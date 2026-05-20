@@ -1,11 +1,12 @@
-1. 更新到最新進度:
-git switch main    # 切換到主分支
-git pull origin main      
+切換到主分支:
+git switch main
 
-2. 建立新分支:
+建立or切換分支:
 git switch -c 分支名稱
+更新到最新進度:
+git pull origin main 
 
-3. 存檔並推送到 GitHub:
+存檔並推送到 GitHub:
 git add .
 git commit -m "完成的內容"
 git push origin 分支名稱    
