@@ -72,19 +72,6 @@ int main(int argc, char* argv[]) {
     } else {
         std::cout << "         -> g0 not found\n";
     }
-    std::vector<int> n0Fanout = myCircuit.getDirectFanoutGatesOfNet("n0");
-    std::cout << "         -> direct fanout gates of net n0: " << n0Fanout.size();
-    if (!n0Fanout.empty()) {
-        std::cout << " (";
-        for (size_t i = 0; i < n0Fanout.size() && i < 10; ++i) {
-            if (i) std::cout << ", ";
-            std::cout << myCircuit.getGate(n0Fanout[i]).instName;
-        }
-        if (n0Fanout.size() > 10) {
-            std::cout << ", ...";
-        }
-        std::cout << ")";
-    }
     std::cout << "\n";
     std::cout << "\n";
 
