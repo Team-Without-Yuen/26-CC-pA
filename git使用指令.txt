@@ -1,6 +1,6 @@
 1. 更新到最新進度:
 git switch main    # 切換到主分支
-git pull      
+git pull origin main      
 
 2. 建立新分支:
 git switch -c 分支名稱
