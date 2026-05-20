@@ -153,3 +153,14 @@ int Netlist::getGateFanout(const std::string& gateInstName) const {
     const Net& outNet = nets[gate.outputNetId];
     return outNet.loadGateIds.size();
 }
+
+// Count the number of logic gates of specific types
+size_t Netlist::getGateCountByType(GateType type) const {
+    size_t count = 0;
+    for (const auto& gate : gates) {
+        if (gate.type == type) {
+            count++;
+        }
+    }
+    return count;
+}
