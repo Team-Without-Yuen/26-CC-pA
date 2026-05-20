@@ -54,24 +54,6 @@ int main(int argc, char* argv[]) {
     std::cout << "         -> NAND gates with constant 1 input: "
               << myCircuit.findGatesWithConstInput(GateType::NAND, 1).size() << "\n";
     const Gate* g0 = myCircuit.findGate("g0");
-    if (g0) {
-        std::cout << "         -> g0 type: " << gateTypeToString(g0->type)
-                  << ", inputs: " << g0->inputNetIds.size()
-                  << ", outputNetId: " << g0->outputNetId << "\n";
-        std::vector<int> g0Successors = myCircuit.getImmediateSuccessors("g0");
-        std::cout << "         -> g0 immediate successors: " << g0Successors.size();
-        if (!g0Successors.empty()) {
-            std::cout << " (";
-            for (size_t i = 0; i < g0Successors.size(); ++i) {
-                if (i) std::cout << ", ";
-                std::cout << myCircuit.getGate(g0Successors[i]).instName;
-            }
-            std::cout << ")";
-        }
-        std::cout << "\n";
-    } else {
-        std::cout << "         -> g0 not found\n";
-    }
     std::cout << "\n";
     std::cout << "\n";
 
