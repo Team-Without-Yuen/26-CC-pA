@@ -1,5 +1,5 @@
-# 編譯指令
-g++ -std=c++11 -I. main.cpp src/core/*.cpp src/io/*.cpp -o NetlistTool
+# 編譯指令 
+g++ -std=c++11 -I. main.cpp src/core/*.cpp src/io/*.cpp src/analysis/*.cpp -o NetlistTool
 
 # 在 Windows下執行指令：
 ./NetlistTool.exe test01.v

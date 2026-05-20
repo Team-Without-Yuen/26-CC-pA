@@ -1,12 +1,16 @@
 #pragma once
 #include <string>
 #include <vector>
+#include <map>
 #include <unordered_map>
 
 // Defines the supported types of logic gates and sequential elements
 enum class GateType {
     AND, OR, NAND, NOR, NOT, BUF, XOR, XNOR, DFF, UNKNOWN
 };
+
+// 將 GateType 轉成大寫字串，主要給報告與 debug 輸出使用
+std::string gateTypeToString(GateType type);
 
 // Represents a physical wire (net) connecting different components in the circuit
 struct Net {
@@ -92,6 +96,36 @@ public:
     const Net& getNet(int id) const { return nets[id]; } 
     size_t getGateCount() const { return gates.size(); }
     size_t getNetCount() const { return nets.size(); }
+
+    // 依 gate instance name 查詢 gate ID；找不到回傳 -1
+    int getGateId(const std::string& gateInstName) const;
+
+    // 依 net name 查詢 net ID；找不到回傳 -1
+    int getNetId(const std::string& netName) const;
+
+    // 依 gate instance name 取得 Gate 指標；找不到回傳 nullptr
+    const Gate* findGate(const std::string& gateInstName) const;
+
+    // 依 net name 取得 Net 指標；找不到回傳 nullptr
+    const Net* findNet(const std::string& netName) const;
+
+    // 統計所有 gate type 的數量，包含 AND/OR/NOT/NAND/NOR/XOR/XNOR/BUF/DFF
+    std::map<GateType, int> countGatesByType() const;
+
+    // 列出指定 gate type 的所有 gate ID
+    std::vector<int> getGatesByType(GateType type) const;
+
+    // 找出含有 constant input 的 gates；type=UNKNOWN 表示不限定 gate type，constValue=-1 表示不限定 0/1
+    std::vector<int> findGatesWithConstInput(GateType type = GateType::UNKNOWN, int constValue = -1) const;
+
+    // 回傳直接使用指定 net 作為 input 的 gate IDs
+    std::vector<int> getDirectFanoutGatesOfNet(const std::string& netName) const;
+
+    // 回傳指定 gate output 直接驅動的 gate IDs
+    std::vector<int> getDirectFanoutGatesOfGate(const std::string& gateInstName) const;
+
+    // 回傳指定 gate 的 immediate successor gates；語意同 getDirectFanoutGatesOfGate
+    std::vector<int> getImmediateSuccessors(const std::string& gateInstName) const;
 
     // Calculate how many gate input pins are connected to a wire (Wire/PI/PO) (support for multi-bit signals)
     int getWireLoadCount(const std::string& wireName) const;

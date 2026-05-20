@@ -22,7 +22,4 @@ private:
     void writeWires(std::ofstream& file, const Netlist& netlist) const;
     // Writes the instantiations of all logic gates
     void writeGates(std::ofstream& file, const Netlist& netlist) const;
-
-    // Converts a GateType enum back into its lowercase string representation
-    std::string gateTypeToString(GateType type) const;
 };
