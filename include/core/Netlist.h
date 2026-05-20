@@ -93,6 +93,12 @@ public:
     size_t getGateCount() const { return gates.size(); }
     size_t getNetCount() const { return nets.size(); }
 
+    // Calculate how many gate input pins are connected to a wire (Wire/PI/PO) (support for multi-bit signals)
+    int getWireLoadCount(const std::string& wireName) const;
+
+    // Calculate how many gate input pins are connected to a gate output
+    int getGateFanout(const std::string& gateInstName) const;
+
     /* 
         future work...
     */

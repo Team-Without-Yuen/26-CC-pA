@@ -105,3 +105,51 @@ void Netlist::connectGateOutput(int gateId, int netId) {
     nets[netId].driverGateId = gateId;
 }
 
+// Calculate how many gate input pins this wire is connected to.
+int Netlist::getWireLoadCount(const std::string& wireName) const {
+    // Case A: A single-bit wire, or a specific bit is selected (e.g., "clk" or "n32[31]")
+    auto it = netNameToId.find(wireName);
+    if (it != netNameToId.end()) {
+        return nets[it->second].loadGateIds.size();
+    }
+
+    // Case B: A multi-bit bus (e.g., "n32", which includes "n32[31]", "n32[30]").
+    int totalLoads = 0;
+    bool isBusFound = false;
+    std::string busPrefix = wireName + "[";
+
+    for (const auto& pair : netNameToId) {
+        // If the wire name starts with "n32["
+        if (pair.first.find(busPrefix) == 0) {
+            totalLoads += nets[pair.second].loadGateIds.size();
+            isBusFound = true;
+        }
+    }
+
+    if (isBusFound) {
+        return totalLoads;
+    }
+
+    // If the wire not found, return -1 to indicate an error.
+    return -1;
+}
+
+// Calculate how many gate input pins are connected to this gate's output
+int Netlist::getGateFanout(const std::string& gateInstName) const {
+    // Find the ID of this gate.
+    auto it = gateNameToId.find(gateInstName);
+    if (it == gateNameToId.end()) {
+        return -1; // Return -1 if the gate not found
+    }
+
+    const Gate& gate = gates[it->second];
+
+    // Check whether this gate has an output net. (If outputNetId is -1, the output is unconnected.)
+    if (gate.outputNetId == -1) {
+        return 0; 
+    }
+
+    // Return the number of gates connected to this wire.
+    const Net& outNet = nets[gate.outputNetId];
+    return outNet.loadGateIds.size();
+}
