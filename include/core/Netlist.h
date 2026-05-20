@@ -118,9 +118,6 @@ public:
     // 找出含有 constant input 的 gates；type=UNKNOWN 表示不限定 gate type，constValue=-1 表示不限定 0/1
     std::vector<int> findGatesWithConstInput(GateType type = GateType::UNKNOWN, int constValue = -1) const;
 
-    // 回傳指定 gate 的 immediate successor gates；語意同 getDirectFanoutGatesOfGate
-    std::vector<int> getImmediateSuccessors(const std::string& gateInstName) const;
-
     // return which gate input pins are connected to a wire (Wire/PI/PO) (support for multi-bit signals)
     std::vector<int> getWireLoads(const std::string& wireName) const;
 
