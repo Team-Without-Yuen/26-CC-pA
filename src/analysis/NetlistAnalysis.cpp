@@ -1,4 +1,5 @@
 #include "include/core/Netlist.h"
+#include <algorithm>
 
 // 統計每一種 gate type 的數量，供「gate count breakdown」類 prompt 使用
 std::map<GateType, int> Netlist::countGatesByType() const {
@@ -63,31 +64,69 @@ std::vector<int> Netlist::findGatesWithConstInput(GateType type, int constValue)
     return result;
 }
 
-// 回傳直接使用指定 net 作為 input 的 gate IDs；若 net 不存在則回傳空 vector
-std::vector<int> Netlist::getDirectFanoutGatesOfNet(const std::string& netName) const {
-    std::vector<int> result;
-    int netId = getNetId(netName);
-    if (netId < 0) {
-        return result;
+// 回傳指定 wire / bus 被多少個 gate input pins 直接使用
+// return which gate input pins this wire is connected to.
+std::vector<int> Netlist::getWireLoads(const std::string& wireName) const {
+    // Case A: A single-bit wire, or a specific bit is selected (e.g., "clk" or "n32[31]")
+    auto it = netNameToId.find(wireName);
+    if (it != netNameToId.end()) {
+        return nets[it->second].loadGateIds;
     }
 
-    const Net& net = getNet(netId);
-    return net.loadGateIds;
-}
+    // Case B: A multi-bit bus (e.g., "n32", which includes "n32[31]", "n32[30]").
+    std::vector<int> allLoadGates;
+    bool isBusFound = false;
+    std::string busPrefix = wireName + "[";
 
-// 回傳指定 gate output net 直接驅動的 gate IDs；若 gate 不存在或無 output 則回傳空 vector
-std::vector<int> Netlist::getDirectFanoutGatesOfGate(const std::string& gateInstName) const {
-    std::vector<int> result;
-    const Gate* gate = findGate(gateInstName);
-    if (!gate || gate->outputNetId < 0) {
-        return result;
+    for (const auto& pair : netNameToId) {
+        // If the wire name starts with "n32["
+        if (pair.first.find(busPrefix) == 0) {
+            const std::vector<int>& loads = nets[pair.second].loadGateIds;
+            
+            // 把這條 bit 線的 loads 全部塞進 allLoadGates 陣列的尾端
+            allLoadGates.insert(allLoadGates.end(), loads.begin(), loads.end());
+            isBusFound = true;
+        }
     }
 
-    const Net& outputNet = getNet(gate->outputNetId);
-    return outputNet.loadGateIds;
+    if (isBusFound) {
+        // 【重要】去除重複的 Gate ID
+        // 因為 Bus 的多個 bit 很有可能接到同一個模組/Gate，不去除的話 ID 會重複
+        std::sort(allLoadGates.begin(), allLoadGates.end());
+        auto last = std::unique(allLoadGates.begin(), allLoadGates.end());
+        allLoadGates.erase(last, allLoadGates.end());
+
+        return allLoadGates;
+    }
+
+    // If the wire not found, return an empty vector to indicate an error or no loads.
+    return {};
 }
 
-// 回傳指定 gate 的 immediate successor gates；目前定義為該 gate output net 的 direct fanout gates
-std::vector<int> Netlist::getImmediateSuccessors(const std::string& gateInstName) const {
-    return getDirectFanoutGatesOfGate(gateInstName);
+// 回傳指定 gate output net 直接驅動多少個 gate input pins
+// return which gate input pins are connected to this gate's output
+std::vector<int> Netlist::getGateFanout(const std::string& gateInstName) const {
+    // 1. Find the ID of this gate.
+    auto it = gateNameToId.find(gateInstName);
+    if (it == gateNameToId.end()) {
+        return {}; // Return an empty vector if the gate not found
+    }
+
+    const Gate& gate = gates[it->second];
+
+    // 2. Check whether this gate has an output net. 
+    // (If outputNetId is -1, the output is unconnected.)
+    if (gate.outputNetId == -1) {
+        return {}; // Return an empty vector if unconnected
+    }
+
+    // 3. Return the vector of gate IDs connected to this wire.
+    const Net& outNet = nets[gate.outputNetId];
+    return outNet.loadGateIds;
+}
+
+// Count the number of logic gates of specific types
+size_t Netlist::getGateCountByType(GateType type) const {
+    size_t count = getGatesByType(type).size();
+    return count;
 }

@@ -118,20 +118,14 @@ public:
     // 找出含有 constant input 的 gates；type=UNKNOWN 表示不限定 gate type，constValue=-1 表示不限定 0/1
     std::vector<int> findGatesWithConstInput(GateType type = GateType::UNKNOWN, int constValue = -1) const;
 
-    // 回傳直接使用指定 net 作為 input 的 gate IDs
-    std::vector<int> getDirectFanoutGatesOfNet(const std::string& netName) const;
-
-    // 回傳指定 gate output 直接驅動的 gate IDs
-    std::vector<int> getDirectFanoutGatesOfGate(const std::string& gateInstName) const;
-
     // 回傳指定 gate 的 immediate successor gates；語意同 getDirectFanoutGatesOfGate
     std::vector<int> getImmediateSuccessors(const std::string& gateInstName) const;
 
-    // Calculate how many gate input pins are connected to a wire (Wire/PI/PO) (support for multi-bit signals)
-    int getWireLoadCount(const std::string& wireName) const;
+    // return which gate input pins are connected to a wire (Wire/PI/PO) (support for multi-bit signals)
+    std::vector<int> getWireLoads(const std::string& wireName) const;
 
-    // Calculate how many gate input pins are connected to a gate output
-    int getGateFanout(const std::string& gateInstName) const;
+    // return which gate input pins are connected to a gate output
+    std::vector<int> getGateFanout(const std::string& gateInstName) const;
 
     // Count the number of specific types of logic gates
     size_t getGateCountByType(GateType type) const;
