@@ -99,6 +99,9 @@ public:
     // Calculate how many gate input pins are connected to a gate output
     int getGateFanout(const std::string& gateInstName) const;
 
+    // Count the number of specific types of logic gates
+    size_t getGateCountByType(GateType type) const;
+
     /* 
         future work...
     */
