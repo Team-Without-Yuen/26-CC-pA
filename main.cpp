@@ -1,5 +1,7 @@
 #include <iostream>
+#include <map>
 #include <string>
+#include <vector>
 #include "include/core/Netlist.h"
 #include "include/io/VerilogReader.h"
 #include "include/io/VerilogWriter.h"
@@ -31,6 +33,60 @@ int main(int argc, char* argv[]) {
     std::cout << "         -> Primary Outputs: " << myCircuit.getPrimaryOutputs().size() << "\n";
     std::cout << "         -> Total Nets     : " << myCircuit.getNetCount() << "\n";
     std::cout << "         -> Total Gates    : " << myCircuit.getGateCount() << "\n\n";
+
+    std::cout << "[Basic Query] Gate type breakdown:\n";
+    std::map<GateType, int> gateCounts = myCircuit.countGatesByType();
+    std::vector<GateType> orderedTypes = {
+        GateType::AND, GateType::OR, GateType::NOT,
+        GateType::NAND, GateType::NOR, GateType::XOR,
+        GateType::XNOR, GateType::BUF, GateType::DFF
+    };
+    for (GateType type : orderedTypes) {
+        std::cout << "         -> " << gateTypeToString(type) << ": " << gateCounts[type] << "\n";
+    }
+    std::cout << "\n";
+
+    std::cout << "[Basic Query] API spot checks:\n";
+    std::cout << "         -> XOR gates listed by getGatesByType(): "
+              << myCircuit.getGatesByType(GateType::XOR).size() << "\n";
+    std::cout << "         -> Gates with any constant input: "
+              << myCircuit.findGatesWithConstInput().size() << "\n";
+    std::cout << "         -> NAND gates with constant 1 input: "
+              << myCircuit.findGatesWithConstInput(GateType::NAND, 1).size() << "\n";
+    const Gate* g0 = myCircuit.findGate("g0");
+    if (g0) {
+        std::cout << "         -> g0 type: " << gateTypeToString(g0->type)
+                  << ", inputs: " << g0->inputNetIds.size()
+                  << ", outputNetId: " << g0->outputNetId << "\n";
+        std::vector<int> g0Successors = myCircuit.getImmediateSuccessors("g0");
+        std::cout << "         -> g0 immediate successors: " << g0Successors.size();
+        if (!g0Successors.empty()) {
+            std::cout << " (";
+            for (size_t i = 0; i < g0Successors.size(); ++i) {
+                if (i) std::cout << ", ";
+                std::cout << myCircuit.getGate(g0Successors[i]).instName;
+            }
+            std::cout << ")";
+        }
+        std::cout << "\n";
+    } else {
+        std::cout << "         -> g0 not found\n";
+    }
+    std::vector<int> n0Fanout = myCircuit.getDirectFanoutGatesOfNet("n0");
+    std::cout << "         -> direct fanout gates of net n0: " << n0Fanout.size();
+    if (!n0Fanout.empty()) {
+        std::cout << " (";
+        for (size_t i = 0; i < n0Fanout.size() && i < 10; ++i) {
+            if (i) std::cout << ", ";
+            std::cout << myCircuit.getGate(n0Fanout[i]).instName;
+        }
+        if (n0Fanout.size() > 10) {
+            std::cout << ", ...";
+        }
+        std::cout << ")";
+    }
+    std::cout << "\n";
+    std::cout << "\n";
 
     VerilogWriter writer;
     

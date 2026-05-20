@@ -1,6 +1,23 @@
 #include "include/core/Netlist.h"
 #include <string>
 
+// 將 GateType enum 轉成大寫字串，供報告、debug、查詢結果輸出使用
+std::string gateTypeToString(GateType type) {
+    switch (type) {
+        case GateType::AND:  return "AND";
+        case GateType::OR:   return "OR";
+        case GateType::NAND: return "NAND";
+        case GateType::NOR:  return "NOR";
+        case GateType::NOT:  return "NOT";
+        case GateType::BUF:  return "BUF";
+        case GateType::XOR:  return "XOR";
+        case GateType::XNOR: return "XNOR";
+        case GateType::DFF:  return "DFF";
+        default: return "UNKNOWN";
+    }
+}
+
+// 新增或取得一條 net；常數 1'b0 / 1'b1 會標記為 constant net
 // Adds a new physical net (wire) to the netlist
 int Netlist::addNet(const std::string& name) {
     // Determine the net is a constant
@@ -24,6 +41,7 @@ int Netlist::addNet(const std::string& name) {
     return newId;
 }
 
+// 新增一個 gate / dff instance，並建立 instance name 到 gate ID 的查表
 // Adds a new logic gate or sequential instance
 int Netlist::addGate(const std::string& name, GateType type) {
     int newId = gates.size();
@@ -32,6 +50,7 @@ int Netlist::addGate(const std::string& name, GateType type) {
     return newId;
 }
 
+// 新增 primary input；若是 bus，會展開成每一個 bit net，例如 n0[7] ... n0[0]
 // Adds a Primary Input (supports both single-bit and bus)
 void Netlist::addPrimaryInput(const std::string& portName, int msb, int lsb) {
     Port newPort(portName, msb, lsb);
@@ -59,6 +78,7 @@ void Netlist::addPrimaryInput(const std::string& portName, int msb, int lsb) {
     primaryInputs.push_back(newPort);
 }
 
+// 新增 primary output；若是 bus，會展開成每一個 bit net，例如 n3[23] ... n3[0]
 // Adds a Primary Output (supports both single-bit and bus)
 void Netlist::addPrimaryOutput(const std::string& portName, int msb, int lsb) {
     Port newPort(portName, msb, lsb);
@@ -83,6 +103,7 @@ void Netlist::addPrimaryOutput(const std::string& portName, int msb, int lsb) {
     primaryOutputs.push_back(newPort);
 }
 
+// 將一條 net 接到指定 gate 的 input pin，並同步更新 net 的 load gate 清單
 // Connects a net to a gate's input pin
 void Netlist::connectGateInput(int gateId, int netId, const std::string& pinName) {
     // Update the Gate: Store the input net ID
@@ -96,6 +117,7 @@ void Netlist::connectGateInput(int gateId, int netId, const std::string& pinName
     nets[netId].loadGateIds.push_back(gateId);
 }
 
+// 將一條 net 接到指定 gate 的 output pin，並記錄該 net 的 driver gate
 // Connects a net to a gate's output pin
 void Netlist::connectGateOutput(int gateId, int netId) {
     // Update the Gate: Set its output net ID
@@ -105,6 +127,43 @@ void Netlist::connectGateOutput(int gateId, int netId) {
     nets[netId].driverGateId = gateId;
 }
 
+// 依 gate instance name 查 gate ID；找不到時回傳 -1
+int Netlist::getGateId(const std::string& gateInstName) const {
+    auto it = gateNameToId.find(gateInstName);
+    if (it == gateNameToId.end()) {
+        return -1;
+    }
+    return it->second;
+}
+
+// 依 net name 查 net ID；找不到時回傳 -1
+int Netlist::getNetId(const std::string& netName) const {
+    auto it = netNameToId.find(netName);
+    if (it == netNameToId.end()) {
+        return -1;
+    }
+    return it->second;
+}
+
+// 依 gate instance name 取得 Gate 指標；找不到時回傳 nullptr
+const Gate* Netlist::findGate(const std::string& gateInstName) const {
+    int id = getGateId(gateInstName);
+    if (id < 0) {
+        return nullptr;
+    }
+    return &gates[id];
+}
+
+// 依 net name 取得 Net 指標；找不到時回傳 nullptr
+const Net* Netlist::findNet(const std::string& netName) const {
+    int id = getNetId(netName);
+    if (id < 0) {
+        return nullptr;
+    }
+    return &nets[id];
+}
+
+// 計算指定 wire / bus 被多少個 gate input pins 直接使用
 // Calculate how many gate input pins this wire is connected to.
 int Netlist::getWireLoadCount(const std::string& wireName) const {
     // Case A: A single-bit wire, or a specific bit is selected (e.g., "clk" or "n32[31]")
@@ -134,6 +193,7 @@ int Netlist::getWireLoadCount(const std::string& wireName) const {
     return -1;
 }
 
+// 計算指定 gate output net 直接驅動多少個 gate input pins
 // Calculate how many gate input pins are connected to this gate's output
 int Netlist::getGateFanout(const std::string& gateInstName) const {
     // Find the ID of this gate.

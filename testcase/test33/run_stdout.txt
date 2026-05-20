@@ -1,0 +1,17 @@
+
+[Info] Input File  : C:\Users\user\Desktop\CAD\2026-CAD-contest-problem-A\testcase\test33\test33.v
+[Info] Output File : C:\Users\user\Desktop\CAD\2026-CAD-contest-problem-A\testcase\test33\roundtrip_output.v
+
+[Step 1] Reading and parsing Verilog...
+         -> Parsing successful!
+         -> Primary Inputs : 8
+         -> Primary Outputs: 7
+         -> Total Nets     : 68692
+         -> Total Gates    : 64430
+
+[Step 2] Writing output Verilog...
+[Writer] Successfully wrote to C:\Users\user\Desktop\CAD\2026-CAD-contest-problem-A\testcase\test33\roundtrip_output.v
+
+========================================
+  Process Completed Successfully!       
+========================================

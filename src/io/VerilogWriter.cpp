@@ -1,5 +1,6 @@
 #include "include/io/VerilogWriter.h"
 #include "include/core/Netlist.h"
+#include <cctype>
 #include <iostream>
 
 bool VerilogWriter::write(const std::string& filepath, const Netlist& netlist) {
@@ -104,26 +105,14 @@ void VerilogWriter::writeWires(std::ofstream& file, const Netlist& netlist) cons
     }
 }
 
-std::string VerilogWriter::gateTypeToString(GateType type) const {
-    switch (type) {
-        case GateType::AND:  return "and";
-        case GateType::OR:   return "or";
-        case GateType::NAND: return "nand";
-        case GateType::NOR:  return "nor";
-        case GateType::XOR:  return "xor";
-        case GateType::XNOR: return "xnor";
-        case GateType::NOT:  return "not";
-        case GateType::BUF:  return "buf";
-        case GateType::DFF:  return "dff";
-        default: return "unknown";
-    }
-}
-
 // Print all logic gates and DFFs
 void VerilogWriter::writeGates(std::ofstream& file, const Netlist& netlist) const {
     for (size_t i = 0; i < netlist.getGateCount(); ++i) {
         const Gate& gate = netlist.getGate(i);
         std::string typeStr = gateTypeToString(gate.type);
+        for (char& c : typeStr) {
+            c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
+        }
 
         // Print the gate type and instance name, e.g., " nand g1("
         file << "  " << typeStr << " " << gate.instName << "(";
