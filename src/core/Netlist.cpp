@@ -1,5 +1,6 @@
 #include "include/core/Netlist.h"
 #include <string>
+#include <algorithm>
 
 // 將 GateType enum 轉成大寫字串，供報告、debug、查詢結果輸出使用
 std::string gateTypeToString(GateType type) {
@@ -161,4 +162,37 @@ const Net* Netlist::findNet(const std::string& netName) const {
         return nullptr;
     }
     return &nets[id];
+}
+
+// 展開 Bus 或單一位元線路 (依照 index 小到大排序)
+std::vector<int> Netlist::expandNetToBits(const std::string& name) const {
+    std::vector<int> bits;
+    
+    // 如果它是單一位元 (如 "clk" 或 "n32[5]")
+    auto it = netNameToId.find(name);
+    if (it != netNameToId.end()) {
+        bits.push_back(it->second);
+        return bits;
+    }
+
+    // 如果它是多位寬 Bus (如 "n32")，找出所有 "n32[" 開頭的線
+    std::string prefix = name + "[";
+    std::vector<std::pair<int, int>> bit_indices; // <index, net_id>
+    
+    for(const auto& pair : netNameToId) {
+        if (pair.first.find(prefix) == 0) {
+            size_t start = prefix.size();
+            size_t end = pair.first.find(']', start);
+            if(end != std::string::npos) {
+                int idx = std::stoi(pair.first.substr(start, end - start));
+                bit_indices.push_back({idx, pair.second});
+            }
+        }
+    }
+    
+    // 確保對齊順序 (例如 bit 0 對 bit 0)
+    std::sort(bit_indices.begin(), bit_indices.end()); 
+    for(const auto& p : bit_indices) bits.push_back(p.second);
+    
+    return bits;
 }

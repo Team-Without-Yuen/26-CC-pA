@@ -1141,10 +1141,14 @@ private:
   //
   // TODO: support for other compilers (beside 'gcc' and 'clang').
 
-#define CADICAL_ATTRIBUTE_FORMAT(FORMAT_POSITION, \
-                                 VARIADIC_ARGUMENT_POSITION) \
-  __attribute__ ((format (PRINTF_FORMAT, FORMAT_POSITION, \
-                          VARIADIC_ARGUMENT_POSITION)))
+#if defined(__GNUC__) || defined(__clang__)
+  #define CADICAL_ATTRIBUTE_FORMAT(FORMAT_POSITION, \
+                                   VARIADIC_ARGUMENT_POSITION) \
+    __attribute__ ((format (printf, FORMAT_POSITION, \
+                            VARIADIC_ARGUMENT_POSITION)))
+#else
+  #define CADICAL_ATTRIBUTE_FORMAT(FORMAT_POSITION, VARIADIC_ARGUMENT_POSITION) 
+#endif
 
   // Messages in a common style.
   //

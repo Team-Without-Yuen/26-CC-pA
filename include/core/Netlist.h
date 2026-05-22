@@ -128,6 +128,13 @@ public:
     // Count the number of specific types of logic gates
     size_t getGateCountByType(GateType type) const;
 
+    // 將字串展開成照 index 排序的 Net ID 陣列 (處理單一 bit 或 Bus)
+    std::vector<int> expandNetToBits(const std::string& name) const;
+
+    // --- Logic Equivalence Checking (LEC) ---
+    // 檢查兩個訊號（支援多位寬）是否在所有輸入情況下功能完全相同
+    bool checkEquivalence(const std::string& netA, const std::string& netB) const;
+
     /* 
         future work...
     */
