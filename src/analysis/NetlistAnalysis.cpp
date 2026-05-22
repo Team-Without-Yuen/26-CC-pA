@@ -1,4 +1,5 @@
 #include "include/core/Netlist.h"
+#include "cadical.hpp"
 #include <algorithm>
 
 // 統計每一種 gate type 的數量，供「gate count breakdown」類 prompt 使用
