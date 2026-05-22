@@ -94,6 +94,7 @@ public:
     // --- APIs for Querying Data ---
     const Gate& getGate(int id) const { return gates[id]; } 
     const Net& getNet(int id) const { return nets[id]; } 
+    // Compute the total gate count of the design.
     size_t getGateCount() const { return gates.size(); }
     size_t getNetCount() const { return nets.size(); }
 
