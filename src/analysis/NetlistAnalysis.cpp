@@ -176,6 +176,11 @@ bool Netlist::checkEquivalence(const std::string& nameA, const std::string& name
 
     // 初始化 CaDiCaL 引擎
     CaDiCaL::Solver solver;
+    // 關閉 factor 演算法
+    solver.set("factor", 0); 
+    // 提前宣告最大的變數 ID
+    int maxSolverVar = nets.size() + netsA.size();
+    solver.resize(maxSolverVar);
 
     // 處理常數線 (1'b0, 1'b1)
     for (int netId : visitedNets) {
