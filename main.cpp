@@ -3,6 +3,7 @@
 #include <string>
 #include <vector>
 #include "include/core/Netlist.h"
+
 #include "include/io/VerilogReader.h"
 #include "include/io/VerilogWriter.h"
 
@@ -34,37 +35,19 @@ int main(int argc, char* argv[]) {
     std::cout << "         -> Total Nets     : " << myCircuit.getNetCount() << "\n";
     std::cout << "         -> Total Gates    : " << myCircuit.getGateCount() << "\n\n";
 
-    std::cout << "[Basic Query] Gate type breakdown:\n";
-    std::map<GateType, int> gateCounts = myCircuit.countGatesByType();
-    std::vector<GateType> orderedTypes = {
-        GateType::AND, GateType::OR, GateType::NOT,
-        GateType::NAND, GateType::NOR, GateType::XOR,
-        GateType::XNOR, GateType::BUF, GateType::DFF
-    };
-    for (GateType type : orderedTypes) {
-        std::cout << "         -> " << gateTypeToString(type) << ": " << gateCounts[type] << "\n";
+    std::string netA, netB;
+    netA = "n2233";
+    netB = "n2193";
+    std::cout << "\n[LEC] Checking equivalence between '" << netA << "' and '" << netB << "'...\n";
+
+    bool isEquivalent = myCircuit.checkEquivalence(netA, netB);
+
+    if (isEquivalent) {
+        std::cout << " => Result: [ EQUIVALENT ] (UNSAT: No counterexample found)\n";
+    } else {
+        std::cout << " => Result: [ NOT EQUIVALENT ] (SAT: Counterexample found / Not Found)\n";
     }
-    std::cout << "\n";
-
-    std::cout << "[Basic Query] API spot checks:\n";
-    std::cout << "         -> XOR gates listed by getGatesByType(): "
-              << myCircuit.getGatesByType(GateType::XOR).size() << "\n";
-    std::cout << "         -> Gates with any constant input: "
-              << myCircuit.findGatesWithConstInput().size() << "\n";
-    std::cout << "         -> NAND gates with constant 1 input: "
-              << myCircuit.findGatesWithConstInput(GateType::NAND, 1).size() << "\n";
-    const Gate* g0 = myCircuit.findGate("g0");
-    std::cout << "\n";
-    std::cout << "\n";
-
-    VerilogWriter writer;
-    
-    std::cout << "[Step 2] Writing output Verilog..." << std::endl;
-    if (!writer.write(outputFilePath, myCircuit)) return -1;
-
-    std::cout << "\n========================================\n";
-    std::cout << "  Process Completed Successfully!       \n";
-    std::cout << "========================================\n";
+    std::cout << "----------------------------------------\n";
 
     return 0; 
 }
