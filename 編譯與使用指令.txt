@@ -1,5 +1,8 @@
 # 編譯指令(windows)(UCRT64) 
-g++ -std=c++11 -I. -Ilib main.cpp src/core/*.cpp src/io/*.cpp src/analysis/*.cpp -L./include/lib/win -lcadical -o NetlistTool
+g++ -std=c++11 -I. -Ilib main.cpp src/core/*.cpp src/io/*.cpp src/analysis/*.cpp -L./include/lib/win/ucrt64 -lcadical -o NetlistTool
+
+# 編譯指令(windows)(mingw64) 
+g++ -std=c++11 -I. -Ilib main.cpp src/core/*.cpp src/io/*.cpp src/analysis/*.cpp -L./include/lib/win/mingw64 -lcadical -o NetlistTool
 
 # 編譯指令(linux) 
 g++ -std=c++11 -I. -Ilib main.cpp src/core/*.cpp src/io/*.cpp src/analysis/*.cpp -L./include/lib/linux -lcadical -o NetlistTool
