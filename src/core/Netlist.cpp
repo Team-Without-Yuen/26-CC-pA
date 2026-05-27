@@ -1,5 +1,6 @@
 #include "include/core/Netlist.h"
 #include <string>
+#include <algorithm>
 
 // 將 GateType enum 轉成大寫字串，供報告、debug、查詢結果輸出使用
 std::string gateTypeToString(GateType type) {
@@ -163,64 +164,35 @@ const Net* Netlist::findNet(const std::string& netName) const {
     return &nets[id];
 }
 
-// 計算指定 wire / bus 被多少個 gate input pins 直接使用
-// Calculate how many gate input pins this wire is connected to.
-int Netlist::getWireLoadCount(const std::string& wireName) const {
-    // Case A: A single-bit wire, or a specific bit is selected (e.g., "clk" or "n32[31]")
-    auto it = netNameToId.find(wireName);
+// 展開 Bus 或單一位元線路 (依照 index 小到大排序)
+std::vector<int> Netlist::expandNetToBits(const std::string& name) const {
+    std::vector<int> bits;
+    
+    // 如果它是單一位元 (如 "clk" 或 "n32[5]")
+    auto it = netNameToId.find(name);
     if (it != netNameToId.end()) {
-        return nets[it->second].loadGateIds.size();
+        bits.push_back(it->second);
+        return bits;
     }
 
-    // Case B: A multi-bit bus (e.g., "n32", which includes "n32[31]", "n32[30]").
-    int totalLoads = 0;
-    bool isBusFound = false;
-    std::string busPrefix = wireName + "[";
-
-    for (const auto& pair : netNameToId) {
-        // If the wire name starts with "n32["
-        if (pair.first.find(busPrefix) == 0) {
-            totalLoads += nets[pair.second].loadGateIds.size();
-            isBusFound = true;
+    // 如果它是多位寬 Bus (如 "n32")，找出所有 "n32[" 開頭的線
+    std::string prefix = name + "[";
+    std::vector<std::pair<int, int>> bit_indices; // <index, net_id>
+    
+    for(const auto& pair : netNameToId) {
+        if (pair.first.find(prefix) == 0) {
+            size_t start = prefix.size();
+            size_t end = pair.first.find(']', start);
+            if(end != std::string::npos) {
+                int idx = std::stoi(pair.first.substr(start, end - start));
+                bit_indices.push_back({idx, pair.second});
+            }
         }
     }
-
-    if (isBusFound) {
-        return totalLoads;
-    }
-
-    // If the wire not found, return -1 to indicate an error.
-    return -1;
-}
-
-// 計算指定 gate output net 直接驅動多少個 gate input pins
-// Calculate how many gate input pins are connected to this gate's output
-int Netlist::getGateFanout(const std::string& gateInstName) const {
-    // Find the ID of this gate.
-    auto it = gateNameToId.find(gateInstName);
-    if (it == gateNameToId.end()) {
-        return -1; // Return -1 if the gate not found
-    }
-
-    const Gate& gate = gates[it->second];
-
-    // Check whether this gate has an output net. (If outputNetId is -1, the output is unconnected.)
-    if (gate.outputNetId == -1) {
-        return 0; 
-    }
-
-    // Return the number of gates connected to this wire.
-    const Net& outNet = nets[gate.outputNetId];
-    return outNet.loadGateIds.size();
-}
-
-// Count the number of logic gates of specific types
-size_t Netlist::getGateCountByType(GateType type) const {
-    size_t count = 0;
-    for (const auto& gate : gates) {
-        if (gate.type == type) {
-            count++;
-        }
-    }
-    return count;
+    
+    // 確保對齊順序 (例如 bit 0 對 bit 0)
+    std::sort(bit_indices.begin(), bit_indices.end()); 
+    for(const auto& p : bit_indices) bits.push_back(p.second);
+    
+    return bits;
 }
