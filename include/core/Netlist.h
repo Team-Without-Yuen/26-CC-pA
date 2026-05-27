@@ -158,4 +158,140 @@ public:
     // Transitive Fanout Cone：從 net 往前追到所有 PO（DFF 不穿越）
     ConeResult getTransitiveFanoutCone(const std::string& netName) const;
 
+
+
+    // =========================================================================
+    // 組合邏輯路徑分析 API (Combinational Path Analysis)
+    //
+    // 共通規則：
+    // 1. 起點與終點固定以 net name 表示；一條路徑形式為 Net -> Gate -> Net -> ...。
+    // 2. 路徑條件中的節點可為 Net 或 Gate，以 PathNode 統一表示。
+    // 3. depth 定義為路徑中經過的 combinational gate 數量。
+    // 4. DFF 仍會以 GateType::DFF 保存在 netlist 中，但它是 sequential boundary；
+    //    組合路徑遇到 DFF 時不從 input 端穿越到 Q。
+    // 5. 若名稱不存在、條件矛盾，或起點到終點原本沒有路徑，布林查詢回傳 false。
+    // 6. A 至 D 類 API 的實作集中於 src/analysis/PathAnalysis.cpp。
+    // =========================================================================
+
+    // 表示限制條件指定的節點種類；可用相同 API 查詢 net 或 gate。
+    enum class PathNodeType {
+        Net,
+        Gate
+    };
+
+    // 表示路徑條件中的一個具名節點，例如 Net "n1" 或 Gate "g2"。
+    struct PathNode {
+        PathNodeType type;
+        std::string name;
+
+        // 建立一個路徑限制節點，type 決定 name 要在 nets 或 gates 中查找。
+        PathNode(PathNodeType _type, const std::string& _name)
+            : type(_type), name(_name) {
+        }
+    };
+
+    // 保存一條組合邏輯路徑；netIds 與 gateIds 都依照起點到終點排列。
+    struct CombinationalPath {
+        std::vector<int> netIds;   // 路徑經過的 nets，包含 startNet 與 endNet
+        std::vector<int> gateIds;  // 路徑中真正穿越的 combinational gates
+
+        // 回傳此路徑的邏輯深度，也就是經過的 combinational gate 數量。
+        int depth() const {
+            return static_cast<int>(gateIds.size());
+        }
+
+        // 判斷是否保存了一條有效路徑；沒有找到路徑時 netIds 為空。
+        bool exists() const {
+            return !netIds.empty();
+        }
+    };
+
+    // --- A：判斷是否至少存在一條符合條件的路徑 ---
+
+    // 判斷 startNet 到 endNet 是否存在不穿越 DFF 的組合邏輯路徑。
+    bool hasCombinationalPath(const std::string& startNet,
+                              const std::string& endNet) const;
+
+    // 判斷是否存在至少一條避開 avoidedNode 的組合邏輯路徑。
+    bool hasCombinationalPathAvoiding(const std::string& startNet,
+                                      const std::string& endNet,
+                                      const PathNode& avoidedNode) const;
+
+    // 判斷是否存在至少一條經過 requiredNode 的組合邏輯路徑。
+    bool hasCombinationalPathThrough(const std::string& startNet,
+                                     const std::string& endNet,
+                                     const PathNode& requiredNode) const;
+
+    // 判斷是否存在至少一條經過 requiredNode 且避開 avoidedNode 的組合邏輯路徑。
+    bool hasCombinationalPathThroughAvoiding(
+        const std::string& startNet,
+        const std::string& endNet,
+        const PathNode& requiredNode,
+        const PathNode& avoidedNode) const;
+
+    // --- B：回傳任意一條符合條件的實際路徑 ---
+
+    // 找到任意一條 startNet 到 endNet 的組合路徑；不存在時回傳空路徑。
+    CombinationalPath findAnyCombinationalPath(const std::string& startNet,
+                                               const std::string& endNet) const;
+
+    // 找到任意一條避開 avoidedNode 的組合路徑；不存在時回傳空路徑。
+    CombinationalPath findAnyCombinationalPathAvoiding(
+        const std::string& startNet,
+        const std::string& endNet,
+        const PathNode& avoidedNode) const;
+
+    // 找到任意一條經過 requiredNode 的組合路徑；不存在時回傳空路徑。
+    CombinationalPath findAnyCombinationalPathThrough(
+        const std::string& startNet,
+        const std::string& endNet,
+        const PathNode& requiredNode) const;
+
+    // 找到任意一條經過 requiredNode 且避開 avoidedNode 的組合路徑。
+    CombinationalPath findAnyCombinationalPathThroughAvoiding(
+        const std::string& startNet,
+        const std::string& endNet,
+        const PathNode& requiredNode,
+        const PathNode& avoidedNode) const;
+
+    // --- C：列出全部符合條件的實際路徑 ---
+
+    // 列出 startNet 到 endNet 的所有組合路徑；大型電路可能產生大量結果。
+    std::vector<CombinationalPath> enumerateCombinationalPaths(
+        const std::string& startNet,
+        const std::string& endNet) const;
+
+    // 列出所有避開 avoidedNode 的組合路徑。
+    std::vector<CombinationalPath> enumerateCombinationalPathsAvoiding(
+        const std::string& startNet,
+        const std::string& endNet,
+        const PathNode& avoidedNode) const;
+
+    // 列出所有經過 requiredNode 的組合路徑。
+    std::vector<CombinationalPath> enumerateCombinationalPathsThrough(
+        const std::string& startNet,
+        const std::string& endNet,
+        const PathNode& requiredNode) const;
+
+    // 列出所有經過 requiredNode 且避開 avoidedNode 的組合路徑。
+    std::vector<CombinationalPath> enumerateCombinationalPathsThroughAvoiding(
+        const std::string& startNet,
+        const std::string& endNet,
+        const PathNode& requiredNode,
+        const PathNode& avoidedNode) const;
+
+    // --- D：判斷所有原有路徑是否都滿足單一條件 ---
+
+    // 判斷 startNet 到 endNet 的每一條組合路徑是否都經過 requiredNode。
+    // 若兩點原本沒有路徑，不採用 vacuous truth，而是回傳 false。
+    bool everyPathPassesThrough(const std::string& startNet,
+                                const std::string& endNet,
+                                const PathNode& requiredNode) const;
+
+    // 判斷 startNet 到 endNet 的每一條組合路徑是否都避開 avoidedNode。
+    // 若兩點原本沒有路徑，不採用 vacuous truth，而是回傳 false。
+    bool everyPathAvoids(const std::string& startNet,
+                         const std::string& endNet,
+                         const PathNode& avoidedNode) const;
+    
 };
