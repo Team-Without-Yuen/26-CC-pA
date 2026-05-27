@@ -3,6 +3,7 @@
 #include <vector>
 #include <map>
 #include <unordered_map>
+#include <unordered_set>
 
 // Defines the supported types of logic gates and sequential elements
 enum class GateType {
@@ -55,6 +56,16 @@ struct Gate {
 
     Gate(int _id, const std::string& _name, GateType _type)
         : id(_id), instName(_name), type(_type), outputNetId(-1) {}
+};
+
+// --- Cone 查詢結果 ---
+// netIds    : cone 內所有 net 的 ID（flat set，適合快速查詢）
+// children  : 樹狀結構，children[A] = {B, C} 表示 A 的下一層是 B 和 C
+// rootNetId : 起點 net ID
+struct ConeResult {
+    std::unordered_set<int> netIds;
+    std::unordered_map<int, std::vector<int>> children;
+    int rootNetId = -1;
 };
 
 // The core data structure representing the entire circuit graph
@@ -138,4 +149,13 @@ public:
     /* 
         future work...
     */
+   std::pair<int, std::vector<std::string>> getLongestPath(const std::string& startNet, const std::string& endNet) const;
+
+   // --- Cone Analysis ---
+    // Transitive Fanin Cone：從 net 往回追到所有 PI（DFF 不穿越）
+    ConeResult getTransitiveFaninCone(const std::string& netName) const;
+ 
+    // Transitive Fanout Cone：從 net 往前追到所有 PO（DFF 不穿越）
+    ConeResult getTransitiveFanoutCone(const std::string& netName) const;
+
 };
