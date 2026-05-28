@@ -39,10 +39,28 @@ int main(int argc, char* argv[]) {
     netB = "n2193";
     std::cout << "\n[LEC] Checking equivalence between '" << netA << "' and '" << netB << "'...\n";
 
+
     bool isEquivalent = myCircuit.checkEquivalence(netA, netB);
 
     if (isEquivalent) {
         std::cout << " => Result: [ EQUIVALENT ] (UNSAT: No counterexample found)\n";
+    } else {
+        std::cout << " => Result: [ NOT EQUIVALENT ] (SAT: Counterexample found / Not Found)\n";
+    }
+    std::cout << "----------------------------------------\n";
+
+    std::cout << "[Basic Query] API spot checks:\n";
+    std::cout << "         -> XOR gates listed by getGatesByType(): "
+              << myCircuit.getGatesByType(GateType::XOR).size() << "\n";
+    std::cout << "         -> Gates with any constant input: "
+              << myCircuit.findGatesWithConstInput().size() << "\n";
+    std::cout << "         -> NAND gates with constant 1 input: "
+              << myCircuit.findGatesWithConstInput(GateType::NAND, 1).size() << "\n";
+    const Gate* g0 = myCircuit.findGate("g0");
+    if (g0) {
+        std::cout << "         -> g0 type: " << gateTypeToString(g0->type)
+                  << ", inputs: " << g0->inputNetIds.size()
+                  << ", outputNetId: " << g0->outputNetId << "\n";
     } else {
         std::cout << " => Result: [ NOT EQUIVALENT ] (SAT: Counterexample found / Not Found)\n";
     }
