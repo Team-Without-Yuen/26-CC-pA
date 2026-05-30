@@ -146,31 +146,12 @@ public:
     // 檢查兩個訊號（支援多位寬）是否在所有輸入情況下功能完全相同
     bool checkEquivalence(const std::string& netA, const std::string& netB) const;
 
-   // 尋找最長組合邏輯路徑 (支援避開特定節點)
-    std::pair<int, std::vector<std::string>> getLongestPath(
-        const std::string& startNet,
-        const std::string& endNet,
-        const std::vector<std::string>& blockedNetNames = {} 
-    ) const;
-
    // --- Cone Analysis ---
     // Transitive Fanin Cone：從 net 往回追到所有 PI（DFF 不穿越）
     ConeResult getTransitiveFaninCone(const std::string& netName) const;
  
     // Transitive Fanout Cone：從 net 往前追到所有 PO（DFF 不穿越）
     ConeResult getTransitiveFanoutCone(const std::string& netName) const;
-     
-    // 第三種 / 第六種：找所有路徑（DFF 不穿越）
-    // requirePItoPort = true  → 第六種（驗證起點是 PI、終點是 PO）
-    // requirePItoPort = false → 第三種（不限定）
-    std::vector<std::vector<std::string>> getAllPaths(
-        const std::string& startNet,
-        const std::string& endNet,
-        const std::vector<std::string>& avoidNets = std::vector<std::string>(),
-        bool requirePItoPort = false
-    ) const;
-
-
 
     // =========================================================================
     // 組合邏輯路徑分析 API (Combinational Path Analysis)
@@ -184,7 +165,7 @@ public:
     // 5. requiredNodes 表示必須全部經過的節點；avoidedNodes 表示必須全部避開的節點。
     //    換句話說，路徑碰到 avoidedNodes 中任一節點即不符合條件。
     // 6. 若名稱不存在、條件矛盾，或起點到終點原本沒有路徑，布林查詢回傳 false。
-    // 7. A 至 D 類 API 的實作集中於 src/analysis/PathAnalysis.cpp。
+    // 7. A 至 E 類 API 的實作集中於 src/analysis/PathAnalysis.cpp。
     // =========================================================================
 
     // 表示限制條件指定的節點種類；可用相同 API 查詢 net 或 gate。
@@ -219,6 +200,9 @@ public:
             return !netIds.empty();
         }
     };
+
+    // 判斷指定的節點 (Net 或 Gate) 是否為終點。
+    bool isEndpoint(const PathNode& node, bool combinationalOnly = true) const;
 
     // --- A：判斷是否至少存在一條符合條件的路徑 ---
 
@@ -307,5 +291,150 @@ public:
     bool everyPathAvoids(const std::string& startNet,
                          const std::string& endNet,
                          const std::vector<PathNode>& avoidedNodes) const;
+
+    // --- E：找到符合條件的最長組合邏輯路徑 ---
+
+    //  最長路徑的布林判斷 (借用findAnyCombinationalPath，有路徑 = 有最長路徑)
     
+    CombinationalPath findLongestCombinationalPath(
+        const std::string& startNet,
+        const std::string& endNet) const;
+
+    CombinationalPath findLongestCombinationalPathAvoiding(
+        const std::string& startNet,
+        const std::string& endNet,
+        const std::vector<PathNode>& avoidedNodes) const;
+
+    CombinationalPath findLongestCombinationalPathThrough(
+        const std::string& startNet,
+        const std::string& endNet,
+        const std::vector<PathNode>& requiredNodes) const;
+
+    CombinationalPath findLongestCombinationalPathThroughAvoiding(
+        const std::string& startNet,
+        const std::string& endNet,
+        const std::vector<PathNode>& requiredNodes,
+        const std::vector<PathNode>& avoidedNodes) const;
+
+    // --- F：確保 endNet 為終點 (Endpoint) 的路徑搜尋 API ---
+    // --- 第一組：回傳 Bool 的存在性檢查 ---
+    bool Netlist::hasCombinationalPathToEndpoint(
+        const std::string& startNet, const std::string& endNet) const {
+        if (!isEndpoint(PathNode(PathNodeType::Net, endNet))) return false;
+        return hasCombinationalPath(startNet, endNet);
+    }
+
+    bool Netlist::hasCombinationalPathAvoidingToEndpoint(
+        const std::string& startNet, const std::string& endNet, const std::vector<PathNode>& avoidedNodes) const {
+        if (!isEndpoint(PathNode(PathNodeType::Net, endNet))) return false;
+        return hasCombinationalPathAvoiding(startNet, endNet, avoidedNodes);
+    }
+
+    bool Netlist::hasCombinationalPathThroughToEndpoint(
+        const std::string& startNet, const std::string& endNet, const std::vector<PathNode>& requiredNodes) const {
+        if (!isEndpoint(PathNode(PathNodeType::Net, endNet))) return false;
+        return hasCombinationalPathThrough(startNet, endNet, requiredNodes);
+    }
+
+    bool Netlist::hasCombinationalPathThroughAvoidingToEndpoint(
+        const std::string& startNet, const std::string& endNet, 
+        const std::vector<PathNode>& requiredNodes, const std::vector<PathNode>& avoidedNodes) const {
+        if (!isEndpoint(PathNode(PathNodeType::Net, endNet))) return false;
+        return hasCombinationalPathThroughAvoiding(startNet, endNet, requiredNodes, avoidedNodes);
+    }
+
+    // --- 第二組：使用 BFS 尋找單一捷徑 ---
+
+    Netlist::CombinationalPath Netlist::findAnyCombinationalPathToEndpoint(
+        const std::string& startNet, const std::string& endNet) const {
+        if (!isEndpoint(PathNode(PathNodeType::Net, endNet))) return CombinationalPath();
+        return findAnyCombinationalPath(startNet, endNet);
+    }
+
+    Netlist::CombinationalPath Netlist::findAnyCombinationalPathAvoidingToEndpoint(
+        const std::string& startNet, const std::string& endNet, const std::vector<PathNode>& avoidedNodes) const {
+        if (!isEndpoint(PathNode(PathNodeType::Net, endNet))) return CombinationalPath();
+        return findAnyCombinationalPathAvoiding(startNet, endNet, avoidedNodes);
+    }
+
+    Netlist::CombinationalPath Netlist::findAnyCombinationalPathThroughToEndpoint(
+        const std::string& startNet, const std::string& endNet, const std::vector<PathNode>& requiredNodes) const {
+        if (!isEndpoint(PathNode(PathNodeType::Net, endNet))) return CombinationalPath();
+        return findAnyCombinationalPathThrough(startNet, endNet, requiredNodes);
+    }
+
+    Netlist::CombinationalPath Netlist::findAnyCombinationalPathThroughAvoidingToEndpoint(
+        const std::string& startNet, const std::string& endNet, 
+        const std::vector<PathNode>& requiredNodes, const std::vector<PathNode>& avoidedNodes) const {
+        if (!isEndpoint(PathNode(PathNodeType::Net, endNet))) return CombinationalPath();
+        return findAnyCombinationalPathThroughAvoiding(startNet, endNet, requiredNodes, avoidedNodes);
+    }
+
+    // --- 第三組：使用 DFS 窮舉所有路徑 ---
+
+    std::vector<Netlist::CombinationalPath> Netlist::enumerateCombinationalPathsToEndpoint(
+        const std::string& startNet, const std::string& endNet) const {
+        if (!isEndpoint(PathNode(PathNodeType::Net, endNet))) return {};
+        return enumerateCombinationalPaths(startNet, endNet);
+    }
+
+    std::vector<Netlist::CombinationalPath> Netlist::enumerateCombinationalPathsAvoidingToEndpoint(
+        const std::string& startNet, const std::string& endNet, const std::vector<PathNode>& avoidedNodes) const {
+        if (!isEndpoint(PathNode(PathNodeType::Net, endNet))) return {};
+        return enumerateCombinationalPathsAvoiding(startNet, endNet, avoidedNodes);
+    }
+
+    std::vector<Netlist::CombinationalPath> Netlist::enumerateCombinationalPathsThroughToEndpoint(
+        const std::string& startNet, const std::string& endNet, const std::vector<PathNode>& requiredNodes) const {
+        if (!isEndpoint(PathNode(PathNodeType::Net, endNet))) return {};
+        return enumerateCombinationalPathsThrough(startNet, endNet, requiredNodes);
+    }
+
+    std::vector<Netlist::CombinationalPath> Netlist::enumerateCombinationalPathsThroughAvoidingToEndpoint(
+        const std::string& startNet, const std::string& endNet, 
+        const std::vector<PathNode>& requiredNodes, const std::vector<PathNode>& avoidedNodes) const {
+        if (!isEndpoint(PathNode(PathNodeType::Net, endNet))) return {};
+        return enumerateCombinationalPathsThroughAvoiding(startNet, endNet, requiredNodes, avoidedNodes);
+    }
+
+    // --- 第四組：反證法邏輯判斷 ---
+
+    bool Netlist::everyPathPassesThroughToEndpoint(
+        const std::string& startNet, const std::string& endNet, const std::vector<PathNode>& requiredNodes) const {
+        if (!isEndpoint(PathNode(PathNodeType::Net, endNet))) return false;
+        return everyPathPassesThrough(startNet, endNet, requiredNodes);
+    }
+
+    bool Netlist::everyPathAvoidsToEndpoint(
+        const std::string& startNet, const std::string& endNet, const std::vector<PathNode>& avoidedNodes) const {
+        if (!isEndpoint(PathNode(PathNodeType::Net, endNet))) return false;
+        return everyPathAvoids(startNet, endNet, avoidedNodes);
+    }
+
+    // --- 第五組：最長路徑搜尋 ---
+
+    Netlist::CombinationalPath Netlist::findLongestCombinationalPathToEndpoint(
+        const std::string& startNet, const std::string& endNet) const {
+        if (!isEndpoint(PathNode(PathNodeType::Net, endNet))) return CombinationalPath();
+        return findLongestCombinationalPath(startNet, endNet);
+    }
+
+    Netlist::CombinationalPath Netlist::findLongestCombinationalPathAvoidingToEndpoint(
+        const std::string& startNet, const std::string& endNet, const std::vector<PathNode>& avoidedNodes) const {
+        if (!isEndpoint(PathNode(PathNodeType::Net, endNet))) return CombinationalPath();
+        return findLongestCombinationalPathAvoiding(startNet, endNet, avoidedNodes);
+    }
+
+    Netlist::CombinationalPath Netlist::findLongestCombinationalPathThroughToEndpoint(
+        const std::string& startNet, const std::string& endNet, const std::vector<PathNode>& requiredNodes) const {
+        if (!isEndpoint(PathNode(PathNodeType::Net, endNet))) return CombinationalPath();
+        return findLongestCombinationalPathThrough(startNet, endNet, requiredNodes);
+    }
+
+    Netlist::CombinationalPath Netlist::findLongestCombinationalPathThroughAvoidingToEndpoint(
+        const std::string& startNet, const std::string& endNet, 
+        const std::vector<PathNode>& requiredNodes, const std::vector<PathNode>& avoidedNodes) const {
+        if (!isEndpoint(PathNode(PathNodeType::Net, endNet))) return CombinationalPath();
+        return findLongestCombinationalPathThroughAvoiding(startNet, endNet, requiredNodes, avoidedNodes);
+    }
 };

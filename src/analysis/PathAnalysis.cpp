@@ -1,5 +1,4 @@
 #include "include/core/Netlist.h"
-
 #include <algorithm>
 #include <queue>
 #include <string>
@@ -292,6 +291,141 @@ std::vector<Netlist::CombinationalPath> enumeratePathsMatching(
     return results;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  使用 DFS + 動態規劃 (Memoization) 尋找最長路徑
+//  回傳值：std::pair<深度, 路徑>。如果深度為 -1 代表此路不通或無法滿足條件。
+// ─────────────────────────────────────────────────────────────────────────────
+std::pair<int, Netlist::CombinationalPath> findLongestPathDepthFirst(
+    const Netlist& netlist,
+    int currentNetId,
+    int endNetId,
+    const std::vector<ResolvedPathNode>& requiredNodes,
+    const std::vector<ResolvedPathNode>& avoidedNodes,
+    std::vector<unsigned char> passedRequired,
+    std::unordered_map<std::string, std::pair<int, Netlist::CombinationalPath>>& memo,
+    std::unordered_set<std::string>& inStack) {
+    
+    // 產生當前狀態的唯一 Key (結合 Net ID 與狀態)
+    std::string stateKey = makeStateKey(currentNetId, passedRequired);
+
+    // 抵達終點的終止條件
+    if (currentNetId == endNetId) {
+        if (allRequiredPassed(passedRequired)) {
+            Netlist::CombinationalPath basePath;
+            basePath.netIds.push_back(currentNetId);
+            return {0, basePath}; // 深度 0，路徑只含終點
+        }
+        return {-1, {}}; // 雖然到了終點，但必經條件沒滿足，算死路
+    }
+
+    // 查表 (Memoization)：確認這個狀態
+    auto it = memo.find(stateKey);
+    if (it != memo.end()) {
+        return it->second;
+    }
+
+    // 防無窮迴圈 (Combinational Loop)
+    if (inStack.count(stateKey)) {
+        return {-1, {}};
+    }
+
+    inStack.insert(stateKey);
+
+    const Net& currentNet = netlist.getNet(currentNetId);
+    std::pair<int, Netlist::CombinationalPath> bestResult = {-1, {}};
+
+    // 探索所有下游路徑
+    for (int gateId : currentNet.loadGateIds) {
+        const Gate& gate = netlist.getGate(gateId);
+        
+        // 避開 DFF, 輸出懸空, 或黑名單 Gate
+        if (gate.type == GateType::DFF ||
+            gate.outputNetId < 0 ||
+            containsGate(avoidedNodes, gateId)) {
+            continue;
+        }
+
+        const int nextNetId = gate.outputNetId;
+        
+        // 避開黑名單 Net
+        if (containsNet(avoidedNodes, nextNetId)) {
+            continue;
+        }
+
+        // 拷貝並更新下一步的打勾狀態
+        std::vector<unsigned char> nextPassed = passedRequired;
+        markRequiredGate(requiredNodes, gateId, nextPassed);
+        markRequiredNet(requiredNodes, nextNetId, nextPassed);
+
+        // 往下遞迴尋找最長路徑
+        auto result = findLongestPathDepthFirst(
+            netlist, nextNetId, endNetId, requiredNodes, avoidedNodes, 
+            nextPassed, memo, inStack
+        );
+
+        // 如果這條岔路走得通，比對看看是不是目前最長的
+        if (result.first >= 0) {
+            if (result.first + 1 > bestResult.first) {
+                bestResult.first = result.first + 1;
+                bestResult.second = result.second; // 拷貝下游回傳的最佳路徑
+                
+                // 用 push_back，避免 O(N)
+                bestResult.second.gateIds.push_back(gateId);
+                bestResult.second.netIds.push_back(currentNetId);
+            }
+        }
+    }
+
+    // 清理並存檔
+    inStack.erase(stateKey);
+    memo[stateKey] = bestResult;
+    return bestResult;
+}
+
+//  尋找符合 required/avoided 條件的「最長」組合邏輯路徑
+Netlist::CombinationalPath findLongestPathMatching(
+    const Netlist& netlist,
+    const std::string& startNet,
+    const std::string& endNet,
+    const std::vector<ResolvedPathNode>& requiredNodes,
+    const std::vector<ResolvedPathNode>& avoidedNodes) {
+    
+    Netlist::CombinationalPath path;
+    const int startNetId = netlist.getNetId(startNet);
+    const int endNetId = netlist.getNetId(endNet);
+    
+    // 防呆檢查
+    if (startNetId < 0 || endNetId < 0 ||
+        containsNet(avoidedNodes, startNetId) ||
+        containsNet(avoidedNodes, endNetId)) {
+        return path;
+    }
+
+    // 初始化狀態
+    std::vector<unsigned char> passedRequired(requiredNodes.size(), 0);
+    markRequiredNet(requiredNodes, startNetId, passedRequired);
+
+    // 準備記憶體與防呆堆疊
+    std::unordered_map<std::string, std::pair<int, Netlist::CombinationalPath>> memo;
+    std::unordered_set<std::string> inStack;
+
+    // 啟動引擎
+    auto result = findLongestPathDepthFirst(
+        netlist, startNetId, endNetId, requiredNodes, avoidedNodes,
+        passedRequired, memo, inStack
+    );
+
+    // 深度 < 0 代表沒找到合法路徑，回傳空的 path
+    if (result.first >= 0) {
+        path = result.second;
+        // 因為 DFS 是由後往前 push_back，這裡做最後一次翻轉
+        std::reverse(path.netIds.begin(), path.netIds.end());
+        std::reverse(path.gateIds.begin(), path.gateIds.end());
+    }
+
+    return path;
+}
+
 } // namespace
 
 // 判斷兩條 net 之間是否至少存在一條組合路徑，且不跨越 DFF。
@@ -457,4 +591,64 @@ bool Netlist::everyPathAvoids(
         }
     }
     return true;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  最長組合邏輯路徑 (Longest Combinational Path) API 
+// ─────────────────────────────────────────────────────────────────────────────
+
+//  最長路徑的布林判斷 (借用findAnyCombinationalPath，有路徑 = 有最長路徑)
+
+// 找到兩條 net 之間的最長組合邏輯路徑 (無特殊條件)。
+Netlist::CombinationalPath Netlist::findLongestCombinationalPath(
+    const std::string& startNet,
+    const std::string& endNet) const {
+    
+    // 直接呼叫我們寫好的底層引擎，傳入空的條件陣列 {}
+    return findLongestPathMatching(*this, startNet, endNet, {}, {});
+}
+
+// 找到兩條 net 之間，且「避開」全部指定節點的最長組合邏輯路徑。
+Netlist::CombinationalPath Netlist::findLongestCombinationalPathAvoiding(
+    const std::string& startNet,
+    const std::string& endNet,
+    const std::vector<PathNode>& avoidedNodes) const {
+    
+    std::vector<ResolvedPathNode> avoided;
+    // 將外部的字串名稱轉換為內部的高速比對 ID
+    if (!resolvePathNodes(*this, avoidedNodes, avoided)) {
+        return CombinationalPath(); // 轉換失敗 (找不到節點) 直接回傳空路徑
+    }
+    return findLongestPathMatching(*this, startNet, endNet, {}, avoided);
+}
+
+// 找到兩條 net 之間，且「經過」全部指定節點的最長組合邏輯路徑。
+Netlist::CombinationalPath Netlist::findLongestCombinationalPathThrough(
+    const std::string& startNet,
+    const std::string& endNet,
+    const std::vector<PathNode>& requiredNodes) const {
+    
+    std::vector<ResolvedPathNode> required;
+    if (!resolvePathNodes(*this, requiredNodes, required)) {
+        return CombinationalPath();
+    }
+    return findLongestPathMatching(*this, startNet, endNet, required, {});
+}
+
+// 找到兩條 net 之間，「經過」全部 requiredNodes 且「避開」全部 avoidedNodes 的最長路徑。
+Netlist::CombinationalPath Netlist::findLongestCombinationalPathThroughAvoiding(
+    const std::string& startNet,
+    const std::string& endNet,
+    const std::vector<PathNode>& requiredNodes,
+    const std::vector<PathNode>& avoidedNodes) const {
+    
+    std::vector<ResolvedPathNode> required;
+    std::vector<ResolvedPathNode> avoided;
+    
+    // 必須 required 和 avoided 兩者都成功解析才繼續
+    if (!resolvePathNodes(*this, requiredNodes, required) ||
+        !resolvePathNodes(*this, avoidedNodes, avoided)) {
+        return CombinationalPath();
+    }
+    return findLongestPathMatching(*this, startNet, endNet, required, avoided);
 }
