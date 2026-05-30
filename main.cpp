@@ -47,29 +47,24 @@ int main(int argc, char* argv[]) {
     }
     std::cout << "\n";
 
-    std::cout << "[Basic Query] API spot checks:\n";
-    std::cout << "         -> XOR gates listed by getGatesByType(): "
-              << myCircuit.getGatesByType(GateType::XOR).size() << "\n";
-    std::cout << "         -> Gates with any constant input: "
-              << myCircuit.findGatesWithConstInput().size() << "\n";
-    std::cout << "         -> NAND gates with constant 1 input: "
-              << myCircuit.findGatesWithConstInput(GateType::NAND, 1).size() << "\n";
-    const Gate* g0 = myCircuit.findGate("g0");
-    if (g0) {
-        std::cout << "         -> g0 type: " << gateTypeToString(g0->type)
-                  << ", inputs: " << g0->inputNetIds.size()
-                  << ", outputNetId: " << g0->outputNetId << "\n";
-        std::vector<int> g0Successors = myCircuit.getImmediateSuccessors("g0");
-        std::cout << "         -> g0 immediate successors: " << g0Successors.size();
-        if (!g0Successors.empty()) {
-            std::cout << " (";
-            for (size_t i = 0; i < g0Successors.size(); ++i) {
-                if (i) std::cout << ", ";
-                std::cout << myCircuit.getGate(g0Successors[i]).instName;
-            }
-            std::cout << ")";
-        }
-        std::cout << "\n";
+    // bool isEquivalent = myCircuit.checkEquivalence(netA, netB);
+
+    /*if (isEquivalent) {
+        std::cout << " => Result: [ EQUIVALENT ] (UNSAT: No counterexample found)\n";
+    } else {
+        std::cout << " => Result: [ NOT EQUIVALENT ] (SAT: Counterexample found / Not Found)\n";
+    }
+    std::cout << "----------------------------------------\n";*/
+
+     // --- 第五種：最長組合邏輯路徑 ---
+    std::string startNet = "n0[0]";
+    std::string endNet   = "n63[1]";
+    std::cout << "\n[Longest Path] " << startNet << " -> " << endNet << "\n";
+ 
+    auto [depth, path] = myCircuit.getLongestPath(startNet, endNet);
+ 
+    if (depth < 0) {
+        std::cout << "  -> No path found between " << startNet << " and " << endNet << ".\n";
     } else {
         std::cout << "  -> Depth: " << depth << " gate(s)\n";
         std::cout << "  -> Path (" << path.size() << " nets):\n";
