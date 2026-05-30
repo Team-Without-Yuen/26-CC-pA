@@ -142,12 +142,39 @@ wire X is a cut between any PI and any PO
 articulation points in combinational graph
 ```
 
-需要 API：
+目前規劃的 A-D 組合路徑 API：
 
 ```cpp
-bool pathExists(srcNet, dstNet, avoidNode optional)
-bool everyPathPassesThrough(srcNet, dstNet, requiredNode)
-vector<Path> enumeratePaths(srcNet, dstNet, limit optional)
+// PathNode 可以代表一條 net 或一顆 gate。
+// requiredNodes 中每一個節點都必須經過。
+// avoidedNodes 中每一個節點都必須避開。
+bool hasCombinationalPath(startNet, endNet)
+bool hasCombinationalPathAvoiding(startNet, endNet, vector<PathNode> avoidedNodes)
+bool hasCombinationalPathThrough(startNet, endNet, vector<PathNode> requiredNodes)
+bool hasCombinationalPathThroughAvoiding(startNet, endNet,
+                                         vector<PathNode> requiredNodes,
+                                         vector<PathNode> avoidedNodes)
+
+CombinationalPath findAnyCombinationalPath...(相同條件分類)
+vector<CombinationalPath> enumerateCombinationalPaths...(相同條件分類)
+bool everyPathPassesThrough(startNet, endNet, vector<PathNode> requiredNodes)
+bool everyPathAvoids(startNet, endNet, vector<PathNode> avoidedNodes)
+```
+
+多節點查詢語意：
+
+```text
+avoidedNodes：路徑只要碰到集合中的任意節點，就不符合查詢條件。
+requiredNodes：路徑必須碰到集合中的所有節點，才符合查詢條件。
+Net 與 Gate 可混在同一個 vector 內，例如必須經過 net n1 與 gate g2。
+組合路徑不穿越 DFF；DFF 仍保留在 netlist 中供 sequential 分析使用。
+多個 avoided nodes 僅增加禁止集合的比對成本；多個 required nodes 會增加搜尋狀態數，
+因為同一條 net 在「已經過哪些必經節點」不同時必須分開搜尋。
+```
+
+後續仍可能需要的額外 API：
+
+```cpp
 vector<pair<Net,Net>> findZeroLengthPaths()
 bool isCutBetweenAnyPIAndPO(nodeName)
 vector<Node> articulationPointsBetween(srcNet, dstNet)
@@ -467,8 +494,9 @@ PI/PO count and bit widths
 
 ```text
 transitive fanin / fanout
-pathExists with avoid node
-everyPathPassesThrough
+pathExists with multiple avoided / required nodes
+everyPathPassesThrough with multiple required nodes
+everyPathAvoids with multiple avoided nodes
 fanin cone size
 shared fanin cone
 ```
