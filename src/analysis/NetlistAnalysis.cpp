@@ -321,124 +321,6 @@ bool Netlist::checkEquivalence(const std::string& nameA, const std::string& name
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  最長組合邏輯路徑 (getLongestPath)
-//
-//  策略：DFS + 記憶化
-//  - 從 startNet 出發，沿 loadGateIds → outputNetId 往終點走
-//  - 每穿越一個 gate，深度 +1
-//  - 遇到 DFF 不穿越
-//  - memo 記錄每個 net 到終點的最長深度(first)與路徑(second)，避免重複計算
-//  - inStack 偵測組合邏輯迴路（防護用）
-//  兩層設計：
-//  - dfsLongest（內部）：用 net ID 做遞迴計算，速度快
-//  - getLongestPath（外部介面）：接受 net name，轉成 ID 後呼叫內部函式，結果再轉回 name 回傳
-// ─────────────────────────────────────────────────────────────────────────────
-
-static std::pair<int, std::vector<int>> dfsLongest(
-    int currNetId,
-    int endNetId,
-    const std::vector<Gate>& gates,
-    const std::vector<Net>& nets,
-    std::unordered_map<int, std::pair<int, std::vector<int>>>& memo,
-    std::unordered_set<int>& inStack,
-    const std::unordered_set<int>& blockedNets
-) {
-    // 遇到黑名單節點，直接當作死路回傳
-    if (blockedNets.count(currNetId)) {
-        return {-1, {}};
-    }
-    
-    // 找到終點
-    if (currNetId == endNetId) {
-        return std::make_pair(0, std::vector<int>(1, currNetId));
-    }
-
-    // 已計算過:直接回傳結果
-    std::unordered_map<int, std::pair<int, std::vector<int>>>::iterator it = memo.find(currNetId);
-    if (it != memo.end()) {
-        return it->second;
-    }
-
-    // 偵測loop:回傳 -1
-    if (inStack.count(currNetId)) {
-        return std::make_pair(-1, std::vector<int>());
-    }
-
-    inStack.insert(currNetId);
-
-    const Net& net = nets[currNetId];
-    std::pair<int, std::vector<int>> best = std::make_pair(-1, std::vector<int>());
-
-    for (int i = 0; i < (int)net.loadGateIds.size(); i++) { // 每條子路徑都試試看，只保留最長的那條
-        int gateId = net.loadGateIds[i];
-        const Gate& gate = gates[gateId];
-
-        // DFF 不穿越
-        if (gate.type == GateType::DFF) continue;
-
-        int outNetId = gate.outputNetId;
-        if (outNetId < 0) continue;
- 
-        auto result = dfsLongest(outNetId, endNetId, gates, nets, memo, inStack, blockedNets);
-        int depth = result.first;
-        std::vector<int>& path = result.second;
- 
-        if (depth >= 0 && depth + 1 > best.first) {
-            best.first = depth + 1;
-            best.second = path;
-            best.second.insert(best.second.begin(), currNetId);
-        }
-    }
-
-    // 離開這個 net 時，從 inStack 移除，並把結果存進 memo
-    inStack.erase(currNetId);
-    memo[currNetId] = best;
-    return best;
-}
-
-std::pair<int, std::vector<std::string>> Netlist::getLongestPath(
-    const std::string& startNet,
-    const std::string& endNet,
-    const std::vector<std::string>& blockedNetNames
-) const {
-    int startId = getNetId(startNet);
-    int endId   = getNetId(endNet);
- 
-    if (startId < 0 || endId < 0) return {-1, {}};
-
-    // 建立一個 unordered_set 來存放黑名單的 ID，方便快速查詢
-    std::unordered_set<int> blockedNets;
-    for (const auto& name : blockedNetNames) {
-        int id = getNetId(name);
-        if (id >= 0) {
-            blockedNets.insert(id);
-        }
-    }
-
-    if (startId == endId) {
-        // 如果起點等於終點，但這個點剛好在黑名單裡，依然要回傳失敗
-        if (blockedNets.count(startId)) return {-1, {}};
-        return {0, {startNet}};
-    }
- 
-    std::unordered_map<int, std::pair<int, std::vector<int>>> memo;
-    std::unordered_set<int> inStack;
- 
-    auto result = dfsLongest(startId, endId, gates, nets, memo, inStack, blockedNets);
-    int depth = result.first;
-    std::vector<int>& netIdPath = result.second;
- 
-    if (depth < 0) return {-1, {}};
- 
-    std::vector<std::string> namePath;
-    namePath.reserve(netIdPath.size());
-    for (int i = 0; i < (int)netIdPath.size(); i++)
-        namePath.push_back(nets[netIdPath[i]].name);
-
-    return std::make_pair(depth, namePath);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
 //  Transitive Fanin Cone
 //  從指定 net 往回追，找出所有影響它的 net（往 PI 方向）
 //  DFF 視為邊界，不穿越
@@ -525,109 +407,50 @@ ConeResult Netlist::getTransitiveFanoutCone(const std::string& netName) const {
     return result;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  第三種 / 第六種：找所有路徑 (getAllPaths)
-//
-//  策略：DFS，不使用記憶化（每條路徑都要完整記錄）
-//  - 從 startNet 出發，沿 loadGateIds → outputNetId 往終點走
-//  - 遇到 DFF 不穿越
-//  - avoidNets：需要避開的 net，遇到就跳過
-//  - 第六種：額外驗證起點是 PI、終點是 PO
-// ─────────────────────────────────────────────────────────────────────────────
- 
-static void dfsAllPaths(
-    int currNetId,
-    int endNetId,
-    const std::vector<Gate>& gates,
-    const std::vector<Net>& nets,
-    const std::unordered_set<int>& avoidIds,
-    std::vector<int>& currentPath,
-    std::unordered_set<int>& visited,
-    std::vector<std::vector<int>>& allPaths
-) {
-    // 找到終點
-    if (currNetId == endNetId) {
-        currentPath.push_back(currNetId);
-        allPaths.push_back(currentPath);
-        currentPath.pop_back();
-        return;
+// 判斷指定的節點 (Net 或 Gate) 是否為終點。
+// combinationalOnly = true: 如果下游只接 DFF，也視為終點。
+// combinationalOnly = false: 必須真的沒有接任何東西才算終點。
+bool Netlist::isEndpoint(const PathNode& node, bool combinationalOnly) const {
+    int targetNetId = -1;
+
+    // 找出要檢查的目標: Net ID
+    if (node.type == PathNodeType::Net) {
+        targetNetId = getNetId(node.name);
+    } else {
+        // 如果傳入的是 Gate，我們要檢查的是「這個 Gate 的輸出線」是不是終點
+        int gateId = getGateId(node.name);
+        if (gateId >= 0) {
+            targetNetId = gates[gateId].outputNetId;
+        } else {
+            return false; // 找不到該 Gate
+        }
     }
- 
-    // 已在當前路徑上（避免迴路）
-    if (visited.count(currNetId)) return;
- 
-    // 需要避開的 net
-    if (avoidIds.count(currNetId)) return;
- 
-    visited.insert(currNetId);
-    currentPath.push_back(currNetId);
- 
-    const Net& net = nets[currNetId];
-    for (int i = 0; i < (int)net.loadGateIds.size(); i++) {
-        int gateId = net.loadGateIds[i];
-        const Gate& gate = gates[gateId];
- 
-        // DFF 不穿越
-        if (gate.type == GateType::DFF) continue;
- 
-        int outNetId = gate.outputNetId;
-        if (outNetId < 0) continue;
- 
-        // 避開指定 net
-        if (avoidIds.count(outNetId)) continue;
- 
-        dfsAllPaths(outNetId, endNetId, gates, nets, avoidIds, currentPath, visited, allPaths);
+
+    // 如果找不到該 Net，或者 Gate 的輸出端本身就是懸空的 (-1)
+    // 在圖論上，死路一條就是終點
+    if (targetNetId < 0) {
+        return true; 
     }
- 
-    currentPath.pop_back();
-    visited.erase(currNetId);
+
+    const Net& net = nets[targetNetId];
+
+    // 如果這條線沒有驅動任何下游 Gate，那它絕對是終點 (Absolute Endpoint)
+    if (net.loadGateIds.empty()) {
+        return true;
+    }
+
+    // 如果開啟了組合邏輯模式，檢查下游是不是「只有 DFF」
+    if (combinationalOnly) {
+        for (int gateId : net.loadGateIds) {
+            // 只要發現下游有任何一個「非 DFF」的邏輯閘，就代表路還能繼續走
+            if (gates[gateId].type != GateType::DFF) {
+                return false; 
+            }
+        }
+        // 迴圈跑完都沒 return，代表下游 100% 全部都是 DFF
+        return true; 
+    }
+
+    // 如果是嚴格拓樸模式，且 loadGateIds 裡面有東西，就不是終點
+    return false;
 }
- 
-std::vector<std::vector<std::string>> Netlist::getAllPaths(
-    const std::string& startNet,
-    const std::string& endNet,
-    const std::vector<std::string>& avoidNets,
-    bool requirePItoPort
-) const {
-    std::vector<std::vector<std::string>> result;
- 
-    int startId = getNetId(startNet);
-    int endId   = getNetId(endNet);
- 
-    if (startId < 0 || endId < 0) return result;
- 
-    // 第六種：驗證起點是 PI、終點是 PO
-    if (requirePItoPort) {
-        if (!nets[startId].isPI) {
-            return result; // 起點不是 PI
-        }
-        if (!nets[endId].isPO) {
-            return result; // 終點不是 PO
-        }
-    }
- 
-    // 建立 avoidNets 的 ID 集合
-    std::unordered_set<int> avoidIds;
-    for (int i = 0; i < (int)avoidNets.size(); i++) {
-        int id = getNetId(avoidNets[i]);
-        if (id >= 0) avoidIds.insert(id);
-    }
- 
-    std::vector<int> currentPath;
-    std::unordered_set<int> visited;
-    std::vector<std::vector<int>> allPathIds;
- 
-    dfsAllPaths(startId, endId, gates, nets, avoidIds, currentPath, visited, allPathIds);
- 
-    // ID 轉回 name
-    for (int i = 0; i < (int)allPathIds.size(); i++) {
-        std::vector<std::string> namePath;
-        for (int j = 0; j < (int)allPathIds[i].size(); j++) {
-            namePath.push_back(nets[allPathIds[i][j]].name);
-        }
-        result.push_back(namePath);
-    }
- 
-    return result;
-}
- 
