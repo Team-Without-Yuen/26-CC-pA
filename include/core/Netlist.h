@@ -157,6 +157,16 @@ public:
  
     // Transitive Fanout Cone：從 net 往前追到所有 PO（DFF 不穿越）
     ConeResult getTransitiveFanoutCone(const std::string& netName) const;
+     
+    // 第三種 / 第六種：找所有路徑（DFF 不穿越）
+    // requirePItoPort = true  → 第六種（驗證起點是 PI、終點是 PO）
+    // requirePItoPort = false → 第三種（不限定）
+    std::vector<std::vector<std::string>> getAllPaths(
+        const std::string& startNet,
+        const std::string& endNet,
+        const std::vector<std::string>& avoidNets = std::vector<std::string>(),
+        bool requirePItoPort = false
+    ) const;
 
 
 

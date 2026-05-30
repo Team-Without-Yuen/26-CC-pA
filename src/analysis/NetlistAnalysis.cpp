@@ -291,10 +291,13 @@ bool Netlist::checkEquivalence(const std::string& nameA, const std::string& name
 //  - 從 startNet 出發，沿 loadGateIds → outputNetId 往終點走
 //  - 每穿越一個 gate，深度 +1
 //  - 遇到 DFF 不穿越
-//  - memo 記錄每個 net 到終點的最長深度與路徑，避免重複計算
+//  - memo 記錄每個 net 到終點的最長深度(first)與路徑(second)，避免重複計算
 //  - inStack 偵測組合邏輯迴路（防護用）
+//  兩層設計：
+//  - dfsLongest（內部）：用 net ID 做遞迴計算，速度快
+//  - getLongestPath（外部介面）：接受 net name，轉成 ID 後呼叫內部函式，結果再轉回 name 回傳
 // ─────────────────────────────────────────────────────────────────────────────
- 
+
 static std::pair<int, std::vector<int>> dfsLongest(
     int currNetId,
     int endNetId,
@@ -305,71 +308,77 @@ static std::pair<int, std::vector<int>> dfsLongest(
 ) {
     // 找到終點
     if (currNetId == endNetId) {
-        return {0, {currNetId}};
+        return std::make_pair(0, std::vector<int>(1, currNetId));
     }
- 
-    // 已計算過
-    auto it = memo.find(currNetId);
+
+    // 已計算過:直接回傳結果
+    std::unordered_map<int, std::pair<int, std::vector<int>>>::iterator it = memo.find(currNetId);
     if (it != memo.end()) {
         return it->second;
     }
- 
-    // 迴路偵測
+
+    // 偵測loop:回傳 -1
     if (inStack.count(currNetId)) {
-        return {-1, {}};
+        return std::make_pair(-1, std::vector<int>());
     }
- 
+
     inStack.insert(currNetId);
- 
+
     const Net& net = nets[currNetId];
-    std::pair<int, std::vector<int>> best = {-1, {}};
- 
-    for (int gateId : net.loadGateIds) {
+    std::pair<int, std::vector<int>> best = std::make_pair(-1, std::vector<int>());
+
+    for (int i = 0; i < (int)net.loadGateIds.size(); i++) { // 每條子路徑都試試看，只保留最長的那條
+        int gateId = net.loadGateIds[i];
         const Gate& gate = gates[gateId];
- 
+
         // DFF 不穿越
         if (gate.type == GateType::DFF) continue;
- 
+
         int outNetId = gate.outputNetId;
         if (outNetId < 0) continue;
- 
-        auto [depth, path] = dfsLongest(outNetId, endNetId, gates, nets, memo, inStack);
- 
+
+        std::pair<int, std::vector<int>> sub = dfsLongest(outNetId, endNetId, gates, nets, memo, inStack);
+        int depth = sub.first;
+        std::vector<int> path = sub.second;
+
         if (depth >= 0 && depth + 1 > best.first) {
             best.first = depth + 1;
             best.second = path;
             best.second.insert(best.second.begin(), currNetId);
         }
     }
- 
+
+    // 離開這個 net 時，從 inStack 移除，並把結果存進 memo
     inStack.erase(currNetId);
     memo[currNetId] = best;
     return best;
 }
- 
+
 std::pair<int, std::vector<std::string>> Netlist::getLongestPath(
     const std::string& startNet,
     const std::string& endNet
 ) const {
     int startId = getNetId(startNet);
     int endId   = getNetId(endNet);
- 
-    if (startId < 0 || endId < 0) return {-1, {}};
-    if (startId == endId)         return {0, {startNet}};
- 
+
+    if (startId < 0 || endId < 0) return std::make_pair(-1, std::vector<std::string>());
+    if (startId == endId)         return std::make_pair(0, std::vector<std::string>(1, startNet));
+
     std::unordered_map<int, std::pair<int, std::vector<int>>> memo;
     std::unordered_set<int> inStack;
- 
-    auto [depth, netIdPath] = dfsLongest(startId, endId, gates, nets, memo, inStack);
- 
-    if (depth < 0) return {-1, {}};
- 
-    std::vector<std::string> namePath;
+
+    std::pair<int, std::vector<int>> result_pair = dfsLongest(startId, endId, gates, nets, memo, inStack);
+    int depth = result_pair.first;
+    std::vector<int> netIdPath = result_pair.second;
+
+    if (depth < 0) return std::make_pair(-1, std::vector<std::string>());
+
+    std::vector<std::string> namePath; // ID 轉回 name
     namePath.reserve(netIdPath.size());
-    for (int id : netIdPath)
-        namePath.push_back(nets[id].name);
- 
-    return {depth, namePath};
+    for (int i = 0; i < (int)netIdPath.size(); i++)
+        namePath.push_back(nets[netIdPath[i]].name);
+
+    return std::make_pair(depth, namePath);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -383,37 +392,38 @@ ConeResult Netlist::getTransitiveFaninCone(const std::string& netName) const {
     ConeResult result;
     int startId = getNetId(netName);
     if (startId < 0) return result;
- 
+
     result.rootNetId = startId;
- 
-    std::queue<int> q;
+
+    std::queue<int> q; // BFS
     q.push(startId);
     result.netIds.insert(startId);
- 
+
     while (!q.empty()) {
         int currNetId = q.front();
         q.pop();
- 
+
         const Net& net = nets[currNetId];
- 
-        if (net.driverGateId >= 0) {
+
+        if (net.driverGateId >= 0) { // net 有沒有 driver gate:有的話取出來
             const Gate& driver = gates[net.driverGateId];
- 
+
             // DFF 不穿越
             if (driver.type == GateType::DFF) continue;
- 
-            for (int inNetId : driver.inputNetIds) {
+
+            for (int i = 0; i < (int)driver.inputNetIds.size(); i++) {
+                int inNetId = driver.inputNetIds[i];
                 result.children[currNetId].push_back(inNetId);
-                if (result.netIds.insert(inNetId).second) {
+                if (result.netIds.insert(inNetId).second) { // 沒訪問過就繼續往回走
                     q.push(inNetId);
                 }
             }
         }
     }
- 
+
     return result;
 }
- 
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Transitive Fanout Cone
 //  從指定 net 往前追，找出所有被它影響的 net（往 PO 方向）
@@ -425,33 +435,140 @@ ConeResult Netlist::getTransitiveFanoutCone(const std::string& netName) const {
     ConeResult result;
     int startId = getNetId(netName);
     if (startId < 0) return result;
- 
+
     result.rootNetId = startId;
- 
+
     std::queue<int> q;
     q.push(startId);
     result.netIds.insert(startId);
- 
+
     while (!q.empty()) {
         int currNetId = q.front();
         q.pop();
- 
+
         const Net& net = nets[currNetId];
- 
-        for (int gateId : net.loadGateIds) {
+
+        for (int i = 0; i < (int)net.loadGateIds.size(); i++) {
+            int gateId = net.loadGateIds[i];
             const Gate& gate = gates[gateId];
- 
+
             // DFF 不穿越
             if (gate.type == GateType::DFF) continue;
- 
+
             int outNetId = gate.outputNetId;
             if (outNetId < 0) continue;
- 
+
             result.children[currNetId].push_back(outNetId);
-            if (result.netIds.insert(outNetId).second) {
+            if (result.netIds.insert(outNetId).second) { // 沒訪問過就繼續往前追
                 q.push(outNetId);
             }
         }
+    }
+
+    return result;
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  第三種 / 第六種：找所有路徑 (getAllPaths)
+//
+//  策略：DFS，不使用記憶化（每條路徑都要完整記錄）
+//  - 從 startNet 出發，沿 loadGateIds → outputNetId 往終點走
+//  - 遇到 DFF 不穿越
+//  - avoidNets：需要避開的 net，遇到就跳過
+//  - 第六種：額外驗證起點是 PI、終點是 PO
+// ─────────────────────────────────────────────────────────────────────────────
+ 
+static void dfsAllPaths(
+    int currNetId,
+    int endNetId,
+    const std::vector<Gate>& gates,
+    const std::vector<Net>& nets,
+    const std::unordered_set<int>& avoidIds,
+    std::vector<int>& currentPath,
+    std::unordered_set<int>& visited,
+    std::vector<std::vector<int>>& allPaths
+) {
+    // 找到終點
+    if (currNetId == endNetId) {
+        currentPath.push_back(currNetId);
+        allPaths.push_back(currentPath);
+        currentPath.pop_back();
+        return;
+    }
+ 
+    // 已在當前路徑上（避免迴路）
+    if (visited.count(currNetId)) return;
+ 
+    // 需要避開的 net
+    if (avoidIds.count(currNetId)) return;
+ 
+    visited.insert(currNetId);
+    currentPath.push_back(currNetId);
+ 
+    const Net& net = nets[currNetId];
+    for (int i = 0; i < (int)net.loadGateIds.size(); i++) {
+        int gateId = net.loadGateIds[i];
+        const Gate& gate = gates[gateId];
+ 
+        // DFF 不穿越
+        if (gate.type == GateType::DFF) continue;
+ 
+        int outNetId = gate.outputNetId;
+        if (outNetId < 0) continue;
+ 
+        // 避開指定 net
+        if (avoidIds.count(outNetId)) continue;
+ 
+        dfsAllPaths(outNetId, endNetId, gates, nets, avoidIds, currentPath, visited, allPaths);
+    }
+ 
+    currentPath.pop_back();
+    visited.erase(currNetId);
+}
+ 
+std::vector<std::vector<std::string>> Netlist::getAllPaths(
+    const std::string& startNet,
+    const std::string& endNet,
+    const std::vector<std::string>& avoidNets,
+    bool requirePItoPort
+) const {
+    std::vector<std::vector<std::string>> result;
+ 
+    int startId = getNetId(startNet);
+    int endId   = getNetId(endNet);
+ 
+    if (startId < 0 || endId < 0) return result;
+ 
+    // 第六種：驗證起點是 PI、終點是 PO
+    if (requirePItoPort) {
+        if (!nets[startId].isPI) {
+            return result; // 起點不是 PI
+        }
+        if (!nets[endId].isPO) {
+            return result; // 終點不是 PO
+        }
+    }
+ 
+    // 建立 avoidNets 的 ID 集合
+    std::unordered_set<int> avoidIds;
+    for (int i = 0; i < (int)avoidNets.size(); i++) {
+        int id = getNetId(avoidNets[i]);
+        if (id >= 0) avoidIds.insert(id);
+    }
+ 
+    std::vector<int> currentPath;
+    std::unordered_set<int> visited;
+    std::vector<std::vector<int>> allPathIds;
+ 
+    dfsAllPaths(startId, endId, gates, nets, avoidIds, currentPath, visited, allPathIds);
+ 
+    // ID 轉回 name
+    for (int i = 0; i < (int)allPathIds.size(); i++) {
+        std::vector<std::string> namePath;
+        for (int j = 0; j < (int)allPathIds[i].size(); j++) {
+            namePath.push_back(nets[allPathIds[i][j]].name);
+        }
+        result.push_back(namePath);
     }
  
     return result;
