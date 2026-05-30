@@ -146,10 +146,12 @@ public:
     // 檢查兩個訊號（支援多位寬）是否在所有輸入情況下功能完全相同
     bool checkEquivalence(const std::string& netA, const std::string& netB) const;
 
-    /* 
-        future work...
-    */
-   std::pair<int, std::vector<std::string>> getLongestPath(const std::string& startNet, const std::string& endNet) const;
+   // 尋找最長組合邏輯路徑 (支援避開特定節點)
+    std::pair<int, std::vector<std::string>> getLongestPath(
+        const std::string& startNet,
+        const std::string& endNet,
+        const std::vector<std::string>& blockedNetNames = {} 
+    ) const;
 
    // --- Cone Analysis ---
     // Transitive Fanin Cone：從 net 往回追到所有 PI（DFF 不穿越）

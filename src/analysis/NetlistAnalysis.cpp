@@ -3,6 +3,37 @@
 #include <algorithm>
 #include <unordered_set>
 #include <queue>
+#include <chrono>
+
+// 客製化 CaDiCaL 終止器：用來設定 Wall-clock Time 限制
+class TimeLimitTerminator : public CaDiCaL::Terminator {
+private:
+    std::chrono::time_point<std::chrono::steady_clock> start_time;
+    double time_limit_seconds;
+    int call_counter; // 新增一個計數器
+
+public:
+    // 傳入想設定的秒數，並記錄當下時間
+    TimeLimitTerminator(double limit) : time_limit_seconds(limit) {
+        start_time = std::chrono::steady_clock::now();
+    }
+
+    // CaDiCaL 內部會在解題過程中頻繁呼叫這個函式
+    // 如果回傳 true，CaDiCaL 就會立刻中斷並回傳 UNKNOWN (0)
+    bool terminate() override {
+        // 每被呼叫 1000 次，才真正去讀取一次系統時間，以減少頻繁讀取時間帶來的效能影響
+        if (++call_counter < 1000) {
+            return false; 
+        }
+        
+        call_counter = 0; // 重置計數器
+
+        // 真正檢查時間
+        auto now = std::chrono::steady_clock::now();
+        std::chrono::duration<double> elapsed = now - start_time;
+        return elapsed.count() >= time_limit_seconds; 
+    }
+};
 
 // 統計每一種 gate type 的數量，供「gate count breakdown」類 prompt 使用
 std::map<GateType, int> Netlist::countGatesByType() const {
@@ -266,8 +297,13 @@ bool Netlist::checkEquivalence(const std::string& nameA, const std::string& name
     }
     solver.add(0);
 
+    TimeLimitTerminator terminator(30.0); 
+    solver.connect_terminator(&terminator); // 把計時器接上 Solver
+
     // 呼叫求解工具，查看是否存在讓 Diff 為 1 的輸入組合
     int res = solver.solve();
+
+    solver.disconnect_terminator();
 
     const int SAT = 10;
     const int UNSAT = 20;
@@ -279,13 +315,13 @@ bool Netlist::checkEquivalence(const std::string& nameA, const std::string& name
         return false; // 找到反例，代表不等價
     } else {
         // res == 0 的情況，通常是 solver 被手動中斷，或設定了時間/資源上限
-        // 這裡保守起見回傳 false，或是拋出例外 (Exception)
+        // 這裡保守起見回傳 false
         return false; 
     }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  第五種：最長組合邏輯路徑 (getLongestPath)
+//  最長組合邏輯路徑 (getLongestPath)
 //
 //  策略：DFS + 記憶化
 //  - 從 startNet 出發，沿 loadGateIds → outputNetId 往終點走
@@ -301,8 +337,14 @@ static std::pair<int, std::vector<int>> dfsLongest(
     const std::vector<Gate>& gates,
     const std::vector<Net>& nets,
     std::unordered_map<int, std::pair<int, std::vector<int>>>& memo,
-    std::unordered_set<int>& inStack
+    std::unordered_set<int>& inStack,
+    const std::unordered_set<int>& blockedNets
 ) {
+    // 遇到黑名單節點，直接當作死路回傳
+    if (blockedNets.count(currNetId)) {
+        return {-1, {}};
+    }
+    
     // 找到終點
     if (currNetId == endNetId) {
         return {0, {currNetId}};
@@ -333,7 +375,9 @@ static std::pair<int, std::vector<int>> dfsLongest(
         int outNetId = gate.outputNetId;
         if (outNetId < 0) continue;
  
-        auto [depth, path] = dfsLongest(outNetId, endNetId, gates, nets, memo, inStack);
+        auto result = dfsLongest(outNetId, endNetId, gates, nets, memo, inStack, blockedNets);
+        int depth = result.first;
+        std::vector<int>& path = result.second;
  
         if (depth >= 0 && depth + 1 > best.first) {
             best.first = depth + 1;
@@ -349,18 +393,35 @@ static std::pair<int, std::vector<int>> dfsLongest(
  
 std::pair<int, std::vector<std::string>> Netlist::getLongestPath(
     const std::string& startNet,
-    const std::string& endNet
+    const std::string& endNet,
+    const std::vector<std::string>& blockedNetNames
 ) const {
     int startId = getNetId(startNet);
     int endId   = getNetId(endNet);
  
     if (startId < 0 || endId < 0) return {-1, {}};
-    if (startId == endId)         return {0, {startNet}};
+
+    // 建立一個 unordered_set 來存放黑名單的 ID，方便快速查詢
+    std::unordered_set<int> blockedNets;
+    for (const auto& name : blockedNetNames) {
+        int id = getNetId(name);
+        if (id >= 0) {
+            blockedNets.insert(id);
+        }
+    }
+
+    if (startId == endId) {
+        // 如果起點等於終點，但這個點剛好在黑名單裡，依然要回傳失敗
+        if (blockedNets.count(startId)) return {-1, {}};
+        return {0, {startNet}};
+    }
  
     std::unordered_map<int, std::pair<int, std::vector<int>>> memo;
     std::unordered_set<int> inStack;
  
-    auto [depth, netIdPath] = dfsLongest(startId, endId, gates, nets, memo, inStack);
+    auto result = dfsLongest(startId, endId, gates, nets, memo, inStack, blockedNets);
+    int depth = result.first;
+    std::vector<int>& netIdPath = result.second;
  
     if (depth < 0) return {-1, {}};
  
