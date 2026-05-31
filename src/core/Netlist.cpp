@@ -146,6 +146,27 @@ int Netlist::getNetId(const std::string& netName) const {
     return it->second;
 }
 
+size_t Netlist::getLogicalWireCount() const {
+    std::unordered_set<std::string> uniqueWireNames;
+    
+    for (const auto& net : nets) {
+        std::string baseName = net.name;
+        
+        // 尋找陣列/匯流排後綴的起始位置，例如 "data[3]" 找到 '['
+        size_t pos = baseName.find_last_of('[');
+        
+        // 確保是合法的後綴且以 ']' 結尾
+        if (pos != std::string::npos && baseName.back() == ']') {
+            baseName = baseName.substr(0, pos);
+        }
+        
+        // 利用 set 的特性剔除重複的 baseName
+        uniqueWireNames.insert(baseName);
+    }
+    
+    return uniqueWireNames.size();
+}
+
 // 依 gate instance name 取得 Gate 指標；找不到時回傳 nullptr
 const Gate* Netlist::findGate(const std::string& gateInstName) const {
     int id = getGateId(gateInstName);

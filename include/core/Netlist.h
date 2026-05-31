@@ -109,6 +109,9 @@ public:
     size_t getGateCount() const { return gates.size(); }
     size_t getNetCount() const { return nets.size(); }
 
+    // 取得邏輯 Wire 的總數（多位寬展開的 bit 如 "data[0]", "data[1]" 會被視為同一個 "data"）
+    size_t getLogicalWireCount() const;
+
     // 依 gate instance name 查詢 gate ID；找不到回傳 -1
     int getGateId(const std::string& gateInstName) const;
 
