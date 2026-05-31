@@ -62,7 +62,7 @@ struct Gate {
 struct ConeResult {
     std::unordered_set<int> netIds;
     std::unordered_map<int, std::vector<int>> children;
-    int rootNetId = -1;
+    std::vector<int> rootNetIds; // 支援多個 roots (支援 Bus)
 };
 
 // The core data structure representing the entire circuit graph
@@ -147,8 +147,20 @@ public:
     // return which gate input pins are connected to a wire (Wire/PI/PO) (support for multi-bit signals)
     std::vector<int> getWireLoads(const std::string& wireName) const;
 
+    // 取得指定線路直接驅動的下一層邏輯閘名稱列表
+    std::vector<std::string> getWireLoadNames(const std::string& wireName) const;
+
+    // 計算指定線路直接驅動的下一層邏輯閘總數
+    size_t getWireLoadCount(const std::string& wireName) const;
+
     // return which gate input pins are connected to a gate output
     std::vector<int> getGateFanout(const std::string& gateInstName) const;
+
+    // 取得指定邏輯閘輸出端直接驅動的下一層邏輯閘名稱列表
+    std::vector<std::string> getGateFanoutNames(const std::string& gateInstName) const;
+
+    // 計算指定邏輯閘輸出端直接驅動的下一層邏輯閘總數
+    size_t getGateFanoutCount(const std::string& gateInstName) const;
 
     // Count the number of specific types of logic gates
     size_t getGateCountByType(GateType type) const;
@@ -166,6 +178,22 @@ public:
  
     // Transitive Fanout Cone：從 net 往前追到所有 PO（DFF 不穿越）
     ConeResult getTransitiveFanoutCone(const std::string& netName) const;
+
+    // 取得指定 Gate 的 Fanin 邏輯錐
+    ConeResult getGateTransitiveFaninCone(const std::string& gateName) const;
+    
+    // 取得指定 Gate 的 Fanout 邏輯錐
+    ConeResult getGateTransitiveFanoutCone(const std::string& gateName) const;
+
+    // 邏輯錐高階查詢 API (Logic Cone Analysis Wrappers)  
+    std::vector<std::string> getTransitiveFaninConeGateNames(const std::string& netName) const;
+    size_t getTransitiveFaninConeGateCount(const std::string& netName) const;
+    std::vector<std::string> getTransitiveFanoutConeGateNames(const std::string& netName) const;
+    size_t getTransitiveFanoutConeGateCount(const std::string& netName) const;
+    std::vector<std::string> getGateTransitiveFaninConeGateNames(const std::string& gateName) const;
+    size_t getGateTransitiveFaninConeGateCount(const std::string& gateName) const;
+    std::vector<std::string> getGateTransitiveFanoutConeGateNames(const std::string& gateName) const;
+    size_t getGateTransitiveFanoutConeGateCount(const std::string& gateName) const;
 
     // =========================================================================
     // 組合邏輯路徑分析 API (Combinational Path Analysis)

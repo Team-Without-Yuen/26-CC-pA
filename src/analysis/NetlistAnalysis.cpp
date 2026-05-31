@@ -155,6 +155,25 @@ std::vector<int> Netlist::getWireLoads(const std::string& wireName) const {
     return {};
 }
 
+std::vector<std::string> Netlist::getWireLoadNames(const std::string& wireName) const {
+    std::vector<std::string> result;
+    // 呼叫你原有的底層 API 取得下游 Gate IDs
+    std::vector<int> loadIds = getWireLoads(wireName);
+    
+    // 將 ID 轉換為 Instance Name
+    result.reserve(loadIds.size());
+    for (int id : loadIds) {
+        result.push_back(gates[id].instName);
+    }
+    
+    return result;
+}
+
+size_t Netlist::getWireLoadCount(const std::string& wireName) const {
+    // 直接計算底層 API 回傳的陣列大小
+    return getWireLoads(wireName).size();
+}
+
 // 回傳指定 gate output net 直接驅動多少個 gate input pins
 // return which gate input pins are connected to this gate's output
 std::vector<int> Netlist::getGateFanout(const std::string& gateInstName) const {
@@ -175,6 +194,25 @@ std::vector<int> Netlist::getGateFanout(const std::string& gateInstName) const {
     // 3. Return the vector of gate IDs connected to this wire.
     const Net& outNet = nets[gate.outputNetId];
     return outNet.loadGateIds;
+}
+
+std::vector<std::string> Netlist::getGateFanoutNames(const std::string& gateInstName) const {
+    std::vector<std::string> result;
+    // 呼叫你原有的底層 API 取得 Gate IDs
+    std::vector<int> fanoutIds = getGateFanout(gateInstName);
+    
+    // 將 ID 轉換為 Instance Name
+    result.reserve(fanoutIds.size());
+    for (int id : fanoutIds) {
+        result.push_back(gates[id].instName);
+    }
+    
+    return result;
+}
+
+size_t Netlist::getGateFanoutCount(const std::string& gateInstName) const {
+    // 直接計算底層 API 回傳的陣列大小
+    return getGateFanout(gateInstName).size();
 }
 
 // Count the number of logic gates of specific types
@@ -338,40 +376,40 @@ bool Netlist::checkEquivalence(const std::string& nameA, const std::string& name
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Transitive Fanin Cone
-//  從指定 net 往回追，找出所有影響它的 net（往 PI 方向）
-//  DFF 視為邊界，不穿越
-//
-//  樹狀結構：children[A] = {B, C} 表示 A 是由 B、C 驅動的
-// ─────────────────────────────────────────────────────────────────────────────
+//  支援 Bus 的 Transitive Fanin Cone (多源 BFS)
 ConeResult Netlist::getTransitiveFaninCone(const std::string& netName) const {
     ConeResult result;
-    int startId = getNetId(netName);
-    if (startId < 0) return result;
+    
+    // 展開 Bus，取得所有起點
+    std::vector<int> startIds = expandNetToBits(netName);
+    if (startIds.empty()) return result;
 
-    result.rootNetId = startId;
-
+    result.rootNetIds = startIds;
     std::queue<int> q; // BFS
-    q.push(startId);
-    result.netIds.insert(startId);
 
+    // 將所有起點同時推入 Queue 並標記為已訪問
+    for (int id : startIds) {
+        q.push(id);
+        result.netIds.insert(id);
+    }
+
+    // BFS 核心邏輯
     while (!q.empty()) {
         int currNetId = q.front();
         q.pop();
 
         const Net& net = nets[currNetId];
 
-        if (net.driverGateId >= 0) { // net 有沒有 driver gate:有的話取出來
+        if (net.driverGateId >= 0) {
             const Gate& driver = gates[net.driverGateId];
 
-            // DFF 不穿越
             if (driver.type == GateType::DFF) continue;
 
             for (int i = 0; i < (int)driver.inputNetIds.size(); i++) {
                 int inNetId = driver.inputNetIds[i];
                 result.children[currNetId].push_back(inNetId);
-                if (result.netIds.insert(inNetId).second) { // 沒訪問過就繼續往回走
+                
+                if (result.netIds.insert(inNetId).second) { 
                     q.push(inNetId);
                 }
             }
@@ -381,24 +419,24 @@ ConeResult Netlist::getTransitiveFaninCone(const std::string& netName) const {
     return result;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Transitive Fanout Cone
-//  從指定 net 往前追，找出所有被它影響的 net（往 PO 方向）
-//  DFF 視為邊界，不穿越
-//
-//  樹狀結構：children[A] = {B, C} 表示 A 驅動了 B 和 C
-// ─────────────────────────────────────────────────────────────────────────────
+//  支援 Bus 的 Transitive Fanout Cone (多源 BFS)
 ConeResult Netlist::getTransitiveFanoutCone(const std::string& netName) const {
     ConeResult result;
-    int startId = getNetId(netName);
-    if (startId < 0) return result;
+    
+    // 展開 Bus，取得所有起點
+    std::vector<int> startIds = expandNetToBits(netName);
+    if (startIds.empty()) return result;
 
-    result.rootNetId = startId;
-
+    result.rootNetIds = startIds;
     std::queue<int> q;
-    q.push(startId);
-    result.netIds.insert(startId);
 
+    // 將所有起點同時推入 Queue
+    for (int id : startIds) {
+        q.push(id);
+        result.netIds.insert(id);
+    }
+
+    // BFS 核心邏輯
     while (!q.empty()) {
         int currNetId = q.front();
         q.pop();
@@ -409,20 +447,44 @@ ConeResult Netlist::getTransitiveFanoutCone(const std::string& netName) const {
             int gateId = net.loadGateIds[i];
             const Gate& gate = gates[gateId];
 
-            // DFF 不穿越
             if (gate.type == GateType::DFF) continue;
 
             int outNetId = gate.outputNetId;
             if (outNetId < 0) continue;
 
             result.children[currNetId].push_back(outNetId);
-            if (result.netIds.insert(outNetId).second) { // 沒訪問過就繼續往前追
+            
+            if (result.netIds.insert(outNetId).second) { 
                 q.push(outNetId);
             }
         }
     }
 
     return result;
+}
+
+ConeResult Netlist::getGateTransitiveFaninCone(const std::string& gateName) const {
+    int gateId = getGateId(gateName);
+    if (gateId < 0) return ConeResult(); // 找不到該 Gate
+
+    const Gate& gate = gates[gateId];
+    
+    // 如果這個 Gate 沒有輸出線 (例如輸出懸空)
+    if (gate.outputNetId < 0) return ConeResult(); 
+
+    // Gate 的 Fanin 錐，就是它「輸出線」的 Fanin 錐
+    return getTransitiveFaninCone(nets[gate.outputNetId].name);
+}
+
+ConeResult Netlist::getGateTransitiveFanoutCone(const std::string& gateName) const {
+    int gateId = getGateId(gateName);
+    if (gateId < 0) return ConeResult();
+
+    const Gate& gate = gates[gateId];
+    if (gate.outputNetId < 0) return ConeResult();
+
+    // Gate 的 Fanout 錐，就是它「輸出線」的 Fanout 錐
+    return getTransitiveFanoutCone(nets[gate.outputNetId].name);
 }
 
 // 判斷指定的節點 (Net 或 Gate) 是否為終點。

@@ -43,6 +43,10 @@ int main() {
             std::cout << "  getGateNamesWithConstInput [gate_type] [0/1]\n";
             std::cout << "  countGatesWithConstInput [gate_type] [0/1]\n";
             std::cout << "  getGateInfo <inst_name>\n";
+            std::cout << "  getWireLoadNames <wire_name>\n";
+            std::cout << "  getWireLoadCount <wire_name>\n";
+            std::cout << "  getGateFanoutNames <inst_name>\n";
+            std::cout << "  getGateFanoutCount <inst_name>\n";
             std::cout << "  write <filepath> (This will save and exit the tool)\n";
         } 
         else if (command == "read") {
