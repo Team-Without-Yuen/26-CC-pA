@@ -1,9 +1,10 @@
 #include "include/core/Netlist.h"
 #include <string>
 #include <algorithm>
+#include <sstream>
 
 // 將 GateType enum 轉成大寫字串，供報告、debug、查詢結果輸出使用
-std::string gateTypeToString(GateType type) {
+std::string Netlist::gateTypeToString(GateType type) const {
     switch (type) {
         case GateType::AND:  return "AND";
         case GateType::OR:   return "OR";
@@ -16,6 +17,21 @@ std::string gateTypeToString(GateType type) {
         case GateType::DFF:  return "DFF";
         default: return "UNKNOWN";
     }
+}
+
+GateType Netlist::stringToGateType(std::string str) const {
+    std::transform(str.begin(), str.end(), str.begin(), ::toupper);
+    if (str == "AND") return GateType::AND;
+    if (str == "OR") return GateType::OR;
+    if (str == "NAND") return GateType::NAND;
+    if (str == "NOR") return GateType::NOR;
+    if (str == "NOT") return GateType::NOT;
+    if (str == "BUF") return GateType::BUF;
+    if (str == "XOR") return GateType::XOR;
+    if (str == "XNOR") return GateType::XNOR;
+    if (str == "DFF") return GateType::DFF;
+    
+    return GateType::UNKNOWN;
 }
 
 // 新增或取得一條 net；常數 1'b0 / 1'b1 會標記為 constant net
@@ -146,6 +162,27 @@ int Netlist::getNetId(const std::string& netName) const {
     return it->second;
 }
 
+size_t Netlist::getLogicalWireCount() const {
+    std::unordered_set<std::string> uniqueWireNames;
+    
+    for (const auto& net : nets) {
+        std::string baseName = net.name;
+        
+        // 尋找陣列/匯流排後綴的起始位置，例如 "data[3]" 找到 '['
+        size_t pos = baseName.find_last_of('[');
+        
+        // 確保是合法的後綴且以 ']' 結尾
+        if (pos != std::string::npos && baseName.back() == ']') {
+            baseName = baseName.substr(0, pos);
+        }
+        
+        // 利用 set 的特性剔除重複的 baseName
+        uniqueWireNames.insert(baseName);
+    }
+    
+    return uniqueWireNames.size();
+}
+
 // 依 gate instance name 取得 Gate 指標；找不到時回傳 nullptr
 const Gate* Netlist::findGate(const std::string& gateInstName) const {
     int id = getGateId(gateInstName);
@@ -195,4 +232,56 @@ std::vector<int> Netlist::expandNetToBits(const std::string& name) const {
     for(const auto& p : bit_indices) bits.push_back(p.second);
     
     return bits;
+}
+
+std::string Netlist::getGateInfo(const std::string& instName) const {
+    const Gate* gate = findGate(instName);
+    if (!gate) {
+        return "Error: Gate instance '" + instName + "' not found.";
+    }
+
+    std::ostringstream oss;
+    oss << "Gate: " << gate->instName << "\n";
+    oss << "Type: " << gateTypeToString(gate->type) << "\n";
+    
+    // --- 處理 Inputs ---
+    oss << "Inputs:\n";
+    if (gate->inputNetIds.empty()) {
+        oss << "  (None)\n";
+    } else {
+        for (size_t i = 0; i < gate->inputNetIds.size(); ++i) {
+            int netId = gate->inputNetIds[i];
+            
+            // 嘗試取得腳位名稱 (支援 DFF 特殊腳位名稱，否則預設為 IN1, IN2...)
+            std::string pinName = (i < gate->inputPinNames.size()) ? 
+                                  gate->inputPinNames[i] : 
+                                  "IN" + std::to_string(i + 1);
+
+            oss << "  - " << pinName << " connected to net ";
+            
+            if (netId != -1) {
+                const Net& net = nets[netId];
+                oss << "'" << net.name << "'";
+                // 附加額外屬性標示
+                if (net.isConst) oss << " (Constant)";
+                if (net.isPI)    oss << " (Primary Input)";
+            } else {
+                oss << "(Unconnected)";
+            }
+            oss << "\n";
+        }
+    }
+
+    // --- 處理 Output ---
+    oss << "Outputs:\n";
+    if (gate->outputNetId != -1) {
+        const Net& net = nets[gate->outputNetId];
+        oss << "  - OUT connected to net '" << net.name << "'";
+        if (net.isPO) oss << " (Primary Output)";
+        oss << "\n";
+    } else {
+        oss << "  - OUT (Unconnected)\n";
+    }
+
+    return oss.str();
 }

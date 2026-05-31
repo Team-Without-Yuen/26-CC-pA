@@ -10,9 +10,6 @@ enum class GateType {
     AND, OR, NAND, NOR, NOT, BUF, XOR, XNOR, DFF, UNKNOWN
 };
 
-// 將 GateType 轉成大寫字串，主要給報告與 debug 輸出使用
-std::string gateTypeToString(GateType type);
-
 // Represents a physical wire (net) connecting different components in the circuit
 struct Net {
     int id;                      // Unique index in the Netlist's 'nets' vector
@@ -65,7 +62,7 @@ struct Gate {
 struct ConeResult {
     std::unordered_set<int> netIds;
     std::unordered_map<int, std::vector<int>> children;
-    int rootNetId = -1;
+    std::vector<int> rootNetIds; // 支援多個 roots (支援 Bus)
 };
 
 // The core data structure representing the entire circuit graph
@@ -109,6 +106,14 @@ public:
     size_t getGateCount() const { return gates.size(); }
     size_t getNetCount() const { return nets.size(); }
 
+    // 取得邏輯 Wire 的總數（多位寬展開的 bit 如 "data[0]", "data[1]" 會被視為同一個 "data"）
+    size_t getLogicalWireCount() const;
+
+    // 將 GateType 轉成大寫字串
+    std::string gateTypeToString(GateType type) const;
+    // 將大寫字串轉成 GateType 
+    GateType stringToGateType(std::string str) const;
+
     // 依 gate instance name 查詢 gate ID；找不到回傳 -1
     int getGateId(const std::string& gateInstName) const;
 
@@ -130,11 +135,32 @@ public:
     // 找出含有 constant input 的 gates；type=UNKNOWN 表示不限定 gate type，constValue=-1 表示不限定 0/1
     std::vector<int> findGatesWithConstInput(GateType type = GateType::UNKNOWN, int constValue = -1) const;
 
+    // 找出含有 constant input 的 gates，並回傳它們的實例名稱 (Instance Name)
+    std::vector<std::string> getGateNamesWithConstInput(GateType type = GateType::UNKNOWN, int constValue = -1) const;
+
+    // 計算含有 constant input 的 gates 的數量
+    size_t countGatesWithConstInput(GateType type = GateType::UNKNOWN, int constValue = -1) const;
+
+    // 給定特定的 Gate Instance Name，回傳包含其類型與 I/O 連線狀態的格式化字串
+    std::string getGateInfo(const std::string& instName) const;
+
     // return which gate input pins are connected to a wire (Wire/PI/PO) (support for multi-bit signals)
     std::vector<int> getWireLoads(const std::string& wireName) const;
 
+    // 取得指定線路直接驅動的下一層邏輯閘名稱列表
+    std::vector<std::string> getWireLoadNames(const std::string& wireName) const;
+
+    // 計算指定線路直接驅動的下一層邏輯閘總數
+    size_t getWireLoadCount(const std::string& wireName) const;
+
     // return which gate input pins are connected to a gate output
     std::vector<int> getGateFanout(const std::string& gateInstName) const;
+
+    // 取得指定邏輯閘輸出端直接驅動的下一層邏輯閘名稱列表
+    std::vector<std::string> getGateFanoutNames(const std::string& gateInstName) const;
+
+    // 計算指定邏輯閘輸出端直接驅動的下一層邏輯閘總數
+    size_t getGateFanoutCount(const std::string& gateInstName) const;
 
     // Count the number of specific types of logic gates
     size_t getGateCountByType(GateType type) const;
@@ -152,6 +178,44 @@ public:
  
     // Transitive Fanout Cone：從 net 往前追到所有 PO（DFF 不穿越）
     ConeResult getTransitiveFanoutCone(const std::string& netName) const;
+
+    // 取得指定 Gate 的 Fanin 邏輯錐
+    ConeResult getGateTransitiveFaninCone(const std::string& gateName) const;
+    
+    // 取得指定 Gate 的 Fanout 邏輯錐
+    ConeResult getGateTransitiveFanoutCone(const std::string& gateName) const;
+
+    // 邏輯錐高階查詢 API (Logic Cone Analysis Wrappers)  
+    std::vector<std::string> getTransitiveFaninConeGateNames(const std::string& netName) const;
+    size_t getTransitiveFaninConeGateCount(const std::string& netName) const;
+    std::vector<std::string> getTransitiveFanoutConeGateNames(const std::string& netName) const;
+    size_t getTransitiveFanoutConeGateCount(const std::string& netName) const;
+    std::vector<std::string> getGateTransitiveFaninConeGateNames(const std::string& gateName) const;
+    size_t getGateTransitiveFaninConeGateCount(const std::string& gateName) const;
+    std::vector<std::string> getGateTransitiveFanoutConeGateNames(const std::string& gateName) const;
+    size_t getGateTransitiveFanoutConeGateCount(const std::string& gateName) const;
+
+    //  分析邏輯錐：尋找錐體內的最長路徑 (Local Critical Path)
+    std::pair<int, std::vector<int>> Netlist::findLongestPathInCone(const ConeResult& cone) const;
+
+    //  分析邏輯錐：尋找錐體內的最短路徑 (Min-Path / Hold Time Check)
+    std::pair<int, std::vector<int>> Netlist::findShortestPathInCone(const ConeResult& cone) const;
+
+    // 針對 Net 的 Fanin Cone 的時序與路徑分析
+    std::pair<int, std::vector<std::string>> getTransitiveFaninConeLongestPath(const std::string& netName) const;
+    std::pair<int, std::vector<std::string>> getTransitiveFaninConeShortestPath(const std::string& netName) const;
+
+    // 針對 Net 的 Fanout Cone 的時序與路徑分析
+    std::pair<int, std::vector<std::string>> getTransitiveFanoutConeLongestPath(const std::string& netName) const;
+    std::pair<int, std::vector<std::string>> getTransitiveFanoutConeShortestPath(const std::string& netName) const;
+
+    // 針對 Gate 的 Fanin Cone 的時序與路徑分析
+    std::pair<int, std::vector<std::string>> getGateTransitiveFaninConeLongestPath(const std::string& gateName) const;
+    std::pair<int, std::vector<std::string>> getGateTransitiveFaninConeShortestPath(const std::string& gateName) const;
+
+    // 針對 Gate 的 Fanout Cone 的時序與路徑分析
+    std::pair<int, std::vector<std::string>> getGateTransitiveFanoutConeLongestPath(const std::string& gateName) const;
+    std::pair<int, std::vector<std::string>> getGateTransitiveFanoutConeShortestPath(const std::string& gateName) const;
 
     // =========================================================================
     // 組合邏輯路徑分析 API (Combinational Path Analysis)
