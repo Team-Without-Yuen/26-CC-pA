@@ -1,9 +1,10 @@
 #include "include/core/Netlist.h"
 #include <string>
 #include <algorithm>
+#include <sstream>
 
 // 將 GateType enum 轉成大寫字串，供報告、debug、查詢結果輸出使用
-std::string Netlist::gateTypeToString(GateType type) {
+std::string Netlist::gateTypeToString(GateType type) const {
     switch (type) {
         case GateType::AND:  return "AND";
         case GateType::OR:   return "OR";
@@ -18,7 +19,7 @@ std::string Netlist::gateTypeToString(GateType type) {
     }
 }
 
-GateType Netlist::stringToGateType(std::string str) {
+GateType Netlist::stringToGateType(std::string str) const {
     std::transform(str.begin(), str.end(), str.begin(), ::toupper);
     if (str == "AND") return GateType::AND;
     if (str == "OR") return GateType::OR;
@@ -231,4 +232,56 @@ std::vector<int> Netlist::expandNetToBits(const std::string& name) const {
     for(const auto& p : bit_indices) bits.push_back(p.second);
     
     return bits;
+}
+
+std::string Netlist::getGateInfo(const std::string& instName) const {
+    const Gate* gate = findGate(instName);
+    if (!gate) {
+        return "Error: Gate instance '" + instName + "' not found.";
+    }
+
+    std::ostringstream oss;
+    oss << "Gate: " << gate->instName << "\n";
+    oss << "Type: " << gateTypeToString(gate->type) << "\n";
+    
+    // --- 處理 Inputs ---
+    oss << "Inputs:\n";
+    if (gate->inputNetIds.empty()) {
+        oss << "  (None)\n";
+    } else {
+        for (size_t i = 0; i < gate->inputNetIds.size(); ++i) {
+            int netId = gate->inputNetIds[i];
+            
+            // 嘗試取得腳位名稱 (支援 DFF 特殊腳位名稱，否則預設為 IN1, IN2...)
+            std::string pinName = (i < gate->inputPinNames.size()) ? 
+                                  gate->inputPinNames[i] : 
+                                  "IN" + std::to_string(i + 1);
+
+            oss << "  - " << pinName << " connected to net ";
+            
+            if (netId != -1) {
+                const Net& net = nets[netId];
+                oss << "'" << net.name << "'";
+                // 附加額外屬性標示
+                if (net.isConst) oss << " (Constant)";
+                if (net.isPI)    oss << " (Primary Input)";
+            } else {
+                oss << "(Unconnected)";
+            }
+            oss << "\n";
+        }
+    }
+
+    // --- 處理 Output ---
+    oss << "Outputs:\n";
+    if (gate->outputNetId != -1) {
+        const Net& net = nets[gate->outputNetId];
+        oss << "  - OUT connected to net '" << net.name << "'";
+        if (net.isPO) oss << " (Primary Output)";
+        oss << "\n";
+    } else {
+        oss << "  - OUT (Unconnected)\n";
+    }
+
+    return oss.str();
 }

@@ -98,6 +98,24 @@ std::vector<int> Netlist::findGatesWithConstInput(GateType type, int constValue)
     return result;
 }
 
+std::vector<std::string> Netlist::getGateNamesWithConstInput(GateType type, int constValue) const {
+    std::vector<std::string> result;
+    // 重用底層 API 取得 Gate IDs
+    std::vector<int> gateIds = findGatesWithConstInput(type, constValue);
+    
+    // 將 ID 轉換為 Instance Name
+    result.reserve(gateIds.size());
+    for (int id : gateIds) {
+        result.push_back(gates[id].instName);
+    }
+    
+    return result;
+}
+
+size_t Netlist::countGatesWithConstInput(GateType type, int constValue) const {
+    return findGatesWithConstInput(type, constValue).size();
+}
+
 // 回傳指定 wire / bus 被多少個 gate input pins 直接使用
 // return which gate input pins this wire is connected to.
 std::vector<int> Netlist::getWireLoads(const std::string& wireName) const {

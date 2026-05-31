@@ -110,9 +110,9 @@ public:
     size_t getLogicalWireCount() const;
 
     // 將 GateType 轉成大寫字串
-    std::string gateTypeToString(GateType type);
+    std::string gateTypeToString(GateType type) const;
     // 將大寫字串轉成 GateType 
-    GateType stringToGateType(std::string str);
+    GateType stringToGateType(std::string str) const;
 
     // 依 gate instance name 查詢 gate ID；找不到回傳 -1
     int getGateId(const std::string& gateInstName) const;
@@ -134,6 +134,15 @@ public:
 
     // 找出含有 constant input 的 gates；type=UNKNOWN 表示不限定 gate type，constValue=-1 表示不限定 0/1
     std::vector<int> findGatesWithConstInput(GateType type = GateType::UNKNOWN, int constValue = -1) const;
+
+    // 找出含有 constant input 的 gates，並回傳它們的實例名稱 (Instance Name)
+    std::vector<std::string> getGateNamesWithConstInput(GateType type = GateType::UNKNOWN, int constValue = -1) const;
+
+    // 計算含有 constant input 的 gates 的數量
+    size_t countGatesWithConstInput(GateType type = GateType::UNKNOWN, int constValue = -1) const;
+
+    // 給定特定的 Gate Instance Name，回傳包含其類型與 I/O 連線狀態的格式化字串
+    std::string getGateInfo(const std::string& instName) const;
 
     // return which gate input pins are connected to a wire (Wire/PI/PO) (support for multi-bit signals)
     std::vector<int> getWireLoads(const std::string& wireName) const;

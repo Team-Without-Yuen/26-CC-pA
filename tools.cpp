@@ -40,6 +40,9 @@ int main() {
             std::cout << "  getPrimaryInputs\n";
             std::cout << "  getPrimaryOutputs\n";
             std::cout << "  getLogicalWireCount\n";
+            std::cout << "  getGateNamesWithConstInput [gate_type] [0/1]\n";
+            std::cout << "  countGatesWithConstInput [gate_type] [0/1]\n";
+            std::cout << "  getGateInfo <inst_name>\n";
             std::cout << "  write <filepath> (This will save and exit the tool)\n";
         } 
         else if (command == "read") {
@@ -88,6 +91,52 @@ int main() {
         else if (command == "getLogicalWireCount") {
             std::cout << "Total Logical Wires: " << netlist.getLogicalWireCount() << "\n";
         } 
+        else if (command == "getGateNamesWithConstInput") {
+            GateType type = GateType::UNKNOWN;
+            int constVal = -1;
+            std::string typeStr;
+            
+            // 嘗試讀取選填參數
+            if (iss >> typeStr) {
+                type = netlist.stringToGateType(typeStr);
+                if (type == GateType::UNKNOWN) {
+                    std::cout << "Warning: Unknown gate type '" << typeStr << "', searching all types.\n";
+                }
+                iss >> constVal; // 如果還有數字就讀入常數值限制
+            }
+            
+            auto names = netlist.getGateNamesWithConstInput(type, constVal);
+            std::cout << "Gates with constant inputs (" << names.size() << " found):\n";
+            for (const auto& name : names) {
+                std::cout << "  - " << name << "\n";
+            }
+        }
+        else if (command == "countGatesWithConstInput") {
+            GateType type = GateType::UNKNOWN;
+            int constVal = -1;
+            std::string typeStr;
+            
+            // 嘗試讀取選填參數
+            if (iss >> typeStr) {
+                type = netlist.stringToGateType(typeStr);
+                if (type == GateType::UNKNOWN) {
+                    std::cout << "Warning: Unknown gate type '" << typeStr << "', searching all types.\n";
+                }
+                iss >> constVal;
+            }
+            
+            std::cout << "Total gates with constant inputs: " 
+                      << netlist.countGatesWithConstInput(type, constVal) << "\n";
+        }
+        else if (command == "getGateInfo") {
+            std::string instName;
+            // 檢查是否有給定必填的實例名稱
+            if (iss >> instName) {
+                std::cout << netlist.getGateInfo(instName) << "\n";
+            } else {
+                std::cout << "Usage: getGateInfo <inst_name>\n";
+            }
+        }
         else if (command == "write") {
             std::string filepath;
             if (iss >> filepath) {
