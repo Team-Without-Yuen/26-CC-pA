@@ -10,9 +10,6 @@ enum class GateType {
     AND, OR, NAND, NOR, NOT, BUF, XOR, XNOR, DFF, UNKNOWN
 };
 
-// 將 GateType 轉成大寫字串，主要給報告與 debug 輸出使用
-std::string gateTypeToString(GateType type);
-
 // Represents a physical wire (net) connecting different components in the circuit
 struct Net {
     int id;                      // Unique index in the Netlist's 'nets' vector
@@ -111,6 +108,11 @@ public:
 
     // 取得邏輯 Wire 的總數（多位寬展開的 bit 如 "data[0]", "data[1]" 會被視為同一個 "data"）
     size_t getLogicalWireCount() const;
+
+    // 將 GateType 轉成大寫字串
+    std::string gateTypeToString(GateType type);
+    // 將大寫字串轉成 GateType 
+    GateType stringToGateType(std::string str);
 
     // 依 gate instance name 查詢 gate ID；找不到回傳 -1
     int getGateId(const std::string& gateInstName) const;

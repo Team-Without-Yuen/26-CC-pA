@@ -3,7 +3,7 @@
 #include <algorithm>
 
 // 將 GateType enum 轉成大寫字串，供報告、debug、查詢結果輸出使用
-std::string gateTypeToString(GateType type) {
+std::string Netlist::gateTypeToString(GateType type) {
     switch (type) {
         case GateType::AND:  return "AND";
         case GateType::OR:   return "OR";
@@ -16,6 +16,21 @@ std::string gateTypeToString(GateType type) {
         case GateType::DFF:  return "DFF";
         default: return "UNKNOWN";
     }
+}
+
+GateType Netlist::stringToGateType(std::string str) {
+    std::transform(str.begin(), str.end(), str.begin(), ::toupper);
+    if (str == "AND") return GateType::AND;
+    if (str == "OR") return GateType::OR;
+    if (str == "NAND") return GateType::NAND;
+    if (str == "NOR") return GateType::NOR;
+    if (str == "NOT") return GateType::NOT;
+    if (str == "BUF") return GateType::BUF;
+    if (str == "XOR") return GateType::XOR;
+    if (str == "XNOR") return GateType::XNOR;
+    if (str == "DFF") return GateType::DFF;
+    
+    return GateType::UNKNOWN;
 }
 
 // 新增或取得一條 net；常數 1'b0 / 1'b1 會標記為 constant net
