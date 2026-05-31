@@ -195,6 +195,28 @@ public:
     std::vector<std::string> getGateTransitiveFanoutConeGateNames(const std::string& gateName) const;
     size_t getGateTransitiveFanoutConeGateCount(const std::string& gateName) const;
 
+    //  分析邏輯錐：尋找錐體內的最長路徑 (Local Critical Path)
+    std::pair<int, std::vector<int>> Netlist::findLongestPathInCone(const ConeResult& cone) const;
+
+    //  分析邏輯錐：尋找錐體內的最短路徑 (Min-Path / Hold Time Check)
+    std::pair<int, std::vector<int>> Netlist::findShortestPathInCone(const ConeResult& cone) const;
+
+    // 針對 Net 的 Fanin Cone 的時序與路徑分析
+    std::pair<int, std::vector<std::string>> getTransitiveFaninConeLongestPath(const std::string& netName) const;
+    std::pair<int, std::vector<std::string>> getTransitiveFaninConeShortestPath(const std::string& netName) const;
+
+    // 針對 Net 的 Fanout Cone 的時序與路徑分析
+    std::pair<int, std::vector<std::string>> getTransitiveFanoutConeLongestPath(const std::string& netName) const;
+    std::pair<int, std::vector<std::string>> getTransitiveFanoutConeShortestPath(const std::string& netName) const;
+
+    // 針對 Gate 的 Fanin Cone 的時序與路徑分析
+    std::pair<int, std::vector<std::string>> getGateTransitiveFaninConeLongestPath(const std::string& gateName) const;
+    std::pair<int, std::vector<std::string>> getGateTransitiveFaninConeShortestPath(const std::string& gateName) const;
+
+    // 針對 Gate 的 Fanout Cone 的時序與路徑分析
+    std::pair<int, std::vector<std::string>> getGateTransitiveFanoutConeLongestPath(const std::string& gateName) const;
+    std::pair<int, std::vector<std::string>> getGateTransitiveFanoutConeShortestPath(const std::string& gateName) const;
+
     // =========================================================================
     // 組合邏輯路徑分析 API (Combinational Path Analysis)
     //

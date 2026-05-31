@@ -107,6 +107,14 @@ int main() {
             std::cout << "  * NOTE: Add 'ToEndpoint' to any of the above commands for strict endpoint checking.\n";
             std::cout << "\n--------------------------------\n";
             std::cout << "  checkEquivalence <netA> <netB>\n";
+            std::cout << "  getTransitiveFaninConeLongestPath <net_name>\n";
+            std::cout << "  getTransitiveFaninConeShortestPath <net_name>\n";
+            std::cout << "  getTransitiveFanoutConeLongestPath <net_name>\n";
+            std::cout << "  getTransitiveFanoutConeShortestPath <net_name>\n";
+            std::cout << "  getGateTransitiveFaninConeLongestPath <gate_name>\n";
+            std::cout << "  getGateTransitiveFaninConeShortestPath <gate_name>\n";
+            std::cout << "  getGateTransitiveFanoutConeLongestPath <gate_name>\n";
+            std::cout << "  getGateTransitiveFanoutConeShortestPath <gate_name>\n";
             std::cout << "  write <filepath> (This will save and exit the tool)\n";
         } 
         else if (command == "read") {
@@ -448,6 +456,38 @@ int main() {
                 }
             } else {
                 std::cout << "Usage: checkEquivalence <netA> <netB>\n";
+            }
+        }
+        else if (command == "getTransitiveFaninConeLongestPath" || command == "getTransitiveFaninConeShortestPath" || 
+                 command == "getTransitiveFanoutConeLongestPath" || command == "getTransitiveFanoutConeShortestPath" ||
+                 command == "getGateTransitiveFaninConeLongestPath" || command == "getGateTransitiveFaninConeShortestPath" ||
+                 command == "getGateTransitiveFanoutConeLongestPath" || command == "getGateTransitiveFanoutConeShortestPath") {
+            
+            std::string targetName;
+            if (iss >> targetName) {
+                std::pair<int, std::vector<std::string>> result;
+                
+                // 根據指令呼叫對應的 API
+                if (command == "getTransitiveFaninConeLongestPath") result = netlist.getTransitiveFaninConeLongestPath(targetName);
+                else if (command == "getTransitiveFaninConeShortestPath") result = netlist.getTransitiveFaninConeShortestPath(targetName);
+                else if (command == "getTransitiveFanoutConeLongestPath") result = netlist.getTransitiveFanoutConeLongestPath(targetName);
+                else if (command == "getTransitiveFanoutConeShortestPath") result = netlist.getTransitiveFanoutConeShortestPath(targetName);
+                else if (command == "getGateTransitiveFaninConeLongestPath") result = netlist.getGateTransitiveFaninConeLongestPath(targetName);
+                else if (command == "getGateTransitiveFaninConeShortestPath") result = netlist.getGateTransitiveFaninConeShortestPath(targetName);
+                else if (command == "getGateTransitiveFanoutConeLongestPath") result = netlist.getGateTransitiveFanoutConeLongestPath(targetName);
+                else if (command == "getGateTransitiveFanoutConeShortestPath") result = netlist.getGateTransitiveFanoutConeShortestPath(targetName);
+                
+                if (result.second.empty()) {
+                    std::cout << "No combinational path found in this cone.\n";
+                } else {
+                    std::cout << "Path Depth: " << result.first << " gates.\n";
+                    std::cout << "Path Nodes:\n";
+                    for (const auto& nodeName : result.second) {
+                        std::cout << "  -> " << nodeName << "\n";
+                    }
+                }
+            } else {
+                std::cout << "Usage: " << command << " <target_name>\n";
             }
         }
         else if (command == "write") {
