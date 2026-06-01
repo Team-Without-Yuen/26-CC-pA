@@ -501,4 +501,20 @@ public:
         if (!isEndpoint(PathNode(PathNodeType::Net, endNet))) return CombinationalPath();
         return findLongestCombinationalPathThroughAvoiding(startNet, endNet, requiredNodes, avoidedNodes);
     }
+
+    // =================================================
+    // Netlist Mutation / ECO(Engineering Change Order)
+    // =================================================
+
+    // 重新命名 Gate。如果舊名字找不到，則回傳 false。
+    bool renameGate(const std::string& oldName, const std::string& newName);
+
+    // 重新命名 Net。如果舊名字找不到，則回傳 false。
+    bool renameNet(const std::string& oldName, const std::string& newName);
+
+    // 斷開連線：將指定 Gate 的輸入端與指定的 Net 斷開。
+    bool disconnectGateInput(const std::string& gateName, const std::string& netName);
+
+    // 建立連線：將指定 Gate 的輸入端連接到指定的 Net。
+    bool connectGateInput(const std::string& gateName, const std::string& netName, int pinIndex = -1);
 };
