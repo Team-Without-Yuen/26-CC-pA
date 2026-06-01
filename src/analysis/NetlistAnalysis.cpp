@@ -5,6 +5,8 @@
 #include <functional>
 #include <queue>
 #include <chrono>
+#include <string>
+#include <vector>
 
 // 客製化 CaDiCaL 終止器：用來設定 Wall-clock Time 限制
 class TimeLimitTerminator : public CaDiCaL::Terminator {
@@ -83,6 +85,7 @@ std::vector<int> Netlist::findGatesWithConstInput(GateType type, int constValue)
 
         bool matched = false;
         for (int netId : gate.inputNetIds) {
+            if (netId < 0) continue;
             const Net& net = getNet(netId);
             if (!net.isConst) {
                 continue;
@@ -253,6 +256,7 @@ bool Netlist::checkEquivalence(const std::string& nameA, const std::string& name
                 // 如果這個 Gate 還沒被加入過，就加入並展開它的 Input
                 if (gatesToEncode.insert(driverGate.id).second) {
                     for (int inNetId : driverGate.inputNetIds) {
+                        if (inNetId < 0) continue; 
                         if (visitedNets.insert(inNetId).second) {
                             q.push(inNetId);
                         }
@@ -408,6 +412,7 @@ ConeResult Netlist::getTransitiveFaninCone(const std::string& netName) const {
 
             for (int i = 0; i < (int)driver.inputNetIds.size(); i++) {
                 int inNetId = driver.inputNetIds[i];
+                if (inNetId < 0) continue;
                 result.children[currNetId].push_back(inNetId);
                 
                 if (result.netIds.insert(inNetId).second) { 
