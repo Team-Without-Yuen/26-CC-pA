@@ -120,7 +120,7 @@ int main(int argc, char* argv[]) {
     avoid2.push_back("n4156");
     std::vector<std::vector<std::string>> paths6 = myCircuit.getAllPaths("n13", "n25[1]", avoid2, true);
     std::cout << "\n[All Paths PI->PO] n13 -> n25[1] (avoiding n4156)\n";
-    std::cout << "  -> Total paths: " << paths6.size() << "\\n";
+    std::cout << "  -> Total paths: " << paths6.size() << "\n";
     for (int i = 0; i < (int)paths6.size(); i++) {
         std::cout << "  Path " << i+1 << ": ";
         for (int j = 0; j < (int)paths6[i].size(); j++)
@@ -128,6 +128,53 @@ int main(int argc, char* argv[]) {
         std::cout << "\n";
     }
 
+     // --- B1+B2: Trim dead logic ---
+    std::cout << "\n[B1+B2] Trimming dead logic...\n";
+    int removed = myCircuit.trimDeadLogic();
+    std::cout << "  -> Removed " << removed << " dead gate(s).\n";
+    std::cout << "  -> Gates remaining: " << myCircuit.getGateCount() << "\n";
+    std::cout << "----------------------------------------\n";
+ 
+    // --- B3: Collapse back-to-back inverters ---
+    std::cout << "\n[B3] Collapsing back-to-back inverter pairs...\n";
+    int collapsed = myCircuit.collapseBackToBackInverters();
+    std::cout << "  -> Collapsed " << collapsed << " inverter pair(s).\n";
+    std::cout << "  -> Gates remaining: " << myCircuit.getGateCount() << "\n";
+    std::cout << "----------------------------------------\n";
+ 
+    // --- B4: Insert buffers for fanout <= 4 ---
+    std::cout << "\n[B4] Inserting buffers for fanout <= 4...\n";
+    int inserted = myCircuit.insertBuffersForFanout(4);
+    std::cout << "  -> Inserted " << inserted << " buffer(s).\n";
+    std::cout << "  -> Gates now: " << myCircuit.getGateCount() << "\n";
+    std::cout << "----------------------------------------\n";
+ 
+    // --- C1: Reconstruct to AND-NOT only ---
+    std::cout << "\n[C1] Reconstructing to AND-NOT only...\n";
+    int c1Added = myCircuit.reconstructToAndNot();
+    std::cout << "  -> Added " << c1Added << " new gate(s).\n";
+    std::cout << "  -> Gates now: " << myCircuit.getGateCount() << "\n";
+    // 驗證只剩 AND 和 NOT（以及 DFF）
+    std::map<GateType, int> counts = myCircuit.countGatesByType();
+    std::cout << "  -> AND: " << counts[GateType::AND]
+              << "  NOT: " << counts[GateType::NOT]
+              << "  DFF: " << counts[GateType::DFF]
+              << "  Other: " << (counts[GateType::OR] + counts[GateType::NAND] +
+                                 counts[GateType::NOR] + counts[GateType::XOR]  +
+                                 counts[GateType::XNOR] + counts[GateType::BUF]) << "\n";
+    std::cout << "----------------------------------------\n";
+ 
+    // --- C2: Merge equivalent gates ---
+    std::cout << "\n[C2] Merging structurally equivalent gates...\n";
+    int c2Merged = myCircuit.mergeEquivalentGates();
+    std::cout << "  -> Merged " << c2Merged << " gate(s).\n";
+    std::cout << "  -> Gates now: " << myCircuit.getGateCount() << "\n";
+    std::cout << "----------------------------------------\n";
+ 
+    // --- 輸出修改後的電路 ---
+    std::cout << "\n[Step 2] Writing output to " << outputFilePath << "...\n";
+    if (!writer.write(outputFilePath, myCircuit)) return -1;
+    std::cout << "  -> Done.\n";
 
     return 0; 
 }
