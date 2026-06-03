@@ -2,7 +2,41 @@
 #include "include/lib/cadical.hpp"
 #include <algorithm>
 #include <unordered_set>
+#include <functional>
 #include <queue>
+#include <chrono>
+#include <string>
+#include <vector>
+
+// 客製化 CaDiCaL 終止器：用來設定 Wall-clock Time 限制
+class TimeLimitTerminator : public CaDiCaL::Terminator {
+private:
+    std::chrono::time_point<std::chrono::steady_clock> start_time;
+    double time_limit_seconds;
+    int call_counter; // 新增一個計數器
+
+public:
+    // 傳入想設定的秒數，並記錄當下時間
+    TimeLimitTerminator(double limit) : time_limit_seconds(limit) {
+        start_time = std::chrono::steady_clock::now();
+    }
+
+    // CaDiCaL 內部會在解題過程中頻繁呼叫這個函式
+    // 如果回傳 true，CaDiCaL 就會立刻中斷並回傳 UNKNOWN (0)
+    bool terminate() override {
+        // 每被呼叫 1000 次，才真正去讀取一次系統時間，以減少頻繁讀取時間帶來的效能影響
+        if (++call_counter < 1000) {
+            return false; 
+        }
+        
+        call_counter = 0; // 重置計數器
+
+        // 真正檢查時間
+        auto now = std::chrono::steady_clock::now();
+        std::chrono::duration<double> elapsed = now - start_time;
+        return elapsed.count() >= time_limit_seconds; 
+    }
+};
 
 // 統計每一種 gate type 的數量，供「gate count breakdown」類 prompt 使用
 std::map<GateType, int> Netlist::countGatesByType() const {
@@ -51,6 +85,7 @@ std::vector<int> Netlist::findGatesWithConstInput(GateType type, int constValue)
 
         bool matched = false;
         for (int netId : gate.inputNetIds) {
+            if (netId < 0) continue;
             const Net& net = getNet(netId);
             if (!net.isConst) {
                 continue;
@@ -65,6 +100,24 @@ std::vector<int> Netlist::findGatesWithConstInput(GateType type, int constValue)
         }
     }
     return result;
+}
+
+std::vector<std::string> Netlist::getGateNamesWithConstInput(GateType type, int constValue) const {
+    std::vector<std::string> result;
+    // 重用底層 API 取得 Gate IDs
+    std::vector<int> gateIds = findGatesWithConstInput(type, constValue);
+    
+    // 將 ID 轉換為 Instance Name
+    result.reserve(gateIds.size());
+    for (int id : gateIds) {
+        result.push_back(gates[id].instName);
+    }
+    
+    return result;
+}
+
+size_t Netlist::countGatesWithConstInput(GateType type, int constValue) const {
+    return findGatesWithConstInput(type, constValue).size();
 }
 
 // 回傳指定 wire / bus 被多少個 gate input pins 直接使用
@@ -106,6 +159,25 @@ std::vector<int> Netlist::getWireLoads(const std::string& wireName) const {
     return {};
 }
 
+std::vector<std::string> Netlist::getWireLoadNames(const std::string& wireName) const {
+    std::vector<std::string> result;
+    // 呼叫你原有的底層 API 取得下游 Gate IDs
+    std::vector<int> loadIds = getWireLoads(wireName);
+    
+    // 將 ID 轉換為 Instance Name
+    result.reserve(loadIds.size());
+    for (int id : loadIds) {
+        result.push_back(gates[id].instName);
+    }
+    
+    return result;
+}
+
+size_t Netlist::getWireLoadCount(const std::string& wireName) const {
+    // 直接計算底層 API 回傳的陣列大小
+    return getWireLoads(wireName).size();
+}
+
 // 回傳指定 gate output net 直接驅動多少個 gate input pins
 // return which gate input pins are connected to this gate's output
 std::vector<int> Netlist::getGateFanout(const std::string& gateInstName) const {
@@ -126,6 +198,25 @@ std::vector<int> Netlist::getGateFanout(const std::string& gateInstName) const {
     // 3. Return the vector of gate IDs connected to this wire.
     const Net& outNet = nets[gate.outputNetId];
     return outNet.loadGateIds;
+}
+
+std::vector<std::string> Netlist::getGateFanoutNames(const std::string& gateInstName) const {
+    std::vector<std::string> result;
+    // 呼叫你原有的底層 API 取得 Gate IDs
+    std::vector<int> fanoutIds = getGateFanout(gateInstName);
+    
+    // 將 ID 轉換為 Instance Name
+    result.reserve(fanoutIds.size());
+    for (int id : fanoutIds) {
+        result.push_back(gates[id].instName);
+    }
+    
+    return result;
+}
+
+size_t Netlist::getGateFanoutCount(const std::string& gateInstName) const {
+    // 直接計算底層 API 回傳的陣列大小
+    return getGateFanout(gateInstName).size();
 }
 
 // Count the number of logic gates of specific types
@@ -165,6 +256,7 @@ bool Netlist::checkEquivalence(const std::string& nameA, const std::string& name
                 // 如果這個 Gate 還沒被加入過，就加入並展開它的 Input
                 if (gatesToEncode.insert(driverGate.id).second) {
                     for (int inNetId : driverGate.inputNetIds) {
+                        if (inNetId < 0) continue; 
                         if (visitedNets.insert(inNetId).second) {
                             q.push(inNetId);
                         }
@@ -266,8 +358,13 @@ bool Netlist::checkEquivalence(const std::string& nameA, const std::string& name
     }
     solver.add(0);
 
+    TimeLimitTerminator terminator(30.0); 
+    solver.connect_terminator(&terminator); // 把計時器接上 Solver
+
     // 呼叫求解工具，查看是否存在讓 Diff 為 1 的輸入組合
     int res = solver.solve();
+
+    solver.disconnect_terminator();
 
     const int SAT = 10;
     const int UNSAT = 20;
@@ -279,142 +376,46 @@ bool Netlist::checkEquivalence(const std::string& nameA, const std::string& name
         return false; // 找到反例，代表不等價
     } else {
         // res == 0 的情況，通常是 solver 被手動中斷，或設定了時間/資源上限
-        // 這裡保守起見回傳 false，或是拋出例外 (Exception)
+        // 這裡保守起見回傳 false
         return false; 
     }
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  第五種：最長組合邏輯路徑 (getLongestPath)
-//
-//  策略：DFS + 記憶化
-//  - 從 startNet 出發，沿 loadGateIds → outputNetId 往終點走
-//  - 每穿越一個 gate，深度 +1
-//  - 遇到 DFF 不穿越
-//  - memo 記錄每個 net 到終點的最長深度(first)與路徑(second)，避免重複計算
-//  - inStack 偵測組合邏輯迴路（防護用）
-//  兩層設計：
-//  - dfsLongest（內部）：用 net ID 做遞迴計算，速度快
-//  - getLongestPath（外部介面）：接受 net name，轉成 ID 後呼叫內部函式，結果再轉回 name 回傳
-// ─────────────────────────────────────────────────────────────────────────────
-
-static std::pair<int, std::vector<int>> dfsLongest(
-    int currNetId,
-    int endNetId,
-    const std::vector<Gate>& gates,
-    const std::vector<Net>& nets,
-    std::unordered_map<int, std::pair<int, std::vector<int>>>& memo,
-    std::unordered_set<int>& inStack
-) {
-    // 找到終點
-    if (currNetId == endNetId) {
-        return std::make_pair(0, std::vector<int>(1, currNetId));
-    }
-
-    // 已計算過:直接回傳結果
-    std::unordered_map<int, std::pair<int, std::vector<int>>>::iterator it = memo.find(currNetId);
-    if (it != memo.end()) {
-        return it->second;
-    }
-
-    // 偵測loop:回傳 -1
-    if (inStack.count(currNetId)) {
-        return std::make_pair(-1, std::vector<int>());
-    }
-
-    inStack.insert(currNetId);
-
-    const Net& net = nets[currNetId];
-    std::pair<int, std::vector<int>> best = std::make_pair(-1, std::vector<int>());
-
-    for (int i = 0; i < (int)net.loadGateIds.size(); i++) { // 每條子路徑都試試看，只保留最長的那條
-        int gateId = net.loadGateIds[i];
-        const Gate& gate = gates[gateId];
-
-        // DFF 不穿越
-        if (gate.type == GateType::DFF) continue;
-
-        int outNetId = gate.outputNetId;
-        if (outNetId < 0) continue;
-
-        std::pair<int, std::vector<int>> sub = dfsLongest(outNetId, endNetId, gates, nets, memo, inStack);
-        int depth = sub.first;
-        std::vector<int> path = sub.second;
-
-        if (depth >= 0 && depth + 1 > best.first) {
-            best.first = depth + 1;
-            best.second = path;
-            best.second.insert(best.second.begin(), currNetId);
-        }
-    }
-
-    // 離開這個 net 時，從 inStack 移除，並把結果存進 memo
-    inStack.erase(currNetId);
-    memo[currNetId] = best;
-    return best;
-}
-
-std::pair<int, std::vector<std::string>> Netlist::getLongestPath(
-    const std::string& startNet,
-    const std::string& endNet
-) const {
-    int startId = getNetId(startNet);
-    int endId   = getNetId(endNet);
-
-    if (startId < 0 || endId < 0) return std::make_pair(-1, std::vector<std::string>());
-    if (startId == endId)         return std::make_pair(0, std::vector<std::string>(1, startNet));
-
-    std::unordered_map<int, std::pair<int, std::vector<int>>> memo;
-    std::unordered_set<int> inStack;
-
-    std::pair<int, std::vector<int>> result_pair = dfsLongest(startId, endId, gates, nets, memo, inStack);
-    int depth = result_pair.first;
-    std::vector<int> netIdPath = result_pair.second;
-
-    if (depth < 0) return std::make_pair(-1, std::vector<std::string>());
-
-    std::vector<std::string> namePath; // ID 轉回 name
-    namePath.reserve(netIdPath.size());
-    for (int i = 0; i < (int)netIdPath.size(); i++)
-        namePath.push_back(nets[netIdPath[i]].name);
-
-    return std::make_pair(depth, namePath);
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  Transitive Fanin Cone
-//  從指定 net 往回追，找出所有影響它的 net（往 PI 方向）
-//  DFF 視為邊界，不穿越
-//
-//  樹狀結構：children[A] = {B, C} 表示 A 是由 B、C 驅動的
-// ─────────────────────────────────────────────────────────────────────────────
+//  支援 Bus 的 Transitive Fanin Cone (多源 BFS)
 ConeResult Netlist::getTransitiveFaninCone(const std::string& netName) const {
     ConeResult result;
-    int startId = getNetId(netName);
-    if (startId < 0) return result;
+    
+    // 展開 Bus，取得所有起點
+    std::vector<int> startIds = expandNetToBits(netName);
+    if (startIds.empty()) return result;
 
-    result.rootNetId = startId;
-
+    result.rootNetIds = startIds;
     std::queue<int> q; // BFS
-    q.push(startId);
-    result.netIds.insert(startId);
 
+    // 將所有起點同時推入 Queue 並標記為已訪問
+    for (int id : startIds) {
+        q.push(id);
+        result.netIds.insert(id);
+    }
+
+    // BFS 核心邏輯
     while (!q.empty()) {
         int currNetId = q.front();
         q.pop();
 
         const Net& net = nets[currNetId];
 
-        if (net.driverGateId >= 0) { // net 有沒有 driver gate:有的話取出來
+        if (net.driverGateId >= 0) {
             const Gate& driver = gates[net.driverGateId];
 
-            // DFF 不穿越
             if (driver.type == GateType::DFF) continue;
 
             for (int i = 0; i < (int)driver.inputNetIds.size(); i++) {
                 int inNetId = driver.inputNetIds[i];
+                if (inNetId < 0) continue;
                 result.children[currNetId].push_back(inNetId);
-                if (result.netIds.insert(inNetId).second) { // 沒訪問過就繼續往回走
+                
+                if (result.netIds.insert(inNetId).second) { 
                     q.push(inNetId);
                 }
             }
@@ -424,24 +425,24 @@ ConeResult Netlist::getTransitiveFaninCone(const std::string& netName) const {
     return result;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  Transitive Fanout Cone
-//  從指定 net 往前追，找出所有被它影響的 net（往 PO 方向）
-//  DFF 視為邊界，不穿越
-//
-//  樹狀結構：children[A] = {B, C} 表示 A 驅動了 B 和 C
-// ─────────────────────────────────────────────────────────────────────────────
+//  支援 Bus 的 Transitive Fanout Cone (多源 BFS)
 ConeResult Netlist::getTransitiveFanoutCone(const std::string& netName) const {
     ConeResult result;
-    int startId = getNetId(netName);
-    if (startId < 0) return result;
+    
+    // 展開 Bus，取得所有起點
+    std::vector<int> startIds = expandNetToBits(netName);
+    if (startIds.empty()) return result;
 
-    result.rootNetId = startId;
-
+    result.rootNetIds = startIds;
     std::queue<int> q;
-    q.push(startId);
-    result.netIds.insert(startId);
 
+    // 將所有起點同時推入 Queue
+    for (int id : startIds) {
+        q.push(id);
+        result.netIds.insert(id);
+    }
+
+    // BFS 核心邏輯
     while (!q.empty()) {
         int currNetId = q.front();
         q.pop();
@@ -452,14 +453,14 @@ ConeResult Netlist::getTransitiveFanoutCone(const std::string& netName) const {
             int gateId = net.loadGateIds[i];
             const Gate& gate = gates[gateId];
 
-            // DFF 不穿越
             if (gate.type == GateType::DFF) continue;
 
             int outNetId = gate.outputNetId;
             if (outNetId < 0) continue;
 
             result.children[currNetId].push_back(outNetId);
-            if (result.netIds.insert(outNetId).second) { // 沒訪問過就繼續往前追
+            
+            if (result.netIds.insert(outNetId).second) { 
                 q.push(outNetId);
             }
         }
@@ -468,110 +469,345 @@ ConeResult Netlist::getTransitiveFanoutCone(const std::string& netName) const {
     return result;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  第三種 / 第六種：找所有路徑 (getAllPaths)
-//
-//  策略：DFS，不使用記憶化（每條路徑都要完整記錄）
-//  - 從 startNet 出發，沿 loadGateIds → outputNetId 往終點走
-//  - 遇到 DFF 不穿越
-//  - avoidNets：需要避開的 net，遇到就跳過
-//  - 第六種：額外驗證起點是 PI、終點是 PO
-// ─────────────────────────────────────────────────────────────────────────────
- 
-static void dfsAllPaths(
-    int currNetId,
-    int endNetId,
-    const std::vector<Gate>& gates,
-    const std::vector<Net>& nets,
-    const std::unordered_set<int>& avoidIds,
-    std::vector<int>& currentPath,
-    std::unordered_set<int>& visited,
-    std::vector<std::vector<int>>& allPaths
-) {
-    // 找到終點
-    if (currNetId == endNetId) {
-        currentPath.push_back(currNetId);
-        allPaths.push_back(currentPath);
-        currentPath.pop_back();
-        return;
-    }
- 
-    // 已在當前路徑上（避免迴路）
-    if (visited.count(currNetId)) return;
- 
-    // 需要避開的 net
-    if (avoidIds.count(currNetId)) return;
- 
-    visited.insert(currNetId);
-    currentPath.push_back(currNetId);
- 
-    const Net& net = nets[currNetId];
-    for (int i = 0; i < (int)net.loadGateIds.size(); i++) {
-        int gateId = net.loadGateIds[i];
-        const Gate& gate = gates[gateId];
- 
-        // DFF 不穿越
-        if (gate.type == GateType::DFF) continue;
- 
-        int outNetId = gate.outputNetId;
-        if (outNetId < 0) continue;
- 
-        // 避開指定 net
-        if (avoidIds.count(outNetId)) continue;
- 
-        dfsAllPaths(outNetId, endNetId, gates, nets, avoidIds, currentPath, visited, allPaths);
-    }
- 
-    currentPath.pop_back();
-    visited.erase(currNetId);
+ConeResult Netlist::getGateTransitiveFaninCone(const std::string& gateName) const {
+    int gateId = getGateId(gateName);
+    if (gateId < 0) return ConeResult(); // 找不到該 Gate
+
+    const Gate& gate = gates[gateId];
+    
+    // 如果這個 Gate 沒有輸出線 (例如輸出懸空)
+    if (gate.outputNetId < 0) return ConeResult(); 
+
+    // Gate 的 Fanin 錐，就是它「輸出線」的 Fanin 錐
+    return getTransitiveFaninCone(nets[gate.outputNetId].name);
 }
- 
-std::vector<std::vector<std::string>> Netlist::getAllPaths(
-    const std::string& startNet,
-    const std::string& endNet,
-    const std::vector<std::string>& avoidNets,
-    bool requirePItoPort
-) const {
-    std::vector<std::vector<std::string>> result;
- 
-    int startId = getNetId(startNet);
-    int endId   = getNetId(endNet);
- 
-    if (startId < 0 || endId < 0) return result;
- 
-    // 第六種：驗證起點是 PI、終點是 PO
-    if (requirePItoPort) {
-        if (!nets[startId].isPI) {
-            return result; // 起點不是 PI
-        }
-        if (!nets[endId].isPO) {
-            return result; // 終點不是 PO
-        }
+
+ConeResult Netlist::getGateTransitiveFanoutCone(const std::string& gateName) const {
+    int gateId = getGateId(gateName);
+    if (gateId < 0) return ConeResult();
+
+    const Gate& gate = gates[gateId];
+    if (gate.outputNetId < 0) return ConeResult();
+
+    // Gate 的 Fanout 錐，就是它「輸出線」的 Fanout 錐
+    return getTransitiveFanoutCone(nets[gate.outputNetId].name);
+}
+
+// --- 針對 Net 的 Fanin ---
+std::vector<std::string> Netlist::getTransitiveFaninConeGateNames(const std::string& netName) const {
+    ConeResult cone = getTransitiveFaninCone(netName);
+    std::unordered_set<int> uniqueGates;
+    
+    // Fanin 邏輯錐中的 Gate，就是錐內所有 Net 的 Driver Gate
+    for (int netId : cone.netIds) {
+        int driverId = nets[netId].driverGateId;
+        if (driverId != -1) uniqueGates.insert(driverId);
     }
- 
-    // 建立 avoidNets 的 ID 集合
-    std::unordered_set<int> avoidIds;
-    for (int i = 0; i < (int)avoidNets.size(); i++) {
-        int id = getNetId(avoidNets[i]);
-        if (id >= 0) avoidIds.insert(id);
-    }
- 
-    std::vector<int> currentPath;
-    std::unordered_set<int> visited;
-    std::vector<std::vector<int>> allPathIds;
- 
-    dfsAllPaths(startId, endId, gates, nets, avoidIds, currentPath, visited, allPathIds);
- 
-    // ID 轉回 name
-    for (int i = 0; i < (int)allPathIds.size(); i++) {
-        std::vector<std::string> namePath;
-        for (int j = 0; j < (int)allPathIds[i].size(); j++) {
-            namePath.push_back(nets[allPathIds[i][j]].name);
-        }
-        result.push_back(namePath);
-    }
- 
+    
+    std::vector<std::string> result;
+    result.reserve(uniqueGates.size());
+    for (int id : uniqueGates) result.push_back(gates[id].instName);
     return result;
+}
+
+size_t Netlist::getTransitiveFaninConeGateCount(const std::string& netName) const {
+    return getTransitiveFaninConeGateNames(netName).size();
+}
+
+// --- 針對 Net 的 Fanout ---
+std::vector<std::string> Netlist::getTransitiveFanoutConeGateNames(const std::string& netName) const {
+    ConeResult cone = getTransitiveFanoutCone(netName);
+    std::unordered_set<int> uniqueGates;
+    
+    // Fanout 邏輯錐中的 Gate，就是錐內所有 Net 的 Load Gates
+    for (int netId : cone.netIds) {
+        for (int loadId : nets[netId].loadGateIds) {
+            uniqueGates.insert(loadId);
+        }
+    }
+    
+    std::vector<std::string> result;
+    result.reserve(uniqueGates.size());
+    for (int id : uniqueGates) result.push_back(gates[id].instName);
+    return result;
+}
+
+size_t Netlist::getTransitiveFanoutConeGateCount(const std::string& netName) const {
+    return getTransitiveFanoutConeGateNames(netName).size();
+}
+
+// --- 針對 Gate 的 Fanin ---
+std::vector<std::string> Netlist::getGateTransitiveFaninConeGateNames(const std::string& gateName) const {
+    ConeResult cone = getGateTransitiveFaninCone(gateName);
+    std::unordered_set<int> uniqueGates;
+    
+    for (int netId : cone.netIds) {
+        int driverId = nets[netId].driverGateId;
+        if (driverId != -1) uniqueGates.insert(driverId);
+    }
+    
+    std::vector<std::string> result;
+    result.reserve(uniqueGates.size());
+    for (int id : uniqueGates) result.push_back(gates[id].instName);
+    return result;
+}
+
+size_t Netlist::getGateTransitiveFaninConeGateCount(const std::string& gateName) const {
+    return getGateTransitiveFaninConeGateNames(gateName).size();
+}
+
+// --- 針對 Gate 的 Fanout ---
+std::vector<std::string> Netlist::getGateTransitiveFanoutConeGateNames(const std::string& gateName) const {
+    ConeResult cone = getGateTransitiveFanoutCone(gateName);
+    std::unordered_set<int> uniqueGates;
+    
+    for (int netId : cone.netIds) {
+        for (int loadId : nets[netId].loadGateIds) {
+            uniqueGates.insert(loadId);
+        }
+    }
+    
+    std::vector<std::string> result;
+    result.reserve(uniqueGates.size());
+    for (int id : uniqueGates) result.push_back(gates[id].instName);
+    return result;
+}
+
+size_t Netlist::getGateTransitiveFanoutConeGateCount(const std::string& gateName) const {
+    return getGateTransitiveFanoutConeGateNames(gateName).size();
+}
+
+// 判斷指定的節點 (Net 或 Gate) 是否為終點。
+// combinationalOnly = true: 如果下游只接 DFF，也視為終點。
+// combinationalOnly = false: 必須真的沒有接任何東西才算終點。
+bool Netlist::isEndpoint(const PathNode& node, bool combinationalOnly) const {
+    int targetNetId = -1;
+
+    // 找出要檢查的目標: Net ID
+    if (node.type == PathNodeType::Net) {
+        targetNetId = getNetId(node.name);
+    } else {
+        // 如果傳入的是 Gate，我們要檢查的是「這個 Gate 的輸出線」是不是終點
+        int gateId = getGateId(node.name);
+        if (gateId >= 0) {
+            targetNetId = gates[gateId].outputNetId;
+        } else {
+            return false; // 找不到該 Gate
+        }
+    }
+
+    // 如果找不到該 Net，或者 Gate 的輸出端本身就是懸空的 (-1)
+    // 在圖論上，死路一條就是終點
+    if (targetNetId < 0) {
+        return true; 
+    }
+
+    const Net& net = nets[targetNetId];
+
+    // 如果這條線沒有驅動任何下游 Gate，那它絕對是終點 (Absolute Endpoint)
+    if (net.loadGateIds.empty()) {
+        return true;
+    }
+
+    // 如果開啟了組合邏輯模式，檢查下游是不是「只有 DFF」
+    if (combinationalOnly) {
+        for (int gateId : net.loadGateIds) {
+            // 只要發現下游有任何一個「非 DFF」的邏輯閘，就代表路還能繼續走
+            if (gates[gateId].type != GateType::DFF) {
+                return false; 
+            }
+        }
+        // 迴圈跑完都沒 return，代表下游 100% 全部都是 DFF
+        return true; 
+    }
+
+    // 如果是嚴格拓樸模式，且 loadGateIds 裡面有東西，就不是終點
+    return false;
+}
+
+//  分析邏輯錐：尋找錐體內的最長路徑 (Local Critical Path)
+//  回傳值：std::pair<深度, 路徑的 Net IDs>
+std::pair<int, std::vector<int>> Netlist::findLongestPathInCone(const ConeResult& cone) const {
+    // 記錄 <當前節點, <最大深度, 最佳路徑的下一個節點>>
+    std::unordered_map<int, std::pair<int, int>> memo;
+
+    // 內部 Lambda 遞迴函式：回傳只傳回「深度 (int)」
+    std::function<int(int)> dfsLongest = [&](int currNetId) -> int {
+        if (memo.count(currNetId)) {
+            return memo[currNetId].first;
+        }
+
+        int maxLength = 0;
+        int bestNextNode = -1; // -1 代表沒有下游 (自己是最底端)
+
+        auto it = cone.children.find(currNetId);
+        if (it != cone.children.end() && !it->second.empty()) {
+            for (int childNetId : it->second) {
+                
+                int childLength = dfsLongest(childNetId);
+                
+                // 如果這條路更長，就更新最大深度與「下一個節點」
+                if (childLength + 1 > maxLength) {
+                    maxLength = childLength + 1;
+                    bestNextNode = childNetId;
+                }
+            }
+        }
+
+        // 存檔並回傳
+        memo[currNetId] = {maxLength, bestNextNode};
+        return maxLength;
+    };
+
+    // 啟動引擎
+    int globalMaxLength = -1;
+    int bestRootId = -1;
+
+    for (int rootId : cone.rootNetIds) {
+        int length = dfsLongest(rootId);
+        if (length > globalMaxLength) {
+            globalMaxLength = length;
+            bestRootId = rootId;
+        }
+    }
+
+    // 防呆：如果沒有找到任何路徑
+    if (globalMaxLength == -1) {
+        return {-1, {}};
+    }
+
+    // 路徑重建 (只執行一次)
+    std::vector<int> longestPath;
+    int curr = bestRootId;
+    
+    while (curr != -1) {
+        longestPath.push_back(curr);
+        curr = memo[curr].second; // 順藤摸瓜找下一個節點
+    }
+
+    return {globalMaxLength, longestPath};
+}
+
+std::pair<int, std::vector<int>> Netlist::findShortestPathInCone(const ConeResult& cone) const {
+    if (cone.rootNetIds.empty()) return {-1, {}};
+
+    std::queue<int> q;
+    std::unordered_set<int> visited;
+    std::unordered_map<int, int> parent; // 紀錄是誰擴展到當前節點的，用於重建路徑
+
+    // 初始化多源 BFS
+    for (int rootId : cone.rootNetIds) {
+        q.push(rootId);
+        visited.insert(rootId);
+        parent[rootId] = -1; // -1 代表起點
+    }
+
+    int targetLeaf = -1;
+    int currentDepth = 0;
+
+    // BFS 擴展
+    while (!q.empty()) {
+        int levelSize = q.size();
+        
+        for (int i = 0; i < levelSize; ++i) {
+            int curr = q.front();
+            q.pop();
+
+            auto it = cone.children.find(curr);
+            
+            // 如果這是一個葉節點 (沒有 downstream)
+            if (it == cone.children.end() || it->second.empty()) {
+                targetLeaf = curr;
+                break; // 找到第一個葉節點就是全局最短路徑，直接中斷內圈！
+            }
+
+            for (int childNetId : it->second) {
+                if (visited.find(childNetId) == visited.end()) {
+                    visited.insert(childNetId);
+                    parent[childNetId] = curr; // 紀錄路徑來源
+                    q.push(childNetId);
+                }
+            }
+        }
+
+        if (targetLeaf != -1) {
+            break; // 中斷外圈
+        }
+        currentDepth++;
+    }
+
+    if (targetLeaf == -1) return {-1, {}};
+
+    // 路徑重建
+    std::vector<int> path;
+    int curr = targetLeaf;
+    while (curr != -1) {
+        path.push_back(curr);
+        curr = parent[curr];
+    }
+    std::reverse(path.begin(), path.end()); // 因為是從葉節點往回追溯，所以需要反轉
+
+    return {currentDepth, path};
+}
+
+// 針對 Net 的 Fanin Cone 的最長路徑
+std::pair<int, std::vector<std::string>> Netlist::getTransitiveFaninConeLongestPath(const std::string& netName) const {
+    auto rawResult = findLongestPathInCone(getTransitiveFaninCone(netName));
+    std::vector<std::string> pathNames;
+    pathNames.reserve(rawResult.second.size());
+    for (int id : rawResult.second) pathNames.push_back(gates[id].instName);
+    return {rawResult.first, pathNames};
+}
+// 針對 Net 的 Fanin Cone 的最短路徑
+std::pair<int, std::vector<std::string>> Netlist::getTransitiveFaninConeShortestPath(const std::string& netName) const {
+    auto rawResult = findShortestPathInCone(getTransitiveFaninCone(netName));
+    std::vector<std::string> pathNames;
+    pathNames.reserve(rawResult.second.size());
+    for (int id : rawResult.second) pathNames.push_back(gates[id].instName);
+    return {rawResult.first, pathNames};
+}
+
+// 針對 Net 的 Fanout Cone 的最長路徑
+std::pair<int, std::vector<std::string>> Netlist::getTransitiveFanoutConeLongestPath(const std::string& netName) const {
+    auto rawResult = findLongestPathInCone(getTransitiveFanoutCone(netName));
+    std::vector<std::string> pathNames;
+    pathNames.reserve(rawResult.second.size());
+    for (int id : rawResult.second) pathNames.push_back(gates[id].instName);
+    return {rawResult.first, pathNames};
+}
+// 針對 Net 的 Fanout Cone 的最短路徑
+std::pair<int, std::vector<std::string>> Netlist::getTransitiveFanoutConeShortestPath(const std::string& netName) const {
+    auto rawResult = findShortestPathInCone(getTransitiveFanoutCone(netName));
+    std::vector<std::string> pathNames;
+    pathNames.reserve(rawResult.second.size());
+    for (int id : rawResult.second) pathNames.push_back(gates[id].instName);
+    return {rawResult.first, pathNames};
+}
+
+// 針對 Gate 的 Fanin Cone 的最長路徑
+std::pair<int, std::vector<std::string>> Netlist::getGateTransitiveFaninConeLongestPath(const std::string& gateName) const {
+    auto rawResult = findLongestPathInCone(getGateTransitiveFaninCone(gateName));
+    std::vector<std::string> pathNames;
+    pathNames.reserve(rawResult.second.size());
+    for (int id : rawResult.second) pathNames.push_back(gates[id].instName);
+    return {rawResult.first, pathNames};
+}
+// 針對 Gate 的 Fanin Cone 的最短路徑
+std::pair<int, std::vector<std::string>> Netlist::getGateTransitiveFaninConeShortestPath(const std::string& gateName) const {
+    auto rawResult = findShortestPathInCone(getGateTransitiveFaninCone(gateName));
+    std::vector<std::string> pathNames;
+    pathNames.reserve(rawResult.second.size());
+    for (int id : rawResult.second) pathNames.push_back(gates[id].instName);
+    return {rawResult.first, pathNames};
+}
+
+// 針對 Gate 的 Fanout Cone 的最長路徑
+std::pair<int, std::vector<std::string>> Netlist::getGateTransitiveFanoutConeLongestPath(const std::string& gateName) const {
+    auto rawResult = findLongestPathInCone(getGateTransitiveFanoutCone(gateName));
+    std::vector<std::string> pathNames;
+    pathNames.reserve(rawResult.second.size());
+    for (int id : rawResult.second) pathNames.push_back(gates[id].instName);
+    return {rawResult.first, pathNames};
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

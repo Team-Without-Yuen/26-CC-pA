@@ -109,7 +109,7 @@ void VerilogWriter::writeWires(std::ofstream& file, const Netlist& netlist) cons
 void VerilogWriter::writeGates(std::ofstream& file, const Netlist& netlist) const {
     for (size_t i = 0; i < netlist.getGateCount(); ++i) {
         const Gate& gate = netlist.getGate(i);
-        std::string typeStr = gateTypeToString(gate.type);
+        std::string typeStr = netlist.gateTypeToString(gate.type);
         for (char& c : typeStr) {
             c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));
         }

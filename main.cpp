@@ -35,19 +35,26 @@ int main(int argc, char* argv[]) {
     std::cout << "         -> Total Nets     : " << myCircuit.getNetCount() << "\n";
     std::cout << "         -> Total Gates    : " << myCircuit.getGateCount() << "\n\n";
 
-    std::string netA, netB;
-    netA = "n2233";
-    netB = "n2193";
-    std::cout << "\n[LEC] Checking equivalence between '" << netA << "' and '" << netB << "'...\n";
+    std::cout << "[Basic Query] Gate type breakdown:\n";
+    std::map<GateType, int> gateCounts = myCircuit.countGatesByType();
+    std::vector<GateType> orderedTypes = {
+        GateType::AND, GateType::OR, GateType::NOT,
+        GateType::NAND, GateType::NOR, GateType::XOR,
+        GateType::XNOR, GateType::BUF, GateType::DFF
+    };
+    for (GateType type : orderedTypes) {
+        std::cout << "         -> " << gateTypeToString(type) << ": " << gateCounts[type] << "\n";
+    }
+    std::cout << "\n";
 
-    bool isEquivalent = myCircuit.checkEquivalence(netA, netB);
+    // bool isEquivalent = myCircuit.checkEquivalence(netA, netB);
 
-    if (isEquivalent) {
+    /*if (isEquivalent) {
         std::cout << " => Result: [ EQUIVALENT ] (UNSAT: No counterexample found)\n";
     } else {
         std::cout << " => Result: [ NOT EQUIVALENT ] (SAT: Counterexample found / Not Found)\n";
     }
-    std::cout << "----------------------------------------\n";
+    std::cout << "----------------------------------------\n";*/
 
       // --- 第五種：最長組合邏輯路徑 ---
     std::string startNet = "n0[0]";
