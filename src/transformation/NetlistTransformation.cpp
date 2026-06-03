@@ -67,7 +67,10 @@ bool Netlist::disconnectGateInput(const std::string& gateName, const std::string
     Gate& gate = gates[gateId];
     Net& net = nets[netId];
 
-    // 把陣列裡的 netId 改成 -1 (懸空)
+    // 把陣列裡的 netId 改成 -1 (懸空)，但不能 erase。
+    // 尤其 DFF 的 inputNetIds 與 inputPinNames 是同位置對應：
+    // inputNetIds[i] 對應 inputPinNames[i]，例如 D/CK/RN/SN。
+    // 若 erase 會讓後面的 pin 往前遞補，造成 named pin 查詢錯位。
     auto gateInputIt = std::find(gate.inputNetIds.begin(), gate.inputNetIds.end(), netId);
     if (gateInputIt != gate.inputNetIds.end()) {
         *gateInputIt = -1; // 保留位子，但拔掉訊號
@@ -85,7 +88,7 @@ bool Netlist::disconnectGateInput(const std::string& gateName, const std::string
 }
 
 // 建立連線
-bool Netlist::connectGateInput(const std::string& gateName, const std::string& netName, int pinIndex = -1) {
+bool Netlist::connectGateInput(const std::string& gateName, const std::string& netName, int pinIndex) {
     int gateId = getGateId(gateName);
     int netId = getNetId(netName);
     

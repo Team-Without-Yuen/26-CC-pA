@@ -126,8 +126,11 @@ void VerilogWriter::writeGates(std::ofstream& file, const Netlist& netlist) cons
             }
             // print Inputs (.D, .CK, .RN)
             for (size_t j = 0; j < gate.inputNetIds.size(); ++j) {
-                file << "." << gate.inputPinNames[j] << "(" 
-                     << netlist.getNet(gate.inputNetIds[j]).name << ")";
+                file << "." << gate.inputPinNames[j] << "(";
+                if (gate.inputNetIds[j] >= 0) {
+                    file << netlist.getNet(gate.inputNetIds[j]).name;
+                }
+                file << ")";
                 if (j != gate.inputNetIds.size() - 1) {
                     file << ", ";
                 }
@@ -141,7 +144,9 @@ void VerilogWriter::writeGates(std::ofstream& file, const Netlist& netlist) cons
             }
             // Inputs
             for (size_t j = 0; j < gate.inputNetIds.size(); ++j) {
-                file << netlist.getNet(gate.inputNetIds[j]).name;
+                if (gate.inputNetIds[j] >= 0) {
+                    file << netlist.getNet(gate.inputNetIds[j]).name;
+                }
                 if (j != gate.inputNetIds.size() - 1) {
                     file << ", ";
                 }

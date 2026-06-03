@@ -380,6 +380,42 @@ public:
         const std::vector<PathNode>& requiredNodes,
         const std::vector<PathNode>& avoidedNodes) const;
 
+    // --- E2：找到符合條件的最短組合邏輯路徑 ---
+
+    // 找到 startNet 到 endNet 的最短組合路徑；不存在時回傳空路徑。
+    CombinationalPath findShortestCombinationalPath(
+        const std::string& startNet,
+        const std::string& endNet) const;
+
+    // 找到避開全部 avoidedNodes 的最短組合路徑。
+    CombinationalPath findShortestCombinationalPathAvoiding(
+        const std::string& startNet,
+        const std::string& endNet,
+        const std::vector<PathNode>& avoidedNodes) const;
+
+    // 找到經過全部 requiredNodes 的最短組合路徑。
+    CombinationalPath findShortestCombinationalPathThrough(
+        const std::string& startNet,
+        const std::string& endNet,
+        const std::vector<PathNode>& requiredNodes) const;
+
+    // 找到經過全部 requiredNodes 且避開全部 avoidedNodes 的最短組合路徑。
+    CombinationalPath findShortestCombinationalPathThroughAvoiding(
+        const std::string& startNet,
+        const std::string& endNet,
+        const std::vector<PathNode>& requiredNodes,
+        const std::vector<PathNode>& avoidedNodes) const;
+
+    // --- Sequential Boundary Path Query ---
+
+    // 取得指定 DFF instance 的 named input pin 所連接的 net ID，例如 "D" 或 "CK"。
+    // 若 gateId 無效、該 gate 不是 DFF、pinName 不存在，或該 pin 未連線，回傳 -1。
+    int getDffInputNetId(int dffGateId, const std::string& pinName) const;
+
+    // 掃描所有 Primary Input 到所有 DFF D-pin 的組合路徑，回傳最大邏輯深度與對應路徑。
+    // 若設計中沒有 DFF，或不存在任何 PI -> DFF.D 組合路徑，回傳 {-1, emptyPath}。
+    std::pair<int, CombinationalPath> getMaximumLogicDepthFromPiToDffD() const;
+
     // --- F：確保 endNet 為終點 (Endpoint) 的路徑搜尋 API ---
     // --- 第一組：回傳 Bool 的存在性檢查 ---
     bool hasCombinationalPathToEndpoint(
@@ -515,31 +551,265 @@ public:
     // 斷開連線：將指定 Gate 的輸入端與指定的 Net 斷開。
     bool disconnectGateInput(const std::string& gateName, const std::string& netName);
 
-    // --- Netlist Transformation (B類) ---
- 
-    // B1 + B2: 移除所有不影響任何 PO 的 gate 和 net
-    // 回傳移除的 gate 數量
-    int trimDeadLogic();
- 
-    // B3: 找出所有連續兩個 NOT gate，把它們消除，直接連線
-    // 回傳移除的 inverter pair 數量
-    int collapseBackToBackInverters();
- 
-    // B4: 對 fanout > maxFanout 的 net 插入 buffer
-    // 讓每個 gate 的 fanout ≤ maxFanout，預設 maxFanout = 4
-    // 回傳插入的 buffer 數量
-    int insertBuffersForFanout(int maxFanout = 4);
+    // 建立連線：將指定 Gate 的輸入端連接到指定的 Net。
+    bool connectGateInput(const std::string& gateName, const std::string& netName, int pinIndex = -1);
 
-    // --- Netlist Transformation (C類) ---
- 
-    // C1: 將整個 netlist 重新建構成只使用 AND 和 NOT gates
-    // 使用 De Morgan 定理替換 OR/NAND/NOR/XOR/XNOR/BUF
-    // DFF 保留不動
-    // 回傳新增的 gate 數量
-    int reconstructToAndNot();
- 
-    // C2: 合併結構等價的 gate（相同 type + 相同 input net 集合）
-    // 回傳合併的 gate 數量
-    int mergeEquivalentGates();
+    // =========================================================================
+    // Depth Analysis API
+    //
+    // 第一階段只做 depth / level / critical path 分析，不直接修改 netlist。
+    // 共通語意：
+    // 1. 使用 unit-delay gate model：每個 combinational gate 的 depth cost = 1。
+    // 2. PI、DFF.Q、constant net 的 level 視為 0。
+    // 3. DFF 是 sequential boundary，不從 DFF input 穿越到 Q。
+    // 4. 回傳 -1 代表找不到、無法計算、或遇到不支援的情況。
+    // =========================================================================
 
+    // 標記 DepthReport 的 endpoint 類型，方便回覆 prompt 與後續 optimization selector 使用。
+    enum class DepthEndpointType {
+        Unknown,
+        SpecificNet,
+        PrimaryOutput,
+        DffD
+    };
+
+    // 保存單一 endpoint 的 depth 分析結果。
+    struct DepthReport {
+        DepthEndpointType endpointType = DepthEndpointType::Unknown; // endpoint 的來源類型
+        std::string endpointName;        // 可讀名稱，例如 y、n10、ff1.D
+        int endpointNetId = -1;          // 被分析的 endpoint net ID
+        int depth = -1;                  // 到該 endpoint 的最大 combinational depth
+        CombinationalPath criticalPath;  // 到該 endpoint 的一條 critical path
+    };
+
+    // 計算每個 net 的 combinational level；vector index 對應 net ID。
+    std::vector<int> computeNetLevels() const;
+
+    // 計算每個 gate output 的 combinational level；vector index 對應 gate ID。
+    std::vector<int> computeGateLevels() const;
+
+    // 查詢指定 net 的最大 fanin depth；找不到或無法計算時回傳 -1。
+    int getMaxDepthToNet(const std::string& netName) const;
+
+    // 找到到指定 net 的一條 critical path；不存在時回傳空路徑。
+    CombinationalPath findCriticalPathToNet(const std::string& netName) const;
+
+    // 分析指定 net 的 depth、endpoint net ID 與 critical path。
+    DepthReport analyzeDepthToNet(const std::string& netName) const;
+
+    // 分析所有 primary outputs 的 depth。
+    std::vector<DepthReport> analyzePrimaryOutputDepths() const;
+
+    // 列出所有 depth 大於 limit 的 primary output 名稱。
+    std::vector<std::string> getPrimaryOutputsWithDepthGreaterThan(int limit) const;
+
+    // 分析所有 DFF D-pin 的 depth。
+    std::vector<DepthReport> analyzeDffDDepths() const;
+
+    // 列出所有 D-pin depth 大於 limit 的 DFF instance name。
+    std::vector<std::string> getDffsWithDDepthGreaterThan(int limit) const;
+
+    // 在所有 primary output 與 DFF D-pin endpoints 中，找出 depth 最大的 critical path。
+    DepthReport findGlobalCriticalPath() const;
+
+    // 找出所有 depth 大於 maxDepth 的 timing endpoints；endpoint 範圍包含 PO 與 DFF.D。
+    std::vector<DepthReport> findEndpointsExceedingDepth(int maxDepth) const;
+
+    // =========================================================================
+    // Optimization Result API
+    //
+    // 這一層定義 optimization pass 的共用回傳格式。
+    // 之後每個真正會修改 netlist 的 pass 都應該用這個結果描述：
+    // 有沒有修改、depth 是否改善、是否做過等價檢查、是否接受或 rollback。
+    // =========================================================================
+
+    // 保存單次 optimization pass 嘗試的結果。
+    struct OptimizationResult {
+        bool changed = false;            // netlist 是否真的被修改
+        bool depthImproved = false;      // 修改後 depth 是否變小
+        bool equivalenceChecked = false; // 是否已做等價檢查
+        bool equivalent = false;         // 等價檢查是否通過
+        int oldDepth = -1;               // 修改前 endpoint depth
+        int newDepth = -1;               // 修改後 endpoint depth
+        std::string passName;            // pass 名稱
+        std::string message;             // 給 debug / LLM response 的說明
+    };
+
+    // =========================================================================
+    // Optimization Candidate API
+    //
+    // 這一層只負責把 depth analysis 的結果整理成「準備最佳化的目標」。
+    // 不直接修改 netlist，也不執行 rewrite。
+    // =========================================================================
+
+    // 保存單一 depth optimization candidate。
+    struct OptimizationCandidate {
+        DepthReport endpoint;            // 要被最佳化的 endpoint 分析結果
+        int targetDepth = -1;            // 希望最佳化後達到的 depth 上限
+        ConeResult faninCone;            // endpoint 的 transitive fanin cone
+        CombinationalPath criticalPath;  // endpoint 目前的一條 critical path
+    };
+
+    // 根據單一 endpoint report 建立 optimization candidate。
+    OptimizationCandidate buildOptimizationCandidate(const DepthReport& endpoint,
+                                                     int targetDepth) const;
+
+    // 找出所有 depth 大於 targetDepth 的 timing endpoints，並轉成 optimization candidates。
+    std::vector<OptimizationCandidate> findOptimizationCandidatesExceedingDepth(
+        int targetDepth) const;
+
+    // =========================================================================
+    // Optimization Target Selection API
+    //
+    // 這一層只負責從 candidate / critical path 裡找出「可能可以處理的 gate」。
+    // 不直接修改 netlist，也不做等價檢查。
+    // =========================================================================
+
+    // 找出 candidate critical path 上所有 BUF gate；只偵測，不判斷是否安全可移除。
+    std::vector<int> findBufferGatesOnCriticalPath(
+        const OptimizationCandidate& candidate) const;
+
+    // 找出 candidate critical path 上第一版可安全 bypass 的 BUF gate；只偵測，不修改 netlist。
+    std::vector<int> findRemovableBufferGatesOnCriticalPath(
+        const OptimizationCandidate& candidate) const;
+
+    // =========================================================================
+    // Optimization Rewrite Pass API
+    //
+    // 這一層未來會放真正修改 netlist 的 pass。
+    // 所有 pass 都應該搭配 structural / function validation，失敗時 rollback。
+    // =========================================================================
+
+    // TODO: 實作 buffer cleanup pass，移除可安全 bypass 的 BUF gate。
+    // OptimizationResult cleanupBufferChain(const OptimizationCandidate& candidate);
+
+    // =========================================================================
+    // Optimization Validation / Rollback API
+    //
+    // 這一層未來會放結構驗證、限制驗證、功能等價檢查，以及 rollback 流程。
+    // =========================================================================
+
+    // TODO: 檢查 gate/net graph 是否一致，例如 driver/load 關係是否同步。
+    // bool validateStructure() const;
+
+    // TODO: 檢查 transformation 後是否仍符合 Problem A 的 restricted primitive netlist 規則。
+    // bool validateProblemAConstraints() const;
+
+    struct PathEndpoint;
+
+    // =========================================================================
+    // Startpoint-to-Endpoint Resolver Helpers
+    //
+    // 這些 helper 負責把常見的抽象起點/終點轉成實際 net ID。
+    // 它們是未來統一 PathQuery API 的底層 building blocks。
+    // =========================================================================
+
+    // 取得所有 Primary Input 對應的 net ID；bus 會展開成每一個 bit net。
+    std::vector<int> getPrimaryInputNetIds() const;
+
+    // 取得所有 Primary Output 對應的 net ID；bus 會展開成每一個 bit net。
+    std::vector<int> getPrimaryOutputNetIds() const;
+
+    // 取得指定 DFF 的 Q/output net ID；若 gateId 無效、不是 DFF 或未連線，回傳 -1。
+    int getDffOutputNetId(int dffGateId) const;
+
+    // 取得指定 gate 的 output net ID；若 gateId 無效或 output 未連線，回傳 -1。
+    int getGateOutputNetId(int gateId) const;
+
+    // 依 positional input index 取得指定 gate 的 input net ID；若 index 無效回傳 -1。
+    int getGateInputNetId(int gateId, int pinIndex) const;
+
+    // 依 named input pin 取得指定 gate 的 input net ID；若 pinName 不存在回傳 -1。
+    int getGateInputNetId(int gateId, const std::string& pinName) const;
+
+    // 將單一抽象 PathEndpoint 解析成實際 net ID 陣列；解析失敗時回傳空陣列。
+    std::vector<int> resolvePathEndpoint(const PathEndpoint& endpoint) const;
+
+    // 將多個抽象 PathEndpoint 解析成實際 net ID 陣列；會自動移除重複 net ID。
+    std::vector<int> resolvePathEndpoints(const std::vector<PathEndpoint>& endpoints) const;
+
+
+
+
+//高階API放置區------------------------------------------------------------------------------------------------------------------------------
+    //以下為高階API，之後給LLM用的。
+
+    // =========================================================================
+    // 未來統一 Startpoint-to-Endpoint Path Query API 草稿
+    //
+    // 這個區塊先獨立放在最下面，作為後續逐步整理 path analysis 的規格草稿。
+    // 目前既有功能仍使用上方 A/B/C/D/E/F 類 API；這裡先不急著替換既有實作。
+    //
+    // 設計目標：
+    // 1. 把 PI、PO、DFF.Q、DFF.D、Gate output、Gate input、Specific net
+    //    這些不同語意的起點/終點統一描述。
+    // 2. 之後由 resolver helper 將 PathEndpoint 轉成實際 net ID。
+    // 3. 再依 PathQueryMode 決定要做 exists、find any、enumerate、min/max depth
+    //    或 every-path 類查詢。
+    // =========================================================================
+
+    // 表示 path query 的抽象起點或終點類型。
+    enum class PathEndpointType {
+        SpecificNet,     // 指定某條 net，例如 "n16"
+        PrimaryInput,    // primary input，可表示單一 PI 或整個 PI bus
+        PrimaryOutput,   // primary output，可表示單一 PO 或整個 PO bus
+        DffQ,            // DFF 的 Q 輸出 pin，通常作為 register-to-* 的 startpoint
+        DffD,            // DFF 的 D 輸入 pin，通常作為 *-to-register 的 endpoint
+        DffClock,        // DFF clock pin，例如 CK；偏 control path
+        DffReset,        // DFF reset/set pin，例如 RN/SN；偏 control path
+        GateOutput,      // 指定 gate 的 output net
+        GateInput        // 指定 gate 的某個 input net
+    };
+
+    // 描述一個抽象 path 起點或終點；實際查詢前要先 resolve 成 net ID。
+    struct PathEndpoint {
+        PathEndpointType type;
+        std::string name;       // net name、port name、gate instance name 或 DFF instance name
+        std::string pinName;    // named pin 使用，例如 "D"、"Q"、"CK"、"RN"
+        int pinIndex = -1;      // positional gate input 使用，例如 input 0 / input 1
+
+        // 建立一個 path endpoint；不同 type 會使用不同欄位。
+        PathEndpoint(PathEndpointType _type,
+                     const std::string& _name,
+                     const std::string& _pinName = "",
+                     int _pinIndex = -1)
+            : type(_type), name(_name), pinName(_pinName), pinIndex(_pinIndex) {
+        }
+    };
+
+    // 表示同一組 startpoints/endpoints 要執行哪一種 path query。
+    enum class PathQueryMode {
+        Exists,             // 是否至少存在一條符合條件的路徑
+        FindAny,            // 回傳任意一條符合條件的路徑
+        EnumerateAll,       // 回傳所有符合條件的路徑
+        MinDepth,           // 回傳最短邏輯深度路徑
+        MaxDepth,           // 回傳最長邏輯深度路徑
+        EveryPathThrough,   // 判斷所有路徑是否都經過 requiredNodes
+        EveryPathAvoids     // 判斷所有路徑是否都避開 avoidedNodes
+    };
+
+    // 描述一個完整的 startpoint-to-endpoint path query。
+    struct PathQuery {
+        std::vector<PathEndpoint> startpoints;  // 一個或多個抽象起點
+        std::vector<PathEndpoint> endpoints;    // 一個或多個抽象終點
+        std::vector<PathNode> requiredNodes;    // 每條符合條件的路徑必須經過的 net/gate
+        std::vector<PathNode> avoidedNodes;     // 每條符合條件的路徑必須避開的 net/gate
+        PathQueryMode mode = PathQueryMode::Exists;
+        bool combinationalOnly = true;          // true 時遇到 DFF 視為 sequential boundary
+    };
+
+    // 保存統一 path query 的結果；不同 mode 會使用不同欄位。
+    struct PathQueryResult {
+        bool exists = false;                    // exists/every-path 類查詢的主要結果
+        int depth = -1;                         // min/max depth 類查詢的邏輯深度
+        CombinationalPath path;                 // find any/min/max depth 的代表路徑
+        std::vector<CombinationalPath> paths;   // enumerate all 的所有路徑
+    };
+
+    // 執行統一 path query；目前支援 Exists、FindAny、EnumerateAll、MinDepth、MaxDepth、
+    // EveryPathThrough、EveryPathAvoids。
+    // 若 mode 尚未支援、端點解析失敗，或 combinationalOnly=false，回傳預設空結果。
+    PathQueryResult runPathQuery(const PathQuery& query) const;
+
+//-----------------------------------------------------------------------------------------------------------------------------------
 };

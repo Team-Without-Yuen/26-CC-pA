@@ -105,6 +105,7 @@ int main() {
             std::cout << "  [Longest]   findLongestCombinationalPathThrough <start> <end> [nodes...]\n";
             std::cout << "  [Longest]   findLongestCombinationalPathThroughAvoiding <start> <end> -req [nodes...] -avoid [nodes...]\n";
             std::cout << "  * NOTE: Add 'ToEndpoint' to any of the above commands for strict endpoint checking.\n";
+            std::cout << "  [Sequential] getMaximumLogicDepthFromPiToDffD\n";
             std::cout << "\n--------------------------------\n";
             std::cout << "  checkEquivalence <netA> <netB>\n";
             std::cout << "  getTransitiveFaninConeLongestPath <net_name>\n";
@@ -328,6 +329,18 @@ int main() {
                           << netlist.getGateTransitiveFanoutConeGateCount(instName) << " gates.\n";
             } else {
                 std::cout << "Usage: getGateTransitiveFanoutConeGateCount <inst_name>\n";
+            }
+        }
+        else if (command == "getMaximumLogicDepthFromPiToDffD") {
+            auto result = netlist.getMaximumLogicDepthFromPiToDffD();
+            if (!result.second.exists()) {
+                std::cout << "No PI-to-DFF-D combinational path found.\n";
+            } else {
+                std::cout << "Maximum PI-to-DFF-D logic depth: " << result.first << "\n";
+                std::cout << "Path nets:\n";
+                for (int netId : result.second.netIds) {
+                    std::cout << "  -> " << netlist.getNet(netId).name << "\n";
+                }
             }
         }
         else if (command.find("hasCombinationalPath") == 0 ||
