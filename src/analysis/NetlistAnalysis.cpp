@@ -225,6 +225,21 @@ size_t Netlist::getGateCountByType(GateType type) const {
     return count;
 }
 
+// 將 cone path 回傳的 net ID 序列轉成 net name 序列。
+// findLongestPathInCone / findShortestPathInCone 的 raw path 存的是 net ID，不是 gate ID。
+static std::vector<std::string> coneNetPathToNames(
+    const Netlist& netlist,
+    const std::vector<int>& netPath) {
+    std::vector<std::string> pathNames;
+    pathNames.reserve(netPath.size());
+    for (int netId : netPath) {
+        if (netId >= 0 && netId < static_cast<int>(netlist.getNetCount())) {
+            pathNames.push_back(netlist.getNet(netId).name);
+        }
+    }
+    return pathNames;
+}
+
 // 邏輯等價性檢查 (LEC) using CaDiCaL SAT solver
 bool Netlist::checkEquivalence(const std::string& nameA, const std::string& nameB) const {
     std::vector<int> netsA = expandNetToBits(nameA);
@@ -630,14 +645,22 @@ bool Netlist::isEndpoint(const PathNode& node, bool combinationalOnly) const {
 std::pair<int, std::vector<int>> Netlist::findLongestPathInCone(const ConeResult& cone) const {
     // 記錄 <當前節點, <最大深度, 最佳路徑的下一個節點>>
     std::unordered_map<int, std::pair<int, int>> memo;
+    std::unordered_set<int> visiting;
 
-    // 內部 Lambda 遞迴函式：回傳只傳回「深度 (int)」
+    // 內部 Lambda 遞迴函式：回傳「從目前 net 往下走的最大深度」。
+    // 若偵測到 combinational loop，回傳 -1，避免無限遞迴。
     std::function<int(int)> dfsLongest = [&](int currNetId) -> int {
         if (memo.count(currNetId)) {
             return memo[currNetId].first;
         }
 
-        int maxLength = 0;
+        if (visiting.count(currNetId) != 0) {
+            return -1;
+        }
+
+        visiting.insert(currNetId);
+
+        int maxLength = -1;
         int bestNextNode = -1; // -1 代表沒有下游 (自己是最底端)
 
         auto it = cone.children.find(currNetId);
@@ -645,6 +668,9 @@ std::pair<int, std::vector<int>> Netlist::findLongestPathInCone(const ConeResult
             for (int childNetId : it->second) {
                 
                 int childLength = dfsLongest(childNetId);
+                if (childLength < 0) {
+                    continue;
+                }
                 
                 // 如果這條路更長，就更新最大深度與「下一個節點」
                 if (childLength + 1 > maxLength) {
@@ -652,7 +678,11 @@ std::pair<int, std::vector<int>> Netlist::findLongestPathInCone(const ConeResult
                     bestNextNode = childNetId;
                 }
             }
+        } else {
+            maxLength = 0;
         }
+
+        visiting.erase(currNetId);
 
         // 存檔並回傳
         memo[currNetId] = {maxLength, bestNextNode};
@@ -679,8 +709,12 @@ std::pair<int, std::vector<int>> Netlist::findLongestPathInCone(const ConeResult
     // 路徑重建 (只執行一次)
     std::vector<int> longestPath;
     int curr = bestRootId;
+    std::unordered_set<int> rebuiltPath;
     
     while (curr != -1) {
+        if (!rebuiltPath.insert(curr).second) {
+            return {-1, {}};
+        }
         longestPath.push_back(curr);
         curr = memo[curr].second; // 順藤摸瓜找下一個節點
     }
@@ -753,67 +787,43 @@ std::pair<int, std::vector<int>> Netlist::findShortestPathInCone(const ConeResul
 // 針對 Net 的 Fanin Cone 的最長路徑
 std::pair<int, std::vector<std::string>> Netlist::getTransitiveFaninConeLongestPath(const std::string& netName) const {
     auto rawResult = findLongestPathInCone(getTransitiveFaninCone(netName));
-    std::vector<std::string> pathNames;
-    pathNames.reserve(rawResult.second.size());
-    for (int id : rawResult.second) pathNames.push_back(gates[id].instName);
-    return {rawResult.first, pathNames};
+    return {rawResult.first, coneNetPathToNames(*this, rawResult.second)};
 }
 // 針對 Net 的 Fanin Cone 的最短路徑
 std::pair<int, std::vector<std::string>> Netlist::getTransitiveFaninConeShortestPath(const std::string& netName) const {
     auto rawResult = findShortestPathInCone(getTransitiveFaninCone(netName));
-    std::vector<std::string> pathNames;
-    pathNames.reserve(rawResult.second.size());
-    for (int id : rawResult.second) pathNames.push_back(gates[id].instName);
-    return {rawResult.first, pathNames};
+    return {rawResult.first, coneNetPathToNames(*this, rawResult.second)};
 }
 
 // 針對 Net 的 Fanout Cone 的最長路徑
 std::pair<int, std::vector<std::string>> Netlist::getTransitiveFanoutConeLongestPath(const std::string& netName) const {
     auto rawResult = findLongestPathInCone(getTransitiveFanoutCone(netName));
-    std::vector<std::string> pathNames;
-    pathNames.reserve(rawResult.second.size());
-    for (int id : rawResult.second) pathNames.push_back(gates[id].instName);
-    return {rawResult.first, pathNames};
+    return {rawResult.first, coneNetPathToNames(*this, rawResult.second)};
 }
 // 針對 Net 的 Fanout Cone 的最短路徑
 std::pair<int, std::vector<std::string>> Netlist::getTransitiveFanoutConeShortestPath(const std::string& netName) const {
     auto rawResult = findShortestPathInCone(getTransitiveFanoutCone(netName));
-    std::vector<std::string> pathNames;
-    pathNames.reserve(rawResult.second.size());
-    for (int id : rawResult.second) pathNames.push_back(gates[id].instName);
-    return {rawResult.first, pathNames};
+    return {rawResult.first, coneNetPathToNames(*this, rawResult.second)};
 }
 
 // 針對 Gate 的 Fanin Cone 的最長路徑
 std::pair<int, std::vector<std::string>> Netlist::getGateTransitiveFaninConeLongestPath(const std::string& gateName) const {
     auto rawResult = findLongestPathInCone(getGateTransitiveFaninCone(gateName));
-    std::vector<std::string> pathNames;
-    pathNames.reserve(rawResult.second.size());
-    for (int id : rawResult.second) pathNames.push_back(gates[id].instName);
-    return {rawResult.first, pathNames};
+    return {rawResult.first, coneNetPathToNames(*this, rawResult.second)};
 }
 // 針對 Gate 的 Fanin Cone 的最短路徑
 std::pair<int, std::vector<std::string>> Netlist::getGateTransitiveFaninConeShortestPath(const std::string& gateName) const {
     auto rawResult = findShortestPathInCone(getGateTransitiveFaninCone(gateName));
-    std::vector<std::string> pathNames;
-    pathNames.reserve(rawResult.second.size());
-    for (int id : rawResult.second) pathNames.push_back(gates[id].instName);
-    return {rawResult.first, pathNames};
+    return {rawResult.first, coneNetPathToNames(*this, rawResult.second)};
 }
 
 // 針對 Gate 的 Fanout Cone 的最長路徑
 std::pair<int, std::vector<std::string>> Netlist::getGateTransitiveFanoutConeLongestPath(const std::string& gateName) const {
     auto rawResult = findLongestPathInCone(getGateTransitiveFanoutCone(gateName));
-    std::vector<std::string> pathNames;
-    pathNames.reserve(rawResult.second.size());
-    for (int id : rawResult.second) pathNames.push_back(gates[id].instName);
-    return {rawResult.first, pathNames};
+    return {rawResult.first, coneNetPathToNames(*this, rawResult.second)};
 }
 // 針對 Gate 的 Fanout Cone 的最短路徑
 std::pair<int, std::vector<std::string>> Netlist::getGateTransitiveFanoutConeShortestPath(const std::string& gateName) const {
     auto rawResult = findShortestPathInCone(getGateTransitiveFanoutCone(gateName));
-    std::vector<std::string> pathNames;
-    pathNames.reserve(rawResult.second.size());
-    for (int id : rawResult.second) pathNames.push_back(gates[id].instName);
-    return {rawResult.first, pathNames};
+    return {rawResult.first, coneNetPathToNames(*this, rawResult.second)};
 }

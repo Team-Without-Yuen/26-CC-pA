@@ -652,3 +652,434 @@ Netlist::CombinationalPath Netlist::findLongestCombinationalPathThroughAvoiding(
     }
     return findLongestPathMatching(*this, startNet, endNet, required, avoided);
 }
+
+// ─────────────────────────────────────────────────────────────────────────────
+//  最短組合邏輯路徑 (Shortest Combinational Path) API
+// ─────────────────────────────────────────────────────────────────────────────
+
+// 找到兩條 net 之間的最短組合邏輯路徑；底層 BFS 第一個合法結果即為最短路徑。
+Netlist::CombinationalPath Netlist::findShortestCombinationalPath(
+    const std::string& startNet,
+    const std::string& endNet) const {
+    return findPathMatching(*this, startNet, endNet, {}, {});
+}
+
+// 找到兩條 net 之間，且避開全部指定節點的最短組合邏輯路徑。
+Netlist::CombinationalPath Netlist::findShortestCombinationalPathAvoiding(
+    const std::string& startNet,
+    const std::string& endNet,
+    const std::vector<PathNode>& avoidedNodes) const {
+    std::vector<ResolvedPathNode> avoided;
+    if (!resolvePathNodes(*this, avoidedNodes, avoided)) {
+        return CombinationalPath();
+    }
+    return findPathMatching(*this, startNet, endNet, {}, avoided);
+}
+
+// 找到兩條 net 之間，且經過全部指定節點的最短組合邏輯路徑。
+Netlist::CombinationalPath Netlist::findShortestCombinationalPathThrough(
+    const std::string& startNet,
+    const std::string& endNet,
+    const std::vector<PathNode>& requiredNodes) const {
+    std::vector<ResolvedPathNode> required;
+    if (!resolvePathNodes(*this, requiredNodes, required)) {
+        return CombinationalPath();
+    }
+    return findPathMatching(*this, startNet, endNet, required, {});
+}
+
+// 找到兩條 net 之間，且經過全部 requiredNodes 並避開全部 avoidedNodes 的最短路徑。
+Netlist::CombinationalPath Netlist::findShortestCombinationalPathThroughAvoiding(
+    const std::string& startNet,
+    const std::string& endNet,
+    const std::vector<PathNode>& requiredNodes,
+    const std::vector<PathNode>& avoidedNodes) const {
+    std::vector<ResolvedPathNode> required;
+    std::vector<ResolvedPathNode> avoided;
+    if (!resolvePathNodes(*this, requiredNodes, required) ||
+        !resolvePathNodes(*this, avoidedNodes, avoided)) {
+        return CombinationalPath();
+    }
+    return findPathMatching(*this, startNet, endNet, required, avoided);
+}
+
+// 取得指定 DFF 的 named input pin 所連接的 net ID；用於 DFF.D / DFF.CK 等 sequential 查詢。
+int Netlist::getDffInputNetId(int dffGateId, const std::string& pinName) const {
+    if (dffGateId < 0 || dffGateId >= static_cast<int>(gates.size())) {
+        return -1;
+    }
+
+    const Gate& dff = gates[dffGateId];
+    if (dff.type != GateType::DFF) {
+        return -1;
+    }
+
+    for (size_t i = 0; i < dff.inputPinNames.size() && i < dff.inputNetIds.size(); ++i) {
+        if (dff.inputPinNames[i] == pinName) {
+            return dff.inputNetIds[i];
+        }
+    }
+    return -1;
+}
+
+// 取得所有 Primary Input port 展開後的 net ID；bus port 會保留每一個 bit net。
+std::vector<int> Netlist::getPrimaryInputNetIds() const {
+    std::vector<int> netIds;
+    for (const Port& port : primaryInputs) {
+        for (int netId : port.netIds) {
+            if (netId >= 0 && netId < static_cast<int>(nets.size())) {
+                netIds.push_back(netId);
+            }
+        }
+    }
+    return netIds;
+}
+
+// 取得所有 Primary Output port 展開後的 net ID；bus port 會保留每一個 bit net。
+std::vector<int> Netlist::getPrimaryOutputNetIds() const {
+    std::vector<int> netIds;
+    for (const Port& port : primaryOutputs) {
+        for (int netId : port.netIds) {
+            if (netId >= 0 && netId < static_cast<int>(nets.size())) {
+                netIds.push_back(netId);
+            }
+        }
+    }
+    return netIds;
+}
+
+// 取得指定 DFF 的 Q/output net ID；DFF 的 outputNetId 目前代表 Q pin。
+int Netlist::getDffOutputNetId(int dffGateId) const {
+    if (dffGateId < 0 || dffGateId >= static_cast<int>(gates.size())) {
+        return -1;
+    }
+
+    const Gate& dff = gates[dffGateId];
+    if (dff.type != GateType::DFF ||
+        dff.outputNetId < 0 ||
+        dff.outputNetId >= static_cast<int>(nets.size())) {
+        return -1;
+    }
+    return dff.outputNetId;
+}
+
+// 取得指定 gate 的 output net ID；primitive gate 與 DFF 都可用。
+int Netlist::getGateOutputNetId(int gateId) const {
+    if (gateId < 0 || gateId >= static_cast<int>(gates.size())) {
+        return -1;
+    }
+
+    const int outputNetId = gates[gateId].outputNetId;
+    if (outputNetId < 0 || outputNetId >= static_cast<int>(nets.size())) {
+        return -1;
+    }
+    return outputNetId;
+}
+
+// 依 input pin 的位置取得指定 gate 的 input net ID；primitive gate 通常使用這個版本。
+int Netlist::getGateInputNetId(int gateId, int pinIndex) const {
+    if (gateId < 0 || gateId >= static_cast<int>(gates.size()) || pinIndex < 0) {
+        return -1;
+    }
+
+    const Gate& gate = gates[gateId];
+    if (pinIndex >= static_cast<int>(gate.inputNetIds.size())) {
+        return -1;
+    }
+
+    const int inputNetId = gate.inputNetIds[static_cast<size_t>(pinIndex)];
+    if (inputNetId < 0 || inputNetId >= static_cast<int>(nets.size())) {
+        return -1;
+    }
+    return inputNetId;
+}
+
+// 依 named input pin 取得指定 gate 的 input net ID；DFF 的 D/CK/RN/SN 會使用這個版本。
+int Netlist::getGateInputNetId(int gateId, const std::string& pinName) const {
+    if (gateId < 0 || gateId >= static_cast<int>(gates.size())) {
+        return -1;
+    }
+
+    const Gate& gate = gates[gateId];
+    for (size_t i = 0; i < gate.inputPinNames.size() && i < gate.inputNetIds.size(); ++i) {
+        if (gate.inputPinNames[i] == pinName) {
+            const int inputNetId = gate.inputNetIds[i];
+            if (inputNetId >= 0 && inputNetId < static_cast<int>(nets.size())) {
+                return inputNetId;
+            }
+            return -1;
+        }
+    }
+    return -1;
+}
+
+// 將單一抽象 PathEndpoint 解析成實際 net ID 陣列；空結果代表解析失敗或沒有對應 net。
+std::vector<int> Netlist::resolvePathEndpoint(const PathEndpoint& endpoint) const {
+    std::vector<int> netIds;
+
+    auto appendValidNet = [&](int netId) {
+        if (netId >= 0 && netId < static_cast<int>(nets.size())) {
+            netIds.push_back(netId);
+        }
+    };
+
+    auto appendPortNets = [&](const std::vector<Port>& ports) {
+        for (const Port& port : ports) {
+            if (!endpoint.name.empty() && port.name != endpoint.name) {
+                continue;
+            }
+            for (int netId : port.netIds) {
+                appendValidNet(netId);
+            }
+        }
+    };
+
+    switch (endpoint.type) {
+    case PathEndpointType::SpecificNet:
+        appendValidNet(getNetId(endpoint.name));
+        break;
+    case PathEndpointType::PrimaryInput:
+        appendPortNets(primaryInputs);
+        break;
+    case PathEndpointType::PrimaryOutput:
+        appendPortNets(primaryOutputs);
+        break;
+    case PathEndpointType::DffQ:
+        appendValidNet(getDffOutputNetId(getGateId(endpoint.name)));
+        break;
+    case PathEndpointType::DffD:
+        appendValidNet(getGateInputNetId(getGateId(endpoint.name), "D"));
+        break;
+    case PathEndpointType::DffClock:
+        appendValidNet(getGateInputNetId(getGateId(endpoint.name),
+                                         endpoint.pinName.empty() ? "CK" : endpoint.pinName));
+        break;
+    case PathEndpointType::DffReset:
+        if (!endpoint.pinName.empty()) {
+            appendValidNet(getGateInputNetId(getGateId(endpoint.name), endpoint.pinName));
+        } else {
+            appendValidNet(getGateInputNetId(getGateId(endpoint.name), "RN"));
+            appendValidNet(getGateInputNetId(getGateId(endpoint.name), "SN"));
+        }
+        break;
+    case PathEndpointType::GateOutput:
+        appendValidNet(getGateOutputNetId(getGateId(endpoint.name)));
+        break;
+    case PathEndpointType::GateInput: {
+        const int gateId = getGateId(endpoint.name);
+        if (!endpoint.pinName.empty()) {
+            appendValidNet(getGateInputNetId(gateId, endpoint.pinName));
+        } else {
+            appendValidNet(getGateInputNetId(gateId, endpoint.pinIndex));
+        }
+        break;
+    }
+    }
+
+    return netIds;
+}
+
+// 將多個抽象 PathEndpoint 解析成 net ID，並保留首次出現順序、移除重複 net。
+std::vector<int> Netlist::resolvePathEndpoints(
+    const std::vector<PathEndpoint>& endpoints) const {
+    std::vector<int> resolvedNetIds;
+    std::unordered_set<int> seenNetIds;
+
+    for (const PathEndpoint& endpoint : endpoints) {
+        const std::vector<int> endpointNetIds = resolvePathEndpoint(endpoint);
+        for (int netId : endpointNetIds) {
+            if (seenNetIds.insert(netId).second) {
+                resolvedNetIds.push_back(netId);
+            }
+        }
+    }
+
+    return resolvedNetIds;
+}
+
+// 執行統一 path query；目前支援 Exists、FindAny、EnumerateAll、MaxDepth 與 every-path 類模式。
+Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
+    PathQueryResult result;
+    if (!query.combinationalOnly) {
+        return result;
+    }
+
+    const std::vector<int> startNetIds = resolvePathEndpoints(query.startpoints);
+    const std::vector<int> endNetIds = resolvePathEndpoints(query.endpoints);
+    if (startNetIds.empty() || endNetIds.empty()) {
+        return result;
+    }
+
+    switch (query.mode) {
+    case PathQueryMode::Exists:
+        for (int startNetId : startNetIds) {
+            for (int endNetId : endNetIds) {
+                if (hasCombinationalPathThroughAvoiding(
+                        nets[startNetId].name,
+                        nets[endNetId].name,
+                        query.requiredNodes,
+                        query.avoidedNodes)) {
+                    result.exists = true;
+                    return result;
+                }
+            }
+        }
+        return result;
+
+    case PathQueryMode::FindAny:
+        for (int startNetId : startNetIds) {
+            for (int endNetId : endNetIds) {
+                CombinationalPath path = findAnyCombinationalPathThroughAvoiding(
+                    nets[startNetId].name,
+                    nets[endNetId].name,
+                    query.requiredNodes,
+                    query.avoidedNodes);
+                if (path.exists()) {
+                    result.exists = true;
+                    result.depth = path.depth();
+                    result.path = path;
+                    return result;
+                }
+            }
+        }
+        return result;
+
+    case PathQueryMode::EnumerateAll:
+        for (int startNetId : startNetIds) {
+            for (int endNetId : endNetIds) {
+                std::vector<CombinationalPath> paths =
+                    enumerateCombinationalPathsThroughAvoiding(
+                        nets[startNetId].name,
+                        nets[endNetId].name,
+                        query.requiredNodes,
+                        query.avoidedNodes);
+                result.paths.insert(result.paths.end(), paths.begin(), paths.end());
+            }
+        }
+        result.exists = !result.paths.empty();
+        if (result.exists) {
+            result.path = result.paths.front();
+            result.depth = result.path.depth();
+        }
+        return result;
+
+    case PathQueryMode::MinDepth:
+        for (int startNetId : startNetIds) {
+            for (int endNetId : endNetIds) {
+                CombinationalPath path = findShortestCombinationalPathThroughAvoiding(
+                    nets[startNetId].name,
+                    nets[endNetId].name,
+                    query.requiredNodes,
+                    query.avoidedNodes);
+                if (path.exists() && (!result.exists || path.depth() < result.depth)) {
+                    result.exists = true;
+                    result.depth = path.depth();
+                    result.path = path;
+                }
+            }
+        }
+        return result;
+
+    case PathQueryMode::MaxDepth:
+        for (int startNetId : startNetIds) {
+            for (int endNetId : endNetIds) {
+                CombinationalPath path = findLongestCombinationalPathThroughAvoiding(
+                    nets[startNetId].name,
+                    nets[endNetId].name,
+                    query.requiredNodes,
+                    query.avoidedNodes);
+                if (path.exists() && path.depth() > result.depth) {
+                    result.exists = true;
+                    result.depth = path.depth();
+                    result.path = path;
+                }
+            }
+        }
+        return result;
+
+    case PathQueryMode::EveryPathThrough: {
+        if (query.requiredNodes.empty()) {
+            return result;
+        }
+
+        bool sawAnyPath = false;
+        for (int startNetId : startNetIds) {
+            for (int endNetId : endNetIds) {
+                const std::string& startName = nets[startNetId].name;
+                const std::string& endName = nets[endNetId].name;
+                if (!hasCombinationalPath(startName, endName)) {
+                    continue;
+                }
+                sawAnyPath = true;
+                if (!everyPathPassesThrough(startName, endName, query.requiredNodes)) {
+                    result.exists = false;
+                    return result;
+                }
+            }
+        }
+        result.exists = sawAnyPath;
+        return result;
+    }
+
+    case PathQueryMode::EveryPathAvoids: {
+        if (query.avoidedNodes.empty()) {
+            return result;
+        }
+
+        bool sawAnyPath = false;
+        for (int startNetId : startNetIds) {
+            for (int endNetId : endNetIds) {
+                const std::string& startName = nets[startNetId].name;
+                const std::string& endName = nets[endNetId].name;
+                if (!hasCombinationalPath(startName, endName)) {
+                    continue;
+                }
+                sawAnyPath = true;
+                if (!everyPathAvoids(startName, endName, query.avoidedNodes)) {
+                    result.exists = false;
+                    return result;
+                }
+            }
+        }
+        result.exists = sawAnyPath;
+        return result;
+    }
+
+    }
+
+    return result;
+}
+
+// 掃描所有 PI bit 到所有 DFF D-pin 的組合路徑，找出最大的 logic depth 與 witness path。
+std::pair<int, Netlist::CombinationalPath>
+Netlist::getMaximumLogicDepthFromPiToDffD() const {
+    int bestDepth = -1;
+    CombinationalPath bestPath;
+    const std::vector<int> dffGateIds = getGatesByType(GateType::DFF);
+
+    for (const Port& inputPort : primaryInputs) {
+        for (int piNetId : inputPort.netIds) {
+            if (piNetId < 0 || piNetId >= static_cast<int>(nets.size())) {
+                continue;
+            }
+
+            const std::string& piNetName = nets[piNetId].name;
+            for (int dffGateId : dffGateIds) {
+                const int dNetId = getDffInputNetId(dffGateId, "D");
+                if (dNetId < 0 || dNetId >= static_cast<int>(nets.size())) {
+                    continue;
+                }
+
+                const std::string& dNetName = nets[dNetId].name;
+                CombinationalPath path =
+                    findLongestCombinationalPath(piNetName, dNetName);
+                if (path.exists() && path.depth() > bestDepth) {
+                    bestDepth = path.depth();
+                    bestPath = path;
+                }
+            }
+        }
+    }
+
+    return {bestDepth, bestPath};
+}
