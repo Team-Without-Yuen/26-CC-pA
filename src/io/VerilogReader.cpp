@@ -190,7 +190,12 @@ void VerilogReader::parseGateInstance(const std::string& line, Netlist& netlist)
                 std::string pinName = trim(trimmedP.substr(dotPos + 1, openP - dotPos - 1));
                 std::string netName = trim(trimmedP.substr(openP + 1, closeP - openP - 1));
 
-                int netId = netlist.addNet(netName);
+                int netId = -1;
+                // 只有在真的有線的名字時，才產生 Net
+                if (!netName.empty()) {
+                    netId = netlist.addNet(netName);
+                }
+
                 if (pinName == "Q") {
                     netlist.connectGateOutput(gateId, netId);
                 } else {
@@ -202,7 +207,10 @@ void VerilogReader::parseGateInstance(const std::string& line, Netlist& netlist)
         // Handle basic logic gates (positional mapping)
         for (size_t i = 0; i < ports.size(); ++i) {
             std::string netName = trim(ports[i]);
-            int netId = netlist.addNet(netName);
+            int netId = -1;
+            if (!netName.empty()) {
+                netId = netlist.addNet(netName);
+            }
             
             // The first argument is the output; the remaining arguments are inputs.
             if (i == 0) {
