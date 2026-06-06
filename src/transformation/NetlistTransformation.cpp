@@ -1,6 +1,8 @@
 #include "include/core/Netlist.h"
+#include "include/core/TechMapper.h"
 #include "include/lib/cadical.hpp"
 #include <string>
+#include <functional>
 #include <algorithm>
 #include <vector>
 #include <queue>
@@ -136,6 +138,466 @@ bool Netlist::connectGateInput(const std::string& gateName, const std::string& n
     gate.inputNetIds[pinIndex] = netId;
 
     return true;
+}
+
+bool Netlist::disconnectAllPins(int gateId) {
+    if (gateId < 0 || gateId >= gates.size()) return false;
+    Gate& gate = gates[gateId];
+
+    // 處理 Input Nets：從所有連接的 Net 的 loadGateIds 中移除自己
+    for (size_t i = 0; i < gate.inputNetIds.size(); ++i) {
+        int netId = gate.inputNetIds[i];
+        
+        if (netId != -1 && netId < (int)nets.size()) {
+            Net& net = nets[netId];
+            
+            // 【Net 端】Fan-out 列表沒有順序問題，直接 erase 是安全的
+            auto it = std::remove(net.loadGateIds.begin(), net.loadGateIds.end(), gateId);
+            net.loadGateIds.erase(it, net.loadGateIds.end());
+            
+            // 【Gate 端】填入 -1 以維持 DFF/Macro 的腳位對應
+            gate.inputNetIds[i] = -1;
+        }
+    }
+
+    // 處理 Output Net：把輸出線的 driverGateId 設為懸空 (-1)
+    if (gate.outputNetId != -1 && gate.outputNetId < (int)nets.size()) {
+        nets[gate.outputNetId].driverGateId = -1;
+        gate.outputNetId = -1;
+    }
+    
+    return true;
+}
+
+bool Netlist::removeGate(int gateId) {
+    if (gateId < 0 || gateId >= (int)gates.size()) return false;
+    
+    // 斷開所有腳位連線 (保留 DFF pin index)
+    disconnectAllPins(gateId);
+    
+    // 將 GateType 標記為 UNKNOWN (Tombstone 機制)
+    gates[gateId].type = GateType::UNKNOWN;
+    
+    return true;
+}
+
+// 遞迴比對引擎核心 (Backward Pattern Matching)
+bool TechMapper::matchNet(Netlist& netlist, std::shared_ptr<PatternNode> pNode, int physNetId, MatchContext& ctx) {
+    if (physNetId == -1) return false;
+
+    // 處理 Leaf 節點 (外部輸入綁定)
+    if (pNode->nodeType == NodeType::LEAF_A) {
+        if (ctx.netA == -1) { ctx.netA = physNetId; return true; } // 第一次遇到 A，綁定！
+        return ctx.netA == physNetId;                              // 之後遇到 A，必須是同一條線
+    }
+    if (pNode->nodeType == NodeType::LEAF_B) {
+        if (ctx.netB == -1) { ctx.netB = physNetId; return true; }
+        return ctx.netB == physNetId;
+    }
+
+    // 處理常數比對
+    if (pNode->nodeType == NodeType::CONST_1 || pNode->nodeType == NodeType::CONST_0) {
+        const Net& net = netlist.getNet(physNetId);
+        if (!net.isConst) return false;
+        std::string expectedName = (pNode->nodeType == NodeType::CONST_1) ? "1'b1" : "1'b0";
+        return net.name == expectedName;
+    }
+
+    // 處理內部 Gate 節點
+    const Net& net = netlist.getNet(physNetId);
+    int driverGateId = net.driverGateId;
+    if (driverGateId == -1) return false; // 這條線沒有驅動閘 (可能是 PI)
+
+    // DAG 檢查：如果這個 PatternNode 之前比對過了，物理實體必須是同一個 Gate
+    if (ctx.mappedNodes.count(pNode.get())) {
+        return ctx.mappedNodes[pNode.get()] == driverGateId;
+    }
+
+    const Gate& physGate = netlist.getGate(driverGateId);
+    if (physGate.type != pNode->gateType) return false; // 閘類型不符
+    if (physGate.inputNetIds.size() != pNode->inputs.size()) return false; // 輸入數量不符
+
+    // 註冊這個物理 Gate
+    ctx.mappedNodes[pNode.get()] = driverGateId;
+    ctx.matchedGates.insert(driverGateId);
+
+    // 比對輸入線 (考慮 2-input 的交換律)
+    if (pNode->inputs.size() == 1) {
+        return matchNet(netlist, pNode->inputs[0], physGate.inputNetIds[0], ctx);
+    } 
+    else if (pNode->inputs.size() == 2) {
+        MatchContext backupCtx = ctx; // 建立備份，以便回溯
+        
+        // 嘗試正向順序：(Input 0 == 0) && (Input 1 == 1)
+        if (matchNet(netlist, pNode->inputs[0], physGate.inputNetIds[0], ctx) &&
+            matchNet(netlist, pNode->inputs[1], physGate.inputNetIds[1], ctx)) {
+            return true;
+        }
+        
+        // 如果失敗，嘗試交換律：(Input 0 == 1) && (Input 1 == 0)
+        ctx = backupCtx; // 恢復狀態
+        if (matchNet(netlist, pNode->inputs[0], physGate.inputNetIds[1], ctx) &&
+            matchNet(netlist, pNode->inputs[1], physGate.inputNetIds[0], ctx)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// 觸發比對的入口點
+bool TechMapper::matchRootGate(Netlist& netlist, int physGateId, const TechMapRule& rule, MatchContext& ctx) {
+    auto pRoot = rule.pattern;
+    if (pRoot->nodeType != NodeType::GATE) return false;
+    
+    // 把目前的物理 Gate 當作 Root，它的 Output 不用比對，我們只比對它的 Input 往下長相
+    const Gate& physGate = netlist.getGate(physGateId);
+    if (physGate.type != pRoot->gateType) return false;
+    if (physGate.inputNetIds.size() != pRoot->inputs.size()) return false;
+
+    ctx.mappedNodes[pRoot.get()] = physGateId;
+    ctx.matchedGates.insert(physGateId);
+
+    // 進入遞迴
+    if (pRoot->inputs.size() == 1) {
+        return matchNet(netlist, pRoot->inputs[0], physGate.inputNetIds[0], ctx);
+    } else if (pRoot->inputs.size() == 2) {
+        MatchContext backup = ctx;
+        if (matchNet(netlist, pRoot->inputs[0], physGate.inputNetIds[0], ctx) &&
+            matchNet(netlist, pRoot->inputs[1], physGate.inputNetIds[1], ctx)) return true;
+        
+        ctx = backup;
+        if (matchNet(netlist, pRoot->inputs[0], physGate.inputNetIds[1], ctx) &&
+            matchNet(netlist, pRoot->inputs[1], physGate.inputNetIds[0], ctx)) return true;
+    }
+    return false;
+}
+
+// 驗證與替換邏輯
+bool TechMapper::isValidSubgraph(Netlist& netlist, const MatchContext& ctx, int rootGateId) {
+    // 遍歷子圖中的每一個 Gate
+    for (int gateId : ctx.matchedGates) {
+        if (gateId == rootGateId) continue; // Root Gate 的輸出本來就是要接給別人的，合法。
+
+        const Gate& g = netlist.getGate(gateId);
+        if (g.outputNetId == -1) continue;
+
+        const Net& outNet = netlist.getNet(g.outputNetId);
+        if (outNet.isPO) return false; // 不能把連到 Primary Output 的中介閘吃掉！
+
+        // 【最精華的 Fan-out 檢查】
+        // 中介閘的所有 Load (吃它訊號的人)，必須統統包含在這次匹配的子圖內！
+        for (int loadGateId : outNet.loadGateIds) {
+            if (ctx.matchedGates.find(loadGateId) == ctx.matchedGates.end()) {
+                return false; // 發現有外部的 Gate 偷接這條線，拔掉會讓別人懸空，退件！
+            }
+        }
+    }
+    return true;
+}
+
+void TechMapper::replaceSubgraph(Netlist& netlist, const MatchContext& ctx, int rootGateId, const TechMapRule& rule) {
+    const Gate& rootGate = netlist.getGate(rootGateId);
+    int origOutNetId = rootGate.outputNetId;
+    std::string newInstName = rootGate.instName + "_opt";
+
+    // 先把它們標記為 UNKNOWN 並斷開
+    for (int gateId : ctx.matchedGates) {
+        netlist.removeGate(gateId); 
+    }
+
+    // 產生新的目標 Gate
+    int newGateId = netlist.addGate(newInstName, rule.targetGate);
+
+    // 接上 A 與 B 的輸入
+    if (ctx.netA != -1) netlist.connectGateInput(newGateId, ctx.netA);
+    if (ctx.netB != -1) netlist.connectGateInput(newGateId, ctx.netB);
+
+    // 接回原本 Root 負責的輸出線
+    if (origOutNetId != -1) {
+        netlist.connectGateOutput(newGateId, origOutNetId);
+    }
+}
+
+std::vector<TechMapRule> TechMapper::getValidRules(GateType targetGate, const std::vector<GateType>& allowedTypes) {
+    std::vector<TechMapRule> validRules;
+    
+    // 將 allowedTypes 轉成 unordered_set 加速查詢
+    std::unordered_set<GateType> allowedSet(allowedTypes.begin(), allowedTypes.end());
+
+    for (const auto& rule : rules) {
+        // 檢查目標 Gate 是否相符
+        if (rule.targetGate != targetGate) continue;
+
+        // 檢查這條 Rule 需要的 Gate 是否都在 allowedTypes 裡面
+        bool isValid = true;
+        for (GateType reqGate : rule.requiredGates) {
+            if (allowedSet.find(reqGate) == allowedSet.end()) {
+                isValid = false;
+                break;
+            }
+        }
+
+        // 如果全部吻合，就加入候選名單
+        if (isValid) {
+            validRules.push_back(rule);
+        }
+    }
+
+    // 依照「新增 Gate 數量」由小到大排序
+    std::sort(validRules.begin(), validRules.end(), 
+        [](const TechMapRule& a, const TechMapRule& b) {
+            return a.addedGateCount < b.addedGateCount;
+        });
+
+    return validRules;
+}
+
+int TechMapper::applyForwardMapping(Netlist& netlist, int targetGateId, const TechMapRule& rule) {
+    // 取得目標 Gate 的原始資訊 
+    const Gate& targetGate = netlist.getGate(targetGateId);
+    std::string origInstName = targetGate.instName;
+    
+    int origNetA = targetGate.inputNetIds.size() > 0 ? targetGate.inputNetIds[0] : -1;
+    int origNetB = targetGate.inputNetIds.size() > 1 ? targetGate.inputNetIds[1] : -1;
+    int origOutNet = targetGate.outputNetId;
+
+    // 準備 Memoization 表 (解決 Fan-out / DAG 問題)
+    std::unordered_map<PatternNode*, int> visited;
+
+    // 建立遞迴走訪的 Lambda 函式
+    std::function<int(std::shared_ptr<PatternNode>, bool)> buildNode = 
+        [&](std::shared_ptr<PatternNode> node, bool isRoot) -> int {
+        
+        // 如果節點已經生成過，直接回傳之前產生的 Net ID
+        if (visited.count(node.get())) {
+            return visited[node.get()];
+        }
+
+        int outNetId = -1;
+
+        if (node->nodeType == NodeType::LEAF_A) {
+            outNetId = origNetA;
+        } 
+        else if (node->nodeType == NodeType::LEAF_B) {
+            outNetId = origNetB;
+        } 
+        else if (node->nodeType == NodeType::CONST_1 || node->nodeType == NodeType::CONST_0) {
+            std::string constName = (node->nodeType == NodeType::CONST_1) ? "1'b1" : "1'b0";
+            outNetId = netlist.getNetId(constName);
+            
+            if (outNetId == -1) {
+                outNetId = netlist.addNet(constName);
+                netlist.setNetConst(outNetId, true); // 使用新增的安全 API
+            }
+        } 
+        else if (node->nodeType == NodeType::GATE) {
+            // A. 先遞迴產生所有的 Input 子樹
+            std::vector<int> childNetIds;
+            for (auto& child : node->inputs) {
+                childNetIds.push_back(buildNode(child, false));
+            }
+
+            // B. 在 Netlist 中實體化這個新的 Gate
+            std::string newInstName = origInstName + "_map_" + std::to_string(visited.size());
+            int newGateId = netlist.addGate(newInstName, node->gateType);
+
+            // C. 將前面取得的 Input Nets 接上
+            for (int cNetId : childNetIds) {
+                netlist.connectGateInput(newGateId, cNetId);
+            }
+
+            // D. 處理 Output Net
+            if (isRoot) {
+                netlist.connectGateOutput(newGateId, origOutNet);
+                outNetId = origOutNet;
+            } else {
+                std::string newNetName = "net_" + newInstName;
+                outNetId = netlist.addNet(newNetName);
+                netlist.connectGateOutput(newGateId, outNetId);
+            }
+        }
+
+        visited[node.get()] = outNetId;
+        return outNetId;
+    };
+
+    // 啟動遞迴引擎
+    buildNode(rule.pattern, true);
+
+    // 透過 Netlist 的合法 API 完美懸空舊 Gate，並標記為 UNKNOWN
+    netlist.removeGate(targetGateId);
+
+    return rule.addedGateCount;
+}
+
+// 主迴圈 (Iterative Fixpoint Engine)
+int TechMapper::applyBackwardMapping(Netlist& netlist) {
+    int totalReplacedCount = 0;
+    bool isChanged;
+
+    // 將 rules 依照「包含的 Gate 數量 (addedGateCount)」由大到小排序
+    // 越複雜的子圖如果能被匹配成功，省下的 Gate 越多！
+    std::vector<TechMapRule> sortedRules = rules;
+    std::sort(sortedRules.begin(), sortedRules.end(), [](const TechMapRule& a, const TechMapRule& b){
+        return a.addedGateCount > b.addedGateCount;
+    });
+
+    // 啟動收斂引擎
+    do {
+        isChanged = false;
+        
+        // 收集現存的所有合法 Gate (Snapshot) 避免迴圈內增刪干擾 Iterator
+        std::vector<int> candidates;
+        for (size_t i = 0; i < netlist.getGateCount(); ++i) {
+            // 假設你有 Tombstone 機制，這裡要過濾掉已刪除的 Gate
+            if (netlist.getGate(i).type != GateType::UNKNOWN) { 
+                candidates.push_back(i);
+            }
+        }
+
+        for (int rootId : candidates) {
+            // 如果這個 Gate 在此回合的稍早已經被拔掉了，跳過
+            if (netlist.getGate(rootId).type == GateType::UNKNOWN) continue;
+
+            for (const auto& rule : sortedRules) {
+                MatchContext ctx;
+                
+                // 結構匹配
+                if (matchRootGate(netlist, rootId, rule, ctx)) {
+                    // Fan-out 合法性檢查
+                    if (isValidSubgraph(netlist, ctx, rootId)) {
+                        
+                        // 執行替換
+                        replaceSubgraph(netlist, ctx, rootId, rule);
+                        
+                        totalReplacedCount += (ctx.matchedGates.size() - 1); 
+                        isChanged = true;
+                        break; // 已經被替換了，不需要再為這個 rootId 測試其他 Rule
+                    }
+                }
+            }
+        }
+    } while (isChanged); // 只要有改動，就再掃一輪，直到完美收斂為止
+
+    return totalReplacedCount;
+}
+
+// targetTypes  : 使用者想要「拔除/替換掉」的 Gate 類型 (例如 {OR, AND})
+// allowedTypes : 使用者允許「新增/使用」的 Gate 類型 (例如 {NAND, NOT})
+// 回傳值       : 總共變動的 Gate 數量 (正數代表變多，負數代表變少)
+int TechMapper::mapTechnology(Netlist& netlist, 
+                              const std::vector<GateType>& targetTypes, 
+                              const std::vector<GateType>& allowedTypes,
+                              bool isOneToMany) {
+    
+    std::unordered_set<GateType> targetSet(targetTypes.begin(), targetTypes.end());
+    std::unordered_set<GateType> allowedSet(allowedTypes.begin(), allowedTypes.end());
+
+    int totalGateChange = 0;
+
+    // 判斷邏輯：直接根據使用者明確傳入的指令執行
+    if (!isOneToMany) {
+        
+        // ==========================================
+        // 情境 A：多對一 (Backward Mapping / Subgraph Reduction)
+        // 目標：減少面積
+        // ==========================================
+        std::vector<TechMapRule> backwardRules;
+        for (const auto& rule : rules) {
+            // 條件：縮減後的目標 Gate 必須是我們允許生成的 (allowedTypes)
+            bool isValid = allowedSet.count(rule.targetGate);
+            // 條件：被吃掉的 Pattern 內部 Gate 必須都是我們要拔除的 (targetTypes)
+            for (GateType req : rule.requiredGates) {
+                if (!targetSet.count(req)) { isValid = false; break; }
+            }
+            if (isValid) backwardRules.push_back(rule);
+        }
+
+        // 排序：優先匹配能消除最多 Gate 的大 Pattern
+        std::sort(backwardRules.begin(), backwardRules.end(), [](const TechMapRule& a, const TechMapRule& b) {
+            return a.addedGateCount > b.addedGateCount;
+        });
+
+        bool isChanged;
+        do {
+            isChanged = false;
+            
+            // Snapshot 收集候選人
+            std::vector<int> candidates;
+            for (size_t i = 0; i < netlist.getGateCount(); ++i) {
+                if (netlist.getGate(i).type != GateType::UNKNOWN) {
+                    candidates.push_back(i);
+                }
+            }
+
+            for (int rootId : candidates) {
+                if (netlist.getGate(rootId).type == GateType::UNKNOWN) continue;
+
+                for (const auto& rule : backwardRules) {
+                    MatchContext ctx;
+                    if (matchRootGate(netlist, rootId, rule, ctx)) {
+                        if (isValidSubgraph(netlist, ctx, rootId)) {
+                            replaceSubgraph(netlist, ctx, rootId, rule);
+                            totalGateChange -= (ctx.matchedGates.size() - 1); 
+                            isChanged = true;
+                            break; // 已經被替換了，跳出 Rule 迴圈
+                        }
+                    }
+                }
+            }
+        } while (isChanged);
+
+    } 
+    else {
+        // ==========================================
+        // 情境 B：一對多 (Forward Mapping / Gate Expansion)
+        // 目標：增加面積 (拆解複雜邏輯)
+        // ==========================================
+        std::vector<TechMapRule> forwardRules;
+        for (const auto& rule : rules) {
+            // 條件：被拔除的目標 Gate 必須是我們要拔除的 (targetTypes)
+            bool isValid = targetSet.count(rule.targetGate);
+            // 條件：展開後用到的 Gate 必須都是允許的 (allowedTypes)
+            for (GateType req : rule.requiredGates) {
+                if (!allowedSet.count(req)) { isValid = false; break; }
+            }
+            if (isValid) forwardRules.push_back(rule);
+        }
+
+        // 排序：優先使用展開後「新增 Gate 數量最少」的 Rule
+        std::sort(forwardRules.begin(), forwardRules.end(), [](const TechMapRule& a, const TechMapRule& b) {
+            return a.addedGateCount < b.addedGateCount;
+        });
+
+        // 建立快取：為每一個 Target Gate 挑選最優解
+        std::unordered_map<GateType, const TechMapRule*> bestForwardRule;
+        for (const auto& rule : forwardRules) {
+            if (bestForwardRule.find(rule.targetGate) == bestForwardRule.end()) {
+                bestForwardRule[rule.targetGate] = &rule;
+            }
+        }
+
+        // Snapshot 收集需要展開的 Gate
+        std::vector<int> forwardCandidates;
+        for (size_t i = 0; i < netlist.getGateCount(); ++i) {
+            const Gate& g = netlist.getGate(i);
+            if (g.type != GateType::UNKNOWN && targetSet.count(g.type)) {
+                forwardCandidates.push_back(i);
+            }
+        }
+
+        // 執行一對多替換
+        for (int gateId : forwardCandidates) {
+            GateType type = netlist.getGate(gateId).type;
+            if (bestForwardRule.count(type)) {
+                const TechMapRule* bestRule = bestForwardRule[type];
+                applyForwardMapping(netlist, gateId, *bestRule);
+                totalGateChange += (bestRule->addedGateCount - 1); 
+            }
+        }
+    }
+
+    return totalGateChange;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -90,6 +90,11 @@ void VerilogWriter::writeWires(std::ofstream& file, const Netlist& netlist) cons
         if (!net.isPI && !net.isPO && !net.isConst) {
             internalWires.push_back(net.name);
         }
+
+        // 過濾掉懸空線 (Dangling Net)
+        if (net.driverGateId == -1 && net.loadGateIds.empty()) {
+            continue; 
+        }
     }
     // Print in groups of 8
     const size_t WiresPerLine = 8;
@@ -109,6 +114,11 @@ void VerilogWriter::writeWires(std::ofstream& file, const Netlist& netlist) cons
 void VerilogWriter::writeGates(std::ofstream& file, const Netlist& netlist) const {
     for (size_t i = 0; i < netlist.getGateCount(); ++i) {
         const Gate& gate = netlist.getGate(i);
+
+        if (gate.type == GateType::UNKNOWN) {
+            continue;
+        }
+
         std::string typeStr = netlist.gateTypeToString(gate.type);
         for (char& c : typeStr) {
             c = static_cast<char>(std::tolower(static_cast<unsigned char>(c)));

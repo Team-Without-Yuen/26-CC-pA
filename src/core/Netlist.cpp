@@ -3,6 +3,12 @@
 #include <algorithm>
 #include <sstream>
 
+void Netlist::setNetConst(int netId, bool isConst) {
+    if (netId >= 0 && netId < (int)nets.size()) {
+        nets[netId].isConst = isConst;
+    }
+}
+
 // 將 GateType enum 轉成大寫字串，供報告、debug、查詢結果輸出使用
 std::string Netlist::gateTypeToString(GateType type) const {
     switch (type) {
@@ -130,8 +136,10 @@ void Netlist::connectGateInput(int gateId, int netId, const std::string& pinName
     if (!pinName.empty()) {
         gates[gateId].inputPinNames.push_back(pinName);
     }
-    // Update the Net: Add this gate as one of its loads (receivers)
-    nets[netId].loadGateIds.push_back(gateId);
+    // 只有當 netId 是有效的 ID 時，才去更新這條線的 load 清單
+    if (netId >= 0 && netId < (int)nets.size()) {
+        nets[netId].loadGateIds.push_back(gateId);
+    }
 }
 
 // 將一條 net 接到指定 gate 的 output pin，並記錄該 net 的 driver gate
@@ -140,8 +148,10 @@ void Netlist::connectGateOutput(int gateId, int netId) {
     // Update the Gate: Set its output net ID
     gates[gateId].outputNetId = netId;
 
-    // Update the Net: Set this gate as its driver
-    nets[netId].driverGateId = gateId;
+    // 只有當 netId 是有效的 ID 時，才將這個 Gate 註冊為該線的 driver
+    if (netId >= 0 && netId < (int)nets.size()) {
+        nets[netId].driverGateId = gateId;
+    }
 }
 
 // 依 gate instance name 查 gate ID；找不到時回傳 -1

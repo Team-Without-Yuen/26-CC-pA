@@ -126,6 +126,9 @@ public:
     // 依 net name 取得 Net 指標；找不到回傳 nullptr
     const Net* findNet(const std::string& netName) const;
 
+    // 用於標記常數線的 API 
+    void setNetConst(int netId, bool isConst);
+
     // 統計所有 gate type 的數量，包含 AND/OR/NOT/NAND/NOR/XOR/XNOR/BUF/DFF
     std::map<GateType, int> countGatesByType() const;
 
@@ -553,6 +556,10 @@ public:
 
     // 建立連線：將指定 Gate 的輸入端連接到指定的 Net。
     bool connectGateInput(const std::string& gateName, const std::string& netName, int pinIndex = -1);
+
+    bool disconnectAllPins(int gateId);
+    // 斷開連線 + 設為 UNKNOWN
+    bool removeGate(int gateId);
 
     // 將整個 netlist 重新建構成只使用 AND 和 NOT gates
     // 使用 De Morgan 定理替換 OR/NAND/NOR/XOR/XNOR/BUF
