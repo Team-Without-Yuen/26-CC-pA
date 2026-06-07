@@ -1,36 +1,34 @@
-# Depth Analysis API 設計整理
+# Depth Analysis / DepthQuery API 整理
 
-這份文件定義後續要新增的 `DepthAnalysis` API。  
-目標是支援 Problem A 中 timing / critical path / depth optimization 類 prompt。
+這份文件整理 `Netlist` 的 depth / timing analysis API。  
+這一層負責回答 logic depth、critical path、primary output depth、DFF.D depth、以及 depth 超標 endpoint 類問題。
 
 ---
 
-## 1. 背景與目標
+## 1. 核心定位
 
-題目與 sample prompt 可能出現這類需求：
+Depth Analysis 負責回答 timing/depth 類問題。
+
+典型問題：
 
 ```text
-Reduce critical path depth.
-Perform depth optimization.
-Try to restructure n10 target depth 4.
-For each output depth > 4 optimize cone.
-What is the maximum logic depth from input in0 to output out3?
+What is the maximum logic depth to output y?
+Report the critical path to n10.
+Which outputs have depth greater than 4?
+What is the maximum logic depth from any primary input to any DFF D-pin?
+Find endpoints exceeding target depth 4.
+Find the global critical path.
 ```
 
-這類問題的第一步不是馬上改電路，而是先分析：
+這一層不做：
 
 ```text
-某個 net / output / DFF.D 的目前 depth 是多少？
-最長路徑 critical path 經過哪些 gates？
-哪些 endpoints 超過 target depth？
-要最佳化的 fanin cone 是哪一塊？
-```
-
-因此 `DepthAnalysis` 的目的：
-
-```text
-提供穩定、可重用的 depth / level / critical path 查詢 API，
-作為後續 depth optimization / cone restructuring 的基礎。
+Boolean constant status -> FunctionQuery
+function equivalence -> FunctionQuery
+reachable / fanin / fanout cone set -> ConeQuery
+arbitrary A-to-B through/avoid path -> PathQuery
+direct driver/load/input/output -> DirectConnectivityQuery
+optimization rewrite
 ```
 
 ---
@@ -40,13 +38,13 @@ What is the maximum logic depth from input in0 to output out3?
 目前採用簡化的 unit-delay gate model：
 
 ```text
-每個 combinational gate 的 delay / depth cost = 1
+每個 combinational gate 的 depth cost = 1
 ```
 
-因此一條路徑的 depth：
+一條 path 的 depth：
 
 ```text
-路徑中穿越的 combinational gate 數量。
+path 中穿越的 combinational gate 數量。
 ```
 
 例子：
@@ -61,19 +59,15 @@ depth 為：
 2
 ```
 
-因為經過：
-
-```text
-g1, g2
-```
+因為穿越 `g1` 和 `g2`。
 
 ---
 
 ## 3. Boundary 規則
 
-Depth analysis 預設只分析 combinational region。
+Depth analysis 只分析 combinational region。
 
-起點 depth = 0 的節點：
+level 0 的來源：
 
 ```text
 Primary Input
@@ -81,203 +75,77 @@ DFF.Q
 constant 1'b0 / 1'b1
 ```
 
-終點可以是：
-
-```text
-Primary Output
-DFF.D
-Specific Net
-Gate Input
-Gate Output
-```
-
 DFF 規則：
 
 ```text
 DFF 是 sequential boundary。
 不從 DFF input 穿越到 DFF Q。
-```
-
-如果要分析 register-to-register depth：
-
-```text
-startpoint = DFF.Q
-endpoint   = DFF.D
+DFF.Q 可視為 timing startpoint。
+DFF.D 可視為 timing endpoint。
 ```
 
 ---
 
-## 4. Level 與 Depth 的差異
+## 4. Level 與 Critical Path
 
-在這份文件中：
+net level：
 
 ```text
-net level  = 從最近的 combinational startpoint 到該 net 的最大 gate 數
-path depth = 某一條 startpoint-to-endpoint path 的 gate 數
+從最近的 combinational startpoint 到該 net 的最大 gate 數。
 ```
 
-若有多條 fanin path 到同一個 net：
+若多條 fanin path 匯合到同一個 net：
 
 ```text
 net level = max(所有 fanin path depth)
 ```
 
-例子：
+critical path：
 
 ```text
-a -> g1 -> n1
-b -> g2 -> n2 -> g3 -> n1
-```
-
-則：
-
-```text
-level(n1) = 2
-```
-
----
-
-## 5. 第一階段建議 API
-
-第一階段只做分析，不做 transformation。
-
-### 5.1 computeNetLevels
-
-```cpp
-std::vector<int> computeNetLevels() const;
-```
-
-用途：
-
-```text
-計算每個 net 的 combinational level。
-```
-
-回傳：
-
-```text
-vector index = netId
-value        = net level
-```
-
-建議語意：
-
-```text
-PI / DFF.Q / constant net level = 0
-無法計算或不在 combinational region 內 = -1
-```
-
-用途例子：
-
-```text
-快速查每條 net 的最大 fanin depth。
-找出 depth 過大的 output。
-為 critical path reconstruction 做準備。
-```
-
----
-
-### 5.2 computeGateLevels
-
-```cpp
-std::vector<int> computeGateLevels() const;
-```
-
-用途：
-
-```text
-計算每個 gate output 的 level。
-```
-
-回傳：
-
-```text
-vector index = gateId
-value        = gate output level
-```
-
-建議語意：
-
-```text
-combinational gate output level = max(input net levels) + 1
-DFF gate level = -1，因為 DFF 不屬於 combinational traversal
-input net 無法計算時，gate level = -1
-```
-
----
-
-### 5.3 getMaxDepthToNet
-
-```cpp
-int getMaxDepthToNet(const std::string& netName) const;
-```
-
-用途：
-
-```text
-查某條 net 的最大 fanin depth。
-```
-
-回傳：
-
-```text
-成功：depth >= 0
-失敗或找不到 net：-1
-```
-
-例子：
-
-```text
-getMaxDepthToNet("n10")
-```
-
-可回答：
-
-```text
-What is the logic depth of n10?
-```
-
----
-
-### 5.4 findCriticalPathToNet
-
-```cpp
-CombinationalPath findCriticalPathToNet(const std::string& netName) const;
-```
-
-用途：
-
-```text
-找出到指定 net 的一條最長 combinational path。
-```
-
-回傳：
-
-```text
-CombinationalPath
-```
-
-語意：
-
-```text
+到某 endpoint 的一條最大 depth path。
 若多條 path 同樣最長，回傳任意一條即可。
 ```
 
-可回答：
+---
 
-```text
-Report the critical path to n10.
+## 5. 基礎 Depth Helper
+
+目前提供以下底層 helper：
+
+```cpp
+std::vector<int> computeNetLevels() const;
+std::vector<int> computeGateLevels() const;
+int getMaxDepthToNet(const std::string& netName) const;
+CombinationalPath findCriticalPathToNet(const std::string& netName) const;
+DepthReport analyzeDepthToNet(const std::string& netName) const;
+std::vector<DepthReport> analyzePrimaryOutputDepths() const;
+std::vector<std::string> getPrimaryOutputsWithDepthGreaterThan(int limit) const;
+std::vector<DepthReport> analyzeDffDDepths() const;
+std::vector<std::string> getDffsWithDDepthGreaterThan(int limit) const;
+DepthReport findGlobalCriticalPath() const;
+std::vector<DepthReport> findEndpointsExceedingDepth(int maxDepth) const;
 ```
+
+用途：
+
+| API | 用途 |
+|---|---|
+| `computeNetLevels()` | 計算每個 net 的 combinational level |
+| `computeGateLevels()` | 計算每個 combinational gate output level |
+| `getMaxDepthToNet(net)` | 查單一 net 的最大 fanin depth |
+| `findCriticalPathToNet(net)` | 找到單一 net 的一條 critical path |
+| `analyzeDepthToNet(net)` | 回傳單一 net 的 `DepthReport` |
+| `analyzePrimaryOutputDepths()` | 分析所有 primary output endpoints |
+| `getPrimaryOutputsWithDepthGreaterThan(limit)` | 列出 depth 大於 limit 的 PO names |
+| `analyzeDffDDepths()` | 分析所有 DFF D-pin endpoints |
+| `getDffsWithDDepthGreaterThan(limit)` | 列出 D-pin depth 大於 limit 的 DFF names |
+| `findGlobalCriticalPath()` | 找出 PO 與 DFF.D 中最深 endpoint |
+| `findEndpointsExceedingDepth(maxDepth)` | 找出所有 depth 大於 maxDepth 的 timing endpoints |
 
 ---
 
-### 5.5 analyzeDepthToNet
-
-```cpp
-DepthReport analyzeDepthToNet(const std::string& netName) const;
-```
-
-建議新增資料結構：
+## 6. DepthReport
 
 ```cpp
 enum class DepthEndpointType {
@@ -298,192 +166,215 @@ struct DepthReport {
 
 欄位語意：
 
-```text
-endpointType  : endpoint 來源類型，例如 PrimaryOutput 或 DffD。
-endpointName  : 給人看的名稱，例如 y、n10、ff1.D。
-endpointNetId : 實際被分析的 net ID。
-depth         : 到該 endpoint 的最大 combinational depth。
-criticalPath  : 到該 endpoint 的一條 critical path。
-```
-
-用途：
-
-```text
-一次取得 endpoint net、depth、critical path。
-```
-
-適合給高階 API / LLM response 使用。
+| 欄位 | 意思 |
+|---|---|
+| `endpointType` | endpoint 來源類型 |
+| `endpointName` | 給人看的 endpoint 名稱，例如 `y`、`n10`、`ff1.D` |
+| `endpointNetId` | 實際被分析的 net ID |
+| `depth` | 到該 endpoint 的最大 combinational depth |
+| `criticalPath` | 到該 endpoint 的一條 critical path |
 
 ---
 
-### 5.6 analyzePrimaryOutputDepths
+## 7. 高階 DepthQuery
+
+目前已提供統一高階入口：
 
 ```cpp
-std::vector<DepthReport> analyzePrimaryOutputDepths() const;
+DepthReportSet runDepthQuery(const DepthQuery& query) const;
 ```
 
-用途：
+支援的 query type：
 
-```text
-分析所有 primary outputs 的 depth。
-```
+| Query type | 用途 |
+|---|---|
+| `SpecificNet` | 分析單一 net 的最大 depth 與 critical path |
+| `PrimaryOutputs` | 分析所有 primary output endpoints |
+| `DffD` | 分析所有 DFF D-pin endpoints |
+| `GlobalCriticalPath` | 找出 PO 與 DFF.D 中最深 timing endpoint |
+| `EndpointsExceedingDepth` | 找出所有 depth 大於 threshold 的 timing endpoints |
 
-可回答：
-
-```text
-Report all primary outputs whose logic cone contains depth greater than 4.
-What is the maximum output depth in this design?
-```
-
----
-
-### 5.7 getPrimaryOutputsWithDepthGreaterThan
+核心資料結構：
 
 ```cpp
-std::vector<std::string> getPrimaryOutputsWithDepthGreaterThan(int limit) const;
+struct DepthQuery {
+    DepthQueryType type = DepthQueryType::SpecificNet;
+    std::string netName;
+    int threshold = -1;
+    bool includeCriticalPath = true;
+};
+
+struct DepthReportSet {
+    bool ok = false;
+    std::string message;
+    DepthQueryType type = DepthQueryType::SpecificNet;
+
+    std::vector<DepthReport> reports;
+    DepthReport worst;
+
+    int threshold = -1;
+    size_t count = 0;
+};
 ```
-
-用途：
-
-```text
-列出所有 depth > limit 的 primary output names。
-```
-
-可回答：
-
-```text
-For each output depth > 4, optimize cone.
-```
-
-這個 API 可以作為 optimization 前的 endpoint selector。
 
 ---
 
-### 5.8 analyzeDffDDepths
+## 8. DepthQuery 輸入欄位
+
+| 欄位 | 型別 | 預設值 | 用途 |
+|---|---|---|---|
+| `type` | `DepthQueryType` | `SpecificNet` | 決定要執行哪一種 depth query |
+| `netName` | `std::string` | `""` | `SpecificNet` 使用 |
+| `threshold` | `int` | `-1` | `EndpointsExceedingDepth` 使用 |
+| `includeCriticalPath` | `bool` | `true` | 是否保留 `criticalPath` |
+
+`includeCriticalPath = false` 時：
+
+```text
+runDepthQuery() 會清空 reports 與 worst 內的 criticalPath。
+這適合只需要 depth / endpoint metadata，不需要完整 path 的情況。
+```
+
+---
+
+## 9. DepthReportSet 回傳欄位
+
+| 欄位 | 意思 |
+|---|---|
+| `ok` | query 是否成功 |
+| `message` | debug / LLM response 用的簡短訊息 |
+| `type` | query type |
+| `reports` | 查詢得到的一個或多個 endpoint report |
+| `worst` | `reports` 中 depth 最大的 endpoint；GlobalCriticalPath 的主要結果 |
+| `threshold` | query 使用的 depth 門檻 |
+| `count` | `reports.size()` |
+
+---
+
+## 10. Query Type 對照
+
+| DepthQueryType | 底層 helper | 主要讀取 |
+|---|---|---|
+| `SpecificNet` | `analyzeDepthToNet(netName)` | `reports[0]`, `worst.depth`, `worst.criticalPath` |
+| `PrimaryOutputs` | `analyzePrimaryOutputDepths()` | `reports`, `worst` |
+| `DffD` | `analyzeDffDDepths()` | `reports`, `worst` |
+| `GlobalCriticalPath` | `findGlobalCriticalPath()` | `worst`, `reports[0]` |
+| `EndpointsExceedingDepth` | `findEndpointsExceedingDepth(threshold)` | `reports`, `count`, `worst` |
+
+---
+
+## 11. 使用範例
+
+### 11.1 單一 net depth
 
 ```cpp
-std::vector<DepthReport> analyzeDffDDepths() const;
+Netlist::DepthQuery query;
+query.type = Netlist::DepthQueryType::SpecificNet;
+query.netName = "y";
+
+Netlist::DepthReportSet report = netlist.runDepthQuery(query);
 ```
 
-用途：
-
-```text
-分析所有 DFF D-pin 的 combinational depth。
-```
-
-原因：
-
-Timing path 常見 endpoint 不只有 PO，也包含 register D pin。
-
----
-
-### 5.9 getDffsWithDDepthGreaterThan
+讀取：
 
 ```cpp
-std::vector<std::string> getDffsWithDDepthGreaterThan(int limit) const;
-```
-
-用途：
-
-```text
-列出所有 D-pin depth > limit 的 DFF instance names。
-```
-
-可回答：
-
-```text
-Find registers whose D input has depth greater than 5.
+int depth = report.worst.depth;
+Netlist::CombinationalPath path = report.worst.criticalPath;
 ```
 
 ---
 
-## 6. 第二階段可加的 API
-
-第二階段才開始跟 optimization 接軌。
-
-### 6.1 findGlobalCriticalPath
+### 11.2 所有 primary outputs depth
 
 ```cpp
-DepthReport findGlobalCriticalPath() const;
+Netlist::DepthQuery query;
+query.type = Netlist::DepthQueryType::PrimaryOutputs;
+query.includeCriticalPath = false;
+
+Netlist::DepthReportSet report = netlist.runDepthQuery(query);
 ```
 
-用途：
-
-```text
-在所有 PO 與 DFF.D endpoints 中找出最大 depth 的 critical path。
-```
-
-可回答：
-
-```text
-Reduce critical path depth.
-```
-
-如果 prompt 沒指定 target net，這個 API 可先找全設計最嚴重的路徑。
-
----
-
-### 6.2 findEndpointsExceedingDepth
+讀取：
 
 ```cpp
-std::vector<DepthReport> findEndpointsExceedingDepth(int maxDepth) const;
-```
-
-用途：
-
-```text
-找出所有 depth > maxDepth 的 endpoints。
-```
-
-endpoint 可包含：
-
-```text
-Primary Output
-DFF.D
+std::vector<Netlist::DepthReport> outputs = report.reports;
+Netlist::DepthReport worstOutput = report.worst;
 ```
 
 ---
 
-### 6.3 getFaninConeDepthReport
+### 11.3 所有 DFF.D depth
 
 ```cpp
-DepthReport getFaninConeDepthReport(const std::string& targetNet) const;
-```
+Netlist::DepthQuery query;
+query.type = Netlist::DepthQueryType::DffD;
 
-用途：
-
-```text
-針對某個 target net 的 fanin cone 建立 depth report。
-```
-
-可接到：
-
-```text
-optimize cone
-restructure target net
+Netlist::DepthReportSet report = netlist.runDepthQuery(query);
 ```
 
 ---
 
-## 7. 和 PathQuery 的關係
+### 11.4 全設計 global critical path
 
-`PathQuery` 已經可以做：
+```cpp
+Netlist::DepthQuery query;
+query.type = Netlist::DepthQueryType::GlobalCriticalPath;
 
-```text
-startpoint-to-endpoint MinDepth / MaxDepth
+Netlist::DepthReportSet report = netlist.runDepthQuery(query);
 ```
 
-但 `DepthAnalysis` 的定位不同：
+讀取：
 
-```text
-PathQuery:
-  使用者已指定 startpoint / endpoint。
-
-DepthAnalysis:
-  幫助系統自動分析整個設計或某個 cone 哪裡太深。
+```cpp
+Netlist::DepthReport critical = report.worst;
 ```
 
-例如：
+---
+
+### 11.5 找 depth 超標 endpoints
+
+```cpp
+Netlist::DepthQuery query;
+query.type = Netlist::DepthQueryType::EndpointsExceedingDepth;
+query.threshold = 4;
+
+Netlist::DepthReportSet report = netlist.runDepthQuery(query);
+```
+
+讀取：
+
+```cpp
+for (const Netlist::DepthReport& endpoint : report.reports) {
+    // endpoint.depth > 4
+}
+```
+
+---
+
+## 12. Prompt 對應表
+
+| Prompt | 建議 API |
+|---|---|
+| What is the maximum logic depth to output y? | `DepthQuery::SpecificNet`, `netName = "y"` |
+| Report the critical path to n10. | `DepthQuery::SpecificNet`, `includeCriticalPath = true` |
+| What is the maximum output depth? | `DepthQuery::PrimaryOutputs`, read `worst` |
+| Which outputs have depth greater than 4? | `DepthQuery::EndpointsExceedingDepth` then filter `PrimaryOutput`, or low-level `getPrimaryOutputsWithDepthGreaterThan(4)` |
+| What is the maximum logic depth from any PI to any DFF D-pin? | `DepthQuery::DffD`, read `worst` |
+| Find the global critical path. | `DepthQuery::GlobalCriticalPath` |
+| Find endpoints exceeding target depth 4. | `DepthQuery::EndpointsExceedingDepth`, `threshold = 4` |
+
+---
+
+## 13. 和 PathQuery 的關係
+
+`PathQuery` 和 `DepthQuery` 都可能出現 depth 字樣，但語意不同。
+
+| API | 語意 |
+|---|---|
+| `PathQuery::MaxDepth` | 指定 startpoints 到 endpoints 之間的最長 path |
+| `DepthQuery` | timing startpoints 到 timing endpoints 的 arrival depth / critical path |
+
+例子：
 
 ```text
 What is the max depth from input a to output y?
@@ -492,7 +383,7 @@ What is the max depth from input a to output y?
 適合：
 
 ```text
-PathQuery MaxDepth
+PathQuery::MaxDepth
 ```
 
 但：
@@ -504,193 +395,85 @@ For each output depth > 4 optimize cone.
 適合：
 
 ```text
-DepthAnalysis 找出 outputs
-再交給 Optimization API
+DepthQuery::EndpointsExceedingDepth
 ```
 
 ---
 
-## 8. 和 Optimization 的關係
+## 14. 和 FunctionQuery 的關係
 
-Depth optimization 的高階流程應該是：
+DepthQuery 不做功能常數判斷。
 
-```text
-1. DepthAnalysis 找出超標 endpoint
-2. 取得 endpoint fanin cone
-3. 找出 critical path
-4. 套用保守 rewrite / balance
-5. 重新計算 depth
-6. 用 LEC 或 SAT 檢查功能等價
-7. 若不符合 hard constraint 或功能錯誤，rollback
-```
-
-因此 DepthAnalysis 是 optimization 的前置條件。
+| 問題 | 正確 API |
+|---|---|
+| Is output n16 always 0? | `FunctionQuery::AlwaysZero` |
+| Is output n16 non-constant? | `FunctionQuery::TruthStatus` |
+| What is output n16 depth? | `DepthQuery::SpecificNet` |
+| Which endpoints exceed depth 4? | `DepthQuery::EndpointsExceedingDepth` |
 
 ---
 
-## 9. 後續 Optimization 可能用到的 Transformation
+## 15. 和 Optimization 的關係
 
-第一批保守 transformation：
-
-```text
-buffer chain cleanup
-inverter-buffer merge
-constant propagation
-duplicate gate sharing
-simple algebraic simplification
-```
-
-第二批 depth-oriented transformation：
+Depth optimization 的高階流程通常是：
 
 ```text
-AND tree balancing
-OR tree balancing
-XOR tree balancing
-critical path local rewriting
-fanin cone restructuring
+1. DepthQuery 找出超標 timing endpoints。
+2. OptimizationCandidate 建立最佳化候選。
+3. 對 candidate critical path / fanin cone 做 target selection。
+4. 執行 transformation / rewrite。
+5. 重新跑 DepthQuery。
+6. 用 FunctionQuery / equivalence check 驗證功能。
+7. accept 或 rollback。
 ```
 
-注意：
-
-```text
-NAND / NOR / XNOR 有 inversion polarity 問題，不應直接當 AND / OR / XOR 任意平衡。
-```
+DepthQuery 只負責第 1 步與第 5 步的分析。
 
 ---
 
-## 10. 實作注意事項
+## 16. 目前限制
 
-### 10.1 DFF 不穿越
-
-DepthAnalysis 應與 PathQuery 一致：
+第一版 DepthAnalysis / DepthQuery 先不處理：
 
 ```text
-DFF 是 sequential boundary。
-```
-
-DFF.Q 可當 startpoint，DFF.D 可當 endpoint。
-
----
-
-### 10.2 unconnected net / pin
-
-官方 Q&A 說 netlist 可能有 floating 或 unconnected ports。
-
-因此：
-
-```text
-遇到 -1 netId 要跳過。
-不要呼叫 getNet(-1)。
-```
-
----
-
-### 10.3 combinational loop
-
-理論上 gate-level netlist 應多為 combinational DAG + DFF boundary。
-
-但仍建議保護：
-
-```text
-若遇到 combinational loop，level 計算應回報 failure 或跳過。
-```
-
-可用：
-
-```text
-topological sort
-DFS inStack cycle detection
-```
-
-目前狀態：
-
-```text
-findLongestPathInCone() 已加入 DFS visiting/inStack 保護。
-若 cone 分支遇到 cycle，該分支視為無效。
-若整個 cone 只有 cycle 而沒有合法出口，回傳 {-1, empty path}。
-```
-
----
-
-### 10.4 多 fanin reconvergence
-
-Depth 取最大 fanin depth：
-
-```text
-gate output level = max(input levels) + 1
-```
-
-這是 timing critical path 常用的簡化模型。
-
----
-
-## 11. 建議實作順序
-
-目前狀態：
-
-```text
-第一階段 API 已先在 include/core/Netlist.h 中完成宣告。
-computeNetLevels() / computeGateLevels() / getMaxDepthToNet() 已在
-src/analysis/DepthAnalysis.cpp 完成實作與 mini tester 驗證。
-findCriticalPathToNet() / analyzeDepthToNet() 也已完成實作與 mini tester 驗證。
-analyzePrimaryOutputDepths() / getPrimaryOutputsWithDepthGreaterThan() 已完成實作與 mini tester 驗證。
-analyzeDffDDepths() / getDffsWithDDepthGreaterThan() 已完成實作與 mini tester 驗證。
-findGlobalCriticalPath() / findEndpointsExceedingDepth() 已完成實作與 mini tester 驗證。
-後續編譯或連結測試時，要記得把 src/analysis/DepthAnalysis.cpp 加入編譯命令。
-```
-
-第一步：
-
-```cpp
-std::vector<int> computeNetLevels() const;
-std::vector<int> computeGateLevels() const;
-int getMaxDepthToNet(const std::string& netName) const;
-```
-
-第二步：
-
-```cpp
-CombinationalPath findCriticalPathToNet(const std::string& netName) const;
-DepthReport analyzeDepthToNet(const std::string& netName) const;
-```
-
-第三步：
-
-```cpp
-std::vector<DepthReport> analyzePrimaryOutputDepths() const;
-std::vector<std::string> getPrimaryOutputsWithDepthGreaterThan(int limit) const;
-```
-
-第四步：
-
-```cpp
-std::vector<DepthReport> analyzeDffDDepths() const;
-std::vector<std::string> getDffsWithDDepthGreaterThan(int limit) const;
-```
-
-第五步：
-
-```cpp
-DepthReport findGlobalCriticalPath() const;
-std::vector<DepthReport> findEndpointsExceedingDepth(int maxDepth) const;
-```
-
----
-
-## 12. 第一版暫不處理
-
-第一版 DepthAnalysis 先不做：
-
-```text
-real delay / library timing
-cell area
+real cell delay
+library timing arc
 load capacitance
 slew
-arrival / required time
-slack
+arrival / required time / slack
 multi-cycle path
 false path
 clock domain timing constraints
+sequential timing across multiple cycles
 ```
 
-因為 Problem A 目前 gate-level primitive model 較簡化，先採 unit-depth model 較適合。
+因為 Problem A 目前是 restricted primitive gate-level netlist，先採 unit-depth model 較適合。
+
+---
+
+## 17. 目前完成狀態
+
+已完成：
+
+```text
+computeNetLevels()
+computeGateLevels()
+getMaxDepthToNet()
+findCriticalPathToNet()
+analyzeDepthToNet()
+analyzePrimaryOutputDepths()
+getPrimaryOutputsWithDepthGreaterThan()
+analyzeDffDDepths()
+getDffsWithDDepthGreaterThan()
+findGlobalCriticalPath()
+findEndpointsExceedingDepth()
+DepthQuery / DepthReportSet / runDepthQuery()
+mini test 覆蓋所有 DepthQueryType
+```
+
+測試狀態：
+
+```text
+runDepthQuery() 已通過 mini tester。
+後續編譯或連結測試時，要記得把 src/analysis/DepthAnalysis.cpp 加入編譯命令。
+```

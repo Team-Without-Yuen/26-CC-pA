@@ -96,6 +96,99 @@ void testBasicQueries(TestReport& report, const Netlist& netlist) {
     report.check(netlist.findNet("n_or") != nullptr, "findNet existing net");
     report.check(netlist.findNet("missing_net") == nullptr, "findNet missing net");
 
+    report.check(netlist.isValidGateId(netlist.getGateId("g_and")) &&
+                 !netlist.isValidGateId(-1),
+                 "isValidGateId");
+    report.check(netlist.isValidNetId(netlist.getNetId("a")) &&
+                 !netlist.isValidNetId(-1),
+                 "isValidNetId");
+    report.check(netlist.isDffGate(netlist.getGateId("ff1")) &&
+                 !netlist.isDffGate(netlist.getGateId("g_and")),
+                 "isDffGate");
+    report.check(netlist.isCombinationalGate(netlist.getGateId("g_and")) &&
+                 !netlist.isCombinationalGate(netlist.getGateId("ff1")),
+                 "isCombinationalGate");
+    report.check(netlist.isPrimaryInputNet(netlist.getNetId("a")) &&
+                 !netlist.isPrimaryInputNet(netlist.getNetId("y")),
+                 "isPrimaryInputNet");
+    report.check(netlist.isPrimaryOutputNet(netlist.getNetId("y")) &&
+                 !netlist.isPrimaryOutputNet(netlist.getNetId("a")),
+                 "isPrimaryOutputNet");
+    const std::vector<std::string> allGateNames = netlist.getAllGateNames();
+    report.check(allGateNames.size() == netlist.getGateCount() &&
+                 containsString(allGateNames, "g_and") &&
+                 containsString(allGateNames, "ff1"),
+                 "getAllGateNames");
+    const std::vector<std::string> allNetNames = netlist.getAllNetNames();
+    bool sawConstantNet = false;
+    for (size_t gateIndex = 0; gateIndex < netlist.getGateCount(); ++gateIndex) {
+        const Gate& gate = netlist.getGate(static_cast<int>(gateIndex));
+        for (int inputNetId : gate.inputNetIds) {
+            if (netlist.isConstantNet(inputNetId)) {
+                sawConstantNet = true;
+                break;
+            }
+        }
+        if (sawConstantNet) {
+            break;
+        }
+    }
+    report.check(sawConstantNet &&
+                 !netlist.isConstantNet(netlist.getNetId("a")),
+                 "isConstantNet");
+    report.check(allNetNames.size() == netlist.getNetCount() &&
+                 containsString(allNetNames, "a") &&
+                 containsString(allNetNames, "n_buf"),
+                 "getAllNetNames");
+    report.check(containsString(netlist.getPrimaryInputNames(), "bus") &&
+                 containsString(netlist.getPrimaryInputNames(), "clk"),
+                 "getPrimaryInputNames");
+    report.check(containsString(netlist.getPrimaryOutputNames(), "y") &&
+                 containsString(netlist.getPrimaryOutputNames(), "bus_out"),
+                 "getPrimaryOutputNames");
+    report.check(netlist.getDffNames().size() == 1 &&
+                 netlist.getDffNames().front() == "ff1",
+                 "getDffNames");
+    report.check(netlist.getCombinationalGateNames().size() == netlist.getGateCount() - 1 &&
+                 containsString(netlist.getCombinationalGateNames(), "g_and") &&
+                 !containsString(netlist.getCombinationalGateNames(), "ff1"),
+                 "getCombinationalGateNames");
+    report.check(netlist.getPortWidth("bus") == 2 &&
+                 netlist.getPortWidth("a") == 1 &&
+                 netlist.getPortWidth("missing_port") == -1,
+                 "getPortWidth");
+    report.check(netlist.isBusPort("bus") &&
+                 !netlist.isBusPort("a") &&
+                 !netlist.isBusPort("missing_port"),
+                 "isBusPort");
+    const std::vector<std::string> busBitNames = netlist.getPortBitNames("bus");
+    report.check(busBitNames.size() == 2 &&
+                 containsString(busBitNames, "bus[0]") &&
+                 containsString(busBitNames, "bus[1]") &&
+                 netlist.getPortBitNames("missing_port").empty(),
+                 "getPortBitNames");
+    report.check(netlist.getUndrivenNetNames().empty(),
+                 "getUndrivenNetNames clean design");
+    report.check(containsString(netlist.getNoLoadNetNames(), "d24") &&
+                 !containsString(netlist.getNoLoadNetNames(), "y"),
+                 "getNoLoadNetNames");
+    report.check(containsString(netlist.getFloatingNetNames(), "d24"),
+                 "getFloatingNetNames no-load net");
+    report.check(netlist.getUnconnectedGateNames().empty(),
+                 "getUnconnectedGateNames clean design");
+
+    Netlist issueNetlist = netlist;
+    issueNetlist.addNet("floating_internal");
+    report.check(containsString(issueNetlist.getUndrivenNetNames(), "floating_internal") &&
+                 containsString(issueNetlist.getNoLoadNetNames(), "floating_internal") &&
+                 containsString(issueNetlist.getFloatingNetNames(), "floating_internal"),
+                 "structural issue helpers floating internal net");
+
+    Netlist unconnectedGateNetlist = netlist;
+    report.check(unconnectedGateNetlist.disconnectGateInput("g_y", "n_buf") &&
+                 containsString(unconnectedGateNetlist.getUnconnectedGateNames(), "g_y"),
+                 "getUnconnectedGateNames disconnected input");
+
     report.check(netlist.gateTypeToString(GateType::NAND) == "NAND", "gateTypeToString");
     report.check(netlist.stringToGateType("xnor") == GateType::XNOR, "stringToGateType lower case");
     report.check(netlist.stringToGateType("bad_type") == GateType::UNKNOWN, "stringToGateType unknown");
@@ -108,6 +201,75 @@ void testBasicQueries(TestReport& report, const Netlist& netlist) {
     report.check(gateInfo.find("Type: NAND") != std::string::npos &&
                  gateInfo.find("1'b1") != std::string::npos,
                  "getGateInfo");
+
+    Netlist::BasicQuery summaryQuery;
+    summaryQuery.type = Netlist::BasicQueryType::Summary;
+    const Netlist::BasicReport summaryReport = netlist.runBasicQuery(summaryQuery);
+    report.check(summaryReport.ok &&
+                 summaryReport.gateCount == netlist.getGateCount() &&
+                 summaryReport.netCount == netlist.getNetCount() &&
+                 summaryReport.logicalWireCount == netlist.getLogicalWireCount() &&
+                 summaryReport.gateTypeCounts.at(GateType::BUF) == 29,
+                 "runBasicQuery Summary");
+
+    Netlist::BasicQuery dffQuery;
+    dffQuery.type = Netlist::BasicQueryType::ListDffs;
+    const Netlist::BasicReport dffReport = netlist.runBasicQuery(dffQuery);
+    report.check(dffReport.ok &&
+                 dffReport.gateCount == 1 &&
+                 containsString(dffReport.gateNames, "ff1"),
+                 "runBasicQuery ListDffs");
+
+    Netlist::BasicQuery gateInfoQuery;
+    gateInfoQuery.type = Netlist::BasicQueryType::GateInfo;
+    gateInfoQuery.name = "g_and";
+    const Netlist::BasicReport gateInfoReport = netlist.runBasicQuery(gateInfoQuery);
+    report.check(gateInfoReport.ok &&
+                 gateInfoReport.exists &&
+                 gateInfoReport.objectId == netlist.getGateId("g_and") &&
+                 gateInfoReport.typeName == "AND" &&
+                 gateInfoReport.isCombinational,
+                 "runBasicQuery GateInfo");
+
+    Netlist::BasicQuery netInfoQuery;
+    netInfoQuery.type = Netlist::BasicQueryType::NetInfo;
+    netInfoQuery.name = "a";
+    const Netlist::BasicReport netInfoReport = netlist.runBasicQuery(netInfoQuery);
+    report.check(netInfoReport.ok &&
+                 netInfoReport.exists &&
+                 netInfoReport.objectId == netlist.getNetId("a") &&
+                 netInfoReport.isPrimaryInput &&
+                 !netInfoReport.isPrimaryOutput,
+                 "runBasicQuery NetInfo");
+
+    Netlist::BasicQuery portInfoQuery;
+    portInfoQuery.type = Netlist::BasicQueryType::PortInfo;
+    portInfoQuery.name = "bus";
+    const Netlist::BasicReport portInfoReport = netlist.runBasicQuery(portInfoQuery);
+    report.check(portInfoReport.ok &&
+                 portInfoReport.exists &&
+                 portInfoReport.isBus &&
+                 portInfoReport.portWidth == 2 &&
+                 containsString(portInfoReport.netNames, "bus[0]"),
+                 "runBasicQuery PortInfo");
+
+    Netlist::BasicQuery constQuery;
+    constQuery.type = Netlist::BasicQueryType::GatesWithConstantInput;
+    constQuery.constValue = 1;
+    const Netlist::BasicReport constReport = netlist.runBasicQuery(constQuery);
+    report.check(constReport.ok &&
+                 constReport.gateCount == 2 &&
+                 containsString(constReport.gateNames, "g_nand"),
+                 "runBasicQuery GatesWithConstantInput");
+
+    Netlist::BasicQuery issueQuery;
+    issueQuery.type = Netlist::BasicQueryType::StructuralIssues;
+    const Netlist::BasicReport issueReport = issueNetlist.runBasicQuery(issueQuery);
+    report.check(issueReport.ok &&
+                 containsString(issueReport.undrivenNets, "floating_internal") &&
+                 containsString(issueReport.noLoadNets, "floating_internal") &&
+                 containsString(issueReport.floatingNets, "floating_internal"),
+                 "runBasicQuery StructuralIssues");
 }
 
 // 測試 gate type 統計、constant input 查詢、wire loads 與 gate fanout。
@@ -139,6 +301,139 @@ void testDirectAnalysis(TestReport& report, const Netlist& netlist) {
     report.check(netlist.getWireLoadCount("a") == 3, "getWireLoadCount scalar");
     report.check(netlist.getWireLoadCount("bus") == 1, "getWireLoadCount bus");
 
+    report.check(netlist.getNetDriverGateId("n_or") == netlist.getGateId("g_or"),
+                 "getNetDriverGateId scalar");
+    report.check(netlist.getNetDriverGateId("a") == -1,
+                 "getNetDriverGateId primary input");
+    const std::vector<int> nOrDrivers = netlist.getNetDriverGateIds("n_or");
+    report.check(nOrDrivers.size() == 1 &&
+                 nOrDrivers.front() == netlist.getGateId("g_or"),
+                 "getNetDriverGateIds scalar");
+    const std::vector<std::string> nOrDriverNames = netlist.getNetDriverGateNames("n_or");
+    report.check(nOrDriverNames.size() == 1 &&
+                 nOrDriverNames.front() == "g_or",
+                 "getNetDriverGateNames scalar");
+    report.check(netlist.getNetDriverGateName("n_or") == "g_or" &&
+                 netlist.getNetDriverGateName("a").empty(),
+                 "getNetDriverGateName");
+
+    const std::vector<int> aLoadIdsByNet = netlist.getNetLoadGateIds("a");
+    report.check(aLoadIdsByNet.size() == aLoads.size(),
+                 "getNetLoadGateIds wrapper");
+    const std::vector<std::string> aLoadNamesByNet = netlist.getNetLoadGateNames("a");
+    report.check(containsString(aLoadNamesByNet, "g_and") &&
+                 containsString(aLoadNamesByNet, "g_direct"),
+                 "getNetLoadGateNames wrapper");
+    report.check(netlist.getNetLoadGateCount("a") == 3,
+                 "getNetLoadGateCount wrapper");
+
+    const std::vector<int> gOrInputIds = netlist.getGateInputNetIds("g_or");
+    report.check(gOrInputIds.size() == 2 &&
+                 containsInt(gOrInputIds, netlist.getNetId("n_and")) &&
+                 containsInt(gOrInputIds, netlist.getNetId("c")),
+                 "getGateInputNetIds");
+    const std::vector<std::string> gOrInputNames = netlist.getGateInputNetNames("g_or");
+    report.check(containsString(gOrInputNames, "n_and") &&
+                 containsString(gOrInputNames, "c"),
+                 "getGateInputNetNames");
+    report.check(netlist.getGateOutputNetName("g_or") == "n_or" &&
+                 netlist.getGateOutputNetName("missing_gate").empty(),
+                 "getGateOutputNetName");
+
+    const std::vector<int> gOrFaninIds = netlist.getGateFaninGateIds("g_or");
+    report.check(gOrFaninIds.size() == 1 &&
+                 gOrFaninIds.front() == netlist.getGateId("g_and"),
+                 "getGateFaninGateIds");
+    const std::vector<std::string> gOrFaninNames = netlist.getGateFaninGateNames("g_or");
+    report.check(gOrFaninNames.size() == 1 &&
+                 gOrFaninNames.front() == "g_and",
+                 "getGateFaninGateNames");
+    report.check(netlist.getGateFaninGateCount("g_or") == 1,
+                 "getGateFaninGateCount");
+    report.check(netlist.isGateDirectlyConnectedToNet("g_or", "n_or") &&
+                 netlist.isGateDirectlyConnectedToNet("g_or", "n_and") &&
+                 !netlist.isGateDirectlyConnectedToNet("g_or", "n_buf"),
+                 "isGateDirectlyConnectedToNet");
+    report.check(netlist.isNetDirectlyConnectedToGate("n_or", "g_or") &&
+                 !netlist.isNetDirectlyConnectedToGate("n_buf", "g_or"),
+                 "isNetDirectlyConnectedToGate");
+
+    Netlist::DirectConnectivityQuery directQuery;
+    directQuery.type = Netlist::DirectConnectivityQueryType::NetDriver;
+    directQuery.netName = "n_or";
+    Netlist::DirectConnectivityReport directReport =
+        netlist.runDirectConnectivityQuery(directQuery);
+    report.check(directReport.ok &&
+                 directReport.count == 1 &&
+                 containsString(directReport.gateNames, "g_or"),
+                 "runDirectConnectivityQuery NetDriver");
+
+    directQuery = Netlist::DirectConnectivityQuery();
+    directQuery.type = Netlist::DirectConnectivityQueryType::NetLoads;
+    directQuery.netName = "n_or";
+    directReport = netlist.runDirectConnectivityQuery(directQuery);
+    report.check(directReport.ok &&
+                 directReport.count == 2 &&
+                 containsString(directReport.gateNames, "g_not") &&
+                 containsString(directReport.gateNames, "g_z"),
+                 "runDirectConnectivityQuery NetLoads");
+
+    directQuery = Netlist::DirectConnectivityQuery();
+    directQuery.type = Netlist::DirectConnectivityQueryType::GateInputs;
+    directQuery.gateName = "g_or";
+    directReport = netlist.runDirectConnectivityQuery(directQuery);
+    report.check(directReport.ok &&
+                 directReport.count == 2 &&
+                 containsString(directReport.netNames, "n_and") &&
+                 containsString(directReport.netNames, "c"),
+                 "runDirectConnectivityQuery GateInputs");
+
+    directQuery = Netlist::DirectConnectivityQuery();
+    directQuery.type = Netlist::DirectConnectivityQueryType::GateOutput;
+    directQuery.gateName = "g_or";
+    directReport = netlist.runDirectConnectivityQuery(directQuery);
+    report.check(directReport.ok &&
+                 directReport.count == 1 &&
+                 directReport.netName == "n_or" &&
+                 containsString(directReport.netNames, "n_or"),
+                 "runDirectConnectivityQuery GateOutput");
+
+    directQuery = Netlist::DirectConnectivityQuery();
+    directQuery.type = Netlist::DirectConnectivityQueryType::GateFanin;
+    directQuery.gateName = "g_or";
+    directReport = netlist.runDirectConnectivityQuery(directQuery);
+    report.check(directReport.ok &&
+                 directReport.count == 1 &&
+                 containsString(directReport.gateNames, "g_and"),
+                 "runDirectConnectivityQuery GateFanin");
+
+    directQuery = Netlist::DirectConnectivityQuery();
+    directQuery.type = Netlist::DirectConnectivityQueryType::GateFanout;
+    directQuery.gateName = "g_or";
+    directReport = netlist.runDirectConnectivityQuery(directQuery);
+    report.check(directReport.ok &&
+                 directReport.count == 2 &&
+                 containsString(directReport.gateNames, "g_not") &&
+                 containsString(directReport.gateNames, "g_z"),
+                 "runDirectConnectivityQuery GateFanout");
+
+    directQuery = Netlist::DirectConnectivityQuery();
+    directQuery.type = Netlist::DirectConnectivityQueryType::DirectlyConnected;
+    directQuery.gateName = "g_or";
+    directQuery.netName = "n_and";
+    directReport = netlist.runDirectConnectivityQuery(directQuery);
+    report.check(directReport.ok &&
+                 directReport.connected &&
+                 directReport.count == 1,
+                 "runDirectConnectivityQuery DirectlyConnected true");
+
+    directQuery.netName = "n_buf";
+    directReport = netlist.runDirectConnectivityQuery(directQuery);
+    report.check(directReport.ok &&
+                 !directReport.connected &&
+                 directReport.count == 0,
+                 "runDirectConnectivityQuery DirectlyConnected false");
+
     const std::vector<int> orFanout = netlist.getGateFanout("g_or");
     report.check(orFanout.size() == 2, "getGateFanout");
     const std::vector<std::string> orFanoutNames = netlist.getGateFanoutNames("g_or");
@@ -157,6 +452,14 @@ void testConeQueries(TestReport& report, const Netlist& netlist) {
     report.check(containsInt(std::vector<int>(faninY.netIds.begin(), faninY.netIds.end()),
                              netlist.getNetId("n_and")),
                  "getTransitiveFaninCone includes upstream net");
+    report.check(containsInt(netlist.getConeNetIds(faninY), netlist.getNetId("y")) &&
+                 containsString(netlist.getConeNetNames(faninY), "n_and") &&
+                 netlist.getConeNetCount(faninY) == netlist.getConeNetIds(faninY).size(),
+                 "getConeNetIds/Names/Count");
+    report.check(containsInt(netlist.getConeGateIds(faninY), netlist.getGateId("g_y")) &&
+                 containsString(netlist.getConeGateNames(faninY), "g_and") &&
+                 netlist.getConeGateCount(faninY) == netlist.getConeGateIds(faninY).size(),
+                 "getConeGateIds/Names/Count");
 
     const ConeResult fanoutNbuf = netlist.getTransitiveFanoutCone("n_buf");
     report.check(containsInt(std::vector<int>(fanoutNbuf.netIds.begin(), fanoutNbuf.netIds.end()),
@@ -164,6 +467,8 @@ void testConeQueries(TestReport& report, const Netlist& netlist) {
                  !containsInt(std::vector<int>(fanoutNbuf.netIds.begin(), fanoutNbuf.netIds.end()),
                               netlist.getNetId("q")),
                  "getTransitiveFanoutCone stops at DFF");
+    report.check(!containsString(netlist.getConeGateNames(fanoutNbuf), "ff1"),
+                 "getConeGateNames excludes DFF boundary");
 
     report.check(netlist.getGateTransitiveFaninCone("g_y").rootNetIds.front() ==
                  netlist.getNetId("y"),
@@ -198,6 +503,46 @@ void testConeQueries(TestReport& report, const Netlist& netlist) {
     report.check(netlist.getGateTransitiveFanoutConeGateCount("g_or") ==
                  netlist.getGateTransitiveFanoutConeGateNames("g_or").size(),
                  "getGateTransitiveFanoutConeGateCount");
+
+    Netlist::ConeQuery coneQuery;
+    coneQuery.type = Netlist::ConeQueryType::NetTransitiveFanin;
+    coneQuery.netName = "y";
+    coneQuery.includeLocalPaths = true;
+    Netlist::ConeReport coneReport = netlist.runConeQuery(coneQuery);
+    report.check(coneReport.ok &&
+                 coneReport.exists &&
+                 containsString(coneReport.netNames, "n_and") &&
+                 containsString(coneReport.gateNames, "g_y") &&
+                 coneReport.longestDepth == 9 &&
+                 !coneReport.longestPathNetNames.empty(),
+                 "runConeQuery NetTransitiveFanin");
+
+    coneQuery = Netlist::ConeQuery();
+    coneQuery.type = Netlist::ConeQueryType::NetTransitiveFanout;
+    coneQuery.netName = "n_or";
+    coneReport = netlist.runConeQuery(coneQuery);
+    report.check(coneReport.ok &&
+                 containsString(coneReport.netNames, "z") &&
+                 containsString(coneReport.gateNames, "g_z"),
+                 "runConeQuery NetTransitiveFanout");
+
+    coneQuery = Netlist::ConeQuery();
+    coneQuery.type = Netlist::ConeQueryType::GateTransitiveFanin;
+    coneQuery.gateName = "g_y";
+    coneReport = netlist.runConeQuery(coneQuery);
+    report.check(coneReport.ok &&
+                 containsString(coneReport.gateNames, "g_buf") &&
+                 containsString(coneReport.netNames, "n_buf"),
+                 "runConeQuery GateTransitiveFanin");
+
+    coneQuery = Netlist::ConeQuery();
+    coneQuery.type = Netlist::ConeQueryType::GateTransitiveFanout;
+    coneQuery.gateName = "g_or";
+    coneReport = netlist.runConeQuery(coneQuery);
+    report.check(coneReport.ok &&
+                 containsString(coneReport.gateNames, "g_z") &&
+                 !containsString(coneReport.gateNames, "ff1"),
+                 "runConeQuery GateTransitiveFanout");
 }
 
 // 測試 cone 內長短路徑；wrapper 應該回傳 net 名稱序列，而不是把 netId 誤當 gateId。
@@ -867,12 +1212,196 @@ void testDepthAnalysis(TestReport& report, const Netlist& netlist) {
     }
     report.check(candidates.size() == 2 && sawYCandidate && sawDffCandidate,
                  "findOptimizationCandidatesExceedingDepth");
+
+    Netlist::DepthQuery depthQuery;
+    depthQuery.type = Netlist::DepthQueryType::SpecificNet;
+    depthQuery.netName = "y";
+    Netlist::DepthReportSet depthReportSet = netlist.runDepthQuery(depthQuery);
+    report.check(depthReportSet.ok &&
+                 depthReportSet.count == 1 &&
+                 depthReportSet.reports.front().endpointNetId == netlist.getNetId("y") &&
+                 depthReportSet.reports.front().depth == 9 &&
+                 depthReportSet.worst.depth == 9 &&
+                 depthReportSet.worst.criticalPath.exists(),
+                 "runDepthQuery SpecificNet");
+
+    depthQuery = Netlist::DepthQuery();
+    depthQuery.type = Netlist::DepthQueryType::PrimaryOutputs;
+    depthQuery.includeCriticalPath = false;
+    depthReportSet = netlist.runDepthQuery(depthQuery);
+    report.check(depthReportSet.ok &&
+                 depthReportSet.count == 5 &&
+                 depthReportSet.worst.endpointName == "y" &&
+                 depthReportSet.worst.depth == 9 &&
+                 !depthReportSet.worst.criticalPath.exists(),
+                 "runDepthQuery PrimaryOutputs");
+
+    depthQuery = Netlist::DepthQuery();
+    depthQuery.type = Netlist::DepthQueryType::DffD;
+    depthReportSet = netlist.runDepthQuery(depthQuery);
+    report.check(depthReportSet.ok &&
+                 depthReportSet.count == 1 &&
+                 depthReportSet.reports.front().endpointName == "ff1.D" &&
+                 depthReportSet.reports.front().depth == 8,
+                 "runDepthQuery DffD");
+
+    depthQuery = Netlist::DepthQuery();
+    depthQuery.type = Netlist::DepthQueryType::GlobalCriticalPath;
+    depthReportSet = netlist.runDepthQuery(depthQuery);
+    report.check(depthReportSet.ok &&
+                 depthReportSet.count == 1 &&
+                 depthReportSet.worst.endpointName == "y" &&
+                 depthReportSet.worst.depth == 9 &&
+                 depthReportSet.worst.criticalPath.exists(),
+                 "runDepthQuery GlobalCriticalPath");
+
+    depthQuery = Netlist::DepthQuery();
+    depthQuery.type = Netlist::DepthQueryType::EndpointsExceedingDepth;
+    depthQuery.threshold = 7;
+    depthReportSet = netlist.runDepthQuery(depthQuery);
+    bool runDepthSawY = false;
+    bool runDepthSawDffD = false;
+    for (const Netlist::DepthReport& reportItem : depthReportSet.reports) {
+        if (reportItem.endpointName == "y" && reportItem.depth == 9) {
+            runDepthSawY = true;
+        }
+        if (reportItem.endpointName == "ff1.D" && reportItem.depth == 8) {
+            runDepthSawDffD = true;
+        }
+    }
+    report.check(depthReportSet.ok &&
+                 depthReportSet.count == 2 &&
+                 depthReportSet.worst.depth == 9 &&
+                 runDepthSawY &&
+                 runDepthSawDffD,
+                 "runDepthQuery EndpointsExceedingDepth");
+
+    depthQuery = Netlist::DepthQuery();
+    depthQuery.type = Netlist::DepthQueryType::SpecificNet;
+    depthQuery.netName = "missing_net";
+    depthReportSet = netlist.runDepthQuery(depthQuery);
+    report.check(!depthReportSet.ok &&
+                 depthReportSet.count == 0,
+                 "runDepthQuery SpecificNet missing");
 }
 
 // 測試 LEC；需要連結 CaDiCaL library。
 void testEquivalence(TestReport& report, const Netlist& netlist) {
     report.check(netlist.checkEquivalence("y", "y"), "checkEquivalence identical");
     report.check(!netlist.checkEquivalence("y", "z"), "checkEquivalence different");
+    report.check(netlist.areNetsEquivalent("y", "y"), "areNetsEquivalent identical wrapper");
+
+    report.check(netlist.canNetBeValue("a", 0) &&
+                 netlist.canNetBeValue("a", 1),
+                 "canNetBeValue primary input both values");
+    report.check(!netlist.isNetAlwaysZero("a") &&
+                 !netlist.isNetAlwaysOne("a"),
+                 "isNetAlwaysZero/One primary input not constant");
+
+    Netlist constantNetlist = netlist;
+    const int constZeroId = constantNetlist.addNet("1'b0");
+    const int constOneId = constantNetlist.addNet("1'b1");
+    const int zeroNetId = constantNetlist.addNet("const_zero_net");
+    const int oneNetId = constantNetlist.addNet("const_one_net");
+
+    const int zeroBufId = constantNetlist.addGate("g_const_zero", GateType::BUF);
+    constantNetlist.connectGateInput(zeroBufId, constZeroId);
+    constantNetlist.connectGateOutput(zeroBufId, zeroNetId);
+
+    const int oneBufId = constantNetlist.addGate("g_const_one", GateType::BUF);
+    constantNetlist.connectGateInput(oneBufId, constOneId);
+    constantNetlist.connectGateOutput(oneBufId, oneNetId);
+
+    report.check(constantNetlist.canNetBeValue("const_zero_net", 0) &&
+                 !constantNetlist.canNetBeValue("const_zero_net", 1),
+                 "canNetBeValue constant zero net");
+    report.check(constantNetlist.canNetBeValue("const_one_net", 1) &&
+                 !constantNetlist.canNetBeValue("const_one_net", 0),
+                 "canNetBeValue constant one net");
+    report.check(constantNetlist.isNetConstantFunction("const_zero_net", 0) &&
+                 !constantNetlist.isNetConstantFunction("const_zero_net", 1),
+                 "isNetConstantFunction zero");
+    report.check(constantNetlist.isNetAlwaysZero("const_zero_net") &&
+                 constantNetlist.isNetAlwaysOne("const_one_net"),
+                 "isNetAlwaysZero/One constant nets");
+    report.check(!constantNetlist.isNetAlwaysZero("missing_net") &&
+                 !constantNetlist.canNetBeValue("missing_net", 1),
+                 "Boolean analysis missing net");
+
+    Netlist::FunctionQuery functionQuery;
+    functionQuery.type = Netlist::FunctionQueryType::Equivalence;
+    functionQuery.netNameA = "y";
+    functionQuery.netNameB = "y";
+    Netlist::FunctionReport functionReport = netlist.runFunctionQuery(functionQuery);
+    report.check(functionReport.ok &&
+                 functionReport.exists &&
+                 functionReport.equivalent &&
+                 functionReport.status == "EQUIVALENT",
+                 "runFunctionQuery Equivalence");
+
+    functionQuery = Netlist::FunctionQuery();
+    functionQuery.type = Netlist::FunctionQueryType::CanBeValue;
+    functionQuery.netNameA = "a";
+    functionQuery.constValue = 1;
+    functionReport = netlist.runFunctionQuery(functionQuery);
+    report.check(functionReport.ok &&
+                 functionReport.exists &&
+                 functionReport.canBeZero &&
+                 functionReport.canBeOne,
+                 "runFunctionQuery CanBeValue");
+
+    functionQuery = Netlist::FunctionQuery();
+    functionQuery.type = Netlist::FunctionQueryType::ConstantFunction;
+    functionQuery.netNameA = "const_zero_net";
+    functionQuery.constValue = 0;
+    functionReport = constantNetlist.runFunctionQuery(functionQuery);
+    report.check(functionReport.ok &&
+                 functionReport.exists &&
+                 functionReport.isConstant &&
+                 functionReport.constValue == 0 &&
+                 functionReport.status == "ALWAYS_ZERO",
+                 "runFunctionQuery ConstantFunction");
+
+    functionQuery = Netlist::FunctionQuery();
+    functionQuery.type = Netlist::FunctionQueryType::AlwaysZero;
+    functionQuery.netNameA = "const_zero_net";
+    functionReport = constantNetlist.runFunctionQuery(functionQuery);
+    report.check(functionReport.ok &&
+                 functionReport.exists &&
+                 functionReport.isConstant &&
+                 functionReport.status == "ALWAYS_ZERO",
+                 "runFunctionQuery AlwaysZero");
+
+    functionQuery = Netlist::FunctionQuery();
+    functionQuery.type = Netlist::FunctionQueryType::AlwaysOne;
+    functionQuery.netNameA = "const_one_net";
+    functionReport = constantNetlist.runFunctionQuery(functionQuery);
+    report.check(functionReport.ok &&
+                 functionReport.exists &&
+                 functionReport.isConstant &&
+                 functionReport.status == "ALWAYS_ONE",
+                 "runFunctionQuery AlwaysOne");
+
+    functionQuery = Netlist::FunctionQuery();
+    functionQuery.type = Netlist::FunctionQueryType::TruthStatus;
+    functionQuery.netNameA = "a";
+    functionReport = netlist.runFunctionQuery(functionQuery);
+    report.check(functionReport.ok &&
+                 functionReport.exists &&
+                 !functionReport.isConstant &&
+                 functionReport.canBeZero &&
+                 functionReport.canBeOne &&
+                 functionReport.status == "NON_CONSTANT",
+                 "runFunctionQuery TruthStatus non-constant");
+
+    functionQuery.netNameA = "const_one_net";
+    functionReport = constantNetlist.runFunctionQuery(functionQuery);
+    report.check(functionReport.ok &&
+                 functionReport.exists &&
+                 functionReport.isConstant &&
+                 functionReport.constValue == 1 &&
+                 functionReport.status == "ALWAYS_ONE",
+                 "runFunctionQuery TruthStatus constant one");
 }
 
 // 測試 VerilogWriter 與 ECO transformation API。
