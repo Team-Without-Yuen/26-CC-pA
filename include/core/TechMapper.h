@@ -105,20 +105,29 @@ public:
         rules.push_back({GateType::NOT, _XOR(A(), C1())});
         // 用 XNOR：A XNOR 0
         rules.push_back({GateType::NOT, _XNOR(A(), C0())});
+        // 用 NAND：A NAND 1
+        rules.push_back({GateType::NOT, _NAND(A(), C1())});
+        // 用 NOR：A NOR 0
+        rules.push_back({GateType::NOT, _NOR(A(), C0())});
 
         // =======================================================
         // BUF 閘的替換規則
         // =======================================================
+        // 只用 1 種閘
         // 用 AND：A AND A
         {
             auto a = A();
             rules.push_back({GateType::BUF, _AND(a, a)});
         }
+        // 用 AND：A AND 1
+        rules.push_back({GateType::BUF, _AND(A(), C1())});
         // 用 OR：A OR A
         {
             auto a = A();
             rules.push_back({GateType::BUF, _OR(a, a)});
         }
+        // 用 OR：A OR 0
+        rules.push_back({GateType::BUF, _OR(A(), C0())});
         // 用 NOT：NOT (NOT A)
         rules.push_back({GateType::BUF, _NOT(_NOT(A()))});
         // 用 XOR：A XOR 0
@@ -137,6 +146,11 @@ public:
             auto nor_a = _NOR(a, a);
             rules.push_back({GateType::BUF, _NOR(nor_a, nor_a)});
         }
+        // 用 2 種閘
+        // 用 {NOT, NAND}：NOT (A NAND 1)
+        rules.push_back({GateType::BUF, _NOT(_NAND(A(), C1()))});
+        // 用 {NOT, NOR}：NOT (A NOR 0)
+        rules.push_back({GateType::BUF, _NOT(_NOR(A(), C0()))});
 
         // =======================================================
         // AND 閘的替換規則

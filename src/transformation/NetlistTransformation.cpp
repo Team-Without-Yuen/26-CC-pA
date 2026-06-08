@@ -244,7 +244,354 @@ int Netlist::insertBuffersForFanout(int maxFanout) {
     return inserted;
 }
 
+//  針對特定的 Net 或 Bus，限制最大 Fanout，並採用 Cascaded Buffer (串聯緩衝樹) 結構
+int Netlist::insertBuffersForSpecificNet(const std::string& wireName, int maxFanout) {
+    // 防呆：Fanout 必須至少為 2
+    if (maxFanout < 2) return 0;
 
+    // 展開 Bus，取得所有目標 Net ID
+    std::vector<int> targetNets = expandNetToBits(wireName);
+    if (targetNets.empty()) return 0;
+
+    int insertedCount = 0;
+    int bufCounter = 0; // 用於命名
+
+    // 使用 Queue 來動態追蹤：因為新產生的 Buffer Net 如果也超載，必須再被處理一次！
+    std::queue<int> netsToProcess;
+    for (int netId : targetNets) {
+        netsToProcess.push(netId);
+    }
+
+    // 只要還有線路需要檢查，就繼續處理
+    while (!netsToProcess.empty()) {
+        int netIdx = netsToProcess.front();
+        netsToProcess.pop();
+
+        if (netIdx < 0 || netIdx >= (int)nets.size() || nets[netIdx].isConst) {
+            continue;
+        }
+
+        // 如果這條線的負載超過限制，進行切割
+        while ((int)nets[netIdx].loadGateIds.size() > maxFanout) {
+            
+            // 留下 maxFanout - 1 個原有的 loads
+            // 剩下的 1 個名額，留給即將接上來的 Buffer
+            int keepCount = maxFanout - 1;
+
+            std::vector<int> overLoads(
+                nets[netIdx].loadGateIds.begin() + keepCount,
+                nets[netIdx].loadGateIds.end()
+            );
+            
+            // 裁切原有的 load 名單
+            nets[netIdx].loadGateIds.resize(keepCount);
+
+            // 建立專屬的新 Buffer 與新線路
+            std::string bufName    = wireName + "_fanout_buf_" + std::to_string(bufCounter);
+            std::string bufNetName = wireName + "_fanout_net_" + std::to_string(bufCounter);
+            bufCounter++;
+
+            int bufGateId = addGate(bufName, GateType::BUF);
+            int bufNetId  = addNet(bufNetName);
+
+            // 雙向連接 Buffer Input (接在當前的 netIdx 上)
+            gates[bufGateId].inputNetIds.push_back(netIdx);
+            nets[netIdx].loadGateIds.push_back(bufGateId); // 把 Buffer 加進去，此時數量剛好等於 maxFanout！
+
+            // 雙向連接 Buffer Output
+            gates[bufGateId].outputNetId = bufNetId;
+            nets[bufNetId].driverGateId  = bufGateId;
+
+            // 把被切出來的超載 Loads，全部改接到新的 bufNetId 上
+            for (int j = 0; j < (int)overLoads.size(); j++) {
+                int loadGateId = overLoads[j];
+                for (int k = 0; k < (int)gates[loadGateId].inputNetIds.size(); k++) {
+                    if (gates[loadGateId].inputNetIds[k] == netIdx) {
+                        gates[loadGateId].inputNetIds[k] = bufNetId;
+                    }
+                }
+                nets[bufNetId].loadGateIds.push_back(loadGateId);
+            }
+
+            insertedCount++;
+
+            // 將這條「新的 Buffer 輸出線」也推入 Queue！
+            // 這樣如果 overLoads 的數量依然 > maxFanout，下一輪它就會再被切出另一顆 Buffer！
+            netsToProcess.push(bufNetId);
+        }
+    }
+
+    return insertedCount;
+}
+
+// 為每個負載加上獨立 Buffer
+// 走訪 wire 的 fanout list，為每一個連接的 Gate 建立專屬的 Buffer
+int Netlist::insertBuffersOnEachLoad(const std::string& wireName) {
+    // 展開 Bus，取得所有目標 Net ID (如果是一般線，回傳陣列只會有一個元素)
+    std::vector<int> targetNets = expandNetToBits(wireName);
+    if (targetNets.empty()) return 0;
+
+    int insertedCount = 0;
+
+    for (int netId : targetNets) {
+        Net& net = nets[netId];
+        
+        // 通常不會對常數線插 Buffer，若有特殊需求可移除此行
+        if (net.isConst) continue; 
+
+        // 取得該條線的所有 loadGateIds，並去除重複的 Gate
+        // 防呆：解決像 AND(n2, n2) 這種同一顆 Gate 吃同一條線兩次的問題
+        std::vector<int> uniqueLoads = net.loadGateIds;
+        std::sort(uniqueLoads.begin(), uniqueLoads.end());
+        uniqueLoads.erase(std::unique(uniqueLoads.begin(), uniqueLoads.end()), uniqueLoads.end());
+
+        // 清空原本 net 的 load 名單，準備全部換成 Buffer
+        net.loadGateIds.clear();
+
+        for (size_t i = 0; i < uniqueLoads.size(); i++) {
+            int loadGateId = uniqueLoads[i];
+            Gate& loadGate = gates[loadGateId];
+
+            // 如果 Load 剛好是 DFF 且有特定處理邏輯，可加在此處
+            
+            // 建立專屬 Buffer 與其輸出的新 Net
+            std::string bufName = wireName + "_loadbuf_" + std::to_string(netId) + "_" + std::to_string(i);
+            std::string bufOutNetName = wireName + "_loadbuf_net_" + std::to_string(netId) + "_" + std::to_string(i);
+
+            int bufGateId = addGate(bufName, GateType::BUF);
+            int bufOutNetId = addNet(bufOutNetName);
+
+            // 雙向連接 Buffer Input (接上原本的 netId)
+            gates[bufGateId].inputNetIds.push_back(netId);
+            net.loadGateIds.push_back(bufGateId); // 把新 buffer 註冊為原本 net 的負載
+
+            // 雙向連接 Buffer Output (接上新的 bufOutNetId)
+            gates[bufGateId].outputNetId = bufOutNetId;
+            nets[bufOutNetId].driverGateId = bufGateId;
+            nets[bufOutNetId].loadGateIds.push_back(loadGateId); // 新 net 的負載是原本的 Gate
+
+            // 將原本目標 Gate 的 Input Pin 從原本的 netId 替換成新的 bufOutNetId
+            for (size_t k = 0; k < loadGate.inputNetIds.size(); k++) {
+                if (loadGate.inputNetIds[k] == netId) {
+                    loadGate.inputNetIds[k] = bufOutNetId;
+                }
+            }
+            insertedCount++;
+        }
+    }
+    return insertedCount;
+}
+
+// 在訊號的驅動端加上單一 Buffer
+// 若為內部線或 PO，在 Driver Gate 與 Net 之間打斷並插入 Buffer。
+// 若為 PI，將原本的 Net 保留給 PI，並將所有 Load 移至 Buffer 後方的新 Net。
+int Netlist::insertBufferAtDriver(const std::string& wireName) {
+    std::vector<int> targetNets = expandNetToBits(wireName);
+    if (targetNets.empty()) return 0;
+
+    int insertedCount = 0;
+
+    for (int netId : targetNets) {
+        Net& net = nets[netId];
+        if (net.isConst) continue;
+
+        // 【情境 A】：這條線有實體的驅動閘 (Driver Gate)，適用於內部線或 PO
+        if (net.driverGateId != -1) {
+            int driverGateId = net.driverGateId;
+            Gate& driverGate = gates[driverGateId];
+
+            // 建立 Buffer 與 中繼 Net (夾在原 Driver 與 Buffer 之間)
+            std::string bufName = wireName + "_drvbuf_" + std::to_string(netId);
+            std::string midNetName = wireName + "_mid_net_" + std::to_string(netId);
+
+            int bufGateId = addGate(bufName, GateType::BUF);
+            int midNetId = addNet(midNetName);
+
+            // 打斷原 Driver：將其輸出從原本的 netId 改接到 midNetId
+            driverGate.outputNetId = midNetId;
+            nets[midNetId].driverGateId = driverGateId;
+            nets[midNetId].loadGateIds.push_back(bufGateId); // 中繼線的 Load 是新 Buffer
+
+            // 連接新 Buffer：輸入吃中繼線，輸出推原本的 netId
+            gates[bufGateId].inputNetIds.push_back(midNetId);
+            gates[bufGateId].outputNetId = netId;
+            net.driverGateId = bufGateId; // 原本的線現在改由新 Buffer 驅動
+
+            insertedCount++;
+        }
+        // 【情境 B】：這條線是 Primary Input (PI)，沒有驅動閘
+        else {
+            // 因為 PI 綁死了這條原始 netId，我們必須把 Buffer 加在 netId 「之後」
+            std::string bufName = wireName + "_pibuf_" + std::to_string(netId);
+            std::string bufOutNetName = wireName + "_pi_out_net_" + std::to_string(netId);
+
+            int bufGateId = addGate(bufName, GateType::BUF);
+            int bufOutNetId = addNet(bufOutNetName);
+
+            // 將原始 netId 上面的所有 Loads 移交給新的 bufOutNetId
+            std::vector<int> oldLoads = net.loadGateIds;
+            net.loadGateIds.clear(); // 清空 PI 的負載
+
+            nets[bufOutNetId].driverGateId = bufGateId;
+            nets[bufOutNetId].loadGateIds = oldLoads;
+
+            // 把新 Buffer 接到 PI 的 netId 上
+            gates[bufGateId].inputNetIds.push_back(netId);
+            net.loadGateIds.push_back(bufGateId);
+            gates[bufGateId].outputNetId = bufOutNetId;
+
+            // 走訪所有被搬移的 Loads，將它們的 Input Pin 從原本的 netId 換成 bufOutNetId
+            for (int loadGateId : oldLoads) {
+                Gate& loadGate = gates[loadGateId];
+                for (size_t k = 0; k < loadGate.inputNetIds.size(); k++) {
+                    if (loadGate.inputNetIds[k] == netId) {
+                        loadGate.inputNetIds[k] = bufOutNetId;
+                    }
+                }
+            }
+            insertedCount++;
+        }
+    }
+    return insertedCount;
+}
+
+// 在特定的 Gate 前面增加 Buffer
+int Netlist::insertBufferBeforeGate(const std::string& wireName, const std::string& targetGateName) {
+    std::vector<int> targetNets = expandNetToBits(wireName);
+    if (targetNets.empty()) return 0;
+
+    int targetGateId = getGateId(targetGateName);
+    if (targetGateId == -1) return 0; // 找不到指定的 Gate
+
+    int insertedCount = 0;
+
+    for (int netId : targetNets) {
+        Net& net = nets[netId];
+        if (net.isConst) continue;
+
+        // 步驟 A：檢查並清除目標 Gate 在原本 net 中的負載紀錄
+        // 防呆：解決像 AND(n2, n2) 這種同一顆 Gate 佔用兩個負載空位的情況
+        int matchCount = 0;
+        for (size_t i = 0; i < net.loadGateIds.size(); ) {
+            if (net.loadGateIds[i] == targetGateId) {
+                matchCount++;
+                // 從原本的 net 拔除這個 Gate
+                net.loadGateIds.erase(net.loadGateIds.begin() + i); 
+            } else {
+                i++;
+            }
+        }
+        
+        // 如果這個 Gate 根本沒有接在這條線上，跳過
+        if (matchCount == 0) continue; 
+
+        // 步驟 B：建立專屬 Buffer 與輸出的新 Net
+        std::string bufName = wireName + "_to_" + targetGateName + "_buf";
+        std::string bufOutNetName = wireName + "_to_" + targetGateName + "_net";
+
+        int bufGateId = addGate(bufName, GateType::BUF);
+        int bufOutNetId = addNet(bufOutNetName);
+
+        // 步驟 C：雙向連接 Buffer Input
+        gates[bufGateId].inputNetIds.push_back(netId);
+        net.loadGateIds.push_back(bufGateId); // 把 Buffer (只加一次) 放入原本 net 的負載中
+
+        // 步驟 D：雙向連接 Buffer Output
+        gates[bufGateId].outputNetId = bufOutNetId;
+        nets[bufOutNetId].driverGateId = bufGateId;
+        
+        // 如果原本接了兩次，新的 net 也要負責推動兩次
+        for (int m = 0; m < matchCount; m++) {
+            nets[bufOutNetId].loadGateIds.push_back(targetGateId);
+        }
+
+        // 步驟 E：將目標 Gate 裡面所有為 netId 的腳位，替換成新的 bufOutNetId
+        Gate& targetGate = gates[targetGateId];
+        for (size_t k = 0; k < targetGate.inputNetIds.size(); k++) {
+            if (targetGate.inputNetIds[k] == netId) {
+                targetGate.inputNetIds[k] = bufOutNetId;
+            }
+        }
+        insertedCount++;
+    }
+    return insertedCount;
+}
+
+// 針對某種類型的 Gate，讓他的輸入或輸出都接上 Buffer
+int Netlist::insertBuffersByGateType(GateType type, bool bufferInputs, bool bufferOutputs) {
+    int insertedCount = 0;
+
+    // 取得當前的 Gate 總數 (Snapshot)，避免掃描到我們在此迴圈內剛新增的 Buffer
+    int originalGateCount = gates.size();
+
+    for (int i = 0; i < originalGateCount; i++) {
+        Gate& gate = gates[i];
+        
+        if (gate.type != type || gate.type == GateType::UNKNOWN) continue;
+
+        // 在所有的 Input 腳位前面加上 Buffer
+        if (bufferInputs) {
+            for (size_t k = 0; k < gate.inputNetIds.size(); k++) {
+                int inNetId = gate.inputNetIds[k];
+                if (inNetId == -1 || nets[inNetId].isConst) continue;
+
+                // 建立 Buffer 與中繼線
+                std::string bufName = gate.instName + "_inbuf_" + std::to_string(k);
+                std::string bufNetName = gate.instName + "_innet_" + std::to_string(k);
+
+                int bufGateId = addGate(bufName, GateType::BUF);
+                int bufNetId = addNet(bufNetName);
+
+                // 接上 Buffer 的 Input
+                gates[bufGateId].inputNetIds.push_back(inNetId);
+                
+                // 在原線的負載中，找到 "1 個" 這個 Gate 的 ID 並替換成 bufGateId
+                Net& inNet = nets[inNetId];
+                for (size_t loadIdx = 0; loadIdx < inNet.loadGateIds.size(); loadIdx++) {
+                    if (inNet.loadGateIds[loadIdx] == i) {
+                        inNet.loadGateIds[loadIdx] = bufGateId;
+                        break; // 非常重要！只換一個，解決 AND(A, A) 被掃描兩次的問題
+                    }
+                }
+
+                // 接上 Buffer 的 Output
+                gates[bufGateId].outputNetId = bufNetId;
+                nets[bufNetId].driverGateId = bufGateId;
+                nets[bufNetId].loadGateIds.push_back(i);
+
+                // 更新 Gate 的第 k 隻腳
+                gate.inputNetIds[k] = bufNetId;
+                insertedCount++;
+            }
+        }
+
+        // 在 Output 腳位後面加上 Buffer
+        if (bufferOutputs) {
+            int outNetId = gate.outputNetId;
+            if (outNetId != -1) {
+                // 建立 Buffer 與中繼線
+                std::string bufName = gate.instName + "_outbuf";
+                std::string midNetName = gate.instName + "_outnet_mid";
+
+                int bufGateId = addGate(bufName, GateType::BUF);
+                int midNetId = addNet(midNetName);
+
+                // 打斷原本的連線：Gate 輸出改接 midNet
+                gate.outputNetId = midNetId;
+                nets[midNetId].driverGateId = i;
+                nets[midNetId].loadGateIds.push_back(bufGateId); // midNet 負責推 Buffer
+
+                // 接上 Buffer：Buffer 輸出負責推原本的 outNet
+                gates[bufGateId].inputNetIds.push_back(midNetId);
+                gates[bufGateId].outputNetId = outNetId;
+                nets[outNetId].driverGateId = bufGateId; // outNet 的新主人是 Buffer
+
+                insertedCount++;
+            }
+        }
+    }
+    return insertedCount;
+}
 
 // 遞迴比對引擎核心 (Backward Pattern Matching)
 bool TechMapper::matchNet(Netlist& netlist, std::shared_ptr<PatternNode> pNode, int physNetId, MatchContext& ctx) {

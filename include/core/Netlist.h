@@ -742,6 +742,26 @@ public:
     // 回傳插入的 buffer 數量
     int insertBuffersForFanout(int maxFanout = 4);
 
+    // 針對特定的 Net (支援 Bus) 限制其 Fanout，插入 Cascaded Buffer
+    // 回傳值: 成功插入的 Buffer 數量
+    int insertBuffersForSpecificNet(const std::string& wireName, int maxFanout = 4);
+
+    // 為每個負載加上獨立 Buffer
+    // 回傳值: 成功插入的 Buffer 數量
+    int insertBuffersOnEachLoad(const std::string& wireName);
+
+    // 在訊號的驅動端加上單一 Buffer
+    // 回傳值: 成功插入的 Buffer 數量
+    int insertBufferAtDriver(const std::string& wireName);
+
+    // 在特定的 Gate 前面增加 Buffer (只阻斷指定的 wire 到該 Gate 的連線)
+    // 回傳值: 成功插入的 Buffer 數量
+    int insertBufferBeforeGate(const std::string& wireName, const std::string& targetGateName);
+
+    // 針對某種類型的 Gate，讓它的輸入或輸出都接上 Buffer
+    // 回傳值: 成功插入的 Buffer 數量
+    int insertBuffersByGateType(GateType type, bool bufferInputs = true, bool bufferOutputs = true);
+
     // =================================================
     // Netlist Optimization
     // =================================================
