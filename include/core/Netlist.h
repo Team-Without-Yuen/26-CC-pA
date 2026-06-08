@@ -732,15 +732,15 @@ public:
     // 建立連線：將指定 Gate 的輸入端連接到指定的 Net。
     bool connectGateInput(const std::string& gateName, const std::string& netName, int pinIndex = -1);
 
+    // 斷開連線：將指定 Gate 的輸入與輸出斷開
     bool disconnectAllPins(int gateId);
     // 斷開連線 + 設為 UNKNOWN
     bool removeGate(int gateId);
 
-    // 將整個 netlist 重新建構成只使用 AND 和 NOT gates
-    // 使用 De Morgan 定理替換 OR/NAND/NOR/XOR/XNOR/BUF
-    // DFF 保留不動
-    // 回傳新增的 gate 數量
-    int reconstructToAndNot();
+    // 對 fanout > maxFanout 的 net 插入 buffer
+    // 讓每個 gate 的 fanout ≤ maxFanout，預設 maxFanout = 4
+    // 回傳插入的 buffer 數量
+    int insertBuffersForFanout(int maxFanout = 4);
 
     // =================================================
     // Netlist Optimization
@@ -753,11 +753,6 @@ public:
     // 找出所有連續兩個 NOT gate，把它們消除，直接連線
     // 回傳移除的 inverter pair 數量
     int collapseBackToBackInverters();
- 
-    // 對 fanout > maxFanout 的 net 插入 buffer
-    // 讓每個 gate 的 fanout ≤ maxFanout，預設 maxFanout = 4
-    // 回傳插入的 buffer 數量
-    int insertBuffersForFanout(int maxFanout = 4);
 
     // 合併結構等價的 gate（相同 type + 相同 input net 集合）
     // 回傳合併的 gate 數量

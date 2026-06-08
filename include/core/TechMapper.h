@@ -336,5 +336,70 @@ public:
     // allowedTypes : 使用者允許「新增/使用」的 Gate 類型 (例如 {NAND, NOT})
     // 回傳值       : 總共變動的 Gate 數量 (正數代表變多，負數代表變少)
     // isOneToMany=true=展開(面積增加), false=濃縮(面積減少)
-    int mapTechnology(Netlist& netlist, const std::vector<GateType>& targetTypes, const std::vector<GateType>& allowedTypes, bool isOneToMany);
+    // scopeGates 是一個可選的參數，如果提供了，就只對這些 Gate 進行技術映射，其他 Gate 不受影響。
+    // 底層的實作引擎
+    int mapTechnologyCore(Netlist& netlist, 
+                          const std::vector<GateType>& targetTypes, 
+                          const std::vector<GateType>& allowedTypes,
+                          bool isOneToMany,
+                          const std::unordered_set<int>* scopeGates);
+    // 處理整個 Netlist 的 API
+    int mapTechnology(Netlist& netlist, 
+                      const std::vector<GateType>& targetTypes, 
+                      const std::vector<GateType>& allowedTypes, 
+                      bool isOneToMany);
+    // 針對特定 Cone 的 API
+    int mapTechnologyForCone(Netlist& netlist, 
+                             const std::vector<GateType>& targetTypes, 
+                             const std::vector<GateType>& allowedTypes,
+                             bool isOneToMany,
+                             const ConeResult& targetCone);
+
+    // 定義轉換的作用範圍
+    enum class TargetScope {
+        WHOLE_NETLIST,  // 針對整個電路 (預設)
+        NET_FANIN,      // 針對 Net 的 Fanin
+        NET_FANOUT,     // 針對 Net 的 Fanout
+        GATE_FANIN,     // 針對 Gate 的 Fanin
+        GATE_FANOUT     // 針對 Gate 的 Fanout
+    };
+
+    // 輔助函式：自動過濾不需要的 Gate，並呼叫轉換引擎
+    int convertToBasis(Netlist& netlist, const std::vector<GateType>& allowedTypes, TargetScope scope, const std::string& name);
+
+    // 如果不傳入後兩個參數，預設就是執行 WHOLE_NETLIST 的轉換
+    // 基礎網路轉換 (AIG 相關)
+    // 轉為 AIG (And-Inverter Graph)
+    int convertToAndNot(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "");
+    // 轉為 OIG (Or-Inverter Graph)
+    int convertToOrNot(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "");         
+    
+    // 萬用閘轉換 (Universal Gates)
+    // 轉為純 NAND 網路 (適合 CMOS 實體合成)
+    int convertToNand(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "");
+    // 轉為純 NOR 網路
+    int convertToNor(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "");          
+
+    // 密碼學與特定代數結構轉換
+    // 轉為 XAG (XOR-AND Graph)
+    int convertToXag(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "");
+    // 轉為 ANF 網路 (代數正規式: XOR + AND)
+    int convertToAnf(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = ""); 
+    
+    // 特殊邏輯組合
+    // 轉為 {XOR, OR}
+    int convertToXorOr(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "");
+    // 轉為 {XNOR, AND}
+    int convertToXnorAnd(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "");
+    // 轉為 {XNOR, OR}
+    int convertToXnorOr(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "");
+        
+    // 提供給使用者的萬用任意修改 API
+    // 預設對整個電路 (WHOLE_NETLIST) 進行操作，此時 name 不需填寫
+    int customMapTechnology(Netlist& netlist, 
+                            const std::vector<GateType>& targetTypes, 
+                            const std::vector<GateType>& allowedTypes, 
+                            bool isOneToMany, 
+                            TargetScope scope = TargetScope::WHOLE_NETLIST, 
+                            const std::string& name = "");
 };
