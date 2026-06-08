@@ -732,15 +732,35 @@ public:
     // 建立連線：將指定 Gate 的輸入端連接到指定的 Net。
     bool connectGateInput(const std::string& gateName, const std::string& netName, int pinIndex = -1);
 
+    // 斷開連線：將指定 Gate 的輸入與輸出斷開
     bool disconnectAllPins(int gateId);
     // 斷開連線 + 設為 UNKNOWN
     bool removeGate(int gateId);
 
-    // 將整個 netlist 重新建構成只使用 AND 和 NOT gates
-    // 使用 De Morgan 定理替換 OR/NAND/NOR/XOR/XNOR/BUF
-    // DFF 保留不動
-    // 回傳新增的 gate 數量
-    int reconstructToAndNot();
+    // 對 fanout > maxFanout 的 net 插入 buffer
+    // 讓每個 gate 的 fanout ≤ maxFanout，預設 maxFanout = 4
+    // 回傳插入的 buffer 數量
+    int insertBuffersForFanout(int maxFanout = 4);
+
+    // 針對特定的 Net (支援 Bus) 限制其 Fanout，插入 Cascaded Buffer
+    // 回傳值: 成功插入的 Buffer 數量
+    int insertBuffersForSpecificNet(const std::string& wireName, int maxFanout = 4);
+
+    // 為每個負載加上獨立 Buffer
+    // 回傳值: 成功插入的 Buffer 數量
+    int insertBuffersOnEachLoad(const std::string& wireName);
+
+    // 在訊號的驅動端加上單一 Buffer
+    // 回傳值: 成功插入的 Buffer 數量
+    int insertBufferAtDriver(const std::string& wireName);
+
+    // 在特定的 Gate 前面增加 Buffer (只阻斷指定的 wire 到該 Gate 的連線)
+    // 回傳值: 成功插入的 Buffer 數量
+    int insertBufferBeforeGate(const std::string& wireName, const std::string& targetGateName);
+
+    // 針對某種類型的 Gate，讓它的輸入或輸出都接上 Buffer
+    // 回傳值: 成功插入的 Buffer 數量
+    int insertBuffersByGateType(GateType type, bool bufferInputs = true, bool bufferOutputs = true);
 
     // =================================================
     // Netlist Optimization
@@ -753,11 +773,6 @@ public:
     // 找出所有連續兩個 NOT gate，把它們消除，直接連線
     // 回傳移除的 inverter pair 數量
     int collapseBackToBackInverters();
- 
-    // 對 fanout > maxFanout 的 net 插入 buffer
-    // 讓每個 gate 的 fanout ≤ maxFanout，預設 maxFanout = 4
-    // 回傳插入的 buffer 數量
-    int insertBuffersForFanout(int maxFanout = 4);
 
     // 合併結構等價的 gate（相同 type + 相同 input net 集合）
     // 回傳合併的 gate 數量
