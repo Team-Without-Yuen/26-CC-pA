@@ -99,11 +99,25 @@ public:
     void connectGateInput(int gateId, int netId, const std::string& pinName = "");
     void connectGateOutput(int gateId, int netId);
 
-    // --- APIs for Querying Data ---
+    // =========================================================================
+    // Basic Netlist / ID / Type Query API
+    //
+    // 這一層只處理最基本的 netlist 物件查詢：
+    // gate/net/port 數量、ID/name lookup、gate type、PI/PO/DFF/constant 判斷、
+    // 以及列出所有 gate/net/port names。
+    // 不做 cone traversal、path search、depth analysis 或 optimization。
+    // =========================================================================
+
+    // 依 ID 取得 Gate；呼叫者需先確認 id 合法。
     const Gate& getGate(int id) const { return gates[id]; } 
+
+    // 依 ID 取得 Net；呼叫者需先確認 id 合法。
     const Net& getNet(int id) const { return nets[id]; } 
-    // Compute the total gate count of the design.
+
+    // 取得 gate 總數；包含 combinational gates 與 DFF。
     size_t getGateCount() const { return gates.size(); }
+
+    // 取得 net 總數；包含 PI/PO/internal/constant net。
     size_t getNetCount() const { return nets.size(); }
 
     // 取得邏輯 Wire 的總數（多位寬展開的 bit 如 "data[0]", "data[1]" 會被視為同一個 "data"）
@@ -126,8 +140,70 @@ public:
     // 依 net name 取得 Net 指標；找不到回傳 nullptr
     const Net* findNet(const std::string& netName) const;
 
+<<<<<<< HEAD
     // 用於標記常數線的 API 
     void setNetConst(int netId, bool isConst);
+=======
+    // 判斷 gate ID 是否落在 gates vector 的合法範圍內。
+    bool isValidGateId(int gateId) const;
+
+    // 判斷 net ID 是否落在 nets vector 的合法範圍內。
+    bool isValidNetId(int netId) const;
+
+    // 判斷指定 gate 是否為 DFF；gateId 無效時回傳 false。
+    bool isDffGate(int gateId) const;
+
+    // 判斷指定 gate 是否為 combinational gate；DFF/UNKNOWN/無效 ID 回傳 false。
+    bool isCombinationalGate(int gateId) const;
+
+    // 判斷指定 net 是否為 Primary Input；netId 無效時回傳 false。
+    bool isPrimaryInputNet(int netId) const;
+
+    // 判斷指定 net 是否為 Primary Output；netId 無效時回傳 false。
+    bool isPrimaryOutputNet(int netId) const;
+
+    // 判斷指定 net 是否為 constant net；netId 無效時回傳 false。
+    bool isConstantNet(int netId) const;
+
+    // 依照 gates vector 順序列出所有 gate instance names。
+    std::vector<std::string> getAllGateNames() const;
+
+    // 依照 nets vector 順序列出所有 net names。
+    std::vector<std::string> getAllNetNames() const;
+
+    // 依照 port declaration 順序列出 primary input port names。
+    std::vector<std::string> getPrimaryInputNames() const;
+
+    // 依照 port declaration 順序列出 primary output port names。
+    std::vector<std::string> getPrimaryOutputNames() const;
+
+    // 列出所有 DFF instance names。
+    std::vector<std::string> getDffNames() const;
+
+    // 列出所有 combinational gate instance names；不包含 DFF。
+    std::vector<std::string> getCombinationalGateNames() const;
+
+    // 取得指定 PI/PO port 的 bit width；找不到 port 時回傳 -1。
+    int getPortWidth(const std::string& portName) const;
+
+    // 判斷指定 PI/PO port 是否為 bus；找不到 port 時回傳 false。
+    bool isBusPort(const std::string& portName) const;
+
+    // 依照 port bit 順序列出指定 PI/PO port 對應的 net names；找不到時回傳空陣列。
+    std::vector<std::string> getPortBitNames(const std::string& portName) const;
+
+    // 列出非 PI、非 constant，且沒有合法 driver gate 的 net names。
+    std::vector<std::string> getUndrivenNetNames() const;
+
+    // 列出非 PO、非 constant，且沒有任何 load gate 的 net names。
+    std::vector<std::string> getNoLoadNetNames() const;
+
+    // 列出有 undriven 或 no-load 結構問題的 net names；會移除重複。
+    std::vector<std::string> getFloatingNetNames() const;
+
+    // 列出 input 或 output 存在無效 / unconnected net ID 的 gate instance names。
+    std::vector<std::string> getUnconnectedGateNames() const;
+>>>>>>> 5699a84d4f617a8592c6259b5264e1443d0a8eab
 
     // 統計所有 gate type 的數量，包含 AND/OR/NOT/NAND/NOR/XOR/XNOR/BUF/DFF
     std::map<GateType, int> countGatesByType() const;
@@ -146,6 +222,60 @@ public:
 
     // 給定特定的 Gate Instance Name，回傳包含其類型與 I/O 連線狀態的格式化字串
     std::string getGateInfo(const std::string& instName) const;
+
+    // =========================================================================
+    // Direct Connectivity Low-level Query API
+    //
+    // 這一層只查「直接相連」的 gate/net 關係，不做 transitive cone 或 path traversal。
+    // 之後會作為高階 DirectConnectivityQuery 的底層 helper。
+    // =========================================================================
+
+    // 取得指定 net 的 driver gate ID；若 net 不存在、無 driver，或 bus 有多個 driver，回傳 -1。
+    int getNetDriverGateId(const std::string& netName) const;
+
+    // 取得指定 net / bus 每個 bit 的 driver gate IDs；會移除重複，無 driver 的 bit 會略過。
+    std::vector<int> getNetDriverGateIds(const std::string& netName) const;
+
+    // 取得指定 net / bus 的 driver gate names；會移除重複，無 driver 時回傳空陣列。
+    std::vector<std::string> getNetDriverGateNames(const std::string& netName) const;
+
+    // 取得指定 scalar net 的 driver gate name；若沒有唯一 driver，回傳空字串。
+    std::string getNetDriverGateName(const std::string& netName) const;
+
+    // 取得指定 net / bus 直接 load 到的 gate IDs；語意等同 getWireLoads，但命名改用 Net。
+    std::vector<int> getNetLoadGateIds(const std::string& netName) const;
+
+    // 取得指定 net / bus 直接 load 到的 gate names；語意等同 getWireLoadNames。
+    std::vector<std::string> getNetLoadGateNames(const std::string& netName) const;
+
+    // 取得指定 net / bus 直接 load 到的 gate 數量；語意等同 getWireLoadCount。
+    size_t getNetLoadGateCount(const std::string& netName) const;
+
+    // 取得指定 gate 的所有有效 input net IDs；未連接 input 會被略過。
+    std::vector<int> getGateInputNetIds(const std::string& gateInstName) const;
+
+    // 取得指定 gate 的所有有效 input net names；未連接 input 會被略過。
+    std::vector<std::string> getGateInputNetNames(const std::string& gateInstName) const;
+
+    // 取得指定 gate 的 output net name；若 gate 不存在或 output 未連接，回傳空字串。
+    std::string getGateOutputNetName(const std::string& gateInstName) const;
+
+    // 取得直接驅動指定 gate inputs 的上一層 gate IDs；PI/constant input 沒有 driver 會被略過。
+    std::vector<int> getGateFaninGateIds(const std::string& gateInstName) const;
+
+    // 取得直接驅動指定 gate inputs 的上一層 gate names。
+    std::vector<std::string> getGateFaninGateNames(const std::string& gateInstName) const;
+
+    // 取得直接驅動指定 gate inputs 的上一層 gate 數量。
+    size_t getGateFaninGateCount(const std::string& gateInstName) const;
+
+    // 判斷指定 gate 的任一 input 或 output 是否直接連到指定 net。
+    bool isGateDirectlyConnectedToNet(const std::string& gateInstName,
+                                      const std::string& netName) const;
+
+    // 判斷指定 net 是否直接連到指定 gate；語意與 isGateDirectlyConnectedToNet 相同但參數順序相反。
+    bool isNetDirectlyConnectedToGate(const std::string& netName,
+                                      const std::string& gateInstName) const;
 
     // return which gate input pins are connected to a wire (Wire/PI/PO) (support for multi-bit signals)
     std::vector<int> getWireLoads(const std::string& wireName) const;
@@ -175,6 +305,35 @@ public:
     // 檢查兩個訊號（支援多位寬）是否在所有輸入情況下功能完全相同
     bool checkEquivalence(const std::string& netA, const std::string& netB) const;
 
+    // =========================================================================
+    // Boolean / Function Analysis API
+    //
+    // 這一層回答「訊號功能」類問題，例如：
+    // 1. 兩條 net / bus 是否功能等價。
+    // 2. 某條 scalar net 是否可能為 0 或 1。
+    // 3. 某條 scalar net 是否在所有輸入組合下恆為 0 或恆為 1。
+    //
+    // 共通規則：
+    // - 目前以 combinational fanin cone 建 SAT model。
+    // - DFF output 視為 pseudo primary input，不穿越 DFF 回到 D pin。
+    // - canNetBeValue / isNetConstantFunction 第一版只支援 scalar net。
+    // =========================================================================
+
+    // 語意化 wrapper：檢查兩個 net / bus 是否在所有輸入組合下功能等價。
+    bool areNetsEquivalent(const std::string& netA, const std::string& netB) const;
+
+    // 使用 SAT 判斷 scalar net 是否存在某組輸入 assignment 可以變成 value；value 只能是 0 或 1。
+    bool canNetBeValue(const std::string& netName, int value) const;
+
+    // 使用 SAT 判斷 scalar net 是否在所有輸入 assignment 下都等於 constValue；constValue 只能是 0 或 1。
+    bool isNetConstantFunction(const std::string& netName, int constValue) const;
+
+    // 判斷 scalar net 是否在所有輸入組合下都為 0。
+    bool isNetAlwaysZero(const std::string& netName) const;
+
+    // 判斷 scalar net 是否在所有輸入組合下都為 1。
+    bool isNetAlwaysOne(const std::string& netName) const;
+
    // --- Cone Analysis ---
     // Transitive Fanin Cone：從 net 往回追到所有 PI（DFF 不穿越）
     ConeResult getTransitiveFaninCone(const std::string& netName) const;
@@ -187,6 +346,24 @@ public:
     
     // 取得指定 Gate 的 Fanout 邏輯錐
     ConeResult getGateTransitiveFanoutCone(const std::string& gateName) const;
+
+    // 將 ConeResult 內的 net IDs 轉成依 ID 排序的陣列，方便高階 ConeQuery 回傳穩定結果。
+    std::vector<int> getConeNetIds(const ConeResult& cone) const;
+
+    // 將 ConeResult 內的 net IDs 轉成 net names；順序與 getConeNetIds() 一致。
+    std::vector<std::string> getConeNetNames(const ConeResult& cone) const;
+
+    // 計算 ConeResult 內 net 數量。
+    size_t getConeNetCount(const ConeResult& cone) const;
+
+    // 從 ConeResult 內的 net-to-net 邊推回實際參與 cone 的 gate IDs；DFF 邊界不會被算入。
+    std::vector<int> getConeGateIds(const ConeResult& cone) const;
+
+    // 將 ConeResult 內參與 cone 的 gate IDs 轉成 gate names；順序與 getConeGateIds() 一致。
+    std::vector<std::string> getConeGateNames(const ConeResult& cone) const;
+
+    // 計算 ConeResult 內參與 cone 的 gate 數量。
+    size_t getConeGateCount(const ConeResult& cone) const;
 
     // 邏輯錐高階查詢 API (Logic Cone Analysis Wrappers)  
     std::vector<std::string> getTransitiveFaninConeGateNames(const std::string& netName) const;
@@ -649,6 +826,39 @@ public:
     // 找出所有 depth 大於 maxDepth 的 timing endpoints；endpoint 範圍包含 PO 與 DFF.D。
     std::vector<DepthReport> findEndpointsExceedingDepth(int maxDepth) const;
 
+    // 表示 DepthQuery 要執行哪一種 depth/timing 查詢。
+    enum class DepthQueryType {
+        SpecificNet,              // 分析單一 net 的最大 depth 與 critical path
+        PrimaryOutputs,           // 分析所有 primary output endpoints
+        DffD,                     // 分析所有 DFF D-pin endpoints
+        GlobalCriticalPath,       // 找出 PO 與 DFF.D 中最深的 timing endpoint
+        EndpointsExceedingDepth   // 找出所有 depth 大於 threshold 的 timing endpoints
+    };
+
+    // 描述一個 Depth Query；這一層只處理 depth/timing，不處理 function 或 through/avoid path 條件。
+    struct DepthQuery {
+        DepthQueryType type = DepthQueryType::SpecificNet;
+        std::string netName;             // SpecificNet 使用的 endpoint net name
+        int threshold = -1;              // EndpointsExceedingDepth 使用的 depth 門檻
+        bool includeCriticalPath = true; // false 時回傳 report 會清空 criticalPath，降低資料量
+    };
+
+    // 保存 DepthQuery 的統一回傳結果。
+    struct DepthReportSet {
+        bool ok = false;                 // query 是否成功
+        std::string message;             // 給 debug / LLM response 的簡短訊息
+        DepthQueryType type = DepthQueryType::SpecificNet;
+
+        std::vector<DepthReport> reports; // 查詢得到的一個或多個 endpoint report
+        DepthReport worst;                // reports 中 depth 最大者；GlobalCriticalPath 的主要結果
+
+        int threshold = -1;               // query 使用的 depth 門檻；未使用時為 -1
+        size_t count = 0;                 // reports 數量
+    };
+
+    // 執行統一 DepthQuery；內部只 dispatch 到既有 DepthAnalysis helper。
+    DepthReportSet runDepthQuery(const DepthQuery& query) const;
+
     // =========================================================================
     // Optimization Result API
     //
@@ -767,6 +977,243 @@ public:
 
 //高階API放置區------------------------------------------------------------------------------------------------------------------------------
     //以下為高階API，之後給LLM用的。
+
+    // =========================================================================
+    // 統一 Basic Query API
+    //
+    // 這一層把 Basic Netlist / ID / Type Query 的低階 helper 包成單一入口。
+    // 適合回答 design summary、列出 gate/net/port、查 gate/net/port 基本資訊、
+    // gate type 統計、constant input gates、structural issue 等問題。
+    // 不做 direct connectivity、cone traversal、path search、depth analysis。
+    // =========================================================================
+
+    // 表示 BasicQuery 要執行哪一種基礎查詢。
+    enum class BasicQueryType {
+        Summary,                 // 回傳 design 規模與 gate type 統計
+        ListGates,               // 列出所有 gate names
+        ListNets,                // 列出所有 net names
+        ListPrimaryInputs,       // 列出所有 primary input port names
+        ListPrimaryOutputs,      // 列出所有 primary output port names
+        ListDffs,                // 列出所有 DFF instance names
+        ListCombinationalGates,  // 列出所有 combinational gate names
+        GateInfo,                // 查單一 gate 的基本資訊
+        NetInfo,                 // 查單一 net 的基本資訊
+        PortInfo,                // 查單一 PI/PO port 的基本資訊
+        CountByGateType,         // 統計指定 gate type 數量；UNKNOWN 表示回傳全部統計
+        GatesByType,             // 列出指定 gate type 的 gates
+        GatesWithConstantInput,  // 列出 input 接 constant 的 gates
+        StructuralIssues         // 回報 undriven/no-load/floating/unconnected
+    };
+
+    // 描述一個 Basic Query；不同 type 會使用不同欄位。
+    struct BasicQuery {
+        BasicQueryType type = BasicQueryType::Summary;
+        std::string name;                       // GateInfo/NetInfo/PortInfo 使用的物件名稱
+        GateType gateType = GateType::UNKNOWN;  // gate type filter；UNKNOWN 表示不限制或列全部
+        int constValue = -1;                    // constant input filter：-1 不限制，0 表示 1'b0，1 表示 1'b1
+        bool includeIds = true;                 // 回傳 report 時是否填 gateIds/netIds
+        bool includeNames = true;               // 回傳 report 時是否填 gateNames/netNames/portNames
+    };
+
+    // 保存 BasicQuery 的統一回傳結果；不同 query type 會填不同欄位。
+    struct BasicReport {
+        bool ok = false;                        // 查詢是否成功；名稱不存在或 type 不合法時為 false
+        std::string message;                    // 給 debug / LLM response 使用的簡短訊息
+
+        size_t gateCount = 0;                   // design 或篩選後 gate 數量
+        size_t netCount = 0;                    // design 或篩選後 net 數量
+        size_t logicalWireCount = 0;            // Verilog declaration 層級的 wire 數量
+        size_t primaryInputCount = 0;           // primary input port 數量
+        size_t primaryOutputCount = 0;          // primary output port 數量
+
+        int objectId = -1;                      // GateInfo/NetInfo 的 ID
+        std::string objectName;                 // GateInfo/NetInfo/PortInfo 的名稱
+        std::string typeName;                   // gate type 或 net/port 類型描述
+        std::string formattedInfo;              // getGateInfo() 這類人類可讀格式
+
+        bool exists = false;                    // 指定 name 是否存在
+        bool isDff = false;                     // GateInfo 使用
+        bool isCombinational = false;           // GateInfo 使用
+        bool isPrimaryInput = false;            // NetInfo 使用
+        bool isPrimaryOutput = false;           // NetInfo 使用
+        bool isConstant = false;                // NetInfo 使用
+        bool isBus = false;                     // PortInfo 使用
+        int portWidth = -1;                     // PortInfo 使用
+
+        std::vector<int> gateIds;               // 查詢得到的 gate IDs
+        std::vector<int> netIds;                // 查詢得到的 net IDs
+        std::vector<std::string> gateNames;     // 查詢得到的 gate names
+        std::vector<std::string> netNames;      // 查詢得到的 net names
+        std::vector<std::string> portNames;     // 查詢得到的 port names
+
+        std::map<GateType, int> gateTypeCounts; // 各 gate type 統計
+
+        std::vector<std::string> undrivenNets;      // structural issue：無 driver 的 nets
+        std::vector<std::string> noLoadNets;        // structural issue：無 load 的 nets
+        std::vector<std::string> floatingNets;      // structural issue：undriven/no-load union
+        std::vector<std::string> unconnectedGates;  // structural issue：有未連接 pin 的 gates
+    };
+
+    // 執行統一 BasicQuery；內部只呼叫 Basic helper，不做跨層 traversal。
+    BasicReport runBasicQuery(const BasicQuery& query) const;
+
+    // =========================================================================
+    // 統一 Direct Connectivity Query API
+    //
+    // 這一層回答 gate/net 的「直接相連」問題：
+    // net driver、net loads、gate inputs、gate output、gate immediate fanin/fanout、
+    // 以及 gate 和 net 是否直接相連。
+    // 不做 transitive cone traversal、path search 或 depth analysis。
+    // =========================================================================
+
+    // 表示 DirectConnectivityQuery 要執行哪一種直接連線查詢。
+    enum class DirectConnectivityQueryType {
+        NetDriver,          // 查某個 net / bus 的直接 driver gate
+        NetLoads,           // 查某個 net / bus 直接 load 到哪些 gates
+        GateInputs,         // 查某個 gate 的直接 input nets
+        GateOutput,         // 查某個 gate 的 output net
+        GateFanin,          // 查直接驅動某 gate inputs 的上一層 gates
+        GateFanout,         // 查某 gate output 直接 fanout 到哪些 gates
+        DirectlyConnected   // 判斷指定 gate 與指定 net 是否直接相連
+    };
+
+    // 描述一個 Direct Connectivity Query；不同 type 會使用 gateName / netName。
+    struct DirectConnectivityQuery {
+        DirectConnectivityQueryType type = DirectConnectivityQueryType::NetDriver;
+        std::string gateName;     // GateInputs/GateOutput/GateFanin/GateFanout/DirectlyConnected 使用
+        std::string netName;      // NetDriver/NetLoads/DirectlyConnected 使用
+        bool includeIds = true;   // 是否填 gateIds/netIds
+        bool includeNames = true; // 是否填 gateNames/netNames
+    };
+
+    // 保存 DirectConnectivityQuery 的統一回傳結果。
+    struct DirectConnectivityReport {
+        bool ok = false;                    // query 是否成功；名稱不存在或必要欄位缺失時為 false
+        bool exists = false;                // 指定 gate/net 是否存在
+        bool connected = false;             // DirectlyConnected 的主要結果
+        std::string message;                // 給 debug / LLM response 的簡短訊息
+
+        std::string gateName;               // 查詢指定或解析出的 gate name
+        std::string netName;                // 查詢指定或解析出的 net name
+        int gateId = -1;                    // 單一 gate ID 結果；沒有唯一 gate 時為 -1
+        int netId = -1;                     // 單一 net ID 結果；沒有唯一 net 時為 -1
+        size_t count = 0;                   // 結果數量
+
+        std::vector<int> gateIds;           // 查詢結果中的 gate IDs
+        std::vector<int> netIds;            // 查詢結果中的 net IDs
+        std::vector<std::string> gateNames; // 查詢結果中的 gate names
+        std::vector<std::string> netNames;  // 查詢結果中的 net names
+    };
+
+    // 執行統一 DirectConnectivityQuery；內部只呼叫 direct connectivity helper。
+    DirectConnectivityReport runDirectConnectivityQuery(
+        const DirectConnectivityQuery& query) const;
+
+    // =========================================================================
+    // 統一 Function Analysis Query API
+    //
+    // 這一層回答 Boolean function 類問題：
+    // 兩個 net / bus 是否功能等價、某個 scalar net 是否可能為 0/1、
+    // 或某個 scalar net 是否恆為 0/1。
+    // DFF.Q 會被視為 pseudo primary input，不會穿越 DFF 回到 D pin。
+    // =========================================================================
+
+    // 表示 FunctionQuery 要執行哪一種功能分析。
+    enum class FunctionQueryType {
+        Equivalence,       // 檢查 netNameA 與 netNameB 是否功能等價
+        CanBeValue,        // 檢查 netNameA 是否存在某組輸入可等於 constValue
+        ConstantFunction,  // 檢查 netNameA 是否恆等於 constValue
+        AlwaysZero,        // 檢查 netNameA 是否永遠為 0
+        AlwaysOne,         // 檢查 netNameA 是否永遠為 1
+        TruthStatus        // 回報 netNameA 是 always 0、always 1，或 non-constant
+    };
+
+    // 描述一個 Function Analysis Query；不同 type 會使用不同欄位。
+    struct FunctionQuery {
+        FunctionQueryType type = FunctionQueryType::TruthStatus;
+        std::string netNameA;   // 主要分析目標；Equivalence 時代表第一個 net / bus
+        std::string netNameB;   // Equivalence 使用的第二個 net / bus
+        int constValue = -1;    // CanBeValue / ConstantFunction 使用；只能是 0 或 1
+    };
+
+    // 保存 FunctionQuery 的統一回傳結果。
+    struct FunctionReport {
+        bool ok = false;              // query 是否成功；名稱不存在或參數不合法時為 false
+        bool exists = false;          // 對 yes/no 問題的主要布林答案
+        std::string message;          // 給 debug / LLM response 的簡短訊息
+
+        std::string netNameA;         // 查詢目標 A
+        std::string netNameB;         // 查詢目標 B
+        int netIdA = -1;              // scalar net A 的 ID；bus 或不存在時可為 -1
+        int netIdB = -1;              // scalar net B 的 ID；bus 或不存在時可為 -1
+        int constValue = -1;          // query 指定或推導出的常數值；unknown 時為 -1
+
+        bool equivalent = false;      // Equivalence 結果
+        bool canBeZero = false;       // TruthStatus / CanBeValue 輔助資訊
+        bool canBeOne = false;        // TruthStatus / CanBeValue 輔助資訊
+        bool isConstant = false;      // TruthStatus 結果；always 0 或 always 1 時為 true
+        std::string status;           // "ALWAYS_ZERO"、"ALWAYS_ONE"、"NON_CONSTANT" 或錯誤描述
+    };
+
+    // 執行統一 FunctionQuery；內部只呼叫 Boolean / Function Analysis 底層 helper。
+    FunctionReport runFunctionQuery(const FunctionQuery& query) const;
+
+    // =========================================================================
+    // 統一 Cone Query API
+    //
+    // 這一層回答跨多層 reachable / transitive fanin / transitive fanout 問題。
+    // 它會回傳 cone 內的 net/gate 集合與數量；可選擇附帶 cone 內長短路徑。
+    // DFF 是 sequential boundary，cone traversal 不穿越 DFF。
+    // =========================================================================
+
+    // 表示 ConeQuery 要從哪種物件與方向建立 transitive cone。
+    enum class ConeQueryType {
+        NetTransitiveFanin,   // 從指定 net 往 fanin 方向追溯
+        NetTransitiveFanout,  // 從指定 net 往 fanout 方向展開
+        GateTransitiveFanin,  // 從指定 gate output net 往 fanin 方向追溯
+        GateTransitiveFanout  // 從指定 gate output net 往 fanout 方向展開
+    };
+
+    // 描述一個 Cone Query；net 類 query 使用 netName，gate 類 query 使用 gateName。
+    struct ConeQuery {
+        ConeQueryType type = ConeQueryType::NetTransitiveFanin;
+        std::string netName;       // NetTransitiveFanin / NetTransitiveFanout 使用
+        std::string gateName;      // GateTransitiveFanin / GateTransitiveFanout 使用
+        bool includeIds = true;    // 是否填 netIds/gateIds/rootNetIds
+        bool includeNames = true;  // 是否填 netNames/gateNames/rootNetNames
+        bool includeLocalPaths = false; // 是否附帶 cone 內 longest/shortest net path
+    };
+
+    // 保存 ConeQuery 的統一回傳結果。
+    struct ConeReport {
+        bool ok = false;                       // query 是否成功
+        bool exists = false;                   // 指定 net/gate 是否存在並成功建立 cone
+        std::string message;                   // 給 debug / LLM response 的簡短訊息
+
+        ConeQueryType type = ConeQueryType::NetTransitiveFanin;
+        std::string sourceName;                // 使用者指定的來源名稱
+        int sourceId = -1;                     // 來源 net ID 或 gate ID
+        ConeResult cone;                       // 原始 cone 結果，供底層演算法繼續使用
+
+        size_t netCount = 0;                   // cone 內有效 net 數量
+        size_t gateCount = 0;                  // cone 內有效 combinational gate 數量
+        std::vector<int> rootNetIds;           // cone roots，支援 bus 多 root
+        std::vector<std::string> rootNetNames; // root net names
+        std::vector<int> netIds;               // cone 內 net IDs
+        std::vector<int> gateIds;              // cone 內 gate IDs
+        std::vector<std::string> netNames;     // cone 內 net names
+        std::vector<std::string> gateNames;    // cone 內 gate names
+
+        int longestDepth = -1;                 // cone 內 longest net path depth
+        int shortestDepth = -1;                // cone 內 shortest net path depth
+        std::vector<int> longestPathNetIds;    // cone 內 longest path 的 net IDs
+        std::vector<int> shortestPathNetIds;   // cone 內 shortest path 的 net IDs
+        std::vector<std::string> longestPathNetNames;  // cone 內 longest path 的 net names
+        std::vector<std::string> shortestPathNetNames; // cone 內 shortest path 的 net names
+    };
+
+    // 執行統一 ConeQuery；內部只呼叫 cone helper，不做 startpoint-to-endpoint path query。
+    ConeReport runConeQuery(const ConeQuery& query) const;
 
     // =========================================================================
     // 未來統一 Startpoint-to-Endpoint Path Query API 草稿
