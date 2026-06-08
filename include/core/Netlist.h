@@ -140,10 +140,9 @@ public:
     // 依 net name 取得 Net 指標；找不到回傳 nullptr
     const Net* findNet(const std::string& netName) const;
 
-<<<<<<< HEAD
     // 用於標記常數線的 API 
     void setNetConst(int netId, bool isConst);
-=======
+
     // 判斷 gate ID 是否落在 gates vector 的合法範圍內。
     bool isValidGateId(int gateId) const;
 
@@ -203,7 +202,6 @@ public:
 
     // 列出 input 或 output 存在無效 / unconnected net ID 的 gate instance names。
     std::vector<std::string> getUnconnectedGateNames() const;
->>>>>>> 5699a84d4f617a8592c6259b5264e1443d0a8eab
 
     // 統計所有 gate type 的數量，包含 AND/OR/NOT/NAND/NOR/XOR/XNOR/BUF/DFF
     std::map<GateType, int> countGatesByType() const;
