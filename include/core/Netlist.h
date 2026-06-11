@@ -769,6 +769,8 @@ public:
  
     int trimDeadLogic();
     int collapseBackToBackInverters();
+    // 合併結構等價的 gate（相同 type + 相同 input net 集合）
+    // 回傳合併的 gate 數量
     int mergeEquivalentGates();
  
     // =========================================================================
