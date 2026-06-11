@@ -3,9 +3,10 @@
 #include <algorithm>
 #include <sstream>
 
-void Netlist::setNetConst(int netId, bool isConst) {
+void Netlist::setNetConst(int netId, bool isConst, int val) {
     if (netId >= 0 && netId < (int)nets.size()) {
         nets[netId].isConst = isConst;
+        nets[netId].constVal = val;
     }
 }
 

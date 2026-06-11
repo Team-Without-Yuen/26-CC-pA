@@ -21,6 +21,7 @@ struct Net {
     bool isPI = false;           // Flag indicating if this net is a Primary Input
     bool isPO = false;           // Flag indicating if this net is a Primary Output
     bool isConst = false;        // Flag indicating if this net is a constant
+    int  constVal = -1;          // 常數值：0 或 1；非常數時為 -1
 
     Net(int _id, const std::string& _name) : id(_id), name(_name), driverGateId(-1) {}
 };
@@ -141,7 +142,7 @@ public:
     const Net* findNet(const std::string& netName) const;
 
     // 用於標記常數線的 API 
-    void setNetConst(int netId, bool isConst);
+    void setNetConst(int netId, bool isConst, int val = -1);
 
     // 判斷 gate ID 是否落在 gates vector 的合法範圍內。
     bool isValidGateId(int gateId) const;
@@ -763,20 +764,115 @@ public:
     int insertBuffersByGateType(GateType type, bool bufferInputs = true, bool bufferOutputs = true);
 
     // =================================================
-    // Netlist Optimization
+    // Netlist Optimization 
     // =================================================
-
-    // 移除所有不影響任何 PO 的 gate 和 net
-    // 回傳移除的 gate 數量
-    int trimDeadLogic();
  
-    // 找出所有連續兩個 NOT gate，把它們消除，直接連線
-    // 回傳移除的 inverter pair 數量
+    int trimDeadLogic();
     int collapseBackToBackInverters();
-
     // 合併結構等價的 gate（相同 type + 相同 input net 集合）
     // 回傳合併的 gate 數量
     int mergeEquivalentGates();
+ 
+    // =========================================================================
+    // Section 1.5: Gate removed flag helpers
+    // =========================================================================
+ 
+    // 查詢 gate 是否已被標記為 removed（type == UNKNOWN）
+    bool isGateRemoved(int gateId) const;
+ 
+    // 把 gate 標記為 removed（type = UNKNOWN），同時清理雙向連線
+    bool markGateRemoved(int gateId);
+ 
+    // 把所有 UNKNOWN gate 從 gates vector 中清除，並修正所有 ID
+    // 回傳移除的 gate 數量
+    int compactRemovedGates();
+ 
+    // =========================================================================
+    // Section 1.7: Validation / Rollback
+    // =========================================================================
+ 
+    // 檢查 gate/net graph 的雙向指標是否一致
+    bool validateStructure() const;
+ 
+    // 檢查是否符合 Problem A 的限制（PO 有 driver、DFF.Q 有效等）
+    bool validateProblemAConstraints() const;
+ 
+    // 回傳 Netlist 的深拷貝，供 rollback 使用
+    Netlist cloneForRollback() const;
+ 
+    // =========================================================================
+    // Section 2.1: Buffer cleanup helpers
+    // =========================================================================
+ 
+    // 把所有接到 oldNetId 的 gate 改接到 newNetId，同時更新 loadGateIds
+    bool replaceAllLoadsOfNet(int oldNetId, int newNetId);
+ 
+    // bypass 一個 BUF gate：in -> BUF -> out -> loads  =>  in -> loads
+    bool bypassBufferGate(int bufGateId);
+ 
+    // 找出全局所有可以安全 bypass 的 BUF gate ID 列表
+    std::vector<int> findAllRemovableBufferGates() const;
+ 
+    // bypass 全局所有可移除的 BUF gate，回傳移除數量
+    int cleanupAllRemovableBuffers();
+ 
+    // =========================================================================
+    // Section 2.3: Double inverter removal
+    // =========================================================================
+ 
+    // 找出所有合法的 NOT -> NOT gate 對，回傳 (g1_id, g2_id)
+    std::vector<std::pair<int,int>> findDoubleInverterPairs() const;
+ 
+    // bypass NOT(g1) -> NOT(g2)，讓 g1 的 input 直接接到 g2 的 loads
+    bool bypassDoubleInverter(int g1id, int g2id);
+ 
+    // =========================================================================
+    // Section 2.4: Constant propagation helpers
+    // =========================================================================
+ 
+    bool isConst0Net(int netId) const;
+    bool isConst1Net(int netId) const;
+    int getConst0NetId() const;
+    int getConst1NetId() const;
+ 
+    // 對單一 gate 做 constant folding；回傳 true 若有簡化
+    bool simplifyGateWithConstant(int gateId);
+ 
+    // =========================================================================
+    // Section 2.5: Same-input simplification
+    // =========================================================================
+ 
+    // 找出所有兩個 input 相同的 gate（and(a,a) / xor(a,a) 等）
+    std::vector<int> findSameInputGates() const;
+ 
+    // 套用 same-input 化簡規則到單一 gate；回傳 true 若有簡化
+    bool simplifySameInputGate(int gateId);
+ 
+    // =========================================================================
+    // Section 2.6: Dangling logic removal
+    // =========================================================================
+ 
+    // 從所有 PO 和 DFF input pin 往回 BFS，回傳所有有用的 gate ID 集合
+    std::unordered_set<int> getEssentialGateIdsForTimingEndpoints() const;
+ 
+    // 回傳所有 dangling gate 的 ID（不影響任何 PO 或 DFF input 的 gate）
+    std::vector<int> findDanglingGateIds() const;
+ 
+    // 移除所有 dangling gate，回傳移除數量
+    int removeDanglingLogic();
+ 
+    // =========================================================================
+    // Section 2.7: Structural hashing
+    // =========================================================================
+ 
+    // 為 gate 產生 structural hash key（commutative gate 的 input 先排序）
+    std::string makeStructuralKey(int gateId) const;
+ 
+    // 回傳所有結構等價的 gate 群組（每個 group 至少 2 個，group[0] 是 canonical）
+    std::vector<std::vector<int>> findStructurallyEquivalentGateGroups() const;
+ 
+    // 合併所有結構等價的 gate 群組，回傳合併數量
+    int mergeStructurallyEquivalentGates();
 
     // =========================================================================
     // Depth Analysis API
@@ -947,10 +1043,10 @@ public:
     // =========================================================================
 
     // TODO: 檢查 gate/net graph 是否一致，例如 driver/load 關係是否同步。
-    // bool validateStructure() const;
+    //bool validateStructure() const;
 
     // TODO: 檢查 transformation 後是否仍符合 Problem A 的 restricted primitive netlist 規則。
-    // bool validateProblemAConstraints() const;
+    //bool validateProblemAConstraints() const;
 
     struct PathEndpoint;
 
@@ -984,6 +1080,10 @@ public:
 
     // 將多個抽象 PathEndpoint 解析成實際 net ID 陣列；會自動移除重複 net ID。
     std::vector<int> resolvePathEndpoints(const std::vector<PathEndpoint>& endpoints) const;
+
+
+
+
 
 
 
