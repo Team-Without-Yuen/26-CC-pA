@@ -799,7 +799,8 @@ int TechMapper::applyForwardMapping(Netlist& netlist, int targetGateId, const Te
             
             if (outNetId == -1) {
                 outNetId = netlist.addNet(constName);
-                netlist.setNetConst(outNetId, true); // 使用新增的安全 API
+                int constVal = (node->nodeType == NodeType::CONST_1) ? 1 : 0;
+                netlist.setNetConst(outNetId, true, constVal);  
             }
         } 
         else if (node->nodeType == NodeType::GATE) {
