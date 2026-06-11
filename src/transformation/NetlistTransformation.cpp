@@ -181,6 +181,418 @@ bool Netlist::removeGate(int gateId) {
     return true;
 }
 
+// ─────────────────────────────────────────────────────────────────────────────
+//  insertBuffersForFanout
+//  對 fanout > maxFanout 的 net 插入 buffer
+//  採用 Cascaded Buffer (串聯緩衝樹) 結構
+// ─────────────────────────────────────────────────────────────────────────────
+int Netlist::insertBuffersForFanout(int maxFanout) {
+    // 防呆：Fanout 必須至少為 2，否則無法插入 Buffer（因為 Buffer 本身就會佔用 1 個 Fanout）
+    if (maxFanout < 2) return 0; 
+
+    int inserted = 0;
+    int bufCounter = 0;
+
+    // 注意：這裡使用動態的 nets.size()，讓新生成的 bufNet 也能被迴圈檢查到！
+    for (int netIdx = 0; netIdx < (int)nets.size(); netIdx++) {
+        if (nets[netIdx].isConst) continue;
+
+        while ((int)nets[netIdx].loadGateIds.size() > maxFanout) {
+            
+            // 只保留 maxFanout - 1 個原有的 loads
+            // 空出 1 個名額，用來連接即將新增的 Buffer
+            int keepCount = maxFanout - 1;
+
+            std::vector<int> overLoads(
+                nets[netIdx].loadGateIds.begin() + keepCount,
+                nets[netIdx].loadGateIds.end()
+            );
+            nets[netIdx].loadGateIds.resize(keepCount);
+
+            std::string bufName    = "_ins_buf_"     + std::to_string(bufCounter);
+            std::string bufNetName = "_ins_buf_net_" + std::to_string(bufCounter);
+            bufCounter++;
+
+            int bufGateId = addGate(bufName, GateType::BUF);
+            int bufNetId  = addNet(bufNetName);
+
+            // 雙向連接 Buffer Input
+            gates[bufGateId].inputNetIds.push_back(netIdx);
+            nets[netIdx].loadGateIds.push_back(bufGateId); // 把 Buffer 正常加入！
+            // 此時 nets[netIdx].loadGateIds.size() 剛好等於 keepCount + 1 = maxFanout
+            // 完美符合規格，while 迴圈也會順利終止！
+
+            // 雙向連接 Buffer Output
+            gates[bufGateId].outputNetId = bufNetId;
+            nets[bufNetId].driverGateId  = bufGateId;
+
+            // 把超載的 load 改接到新的 bufNetId 上
+            for (int j = 0; j < (int)overLoads.size(); j++) {
+                int loadGateId = overLoads[j];
+                for (int k = 0; k < (int)gates[loadGateId].inputNetIds.size(); k++) {
+                    if (gates[loadGateId].inputNetIds[k] == netIdx) {
+                        gates[loadGateId].inputNetIds[k] = bufNetId;
+                    }
+                }
+                nets[bufNetId].loadGateIds.push_back(loadGateId);
+            }
+
+            inserted++;
+        }
+    }
+
+    return inserted;
+}
+
+//  針對特定的 Net 或 Bus，限制最大 Fanout，並採用 Cascaded Buffer (串聯緩衝樹) 結構
+int Netlist::insertBuffersForSpecificNet(const std::string& wireName, int maxFanout) {
+    // 防呆：Fanout 必須至少為 2
+    if (maxFanout < 2) return 0;
+
+    // 展開 Bus，取得所有目標 Net ID
+    std::vector<int> targetNets = expandNetToBits(wireName);
+    if (targetNets.empty()) return 0;
+
+    int insertedCount = 0;
+    int bufCounter = 0; // 用於命名
+
+    // 使用 Queue 來動態追蹤：因為新產生的 Buffer Net 如果也超載，必須再被處理一次！
+    std::queue<int> netsToProcess;
+    for (int netId : targetNets) {
+        netsToProcess.push(netId);
+    }
+
+    // 只要還有線路需要檢查，就繼續處理
+    while (!netsToProcess.empty()) {
+        int netIdx = netsToProcess.front();
+        netsToProcess.pop();
+
+        if (netIdx < 0 || netIdx >= (int)nets.size() || nets[netIdx].isConst) {
+            continue;
+        }
+
+        // 如果這條線的負載超過限制，進行切割
+        while ((int)nets[netIdx].loadGateIds.size() > maxFanout) {
+            
+            // 留下 maxFanout - 1 個原有的 loads
+            // 剩下的 1 個名額，留給即將接上來的 Buffer
+            int keepCount = maxFanout - 1;
+
+            std::vector<int> overLoads(
+                nets[netIdx].loadGateIds.begin() + keepCount,
+                nets[netIdx].loadGateIds.end()
+            );
+            
+            // 裁切原有的 load 名單
+            nets[netIdx].loadGateIds.resize(keepCount);
+
+            // 建立專屬的新 Buffer 與新線路
+            std::string bufName    = wireName + "_fanout_buf_" + std::to_string(bufCounter);
+            std::string bufNetName = wireName + "_fanout_net_" + std::to_string(bufCounter);
+            bufCounter++;
+
+            int bufGateId = addGate(bufName, GateType::BUF);
+            int bufNetId  = addNet(bufNetName);
+
+            // 雙向連接 Buffer Input (接在當前的 netIdx 上)
+            gates[bufGateId].inputNetIds.push_back(netIdx);
+            nets[netIdx].loadGateIds.push_back(bufGateId); // 把 Buffer 加進去，此時數量剛好等於 maxFanout！
+
+            // 雙向連接 Buffer Output
+            gates[bufGateId].outputNetId = bufNetId;
+            nets[bufNetId].driverGateId  = bufGateId;
+
+            // 把被切出來的超載 Loads，全部改接到新的 bufNetId 上
+            for (int j = 0; j < (int)overLoads.size(); j++) {
+                int loadGateId = overLoads[j];
+                for (int k = 0; k < (int)gates[loadGateId].inputNetIds.size(); k++) {
+                    if (gates[loadGateId].inputNetIds[k] == netIdx) {
+                        gates[loadGateId].inputNetIds[k] = bufNetId;
+                    }
+                }
+                nets[bufNetId].loadGateIds.push_back(loadGateId);
+            }
+
+            insertedCount++;
+
+            // 將這條「新的 Buffer 輸出線」也推入 Queue！
+            // 這樣如果 overLoads 的數量依然 > maxFanout，下一輪它就會再被切出另一顆 Buffer！
+            netsToProcess.push(bufNetId);
+        }
+    }
+
+    return insertedCount;
+}
+
+// 為每個負載加上獨立 Buffer
+// 走訪 wire 的 fanout list，為每一個連接的 Gate 建立專屬的 Buffer
+int Netlist::insertBuffersOnEachLoad(const std::string& wireName) {
+    // 展開 Bus，取得所有目標 Net ID (如果是一般線，回傳陣列只會有一個元素)
+    std::vector<int> targetNets = expandNetToBits(wireName);
+    if (targetNets.empty()) return 0;
+
+    int insertedCount = 0;
+
+    for (int netId : targetNets) {
+        Net& net = nets[netId];
+        
+        // 通常不會對常數線插 Buffer，若有特殊需求可移除此行
+        if (net.isConst) continue; 
+
+        // 取得該條線的所有 loadGateIds，並去除重複的 Gate
+        // 防呆：解決像 AND(n2, n2) 這種同一顆 Gate 吃同一條線兩次的問題
+        std::vector<int> uniqueLoads = net.loadGateIds;
+        std::sort(uniqueLoads.begin(), uniqueLoads.end());
+        uniqueLoads.erase(std::unique(uniqueLoads.begin(), uniqueLoads.end()), uniqueLoads.end());
+
+        // 清空原本 net 的 load 名單，準備全部換成 Buffer
+        net.loadGateIds.clear();
+
+        for (size_t i = 0; i < uniqueLoads.size(); i++) {
+            int loadGateId = uniqueLoads[i];
+            Gate& loadGate = gates[loadGateId];
+
+            // 如果 Load 剛好是 DFF 且有特定處理邏輯，可加在此處
+            
+            // 建立專屬 Buffer 與其輸出的新 Net
+            std::string bufName = wireName + "_loadbuf_" + std::to_string(netId) + "_" + std::to_string(i);
+            std::string bufOutNetName = wireName + "_loadbuf_net_" + std::to_string(netId) + "_" + std::to_string(i);
+
+            int bufGateId = addGate(bufName, GateType::BUF);
+            int bufOutNetId = addNet(bufOutNetName);
+
+            // 雙向連接 Buffer Input (接上原本的 netId)
+            gates[bufGateId].inputNetIds.push_back(netId);
+            net.loadGateIds.push_back(bufGateId); // 把新 buffer 註冊為原本 net 的負載
+
+            // 雙向連接 Buffer Output (接上新的 bufOutNetId)
+            gates[bufGateId].outputNetId = bufOutNetId;
+            nets[bufOutNetId].driverGateId = bufGateId;
+            nets[bufOutNetId].loadGateIds.push_back(loadGateId); // 新 net 的負載是原本的 Gate
+
+            // 將原本目標 Gate 的 Input Pin 從原本的 netId 替換成新的 bufOutNetId
+            for (size_t k = 0; k < loadGate.inputNetIds.size(); k++) {
+                if (loadGate.inputNetIds[k] == netId) {
+                    loadGate.inputNetIds[k] = bufOutNetId;
+                }
+            }
+            insertedCount++;
+        }
+    }
+    return insertedCount;
+}
+
+// 在訊號的驅動端加上單一 Buffer
+// 若為內部線或 PO，在 Driver Gate 與 Net 之間打斷並插入 Buffer。
+// 若為 PI，將原本的 Net 保留給 PI，並將所有 Load 移至 Buffer 後方的新 Net。
+int Netlist::insertBufferAtDriver(const std::string& wireName) {
+    std::vector<int> targetNets = expandNetToBits(wireName);
+    if (targetNets.empty()) return 0;
+
+    int insertedCount = 0;
+
+    for (int netId : targetNets) {
+        Net& net = nets[netId];
+        if (net.isConst) continue;
+
+        // 【情境 A】：這條線有實體的驅動閘 (Driver Gate)，適用於內部線或 PO
+        if (net.driverGateId != -1) {
+            int driverGateId = net.driverGateId;
+            Gate& driverGate = gates[driverGateId];
+
+            // 建立 Buffer 與 中繼 Net (夾在原 Driver 與 Buffer 之間)
+            std::string bufName = wireName + "_drvbuf_" + std::to_string(netId);
+            std::string midNetName = wireName + "_mid_net_" + std::to_string(netId);
+
+            int bufGateId = addGate(bufName, GateType::BUF);
+            int midNetId = addNet(midNetName);
+
+            // 打斷原 Driver：將其輸出從原本的 netId 改接到 midNetId
+            driverGate.outputNetId = midNetId;
+            nets[midNetId].driverGateId = driverGateId;
+            nets[midNetId].loadGateIds.push_back(bufGateId); // 中繼線的 Load 是新 Buffer
+
+            // 連接新 Buffer：輸入吃中繼線，輸出推原本的 netId
+            gates[bufGateId].inputNetIds.push_back(midNetId);
+            gates[bufGateId].outputNetId = netId;
+            net.driverGateId = bufGateId; // 原本的線現在改由新 Buffer 驅動
+
+            insertedCount++;
+        }
+        // 【情境 B】：這條線是 Primary Input (PI)，沒有驅動閘
+        else {
+            // 因為 PI 綁死了這條原始 netId，我們必須把 Buffer 加在 netId 「之後」
+            std::string bufName = wireName + "_pibuf_" + std::to_string(netId);
+            std::string bufOutNetName = wireName + "_pi_out_net_" + std::to_string(netId);
+
+            int bufGateId = addGate(bufName, GateType::BUF);
+            int bufOutNetId = addNet(bufOutNetName);
+
+            // 將原始 netId 上面的所有 Loads 移交給新的 bufOutNetId
+            std::vector<int> oldLoads = net.loadGateIds;
+            net.loadGateIds.clear(); // 清空 PI 的負載
+
+            nets[bufOutNetId].driverGateId = bufGateId;
+            nets[bufOutNetId].loadGateIds = oldLoads;
+
+            // 把新 Buffer 接到 PI 的 netId 上
+            gates[bufGateId].inputNetIds.push_back(netId);
+            net.loadGateIds.push_back(bufGateId);
+            gates[bufGateId].outputNetId = bufOutNetId;
+
+            // 走訪所有被搬移的 Loads，將它們的 Input Pin 從原本的 netId 換成 bufOutNetId
+            for (int loadGateId : oldLoads) {
+                Gate& loadGate = gates[loadGateId];
+                for (size_t k = 0; k < loadGate.inputNetIds.size(); k++) {
+                    if (loadGate.inputNetIds[k] == netId) {
+                        loadGate.inputNetIds[k] = bufOutNetId;
+                    }
+                }
+            }
+            insertedCount++;
+        }
+    }
+    return insertedCount;
+}
+
+// 在特定的 Gate 前面增加 Buffer
+int Netlist::insertBufferBeforeGate(const std::string& wireName, const std::string& targetGateName) {
+    std::vector<int> targetNets = expandNetToBits(wireName);
+    if (targetNets.empty()) return 0;
+
+    int targetGateId = getGateId(targetGateName);
+    if (targetGateId == -1) return 0; // 找不到指定的 Gate
+
+    int insertedCount = 0;
+
+    for (int netId : targetNets) {
+        Net& net = nets[netId];
+        if (net.isConst) continue;
+
+        // 步驟 A：檢查並清除目標 Gate 在原本 net 中的負載紀錄
+        // 防呆：解決像 AND(n2, n2) 這種同一顆 Gate 佔用兩個負載空位的情況
+        int matchCount = 0;
+        for (size_t i = 0; i < net.loadGateIds.size(); ) {
+            if (net.loadGateIds[i] == targetGateId) {
+                matchCount++;
+                // 從原本的 net 拔除這個 Gate
+                net.loadGateIds.erase(net.loadGateIds.begin() + i); 
+            } else {
+                i++;
+            }
+        }
+        
+        // 如果這個 Gate 根本沒有接在這條線上，跳過
+        if (matchCount == 0) continue; 
+
+        // 步驟 B：建立專屬 Buffer 與輸出的新 Net
+        std::string bufName = wireName + "_to_" + targetGateName + "_buf";
+        std::string bufOutNetName = wireName + "_to_" + targetGateName + "_net";
+
+        int bufGateId = addGate(bufName, GateType::BUF);
+        int bufOutNetId = addNet(bufOutNetName);
+
+        // 步驟 C：雙向連接 Buffer Input
+        gates[bufGateId].inputNetIds.push_back(netId);
+        net.loadGateIds.push_back(bufGateId); // 把 Buffer (只加一次) 放入原本 net 的負載中
+
+        // 步驟 D：雙向連接 Buffer Output
+        gates[bufGateId].outputNetId = bufOutNetId;
+        nets[bufOutNetId].driverGateId = bufGateId;
+        
+        // 如果原本接了兩次，新的 net 也要負責推動兩次
+        for (int m = 0; m < matchCount; m++) {
+            nets[bufOutNetId].loadGateIds.push_back(targetGateId);
+        }
+
+        // 步驟 E：將目標 Gate 裡面所有為 netId 的腳位，替換成新的 bufOutNetId
+        Gate& targetGate = gates[targetGateId];
+        for (size_t k = 0; k < targetGate.inputNetIds.size(); k++) {
+            if (targetGate.inputNetIds[k] == netId) {
+                targetGate.inputNetIds[k] = bufOutNetId;
+            }
+        }
+        insertedCount++;
+    }
+    return insertedCount;
+}
+
+// 針對某種類型的 Gate，讓他的輸入或輸出都接上 Buffer
+int Netlist::insertBuffersByGateType(GateType type, bool bufferInputs, bool bufferOutputs) {
+    int insertedCount = 0;
+
+    // 取得當前的 Gate 總數 (Snapshot)，避免掃描到我們在此迴圈內剛新增的 Buffer
+    int originalGateCount = gates.size();
+
+    for (int i = 0; i < originalGateCount; i++) {
+        Gate& gate = gates[i];
+        
+        if (gate.type != type || gate.type == GateType::UNKNOWN) continue;
+
+        // 在所有的 Input 腳位前面加上 Buffer
+        if (bufferInputs) {
+            for (size_t k = 0; k < gate.inputNetIds.size(); k++) {
+                int inNetId = gate.inputNetIds[k];
+                if (inNetId == -1 || nets[inNetId].isConst) continue;
+
+                // 建立 Buffer 與中繼線
+                std::string bufName = gate.instName + "_inbuf_" + std::to_string(k);
+                std::string bufNetName = gate.instName + "_innet_" + std::to_string(k);
+
+                int bufGateId = addGate(bufName, GateType::BUF);
+                int bufNetId = addNet(bufNetName);
+
+                // 接上 Buffer 的 Input
+                gates[bufGateId].inputNetIds.push_back(inNetId);
+                
+                // 在原線的負載中，找到 "1 個" 這個 Gate 的 ID 並替換成 bufGateId
+                Net& inNet = nets[inNetId];
+                for (size_t loadIdx = 0; loadIdx < inNet.loadGateIds.size(); loadIdx++) {
+                    if (inNet.loadGateIds[loadIdx] == i) {
+                        inNet.loadGateIds[loadIdx] = bufGateId;
+                        break; // 非常重要！只換一個，解決 AND(A, A) 被掃描兩次的問題
+                    }
+                }
+
+                // 接上 Buffer 的 Output
+                gates[bufGateId].outputNetId = bufNetId;
+                nets[bufNetId].driverGateId = bufGateId;
+                nets[bufNetId].loadGateIds.push_back(i);
+
+                // 更新 Gate 的第 k 隻腳
+                gate.inputNetIds[k] = bufNetId;
+                insertedCount++;
+            }
+        }
+
+        // 在 Output 腳位後面加上 Buffer
+        if (bufferOutputs) {
+            int outNetId = gate.outputNetId;
+            if (outNetId != -1) {
+                // 建立 Buffer 與中繼線
+                std::string bufName = gate.instName + "_outbuf";
+                std::string midNetName = gate.instName + "_outnet_mid";
+
+                int bufGateId = addGate(bufName, GateType::BUF);
+                int midNetId = addNet(midNetName);
+
+                // 打斷原本的連線：Gate 輸出改接 midNet
+                gate.outputNetId = midNetId;
+                nets[midNetId].driverGateId = i;
+                nets[midNetId].loadGateIds.push_back(bufGateId); // midNet 負責推 Buffer
+
+                // 接上 Buffer：Buffer 輸出負責推原本的 outNet
+                gates[bufGateId].inputNetIds.push_back(midNetId);
+                gates[bufGateId].outputNetId = outNetId;
+                nets[outNetId].driverGateId = bufGateId; // outNet 的新主人是 Buffer
+
+                insertedCount++;
+            }
+        }
+    }
+    return insertedCount;
+}
+
 // 遞迴比對引擎核心 (Backward Pattern Matching)
 bool TechMapper::matchNet(Netlist& netlist, std::shared_ptr<PatternNode> pNode, int physNetId, MatchContext& ctx) {
     if (physNetId == -1) return false;
@@ -486,10 +898,14 @@ int TechMapper::applyBackwardMapping(Netlist& netlist) {
 // targetTypes  : 使用者想要「拔除/替換掉」的 Gate 類型 (例如 {OR, AND})
 // allowedTypes : 使用者允許「新增/使用」的 Gate 類型 (例如 {NAND, NOT})
 // 回傳值       : 總共變動的 Gate 數量 (正數代表變多，負數代表變少)
-int TechMapper::mapTechnology(Netlist& netlist, 
+// isOneToMany=true=展開(面積增加), false=濃縮(面積減少)
+// scopeGates 是一個可選的參數，如果提供了，就只對這些 Gate 進行技術映射，其他 Gate 不受影響。
+// 底層的實作引擎
+int TechMapper::mapTechnologyCore(Netlist& netlist, 
                               const std::vector<GateType>& targetTypes, 
                               const std::vector<GateType>& allowedTypes,
-                              bool isOneToMany) {
+                              bool isOneToMany,
+                              const std::unordered_set<int>* scopeGates) {
     
     std::unordered_set<GateType> targetSet(targetTypes.begin(), targetTypes.end());
     std::unordered_set<GateType> allowedSet(allowedTypes.begin(), allowedTypes.end());
@@ -525,9 +941,18 @@ int TechMapper::mapTechnology(Netlist& netlist,
             
             // Snapshot 收集候選人
             std::vector<int> candidates;
-            for (size_t i = 0; i < netlist.getGateCount(); ++i) {
-                if (netlist.getGate(i).type != GateType::UNKNOWN) {
-                    candidates.push_back(i);
+            // 判斷是否有給定範圍名單
+            if (scopeGates != nullptr) {
+                for (int gateId : *scopeGates) {
+                    if (gateId >= 0 && gateId < netlist.getGateCount() && netlist.getGate(gateId).type != GateType::UNKNOWN) {
+                        candidates.push_back(gateId);
+                    }
+                }
+            } else {
+                for (size_t i = 0; i < netlist.getGateCount(); ++i) {
+                    if (netlist.getGate(i).type != GateType::UNKNOWN) {
+                        candidates.push_back(i);
+                    }
                 }
             }
 
@@ -580,10 +1005,22 @@ int TechMapper::mapTechnology(Netlist& netlist,
 
         // Snapshot 收集需要展開的 Gate
         std::vector<int> forwardCandidates;
-        for (size_t i = 0; i < netlist.getGateCount(); ++i) {
-            const Gate& g = netlist.getGate(i);
-            if (g.type != GateType::UNKNOWN && targetSet.count(g.type)) {
-                forwardCandidates.push_back(i);
+        // 判斷是否有給定範圍名單
+        if (scopeGates != nullptr) {
+            for (int gateId : *scopeGates) {
+                if (gateId >= 0 && gateId < netlist.getGateCount()) {
+                    const Gate& g = netlist.getGate(gateId);
+                    if (g.type != GateType::UNKNOWN && targetSet.count(g.type)) {
+                        forwardCandidates.push_back(gateId);
+                    }
+                }
+            }
+        } else {
+            for (size_t i = 0; i < netlist.getGateCount(); ++i) {
+                const Gate& g = netlist.getGate(i);
+                if (g.type != GateType::UNKNOWN && targetSet.count(g.type)) {
+                    forwardCandidates.push_back(i);
+                }
             }
         }
 
@@ -601,201 +1038,151 @@ int TechMapper::mapTechnology(Netlist& netlist,
     return totalGateChange;
 }
 
-// ─────────────────────────────────────────────────────────────────────────────
-//  reconstructToAndNot
-//  將整個 netlist 重新建構成只使用 AND 和 NOT gates
-//  策略：先備份所有需要替換的 gate info，再做替換
-//  De Morgan 定理：
-//  - OR(a,b)   → NOT(AND(NOT(a), NOT(b)))
-//  - NAND(a,b) → NOT(AND(a,b))
-//  - NOR(a,b)  → AND(NOT(a), NOT(b))
-//  - XOR(a,b)  → NOT(AND(NOT(AND(a,NOT(b))), NOT(AND(NOT(a),b))))
-//  - XNOR(a,b) → NOT(XOR(a,b))
-//  - BUF       → 直接連線（移除 gate）
-//  - DFF       → 保留不動
-//  回傳新增的 gate 數量
-// ─────────────────────────────────────────────────────────────────────────────
-int Netlist::reconstructToAndNot() {
-    int newGateCount = 0;
-    int synCounter = 0;
- 
-    // Step 1: 備份所有需要替換的 gate info
-    struct GateInfo {
-        int id;
-        GateType type;
-        std::vector<int> inputNetIds;
-        int outputNetId;
+// 萬用 API 實作 (直接呼叫 Core，scopeGates 給 nullptr 代表全部)
+int TechMapper::mapTechnology(Netlist& netlist, const std::vector<GateType>& targetTypes, const std::vector<GateType>& allowedTypes, bool isOneToMany) {
+    return mapTechnologyCore(netlist, targetTypes, allowedTypes, isOneToMany, nullptr);
+}
+
+// 針對 Cone 的 API 實作 (使用 Netlist 內建的 getConeGateIds)
+int TechMapper::mapTechnologyForCone(Netlist& netlist, 
+                              const std::vector<GateType>& targetTypes, 
+                              const std::vector<GateType>& allowedTypes, 
+                              bool isOneToMany, 
+                              const ConeResult& targetCone) {
+                              
+    // 呼叫 Netlist 原本就有的 Function 取得 Gate 陣列
+    std::vector<int> coneGateVec = netlist.getConeGateIds(targetCone);
+    
+    // 將 vector 轉換為 unordered_set，讓後續引擎在查詢時擁有 O(1) 的效率
+    std::unordered_set<int> scopeGates(coneGateVec.begin(), coneGateVec.end());
+    
+    // 呼叫核心引擎！
+    return mapTechnologyCore(netlist, targetTypes, allowedTypes, isOneToMany, &scopeGates);
+}
+
+// 核心輔助函式：給定「允許使用的基礎閘」，自動把其他所有的組合邏輯閘拆解
+// 核心輔助函式：根據 TargetScope 解析 Cone，並呼叫底層引擎
+int TechMapper::convertToBasis(Netlist& netlist, const std::vector<GateType>& allowedTypes, TargetScope scope, const std::string& name) {
+    std::unordered_set<GateType> allowedSet(allowedTypes.begin(), allowedTypes.end());
+    std::vector<GateType> targetTypes;
+
+    std::vector<GateType> allCombinational = {
+        GateType::AND, GateType::OR, GateType::NAND, GateType::NOR,
+        GateType::NOT, GateType::BUF, GateType::XOR, GateType::XNOR
     };
- 
-    std::vector<GateInfo> toReplace;
-    for (int gi = 0; gi < (int)gates.size(); gi++) {
-        GateType t = gates[gi].type;
-        if (t == GateType::OR  || t == GateType::NAND || t == GateType::NOR  ||
-            t == GateType::XOR || t == GateType::XNOR || t == GateType::BUF) {
-            GateInfo info;
-            info.id          = gi;
-            info.type        = t;
-            info.inputNetIds = gates[gi].inputNetIds;
-            info.outputNetId = gates[gi].outputNetId;
-            toReplace.push_back(info);
+
+    for (GateType type : allCombinational) {
+        if (allowedSet.find(type) == allowedSet.end()) {
+            targetTypes.push_back(type);
         }
     }
- 
-    // Step 2: 替換每個 gate
-    for (int ri = 0; ri < (int)toReplace.size(); ri++) {
-        GateInfo& info = toReplace[ri];
-        int gi       = info.id;
-        int outNetId = info.outputNetId;
-        int a        = (info.inputNetIds.size() > 0) ? info.inputNetIds[0] : -1;
-        int b        = (info.inputNetIds.size() > 1) ? info.inputNetIds[1] : -1;
- 
-        // 從 input net 的 loadGateIds 移除舊 gate
-        for (int inNetId : info.inputNetIds) {
-            std::vector<int> newLoads;
-            for (int x : nets[inNetId].loadGateIds)
-                if (x != gi) newLoads.push_back(x);
-            nets[inNetId].loadGateIds = newLoads;
-        }
-        nets[outNetId].driverGateId = -1;
- 
-        // 清空舊 gate
-        gates[gi].type = GateType::UNKNOWN;
-        gates[gi].inputNetIds.clear();
-        gates[gi].outputNetId = -1;
- 
-        std::string sid = std::to_string(synCounter++);
- 
-        if (info.type == GateType::BUF) {
-            // BUF: 把所有接到 outNet 的 gate 改接到 a
-            for (int loadGateId : nets[outNetId].loadGateIds) {
-                for (int k = 0; k < (int)gates[loadGateId].inputNetIds.size(); k++) {
-                    if (gates[loadGateId].inputNetIds[k] == outNetId) {
-                        gates[loadGateId].inputNetIds[k] = a;
-                        nets[a].loadGateIds.push_back(loadGateId);
-                    }
-                }
-            }
-            if (nets[outNetId].isPO) {
-                nets[a].isPO = true;
-                for (int pi = 0; pi < (int)primaryOutputs.size(); pi++)
-                    for (int pj = 0; pj < (int)primaryOutputs[pi].netIds.size(); pj++)
-                        if (primaryOutputs[pi].netIds[pj] == outNetId)
-                            primaryOutputs[pi].netIds[pj] = a;
-            }
-            nets[outNetId].loadGateIds.clear();
- 
-        } else if (info.type == GateType::OR) {
-            // OR(a,b) = NOT(AND(NOT(a), NOT(b)))
-            int notA_net = addNet("_na_" + sid);
-            int notB_net = addNet("_nb_" + sid);
-            int and_net  = addNet("_and_" + sid);
-            int notA_g = addGate("_notA_" + sid, GateType::NOT);
-            int notB_g = addGate("_notB_" + sid, GateType::NOT);
-            int and_g  = addGate("_and_"  + sid, GateType::AND);
-            int notO_g = addGate("_notO_" + sid, GateType::NOT);
-            connectGateInput(notA_g, a);        connectGateOutput(notA_g, notA_net);
-            connectGateInput(notB_g, b);        connectGateOutput(notB_g, notB_net);
-            connectGateInput(and_g, notA_net);  connectGateInput(and_g, notB_net);
-            connectGateOutput(and_g, and_net);
-            connectGateInput(notO_g, and_net);  connectGateOutput(notO_g, outNetId);
-            nets[outNetId].driverGateId = notO_g;
-            newGateCount += 4;
- 
-        } else if (info.type == GateType::NAND) {
-            // NAND(a,b) = NOT(AND(a,b))
-            int and_net = addNet("_and_" + sid);
-            int and_g   = addGate("_and_" + sid, GateType::AND);
-            int not_g   = addGate("_not_" + sid, GateType::NOT);
-            connectGateInput(and_g, a);     connectGateInput(and_g, b);
-            connectGateOutput(and_g, and_net);
-            connectGateInput(not_g, and_net); connectGateOutput(not_g, outNetId);
-            nets[outNetId].driverGateId = not_g;
-            newGateCount += 2;
- 
-        } else if (info.type == GateType::NOR) {
-            // NOR(a,b) = AND(NOT(a), NOT(b))
-            int notA_net = addNet("_na_" + sid);
-            int notB_net = addNet("_nb_" + sid);
-            int notA_g = addGate("_notA_" + sid, GateType::NOT);
-            int notB_g = addGate("_notB_" + sid, GateType::NOT);
-            int and_g  = addGate("_and_"  + sid, GateType::AND);
-            connectGateInput(notA_g, a);        connectGateOutput(notA_g, notA_net);
-            connectGateInput(notB_g, b);        connectGateOutput(notB_g, notB_net);
-            connectGateInput(and_g, notA_net);  connectGateInput(and_g, notB_net);
-            connectGateOutput(and_g, outNetId);
-            nets[outNetId].driverGateId = and_g;
-            newGateCount += 3;
- 
-        } else if (info.type == GateType::XOR) {
-            // XOR(a,b) = NOT(AND(NOT(AND(a,NOT(b))), NOT(AND(NOT(a),b))))
-            std::string s2  = std::to_string(synCounter++);
-            int notB_net  = addNet("_nb_"  + sid);
-            int notA_net  = addNet("_na_"  + sid);
-            int and1_net  = addNet("_a1_"  + sid);
-            int and2_net  = addNet("_a2_"  + sid);
-            int notX_net  = addNet("_nx_"  + s2);
-            int notY_net  = addNet("_ny_"  + s2);
-            int and3_net  = addNet("_a3_"  + s2);
-            int notB_g  = addGate("_notB_"  + sid, GateType::NOT);
-            int notA_g  = addGate("_notA_"  + sid, GateType::NOT);
-            int and1_g  = addGate("_and1_"  + sid, GateType::AND);
-            int and2_g  = addGate("_and2_"  + sid, GateType::AND);
-            int notX_g  = addGate("_notX_"  + s2,  GateType::NOT);
-            int notY_g  = addGate("_notY_"  + s2,  GateType::NOT);
-            int and3_g  = addGate("_and3_"  + s2,  GateType::AND);
-            int notF_g  = addGate("_notF_"  + s2,  GateType::NOT);
-            connectGateInput(notB_g, b);        connectGateOutput(notB_g, notB_net);
-            connectGateInput(notA_g, a);        connectGateOutput(notA_g, notA_net);
-            connectGateInput(and1_g, a);        connectGateInput(and1_g, notB_net);
-            connectGateOutput(and1_g, and1_net);
-            connectGateInput(and2_g, notA_net); connectGateInput(and2_g, b);
-            connectGateOutput(and2_g, and2_net);
-            connectGateInput(notX_g, and1_net); connectGateOutput(notX_g, notX_net);
-            connectGateInput(notY_g, and2_net); connectGateOutput(notY_g, notY_net);
-            connectGateInput(and3_g, notX_net); connectGateInput(and3_g, notY_net);
-            connectGateOutput(and3_g, and3_net);
-            connectGateInput(notF_g, and3_net); connectGateOutput(notF_g, outNetId);
-            nets[outNetId].driverGateId = notF_g;
-            newGateCount += 8;
- 
-        } else if (info.type == GateType::XNOR) {
-            // XNOR(a,b) = NOT(XOR(a,b)) → 先展開 XOR 再加 NOT
-            std::string s2  = std::to_string(synCounter++);
-            std::string s3  = std::to_string(synCounter++);
-            int notB_net  = addNet("_nb_"  + sid);
-            int notA_net  = addNet("_na_"  + sid);
-            int and1_net  = addNet("_a1_"  + sid);
-            int and2_net  = addNet("_a2_"  + sid);
-            int notX_net  = addNet("_nx_"  + s2);
-            int notY_net  = addNet("_ny_"  + s2);
-            int and3_net  = addNet("_a3_"  + s2);
-            int xor_net   = addNet("_xr_"  + s3);
-            int notB_g  = addGate("_notB_"  + sid, GateType::NOT);
-            int notA_g  = addGate("_notA_"  + sid, GateType::NOT);
-            int and1_g  = addGate("_and1_"  + sid, GateType::AND);
-            int and2_g  = addGate("_and2_"  + sid, GateType::AND);
-            int notX_g  = addGate("_notX_"  + s2,  GateType::NOT);
-            int notY_g  = addGate("_notY_"  + s2,  GateType::NOT);
-            int and3_g  = addGate("_and3_"  + s2,  GateType::AND);
-            int notF_g  = addGate("_notF_"  + s2,  GateType::NOT);
-            int notXor_g = addGate("_nxor_" + s3,  GateType::NOT);
-            connectGateInput(notB_g, b);        connectGateOutput(notB_g, notB_net);
-            connectGateInput(notA_g, a);        connectGateOutput(notA_g, notA_net);
-            connectGateInput(and1_g, a);        connectGateInput(and1_g, notB_net);
-            connectGateOutput(and1_g, and1_net);
-            connectGateInput(and2_g, notA_net); connectGateInput(and2_g, b);
-            connectGateOutput(and2_g, and2_net);
-            connectGateInput(notX_g, and1_net); connectGateOutput(notX_g, notX_net);
-            connectGateInput(notY_g, and2_net); connectGateOutput(notY_g, notY_net);
-            connectGateInput(and3_g, notX_net); connectGateInput(and3_g, notY_net);
-            connectGateOutput(and3_g, and3_net);
-            connectGateInput(notF_g, and3_net); connectGateOutput(notF_g, xor_net);
-            connectGateInput(notXor_g, xor_net); connectGateOutput(notXor_g, outNetId);
-            nets[outNetId].driverGateId = notXor_g;
-            newGateCount += 9;
-        }
+
+    // 根據使用者的選項，動態產生 ConeResult
+    // 如果是 WHOLE_NETLIST，就呼叫原本不需要 Cone 的 mapTechnology
+    switch (scope) {
+        case TargetScope::WHOLE_NETLIST:
+            return mapTechnology(netlist, targetTypes, allowedTypes, true);
+            
+        case TargetScope::NET_FANIN:
+            return mapTechnologyForCone(netlist, targetTypes, allowedTypes, true, netlist.getTransitiveFaninCone(name));
+            
+        case TargetScope::NET_FANOUT:
+            return mapTechnologyForCone(netlist, targetTypes, allowedTypes, true, netlist.getTransitiveFanoutCone(name));
+            
+        case TargetScope::GATE_FANIN:
+            return mapTechnologyForCone(netlist, targetTypes, allowedTypes, true, netlist.getGateTransitiveFaninCone(name));
+            
+        case TargetScope::GATE_FANOUT:
+            return mapTechnologyForCone(netlist, targetTypes, allowedTypes, true, netlist.getGateTransitiveFanoutCone(name));
+            
+        default:
+            return 0; // 防呆
     }
- 
-    trimDeadLogic();
-    return newGateCount;
+}
+
+// 將整個 netlist 轉成 {AND, NOT} (AIG: And-Inverter Graph)
+int TechMapper::convertToAndNot(Netlist& netlist, TargetScope scope, const std::string& name) {
+    return convertToBasis(netlist, {GateType::AND, GateType::NOT}, scope, name);
+}
+
+// 將整個 netlist 轉成 {OR, NOT} (OIG: Or-Inverter Graph)
+int TechMapper::convertToOrNot(Netlist& netlist, TargetScope scope, const std::string& name) {
+    return convertToBasis(netlist, {GateType::OR, GateType::NOT}, scope, name);
+}
+
+// 將整個 netlist 轉成 {NAND} (純 NAND 網路)
+// 說明：NAND 是 Universal Gate (萬用閘)。在早期 TTL 或現代 CMOS 中，NAND 的電晶體堆疊最少，
+// 速度最快，這是一個非常符合物理特性的轉換。
+int TechMapper::convertToNand(Netlist& netlist, TargetScope scope, const std::string& name) {
+    return convertToBasis(netlist, {GateType::NAND}, scope, name);
+}
+
+// 將整個 netlist 轉成 {NOR} (純 NOR 網路)
+// 說明：NOR 同樣是 Universal Gate，常用於一些特殊的記憶體周邊控制電路。
+int TechMapper::convertToNor(Netlist& netlist, TargetScope scope, const std::string& name) {
+    return convertToBasis(netlist, {GateType::NOR}, scope, name);
+}
+
+// 將整個 netlist 轉成 XAG (XOR-AND Graph)
+// 說明：由 {XOR, AND, NOT} 組成。XAG 在現代 EDA 非常紅！
+// 在全同態加密 (FHE) 與量子運算中，XOR 通常是 Free (不用成本) 的，
+// 而 AND 需要消耗極大的資源，所以會特別使用 XAG 來做進一步的最佳化。
+int TechMapper::convertToXag(Netlist& netlist, TargetScope scope, const std::string& name) {
+    return convertToBasis(netlist, {GateType::XOR, GateType::AND, GateType::NOT}, scope, name);
+}
+
+// 將整個 netlist 轉成 {XOR, AND} (ANF: Algebraic Normal Form)
+// 說明：又稱 Reed-Muller 展開。這是一種沒有 NOT 閘的代數結構！
+// 引擎非常聰明，遇到 NOT 閘時，會自動使用查表裡的 A XOR 1 來替換，
+int TechMapper::convertToAnf(Netlist& netlist, TargetScope scope, const std::string& name) {
+    return convertToBasis(netlist, {GateType::XOR, GateType::AND}, scope, name);
+}
+
+// 將整個 netlist 轉成 {XOR, OR}
+// 說明：這是另一種特化的代數基底映射。
+int TechMapper::convertToXorOr(Netlist& netlist, TargetScope scope, const std::string& name) {
+    return convertToBasis(netlist, {GateType::XOR, GateType::OR}, scope, name);
+}
+
+// 將整個 netlist 轉成 {XNOR, AND}
+// 說明：XNOR 與 XOR 具有對稱性，在某些 Cell Library 中 XNOR 的面積更小。
+// NOT 閘會被自動替換為 A XNOR 0。
+int TechMapper::convertToXnorAnd(Netlist& netlist, TargetScope scope, const std::string& name) {
+    return convertToBasis(netlist, {GateType::XNOR, GateType::AND}, scope, name);
+}
+
+// 將整個 netlist 轉成 {XNOR, OR}
+// 說明：特化的邏輯合成基底。
+int TechMapper::convertToXnorOr(Netlist& netlist, TargetScope scope, const std::string& name) {
+    return convertToBasis(netlist, {GateType::XNOR, GateType::OR}, scope, name);
+}
+
+// 給使用者呼叫的任意修改 API 
+int TechMapper::customMapTechnology(Netlist& netlist, 
+                                    const std::vector<GateType>& targetTypes, 
+                                    const std::vector<GateType>& allowedTypes, 
+                                    bool isOneToMany, 
+                                    TargetScope scope, 
+                                    const std::string& name) {
+    
+    // 根據使用者指定的 Scope，自動產生對應的 Cone 並呼叫底層的 API
+    switch (scope) {
+        case TargetScope::WHOLE_NETLIST:
+            return mapTechnology(netlist, targetTypes, allowedTypes, isOneToMany);
+            
+        case TargetScope::NET_FANIN:
+            return mapTechnologyForCone(netlist, targetTypes, allowedTypes, isOneToMany, netlist.getTransitiveFaninCone(name));
+            
+        case TargetScope::NET_FANOUT:
+            return mapTechnologyForCone(netlist, targetTypes, allowedTypes, isOneToMany, netlist.getTransitiveFanoutCone(name));
+            
+        case TargetScope::GATE_FANIN:
+            return mapTechnologyForCone(netlist, targetTypes, allowedTypes, isOneToMany, netlist.getGateTransitiveFaninCone(name));
+            
+        case TargetScope::GATE_FANOUT:
+            return mapTechnologyForCone(netlist, targetTypes, allowedTypes, isOneToMany, netlist.getGateTransitiveFanoutCone(name));
+            
+        default:
+            return 0; // 防呆機制
+    }
 }

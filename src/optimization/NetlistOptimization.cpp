@@ -180,69 +180,7 @@ int Netlist::collapseBackToBackInverters() {
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
-//  insertBuffersForFanout
-//  對 fanout > maxFanout 的 net 插入 buffer
-//  採用 Cascaded Buffer（串聯緩衝樹）結構
-// ─────────────────────────────────────────────────────────────────────────────
-int Netlist::insertBuffersForFanout(int maxFanout) {
-    // 防呆：Fanout 必須至少為 2，否則無法插入 Buffer（因為 Buffer 本身就會佔用 1 個 Fanout）
-    if (maxFanout < 2) return 0;
-
-    int inserted = 0;
-    int bufCounter = 0;
-
-    // 注意：這裡使用動態的 nets.size()，讓新生成的 bufNet 也能被迴圈檢查到！
-    for (int netIdx = 0; netIdx < (int)nets.size(); netIdx++) {
-        if (nets[netIdx].isConst) continue;
-
-        while ((int)nets[netIdx].loadGateIds.size() > maxFanout) {
-
-            // 只保留 maxFanout - 1 個原有的 loads
-            // 空出 1 個名額，用來連接即將新增的 Buffer
-            int keepCount = maxFanout - 1;
-
-            std::vector<int> overLoads(
-                nets[netIdx].loadGateIds.begin() + keepCount,
-                nets[netIdx].loadGateIds.end()
-            );
-            nets[netIdx].loadGateIds.resize(keepCount);
-
-            std::string bufName    = "_ins_buf_"     + std::to_string(bufCounter);
-            std::string bufNetName = "_ins_buf_net_" + std::to_string(bufCounter);
-            bufCounter++;
-
-            int bufGateId = addGate(bufName, GateType::BUF);
-            int bufNetId  = addNet(bufNetName);
-
-            // 雙向連接 Buffer Input
-            gates[bufGateId].inputNetIds.push_back(netIdx);
-            nets[netIdx].loadGateIds.push_back(bufGateId);
-            // 此時 nets[netIdx].loadGateIds.size() 剛好等於 keepCount + 1 = maxFanout
-            // 完美符合規格，while 迴圈也會順利終止！
-
-            // 雙向連接 Buffer Output
-            gates[bufGateId].outputNetId = bufNetId;
-            nets[bufNetId].driverGateId  = bufGateId;
-
-            // 把超載的 load 改接到新的 bufNetId 上
-            for (int j = 0; j < (int)overLoads.size(); j++) {
-                int loadGateId = overLoads[j];
-                for (int k = 0; k < (int)gates[loadGateId].inputNetIds.size(); k++) {
-                    if (gates[loadGateId].inputNetIds[k] == netIdx)
-                        gates[loadGateId].inputNetIds[k] = bufNetId;
-                }
-                nets[bufNetId].loadGateIds.push_back(loadGateId);
-            }
-
-            inserted++;
-        }
-    }
-
-    return inserted;
-}
-
-// ─────────────────────────────────────────────────────────────────────────────
-//  mergeEquivalentGates  【保留組員版：One-pass + 清除 dead gate 在 input nets 上的負載】
+//  mergeEquivalentGates
 //  合併結構等價的 gate（相同 type + 相同 input net 集合）
 //  回傳合併的 gate 數量
 // ─────────────────────────────────────────────────────────────────────────────

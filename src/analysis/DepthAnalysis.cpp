@@ -330,3 +330,94 @@ std::vector<Netlist::DepthReport> Netlist::findEndpointsExceedingDepth(int maxDe
 
     return reports;
 }
+
+// 執行統一 DepthQuery；這層只負責把既有 DepthAnalysis helper 整理成一致的 DepthReportSet。
+Netlist::DepthReportSet Netlist::runDepthQuery(const DepthQuery& query) const {
+    DepthReportSet result;
+    result.type = query.type;
+    result.threshold = query.threshold;
+
+    auto clearCriticalPathsIfNeeded = [&]() {
+        if (query.includeCriticalPath) {
+            return;
+        }
+        for (DepthReport& report : result.reports) {
+            report.criticalPath = CombinationalPath();
+        }
+        result.worst.criticalPath = CombinationalPath();
+    };
+
+    auto updateSummary = [&]() {
+        result.count = result.reports.size();
+        result.worst = DepthReport();
+        for (const DepthReport& report : result.reports) {
+            if (report.depth > result.worst.depth) {
+                result.worst = report;
+            }
+        }
+        clearCriticalPathsIfNeeded();
+    };
+
+    switch (query.type) {
+    case DepthQueryType::SpecificNet: {
+        if (query.netName.empty()) {
+            result.message = "SpecificNet depth query requires netName";
+            return result;
+        }
+
+        DepthReport report = analyzeDepthToNet(query.netName);
+        if (report.endpointNetId < 0 || report.depth < 0) {
+            result.message = "Net not found or depth unavailable: " + query.netName;
+            return result;
+        }
+
+        result.ok = true;
+        result.message = "Specific net depth";
+        result.reports.push_back(report);
+        updateSummary();
+        return result;
+    }
+
+    case DepthQueryType::PrimaryOutputs:
+        result.reports = analyzePrimaryOutputDepths();
+        result.ok = true;
+        result.message = "Primary output depth reports";
+        updateSummary();
+        return result;
+
+    case DepthQueryType::DffD:
+        result.reports = analyzeDffDDepths();
+        result.ok = true;
+        result.message = "DFF D-pin depth reports";
+        updateSummary();
+        return result;
+
+    case DepthQueryType::GlobalCriticalPath:
+        result.worst = findGlobalCriticalPath();
+        if (result.worst.endpointNetId < 0 || result.worst.depth < 0) {
+            result.message = "Global critical path is unavailable";
+            clearCriticalPathsIfNeeded();
+            return result;
+        }
+        result.ok = true;
+        result.message = "Global critical path";
+        result.reports.push_back(result.worst);
+        result.count = result.reports.size();
+        clearCriticalPathsIfNeeded();
+        return result;
+
+    case DepthQueryType::EndpointsExceedingDepth:
+        if (query.threshold < 0) {
+            result.message = "EndpointsExceedingDepth requires non-negative threshold";
+            return result;
+        }
+        result.reports = findEndpointsExceedingDepth(query.threshold);
+        result.ok = true;
+        result.message = "Timing endpoints exceeding depth threshold";
+        updateSummary();
+        return result;
+    }
+
+    result.message = "Unsupported DepthQueryType";
+    return result;
+}
