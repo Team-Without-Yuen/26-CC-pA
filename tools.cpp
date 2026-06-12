@@ -11,6 +11,7 @@ void parsePathArgs(std::istringstream& iss, std::vector<Netlist::PathNode>& req,
     std::string token;
     int mode = 1; // 預設讀入到 req (如果是只有 avoiding 的指令，呼叫端可直接傳 avoid 進來)
     
+    
     while (iss >> token) {
         if (token == "-req") { mode = 1; continue; }
         if (token == "-avoid") { mode = 2; continue; }
