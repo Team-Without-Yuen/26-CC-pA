@@ -61,6 +61,16 @@ int customMapTechnology(...);
 std::vector<TechMapRule> getValidRules(GateType targetGate, const std::vector<GateType>& allowedTypes);
 ```
 
+目前主要實作檔案：
+
+```text
+src/analysis/OptimizationAnalysis.cpp
+src/transformation/NetlistTransformation.cpp
+include/core/TechMapper.h
+```
+
+目前已經有 depth-driven candidate selector，但還缺 plan / apply / validation report 的完整 flow。
+
 ## 2. C-1 缺 fanout buffer planning API
 
 目前 insertion 會直接改 netlist，缺修改前 planning。
@@ -403,3 +413,11 @@ P3：
 | rollback mapping fail | Team B |
 | 找可 balance 的 associative chain | Team C |
 | 真正改接 tree 的 net/gate | Team B primitive + Team C strategy |
+
+## 13. 目前測試狀態
+
+```text
+mini test/tester.cpp 目前覆蓋 depth/path/function 等 Team C 會依賴的 analysis 基礎。
+fanout buffer planning、mapping plan、depth optimization flow 尚未納入 regression tester。
+目前 regression：Summary: 45 passed, 0 failed.
+```

@@ -453,6 +453,13 @@ sequential timing across multiple cycles
 
 ## 17. 目前完成狀態
 
+實作位置：
+
+```text
+include/core/PathTypes.h
+src/analysis/DepthAnalysis.cpp
+```
+
 已完成：
 
 ```text
@@ -468,12 +475,20 @@ getDffsWithDDepthGreaterThan()
 findGlobalCriticalPath()
 findEndpointsExceedingDepth()
 DepthQuery / DepthReportSet / runDepthQuery()
-mini test 覆蓋所有 DepthQueryType
 ```
 
 測試狀態：
 
 ```text
-runDepthQuery() 已通過 mini tester。
-後續編譯或連結測試時，要記得把 src/analysis/DepthAnalysis.cpp 加入編譯命令。
+mini test/tester.cpp 已覆蓋 computeNetLevels / computeGateLevels / findCriticalPathToNet / runDepthQuery(SpecificNet, DffD, GlobalCriticalPath)。
+目前 regression 結果：Summary: 45 passed, 0 failed.
+後續編譯或連結測試時，要記得把 src/analysis/*.cpp 加入編譯命令，並連結 CaDiCaL。
+```
+
+後續可補：
+
+```text
+1. 在 tester 補 PrimaryOutputs / EndpointsExceedingDepth 的 runDepthQuery case。
+2. 加入 before/after depth comparison wrapper，供 optimization report 使用。
+3. 若未來引入 library delay，再把 unit-depth model 擴充成 weighted delay model。
 ```

@@ -392,3 +392,14 @@ bool equivalent = report.ok && report.equivalent;
 5. DFF.Q 是 pseudo PI；這不是 sequential equivalence。
 6. 若 SAT solver timeout 或 UNKNOWN，結果會保守地偏向 false / unsupported。
 ```
+
+---
+
+## 15. 目前實作與測試狀態
+
+```text
+實作檔案：src/analysis/FunctionAnalysis.cpp
+型別檔案：include/core/NetlistQueries.h
+tester：mini test/tester.cpp
+目前 regression：Summary: 45 passed, 0 failed.
+```

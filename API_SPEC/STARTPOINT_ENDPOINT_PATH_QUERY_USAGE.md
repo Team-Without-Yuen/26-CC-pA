@@ -326,3 +326,24 @@ Netlist::PathQueryResult result = netlist.runPathQuery(query);
 6. 目前 combinationalOnly=false 尚未支援。
 ```
 
+---
+
+## 9. 目前實作與測試狀態
+
+```text
+實作檔案：src/analysis/PathAnalysis.cpp
+型別檔案：include/core/PathTypes.h
+tester：mini test/tester.cpp
+目前 regression：Summary: 45 passed, 0 failed.
+```
+
+目前 `runPathQuery()` 已覆蓋：
+
+```text
+Exists
+FindAny
+MinDepth
+MaxDepth
+EveryPathThrough
+EveryPathAvoids
+```

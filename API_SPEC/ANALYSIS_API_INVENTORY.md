@@ -31,6 +31,26 @@
 | `DepthQuery / DepthAnalysis` | logic level、endpoint depth、critical path、PO/DFF.D depth、depth 超標 endpoint | Boolean truth status、一般路徑條件查詢 |
 | `OptimizationCandidate` | 根據 depth report 建立最佳化候選與 target gate 偵測 | 純分析總入口、實際 rewrite |
 
+目前 source ownership：
+
+| 高階 API | 主要實作檔案 |
+|---|---|
+| `BasicQuery` | `src/analysis/BasicAnalysis.cpp` |
+| `DirectConnectivityQuery` | `src/analysis/ConnectivityAnalysis.cpp` |
+| `FunctionQuery` | `src/analysis/FunctionAnalysis.cpp` |
+| `ConeQuery` | `src/analysis/ConeAnalysis.cpp` |
+| `PathQuery` | `src/analysis/PathAnalysis.cpp` |
+| `DepthQuery / DepthAnalysis` | `src/analysis/DepthAnalysis.cpp` |
+| `OptimizationCandidate` | `src/analysis/OptimizationAnalysis.cpp` |
+
+目前共用 query/report 型別位置：
+
+| Header | 內容 |
+|---|---|
+| `include/core/NetlistQueries.h` | Basic / DirectConnectivity / Function / Cone query/report |
+| `include/core/PathTypes.h` | Path / Depth query/report 與 endpoint/path 型別 |
+| `include/core/OptimizationTypes.h` | Optimization result / candidate 型別 |
+
 注意：
 
 ```text
@@ -578,7 +598,42 @@ DepthAnalysis 的 critical path。
 
 ---
 
-## 12. 下一步建議
+## 12. 目前驗證狀態
+
+目前新版 regression tester：
+
+```text
+mini test/tester.cpp
+mini test/mini_circuit.v
+```
+
+覆蓋：
+
+```text
+VerilogReader / VerilogWriter
+runBasicQuery()
+runDirectConnectivityQuery()
+runFunctionQuery()
+runConeQuery()
+runPathQuery()
+runDepthQuery()
+少量 mutation primitive
+```
+
+目前驗證結果：
+
+```text
+Summary: 45 passed, 0 failed.
+```
+
+Windows 目前建議使用：
+
+```powershell
+g++ -std=c++20 -I. -Ilib "mini test/tester.cpp" src/core/*.cpp src/io/*.cpp src/analysis/*.cpp src/optimization/*.cpp src/transformation/*.cpp -L./include/lib/win/ucrt64 -lcadical -o "mini test/tester.exe"
+.\mini test\tester.exe
+```
+
+## 13. 下一步建議
 
 目前不要新增 `EndpointQuery`，避免和既有高階 API 重疊。
 
@@ -588,7 +643,9 @@ DepthAnalysis 的 critical path。
 1. 維持 DepthQuery 只處理 depth/timing 類問題。
 2. 不把 output truth status 放進 DepthQuery。
 3. 不把 arbitrary path through/avoid 放進 DepthQuery。
-4. 等 Basic / Direct / Function / Cone / Path / Depth 邊界穩定後，再考慮總入口 AnalysisQuery。
+4. 補 transformation / optimization 的統一修改結果 report。
+5. 補 transformation / cleanup 的 regression test。
+6. 等所有高階 API 邊界更穩定後，再考慮總入口 AnalysisQuery。
 ```
 
 建議未來總入口只做 routing，不重新定義功能：

@@ -329,3 +329,14 @@ Netlist::DirectConnectivityReport report =
 | `GateFanin` | `getGateFaninGateIds()`, `getGateFaninGateNames()`, `getGateFaninGateCount()` |
 | `GateFanout` | `getGateFanout()`, `getGateFanoutNames()`, `getGateFanoutCount()` |
 | `DirectlyConnected` | `isGateDirectlyConnectedToNet()`, `isNetDirectlyConnectedToGate()` |
+
+---
+
+## 15. 目前實作與測試狀態
+
+```text
+實作檔案：src/analysis/ConnectivityAnalysis.cpp
+型別檔案：include/core/NetlistQueries.h
+tester：mini test/tester.cpp
+目前 regression：Summary: 45 passed, 0 failed.
+```

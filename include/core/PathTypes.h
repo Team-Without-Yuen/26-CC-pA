@@ -1,0 +1,150 @@
+#pragma once
+
+#include <string>
+#include <vector>
+
+// =========================================================================
+// Path / Depth Analysis Types
+//
+// 這個 header 只放 path analysis 與 depth analysis 共用的純資料型別。
+// 不放 Netlist graph 儲存、不放 traversal 實作、不放 mutation API。
+// Netlist.h 會用 using alias 保留 Netlist::Xxx 的既有寫法。
+// =========================================================================
+
+// 表示限制條件指定的節點種類；可用相同 API 查詢 net 或 gate。
+enum class PathNodeType {
+    Net,
+    Gate
+};
+
+// 表示路徑條件中的一個具名節點；多個條件以 std::vector<PathNode> 傳入。
+struct PathNode {
+    PathNodeType type;
+    std::string name;
+
+    // 建立一個路徑限制節點，type 決定 name 要在 nets 或 gates 中查找。
+    PathNode(PathNodeType _type, const std::string& _name)
+        : type(_type), name(_name) {
+    }
+};
+
+// 保存一條組合邏輯路徑；netIds 與 gateIds 都依照起點到終點排列。
+struct CombinationalPath {
+    std::vector<int> netIds;   // 路徑經過的 nets，包含 startNet 與 endNet
+    std::vector<int> gateIds;  // 路徑中真正穿越的 combinational gates
+
+    // 回傳此路徑的邏輯深度，也就是經過的 combinational gate 數量。
+    int depth() const {
+        return static_cast<int>(gateIds.size());
+    }
+
+    // 判斷是否保存了一條有效路徑；沒有找到路徑時 netIds 為空。
+    bool exists() const {
+        return !netIds.empty();
+    }
+};
+
+// 標記 DepthReport 的 endpoint 類型，方便回覆 prompt 與後續 optimization selector 使用。
+enum class DepthEndpointType {
+    Unknown,
+    SpecificNet,
+    PrimaryOutput,
+    DffD
+};
+
+// 保存單一 endpoint 的 depth 分析結果。
+struct DepthReport {
+    DepthEndpointType endpointType = DepthEndpointType::Unknown; // endpoint 的來源類型
+    std::string endpointName;        // 可讀名稱，例如 y、n10、ff1.D
+    int endpointNetId = -1;          // 被分析的 endpoint net ID
+    int depth = -1;                  // 到該 endpoint 的最大 combinational depth
+    CombinationalPath criticalPath;  // 到該 endpoint 的一條 critical path
+};
+
+// 表示 DepthQuery 要執行哪一種 depth/timing 查詢。
+enum class DepthQueryType {
+    SpecificNet,              // 分析單一 net 的最大 depth 與 critical path
+    PrimaryOutputs,           // 分析所有 primary output endpoints
+    DffD,                     // 分析所有 DFF D-pin endpoints
+    GlobalCriticalPath,       // 找出 PO 與 DFF.D 中最深的 timing endpoint
+    EndpointsExceedingDepth   // 找出所有 depth 大於 threshold 的 timing endpoints
+};
+
+// 描述一個 Depth Query；這一層只處理 depth/timing，不處理 function 或 through/avoid path 條件。
+struct DepthQuery {
+    DepthQueryType type = DepthQueryType::SpecificNet;
+    std::string netName;             // SpecificNet 使用的 endpoint net name
+    int threshold = -1;              // EndpointsExceedingDepth 使用的 depth 門檻
+    bool includeCriticalPath = true; // false 時回傳 report 會清空 criticalPath，降低資料量
+};
+
+// 保存 DepthQuery 的統一回傳結果。
+struct DepthReportSet {
+    bool ok = false;                 // query 是否成功
+    std::string message;             // 給 debug / LLM response 的簡短訊息
+    DepthQueryType type = DepthQueryType::SpecificNet;
+
+    std::vector<DepthReport> reports; // 查詢得到的一個或多個 endpoint report
+    DepthReport worst;                // reports 中 depth 最大者；GlobalCriticalPath 的主要結果
+
+    int threshold = -1;               // query 使用的 depth 門檻；未使用時為 -1
+    size_t count = 0;                 // reports 數量
+};
+
+// 表示 path query 的抽象起點或終點類型。
+enum class PathEndpointType {
+    SpecificNet,     // 指定某條 net，例如 "n16"
+    PrimaryInput,    // primary input，可表示單一 PI 或整個 PI bus
+    PrimaryOutput,   // primary output，可表示單一 PO 或整個 PO bus
+    DffQ,            // DFF 的 Q 輸出 pin，通常作為 register-to-* 的 startpoint
+    DffD,            // DFF 的 D 輸入 pin，通常作為 *-to-register 的 endpoint
+    DffClock,        // DFF clock pin，例如 CK；偏 control path
+    DffReset,        // DFF reset/set pin，例如 RN/SN；偏 control path
+    GateOutput,      // 指定 gate 的 output net
+    GateInput        // 指定 gate 的某個 input net
+};
+
+// 描述一個抽象 path 起點或終點；實際查詢前要先 resolve 成 net ID。
+struct PathEndpoint {
+    PathEndpointType type;
+    std::string name;       // net name、port name、gate instance name 或 DFF instance name
+    std::string pinName;    // named pin 使用，例如 "D"、"Q"、"CK"、"RN"
+    int pinIndex = -1;      // positional gate input 使用，例如 input 0 / input 1
+
+    // 建立一個 path endpoint；不同 type 會使用不同欄位。
+    PathEndpoint(PathEndpointType _type,
+                 const std::string& _name,
+                 const std::string& _pinName = "",
+                 int _pinIndex = -1)
+        : type(_type), name(_name), pinName(_pinName), pinIndex(_pinIndex) {
+    }
+};
+
+// 表示同一組 startpoints/endpoints 要執行哪一種 path query。
+enum class PathQueryMode {
+    Exists,             // 是否至少存在一條符合條件的路徑
+    FindAny,            // 回傳任意一條符合條件的路徑
+    EnumerateAll,       // 回傳所有符合條件的路徑
+    MinDepth,           // 回傳最短邏輯深度路徑
+    MaxDepth,           // 回傳最長邏輯深度路徑
+    EveryPathThrough,   // 判斷所有路徑是否都經過 requiredNodes
+    EveryPathAvoids     // 判斷所有路徑是否都避開 avoidedNodes
+};
+
+// 描述一個完整的 startpoint-to-endpoint path query。
+struct PathQuery {
+    std::vector<PathEndpoint> startpoints;  // 一個或多個抽象起點
+    std::vector<PathEndpoint> endpoints;    // 一個或多個抽象終點
+    std::vector<PathNode> requiredNodes;    // 每條符合條件的路徑必須經過的 net/gate
+    std::vector<PathNode> avoidedNodes;     // 每條符合條件的路徑必須避開的 net/gate
+    PathQueryMode mode = PathQueryMode::Exists;
+    bool combinationalOnly = true;          // true 時遇到 DFF 視為 sequential boundary
+};
+
+// 保存統一 path query 的結果；不同 mode 會使用不同欄位。
+struct PathQueryResult {
+    bool exists = false;                    // exists/every-path 類查詢的主要結果
+    int depth = -1;                         // min/max depth 類查詢的邏輯深度
+    CombinationalPath path;                 // find any/min/max depth 的代表路徑
+    std::vector<CombinationalPath> paths;   // enumerate all 的所有路徑
+};

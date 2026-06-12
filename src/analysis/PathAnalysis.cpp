@@ -428,6 +428,46 @@ Netlist::CombinationalPath findLongestPathMatching(
 
 } // namespace
 
+// 判斷指定的節點 (Net 或 Gate) 是否為終點。
+// combinationalOnly = true 時，如果下游只接 DFF，也視為組合路徑終點。
+// combinationalOnly = false 時，必須真的沒有任何 load 才算拓樸終點。
+bool Netlist::isEndpoint(const PathNode& node, bool combinationalOnly) const {
+    int targetNetId = -1;
+
+    if (node.type == PathNodeType::Net) {
+        targetNetId = getNetId(node.name);
+    } else {
+        const int gateId = getGateId(node.name);
+        if (gateId < 0) {
+            return false;
+        }
+        targetNetId = gates[gateId].outputNetId;
+    }
+
+    if (targetNetId < 0) {
+        return true;
+    }
+
+    const Net& net = nets[targetNetId];
+    if (net.loadGateIds.empty()) {
+        return true;
+    }
+
+    if (combinationalOnly) {
+        for (int gateId : net.loadGateIds) {
+            if (gateId < 0 || gateId >= static_cast<int>(gates.size())) {
+                return false;
+            }
+            if (gates[gateId].type != GateType::DFF) {
+                return false;
+            }
+        }
+        return true;
+    }
+
+    return false;
+}
+
 // 判斷兩條 net 之間是否至少存在一條組合路徑，且不跨越 DFF。
 bool Netlist::hasCombinationalPath(const std::string& startNet,
                                    const std::string& endNet) const {

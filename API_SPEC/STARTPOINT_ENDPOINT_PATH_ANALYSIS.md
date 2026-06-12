@@ -134,12 +134,12 @@ int getGateInputNetId(int gateId, const std::string& pinName) const;
 |---|---|---|
 | input-to-output | PI -> PO | 可用現有 path API 組合 |
 | input-to-register | PI -> DFF.D | 已有 `getMaximumLogicDepthFromPiToDffD()` |
-| register-to-register | DFF.Q -> DFF.D | 可用現有 path API 組合，但缺 wrapper |
-| register-to-output | DFF.Q -> PO | 可用現有 path API 組合，但缺 wrapper |
+| register-to-register | DFF.Q -> DFF.D | 可用 `PathEndpoint(DffQ)` + `PathEndpoint(DffD)` 組合 |
+| register-to-output | DFF.Q -> PO | 可用 `PathEndpoint(DffQ)` + `PathEndpoint(PrimaryOutput)` 組合 |
 | net-to-net | specific net -> specific net | 已支援 |
-| gate-output-to-net | gate output -> specific net | 可用 `Gate.outputNetId` + path API |
-| net-to-gate-input | specific net -> gate input net | 可用 gate input net + path API |
-| gate-output-to-gate-input | gate output -> gate input net | 可組合，缺 wrapper |
+| gate-output-to-net | gate output -> specific net | 可用 `PathEndpoint(GateOutput)` + `PathEndpoint(SpecificNet)` 組合 |
+| net-to-gate-input | specific net -> gate input net | 可用 `PathEndpoint(SpecificNet)` + `PathEndpoint(GateInput)` 組合 |
+| gate-output-to-gate-input | gate output -> gate input net | 可用 `PathEndpoint(GateOutput)` + `PathEndpoint(GateInput)` 組合 |
 
 ## 5. Control Path 類型
 
@@ -430,7 +430,16 @@ combinationalOnly=true
 combinationalOnly=false
 ```
 
-後續可補四種 timing path wrapper：
+目前測試狀態：
+
+```text
+實作檔案：src/analysis/PathAnalysis.cpp
+型別檔案：include/core/PathTypes.h
+tester：mini test/tester.cpp
+目前 regression：Summary: 45 passed, 0 failed.
+```
+
+後續可補 convenience wrapper：
 
 ```text
 PI -> PO
@@ -438,5 +447,7 @@ PI -> DFF.D
 DFF.Q -> DFF.D
 DFF.Q -> PO
 ```
+
+這些 wrapper 不是底層能力缺口，而是為了讓 prompt handler 呼叫時更直覺。
 
 這些 wrapper 可以直接包 `PathQuery`，不一定要另外寫底層搜尋邏輯。

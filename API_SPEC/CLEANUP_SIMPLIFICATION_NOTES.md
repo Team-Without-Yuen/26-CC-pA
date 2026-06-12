@@ -543,23 +543,37 @@ checkEquivalence(...)
 
 ## 4. 建議下一步
 
-下一步先補全域 buffer 目標選擇：
+目前已完成第一批 cleanup building blocks：
 
 ```cpp
 std::vector<int> findAllRemovableBufferGates() const;
-```
-
-然後再補真正 rewrite 需要的低階 helper：
-
-```cpp
 bool replaceAllLoadsOfNet(int oldNetId, int newNetId);
 bool bypassBufferGate(int bufferGateId);
+int cleanupAllRemovableBuffers();
+std::vector<std::pair<int,int>> findDoubleInverterPairs() const;
+bool bypassDoubleInverter(int g1id, int g2id);
+bool simplifyGateWithConstant(int gateId);
+std::vector<int> findSameInputGates() const;
+bool simplifySameInputGate(int gateId);
+std::vector<int> findDanglingGateIds() const;
+int removeDanglingLogic();
+std::vector<std::vector<int>> findStructurallyEquivalentGateGroups() const;
+int mergeStructurallyEquivalentGates();
 ```
 
-最後再包成 pass：
+下一步應先補：
 
-```cpp
-OptimizationResult cleanupAllRemovableBuffers();
+```text
+1. cleanup / simplification 專用 mini regression test。
+2. 統一修改結果 report，例如 NetlistEditReport。
+3. 將 cleanupAllRemovableBuffers() 接上 validateStructure() / rollback flow。
+4. 再逐步把 double inverter / constant propagation / same-input / dangling / structural hashing 包成固定 pass runner。
 ```
 
-這樣可以先跑出第一個完整 local safe optimization flow。
+目前測試狀態：
+
+```text
+mini test/tester.cpp 目前主要覆蓋 analysis 高階 API 與少量 mutation primitive。
+cleanup pass 尚未完整納入 tester。
+目前 regression：Summary: 45 passed, 0 failed.
+```

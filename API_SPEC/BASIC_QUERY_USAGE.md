@@ -550,3 +550,14 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 | `GatesByType` | `getGatesByType()` |
 | `GatesWithConstantInput` | `findGatesWithConstInput()`, `getGateNamesWithConstInput()`, `countGatesWithConstInput()` |
 | `StructuralIssues` | `getUndrivenNetNames()`, `getNoLoadNetNames()`, `getFloatingNetNames()`, `getUnconnectedGateNames()` |
+
+---
+
+## 17. 目前實作與測試狀態
+
+```text
+實作檔案：src/analysis/BasicAnalysis.cpp
+型別檔案：include/core/NetlistQueries.h
+tester：mini test/tester.cpp
+目前 regression：Summary: 45 passed, 0 failed.
+```

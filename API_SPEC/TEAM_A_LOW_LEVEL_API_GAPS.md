@@ -21,15 +21,17 @@ Basic query：
 ```cpp
 int getGateCount() const;
 int getNetCount() const;
-bool hasGate(const std::string& gateName) const;
-bool hasNet(const std::string& netName) const;
 int getGateId(const std::string& gateName) const;
 int getNetId(const std::string& netName) const;
-std::string getGateName(int gateId) const;
-std::string getNetName(int netId) const;
-GateType getGateType(int gateId) const;
+const Gate* findGate(const std::string& gateName) const;
+const Net* findNet(const std::string& netName) const;
+bool isValidGateId(int gateId) const;
+bool isValidNetId(int netId) const;
 bool isDffGate(int gateId) const;
 bool isCombinationalGate(int gateId) const;
+bool isPrimaryInputNet(int netId) const;
+bool isPrimaryOutputNet(int netId) const;
+bool isConstantNet(int netId) const;
 std::vector<std::string> getAllGateNames() const;
 std::vector<std::string> getAllNetNames() const;
 std::vector<std::string> getPrimaryInputNames() const;
@@ -76,9 +78,23 @@ DepthReportSet runDepthQuery(const DepthQuery& query) const;
 Function analysis：
 
 ```cpp
-bool isNetConstantZero(const std::string& netName) const;
-bool isNetConstantOne(const std::string& netName) const;
-FunctionQueryResult runFunctionQuery(const FunctionQuery& query) const;
+bool canNetBeValue(const std::string& netName, int value) const;
+bool isNetConstantFunction(const std::string& netName, int constValue) const;
+bool isNetAlwaysZero(const std::string& netName) const;
+bool isNetAlwaysOne(const std::string& netName) const;
+FunctionReport runFunctionQuery(const FunctionQuery& query) const;
+```
+
+目前 analysis API 主要分檔：
+
+```text
+src/analysis/BasicAnalysis.cpp
+src/analysis/ConnectivityAnalysis.cpp
+src/analysis/FunctionAnalysis.cpp
+src/analysis/ConeAnalysis.cpp
+src/analysis/PathAnalysis.cpp
+src/analysis/DepthAnalysis.cpp
+src/analysis/OptimizationAnalysis.cpp
 ```
 
 ## 2. A-1 缺全域 fanout constraint / report API
@@ -648,3 +664,10 @@ P2：
 1. writable object classification。
 2. cleanup candidate finder 整理。
 3. more detailed report formatting。
+
+## 16. 目前測試狀態
+
+```text
+mini test/tester.cpp 已覆蓋主要 high-level analysis API。
+目前 regression：Summary: 45 passed, 0 failed.
+```

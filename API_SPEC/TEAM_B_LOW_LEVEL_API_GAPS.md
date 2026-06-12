@@ -65,7 +65,14 @@ int removeDanglingLogic();
 int mergeStructurallyEquivalentGates();
 ```
 
-所以 Team B 不是缺全部，而是缺「讓 rewrite 可以安全落地」的 mutation primitives。
+目前主要實作檔案：
+
+```text
+src/transformation/NetlistTransformation.cpp
+src/optimization/NetlistOptimization.cpp
+```
+
+所以 Team B 不是缺全部，而是缺「讓 rewrite 可以安全落地」的更精準 mutation primitive、transaction wrapper，以及統一 report。
 
 ## 2. B-1 缺 pin-level 精準改線 primitive
 
@@ -339,3 +346,11 @@ P2：
 | 真正改接 cone 裡的 net/gate | Team B |
 | 計算修改前後 gate 數 | Team A |
 | 產生 unique gate/net name | Team B |
+
+## 12. 目前測試狀態
+
+```text
+mini test/tester.cpp 目前覆蓋 renameGate、disconnectGateInput、connectGateInput 與 VerilogWriter。
+cleanup / simplification pass 尚未完整納入 regression tester。
+目前 regression：Summary: 45 passed, 0 failed.
+```
