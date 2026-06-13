@@ -1,527 +1,752 @@
+#include <algorithm>
+#include <cctype>
 #include <iostream>
 #include <sstream>
 #include <string>
+#include <vector>
+
 #include "include/core/Netlist.h"
 #include "include/io/VerilogReader.h"
 #include "include/io/VerilogWriter.h"
 
-// 輔助函數：解析命令列中的 PathNode 陣列 (支援 -req 與 -avoid 標籤)
-// 語法範例：-req gate:U1 net:n2 -avoid gate:U3
-void parsePathArgs(std::istringstream& iss, std::vector<Netlist::PathNode>& req, std::vector<Netlist::PathNode>& avoid) {
-    std::string token;
-    int mode = 1; // 預設讀入到 req (如果是只有 avoiding 的指令，呼叫端可直接傳 avoid 進來)
-    
-    
-    while (iss >> token) {
-        if (token == "-req") { mode = 1; continue; }
-        if (token == "-avoid") { mode = 2; continue; }
+namespace {
 
-        Netlist::PathNodeType type = Netlist::PathNodeType::Net;
-        std::string name = token;
-        
-        // 判斷前綴是 gate: 還是 net:
-        if (token.find("gate:") == 0) {
-            type = Netlist::PathNodeType::Gate;
-            name = token.substr(5);
-        } else if (token.find("net:") == 0) {
-            type = Netlist::PathNodeType::Net;
-            name = token.substr(4);
+// 將字串轉小寫，讓 CLI mode/type 可以接受大小寫混用。
+std::string toLower(std::string text) {
+    for (char& ch : text) {
+        ch = static_cast<char>(std::tolower(static_cast<unsigned char>(ch)));
+    }
+    return text;
+}
+
+// 判斷 token 是否為整數，用於 gate_in:<gate>:<index>。
+bool isIntegerToken(const std::string& text) {
+    if (text.empty()) {
+        return false;
+    }
+    size_t start = (text[0] == '-' || text[0] == '+') ? 1 : 0;
+    if (start == text.size()) {
+        return false;
+    }
+    for (size_t i = start; i < text.size(); ++i) {
+        if (!std::isdigit(static_cast<unsigned char>(text[i]))) {
+            return false;
         }
+    }
+    return true;
+}
 
-        if (mode == 1) req.push_back(Netlist::PathNode(type, name));
-        else avoid.push_back(Netlist::PathNode(type, name));
+// 依 delimiter 切字串；這裡只用於解析 CLI endpoint/node token。
+std::vector<std::string> split(const std::string& text, char delimiter) {
+    std::vector<std::string> parts;
+    std::string current;
+    std::istringstream iss(text);
+    while (std::getline(iss, current, delimiter)) {
+        parts.push_back(current);
+    }
+    if (!text.empty() && text.back() == delimiter) {
+        parts.emplace_back();
+    }
+    return parts;
+}
+
+// 清掉 CLI 參數前後空白。
+std::string trim(std::string text) {
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.front()))) {
+        text.erase(text.begin());
+    }
+    while (!text.empty() && std::isspace(static_cast<unsigned char>(text.back()))) {
+        text.pop_back();
+    }
+    return text;
+}
+
+// read/write 檔名可能包含空白；吃掉整行剩餘內容並移除外層引號。
+std::string readRestPath(std::istringstream& iss) {
+    std::string path;
+    std::getline(iss >> std::ws, path);
+    path = trim(path);
+    if (path.size() >= 2 &&
+        ((path.front() == '"' && path.back() == '"') ||
+         (path.front() == '\'' && path.back() == '\''))) {
+        path = path.substr(1, path.size() - 2);
+    }
+    return path;
+}
+
+// 印出 string 陣列；所有高階 query report 的 name list 都共用這個輸出。
+void printStringList(const std::string& title,
+                     const std::vector<std::string>& values) {
+    std::cout << title << " (" << values.size() << "):\n";
+    for (const std::string& value : values) {
+        std::cout << "  " << value << "\n";
     }
 }
+
+// 印出 path 的 net/gate 序列，供 path/depth 類 query 共用。
+void printPath(const Netlist& netlist, const Netlist::CombinationalPath& path) {
+    if (!path.exists()) {
+        std::cout << "  (no path)\n";
+        return;
+    }
+
+    std::cout << "  Depth: " << path.depth() << "\n";
+    std::cout << "  Nets:\n";
+    for (int netId : path.netIds) {
+        std::cout << "    " << netlist.getNet(netId).name << "\n";
+    }
+    std::cout << "  Gates:\n";
+    for (int gateId : path.gateIds) {
+        std::cout << "    " << netlist.getGate(gateId).instName << "\n";
+    }
+}
+
+// 將 CLI node token 轉成 PathNode。
+// 語法：gate:<name>、net:<name>，沒有前綴時預設視為 net。
+Netlist::PathNode parsePathNode(const std::string& token) {
+    if (token.rfind("gate:", 0) == 0) {
+        return Netlist::PathNode(Netlist::PathNodeType::Gate, token.substr(5));
+    }
+    if (token.rfind("net:", 0) == 0) {
+        return Netlist::PathNode(Netlist::PathNodeType::Net, token.substr(4));
+    }
+    return Netlist::PathNode(Netlist::PathNodeType::Net, token);
+}
+
+// 將 CLI endpoint token 轉成 PathEndpoint。
+// 支援 net/pi/po/dff_q/dff_d/dff_clk/dff_reset/gate_out/gate_in。
+Netlist::PathEndpoint parseEndpoint(const std::string& token) {
+    std::vector<std::string> parts = split(token, ':');
+    if (parts.size() < 2) {
+        return Netlist::PathEndpoint(Netlist::PathEndpointType::SpecificNet, token);
+    }
+
+    const std::string prefix = toLower(parts[0]);
+    const std::string name = parts[1];
+    const std::string pin = parts.size() >= 3 ? parts[2] : "";
+
+    if (prefix == "net") {
+        return Netlist::PathEndpoint(Netlist::PathEndpointType::SpecificNet, name);
+    }
+    if (prefix == "pi") {
+        return Netlist::PathEndpoint(Netlist::PathEndpointType::PrimaryInput, name);
+    }
+    if (prefix == "po") {
+        return Netlist::PathEndpoint(Netlist::PathEndpointType::PrimaryOutput, name);
+    }
+    if (prefix == "dff_q") {
+        return Netlist::PathEndpoint(Netlist::PathEndpointType::DffQ, name);
+    }
+    if (prefix == "dff_d") {
+        return Netlist::PathEndpoint(Netlist::PathEndpointType::DffD, name);
+    }
+    if (prefix == "dff_clk" || prefix == "dff_clock") {
+        return Netlist::PathEndpoint(Netlist::PathEndpointType::DffClock, name, pin);
+    }
+    if (prefix == "dff_reset" || prefix == "dff_rst") {
+        return Netlist::PathEndpoint(Netlist::PathEndpointType::DffReset, name, pin);
+    }
+    if (prefix == "gate_out") {
+        return Netlist::PathEndpoint(Netlist::PathEndpointType::GateOutput, name);
+    }
+    if (prefix == "gate_in") {
+        if (isIntegerToken(pin)) {
+            return Netlist::PathEndpoint(Netlist::PathEndpointType::GateInput,
+                                         name, "", std::stoi(pin));
+        }
+        return Netlist::PathEndpoint(Netlist::PathEndpointType::GateInput,
+                                     name, pin, pin.empty() ? 0 : -1);
+    }
+
+    return Netlist::PathEndpoint(Netlist::PathEndpointType::SpecificNet, token);
+}
+
+// 印出 BasicQuery 的統一 report。
+void printBasicReport(const Netlist& netlist, const Netlist::BasicReport& report) {
+    if (!report.ok) {
+        std::cout << "Error: " << report.message << "\n";
+        return;
+    }
+
+    std::cout << "OK: " << report.message << "\n";
+    if (report.gateCount || report.netCount || report.logicalWireCount ||
+        report.primaryInputCount || report.primaryOutputCount) {
+        std::cout << "  gates: " << report.gateCount << "\n";
+        std::cout << "  nets: " << report.netCount << "\n";
+        std::cout << "  logical wires: " << report.logicalWireCount << "\n";
+        std::cout << "  primary inputs: " << report.primaryInputCount << "\n";
+        std::cout << "  primary outputs: " << report.primaryOutputCount << "\n";
+    }
+    if (!report.objectName.empty()) {
+        std::cout << "  object: " << report.objectName << "\n";
+        std::cout << "  id: " << report.objectId << "\n";
+        if (!report.typeName.empty()) {
+            std::cout << "  type: " << report.typeName << "\n";
+        }
+        if (report.portWidth >= 0) {
+            std::cout << "  width: " << report.portWidth << "\n";
+        }
+        if (!report.formattedInfo.empty()) {
+            std::cout << report.formattedInfo << "\n";
+        }
+    }
+    if (!report.gateTypeCounts.empty()) {
+        std::cout << "Gate type counts:\n";
+        for (const auto& item : report.gateTypeCounts) {
+            std::cout << "  " << netlist.gateTypeToString(item.first)
+                      << " : " << item.second << "\n";
+        }
+    }
+    if (!report.gateNames.empty()) {
+        printStringList("Gate names", report.gateNames);
+    }
+    if (!report.netNames.empty()) {
+        printStringList("Net names", report.netNames);
+    }
+    if (!report.portNames.empty()) {
+        printStringList("Port names", report.portNames);
+    }
+    if (!report.undrivenNets.empty()) {
+        printStringList("Undriven nets", report.undrivenNets);
+    }
+    if (!report.noLoadNets.empty()) {
+        printStringList("No-load nets", report.noLoadNets);
+    }
+    if (!report.floatingNets.empty()) {
+        printStringList("Floating nets", report.floatingNets);
+    }
+    if (!report.unconnectedGates.empty()) {
+        printStringList("Unconnected gates", report.unconnectedGates);
+    }
+}
+
+// 印出 DirectConnectivityQuery 的統一 report。
+void printConnectivityReport(const Netlist::DirectConnectivityReport& report) {
+    if (!report.ok) {
+        std::cout << "Error: " << report.message << "\n";
+        return;
+    }
+
+    std::cout << "OK: " << report.message << "\n";
+    if (!report.gateName.empty()) {
+        std::cout << "  gate: " << report.gateName << "\n";
+    }
+    if (!report.netName.empty()) {
+        std::cout << "  net: " << report.netName << "\n";
+    }
+    std::cout << "  count: " << report.count << "\n";
+    if (report.connected) {
+        std::cout << "  connected: yes\n";
+    }
+    if (!report.gateNames.empty()) {
+        printStringList("Gate names", report.gateNames);
+    }
+    if (!report.netNames.empty()) {
+        printStringList("Net names", report.netNames);
+    }
+}
+
+// 印出 ConeQuery 的統一 report。
+void printConeReport(const Netlist& netlist, const Netlist::ConeReport& report) {
+    if (!report.ok) {
+        std::cout << "Error: " << report.message << "\n";
+        return;
+    }
+
+    std::cout << "OK: " << report.message << "\n";
+    std::cout << "  source: " << report.sourceName << "\n";
+    std::cout << "  gates: " << report.gateCount << "\n";
+    std::cout << "  nets: " << report.netCount << "\n";
+    if (!report.rootNetNames.empty()) {
+        printStringList("Root nets", report.rootNetNames);
+    }
+    if (!report.gateNames.empty()) {
+        printStringList("Cone gates", report.gateNames);
+    }
+    if (!report.netNames.empty()) {
+        printStringList("Cone nets", report.netNames);
+    }
+    if (report.longestDepth >= 0) {
+        std::cout << "  longest local path depth: " << report.longestDepth << "\n";
+        for (int netId : report.longestPathNetIds) {
+            std::cout << "    " << netlist.getNet(netId).name << "\n";
+        }
+    }
+    if (report.shortestDepth >= 0) {
+        std::cout << "  shortest local path depth: " << report.shortestDepth << "\n";
+    }
+}
+
+// 印出 PathQuery 的統一 result。
+void printPathResult(const Netlist& netlist,
+                     Netlist::PathQueryMode mode,
+                     const Netlist::PathQueryResult& result) {
+    if (mode == Netlist::PathQueryMode::Exists ||
+        mode == Netlist::PathQueryMode::EveryPathThrough ||
+        mode == Netlist::PathQueryMode::EveryPathAvoids) {
+        std::cout << (result.exists ? "Yes\n" : "No\n");
+        return;
+    }
+
+    if (mode == Netlist::PathQueryMode::EnumerateAll) {
+        std::cout << "Total paths: " << result.paths.size() << "\n";
+        for (size_t i = 0; i < result.paths.size(); ++i) {
+            std::cout << "Path " << (i + 1) << ":\n";
+            printPath(netlist, result.paths[i]);
+        }
+        return;
+    }
+
+    if (!result.path.exists()) {
+        std::cout << "No path found.\n";
+        return;
+    }
+    printPath(netlist, result.path);
+}
+
+// 印出 DepthQuery 的統一 report。
+void printDepthReportSet(const Netlist& netlist, const Netlist::DepthReportSet& report) {
+    if (!report.ok) {
+        std::cout << "Error: " << report.message << "\n";
+        return;
+    }
+
+    std::cout << "OK: " << report.message << "\n";
+    std::cout << "Report count: " << report.count << "\n";
+    for (const DepthReport& item : report.reports) {
+        std::cout << "  " << item.endpointName << " depth=" << item.depth << "\n";
+    }
+    if (report.worst.depth >= 0) {
+        std::cout << "Worst endpoint: " << report.worst.endpointName
+                  << " depth=" << report.worst.depth << "\n";
+        printPath(netlist, report.worst.criticalPath);
+    }
+}
+
+// 印出 FunctionQuery 的統一 report。
+void printFunctionReport(const Netlist::FunctionReport& report) {
+    if (!report.ok) {
+        std::cout << "Error: " << report.message << "\n";
+        return;
+    }
+
+    std::cout << "OK: " << report.message << "\n";
+    if (!report.netNameA.empty()) {
+        std::cout << "  net A: " << report.netNameA << "\n";
+    }
+    if (!report.netNameB.empty()) {
+        std::cout << "  net B: " << report.netNameB << "\n";
+    }
+    if (!report.status.empty()) {
+        std::cout << "  status: " << report.status << "\n";
+    }
+    std::cout << "  answer: " << (report.exists ? "yes" : "no") << "\n";
+    std::cout << "  equivalent: " << (report.equivalent ? "yes" : "no") << "\n";
+    std::cout << "  can be 0: " << (report.canBeZero ? "yes" : "no") << "\n";
+    std::cout << "  can be 1: " << (report.canBeOne ? "yes" : "no") << "\n";
+    std::cout << "  is constant: " << (report.isConstant ? "yes" : "no") << "\n";
+}
+
+// 將 basic_query 的 mode 轉成 BasicQuery。
+bool buildBasicQuery(const Netlist& netlist,
+                     std::istringstream& iss,
+                     const std::string& mode,
+                     Netlist::BasicQuery& query) {
+    const std::string m = toLower(mode);
+    if (m == "summary") {
+        query.type = Netlist::BasicQueryType::Summary;
+    } else if (m == "list_gates") {
+        query.type = Netlist::BasicQueryType::ListGates;
+    } else if (m == "list_nets") {
+        query.type = Netlist::BasicQueryType::ListNets;
+    } else if (m == "list_pi") {
+        query.type = Netlist::BasicQueryType::ListPrimaryInputs;
+    } else if (m == "list_po") {
+        query.type = Netlist::BasicQueryType::ListPrimaryOutputs;
+    } else if (m == "list_dffs") {
+        query.type = Netlist::BasicQueryType::ListDffs;
+    } else if (m == "list_comb" || m == "list_comb_gates") {
+        query.type = Netlist::BasicQueryType::ListCombinationalGates;
+    } else if (m == "gate_info") {
+        query.type = Netlist::BasicQueryType::GateInfo;
+        iss >> query.name;
+    } else if (m == "net_info") {
+        query.type = Netlist::BasicQueryType::NetInfo;
+        iss >> query.name;
+    } else if (m == "port_info") {
+        query.type = Netlist::BasicQueryType::PortInfo;
+        iss >> query.name;
+    } else if (m == "count_by_type") {
+        query.type = Netlist::BasicQueryType::CountByGateType;
+        std::string gateType;
+        if (iss >> gateType) {
+            query.gateType = netlist.stringToGateType(gateType);
+        }
+    } else if (m == "gates_by_type") {
+        query.type = Netlist::BasicQueryType::GatesByType;
+        std::string gateType;
+        iss >> gateType;
+        query.gateType = netlist.stringToGateType(gateType);
+    } else if (m == "const_input_gates") {
+        query.type = Netlist::BasicQueryType::GatesWithConstantInput;
+        std::string gateType;
+        if (iss >> gateType) {
+            query.gateType = netlist.stringToGateType(gateType);
+            iss >> query.constValue;
+        }
+    } else if (m == "structural_issues") {
+        query.type = Netlist::BasicQueryType::StructuralIssues;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+// 將 conn_query 的 mode 轉成 DirectConnectivityQuery。
+bool buildConnectivityQuery(std::istringstream& iss,
+                            const std::string& mode,
+                            Netlist::DirectConnectivityQuery& query) {
+    const std::string m = toLower(mode);
+    if (m == "net_driver") {
+        query.type = Netlist::DirectConnectivityQueryType::NetDriver;
+        iss >> query.netName;
+    } else if (m == "net_loads") {
+        query.type = Netlist::DirectConnectivityQueryType::NetLoads;
+        iss >> query.netName;
+    } else if (m == "gate_inputs") {
+        query.type = Netlist::DirectConnectivityQueryType::GateInputs;
+        iss >> query.gateName;
+    } else if (m == "gate_output") {
+        query.type = Netlist::DirectConnectivityQueryType::GateOutput;
+        iss >> query.gateName;
+    } else if (m == "gate_fanin") {
+        query.type = Netlist::DirectConnectivityQueryType::GateFanin;
+        iss >> query.gateName;
+    } else if (m == "gate_fanout") {
+        query.type = Netlist::DirectConnectivityQueryType::GateFanout;
+        iss >> query.gateName;
+    } else if (m == "is_connected") {
+        query.type = Netlist::DirectConnectivityQueryType::DirectlyConnected;
+        iss >> query.gateName >> query.netName;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+// 將 cone_query 的 mode 轉成 ConeQuery。
+bool buildConeQuery(std::istringstream& iss,
+                    const std::string& mode,
+                    Netlist::ConeQuery& query) {
+    const std::string m = toLower(mode);
+    if (m == "net_fanin") {
+        query.type = Netlist::ConeQueryType::NetTransitiveFanin;
+        iss >> query.netName;
+    } else if (m == "net_fanout") {
+        query.type = Netlist::ConeQueryType::NetTransitiveFanout;
+        iss >> query.netName;
+    } else if (m == "gate_fanin") {
+        query.type = Netlist::ConeQueryType::GateTransitiveFanin;
+        iss >> query.gateName;
+    } else if (m == "gate_fanout") {
+        query.type = Netlist::ConeQueryType::GateTransitiveFanout;
+        iss >> query.gateName;
+    } else {
+        return false;
+    }
+
+    std::string option;
+    while (iss >> option) {
+        if (toLower(option) == "with_paths") {
+            query.includeLocalPaths = true;
+        }
+    }
+    return true;
+}
+
+// 將 depth_query 的 mode 轉成 DepthQuery。
+bool buildDepthQuery(std::istringstream& iss,
+                     const std::string& mode,
+                     Netlist::DepthQuery& query) {
+    const std::string m = toLower(mode);
+    if (m == "net") {
+        query.type = Netlist::DepthQueryType::SpecificNet;
+        iss >> query.netName;
+    } else if (m == "all_po") {
+        query.type = Netlist::DepthQueryType::PrimaryOutputs;
+    } else if (m == "all_dff_d") {
+        query.type = Netlist::DepthQueryType::DffD;
+    } else if (m == "global_critical") {
+        query.type = Netlist::DepthQueryType::GlobalCriticalPath;
+    } else if (m == "exceeding") {
+        query.type = Netlist::DepthQueryType::EndpointsExceedingDepth;
+        iss >> query.threshold;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+// 將 func_query 的 mode 轉成 FunctionQuery。
+bool buildFunctionQuery(std::istringstream& iss,
+                        const std::string& mode,
+                        Netlist::FunctionQuery& query) {
+    const std::string m = toLower(mode);
+    if (m == "equivalence") {
+        query.type = Netlist::FunctionQueryType::Equivalence;
+        iss >> query.netNameA >> query.netNameB;
+    } else if (m == "can_be_value") {
+        query.type = Netlist::FunctionQueryType::CanBeValue;
+        iss >> query.netNameA >> query.constValue;
+    } else if (m == "constant") {
+        query.type = Netlist::FunctionQueryType::ConstantFunction;
+        iss >> query.netNameA >> query.constValue;
+    } else if (m == "always_zero") {
+        query.type = Netlist::FunctionQueryType::AlwaysZero;
+        iss >> query.netNameA;
+    } else if (m == "always_one") {
+        query.type = Netlist::FunctionQueryType::AlwaysOne;
+        iss >> query.netNameA;
+    } else if (m == "truth_status") {
+        query.type = Netlist::FunctionQueryType::TruthStatus;
+        iss >> query.netNameA;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+// 將 path_query 的 mode 轉成 PathQueryMode。
+bool parsePathMode(const std::string& mode, Netlist::PathQueryMode& outMode) {
+    const std::string m = toLower(mode);
+    if (m == "exists") {
+        outMode = Netlist::PathQueryMode::Exists;
+    } else if (m == "find_any") {
+        outMode = Netlist::PathQueryMode::FindAny;
+    } else if (m == "enumerate") {
+        outMode = Netlist::PathQueryMode::EnumerateAll;
+    } else if (m == "min_depth") {
+        outMode = Netlist::PathQueryMode::MinDepth;
+    } else if (m == "max_depth") {
+        outMode = Netlist::PathQueryMode::MaxDepth;
+    } else if (m == "every_through") {
+        outMode = Netlist::PathQueryMode::EveryPathThrough;
+    } else if (m == "every_avoids") {
+        outMode = Netlist::PathQueryMode::EveryPathAvoids;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+// 印出統一 CLI 的 help；只保留分類式高階入口，避免 LLM 選到低階散裝 API。
+void printHelp() {
+    std::cout
+        << "Unified EDA query CLI\n"
+        << "\nI/O\n"
+        << "  read <verilog_file>\n"
+        << "  write <verilog_file>\n"
+        << "  quit\n"
+        << "\nBasic netlist query\n"
+        << "  basic_query <mode> [args]\n"
+        << "  mode: summary | list_gates | list_nets | list_pi | list_po\n"
+        << "        list_dffs | list_comb | gate_info <gate> | net_info <net>\n"
+        << "        port_info <port> | count_by_type [type] | gates_by_type <type>\n"
+        << "        const_input_gates [type] [0|1] | structural_issues\n"
+        << "\nDirect connectivity query\n"
+        << "  conn_query <mode> [args]\n"
+        << "  mode: net_driver <net> | net_loads <net> | gate_inputs <gate>\n"
+        << "        gate_output <gate> | gate_fanin <gate> | gate_fanout <gate>\n"
+        << "        is_connected <gate> <net>\n"
+        << "\nCone query\n"
+        << "  cone_query <mode> <name> [with_paths]\n"
+        << "  mode: net_fanin | net_fanout | gate_fanin | gate_fanout\n"
+        << "\nPath query\n"
+        << "  path_query <mode> <start_endpoint> <end_endpoint> [-req node...] [-avoid node...]\n"
+        << "  mode: exists | find_any | enumerate | min_depth | max_depth\n"
+        << "        every_through | every_avoids\n"
+        << "  endpoint: net:<n> | pi:<p> | po:<p> | dff_q:<ff> | dff_d:<ff>\n"
+        << "            dff_clk:<ff>[:pin] | dff_reset:<ff>[:pin]\n"
+        << "            gate_out:<g> | gate_in:<g>:<index_or_pin> | bare_net\n"
+        << "  node: gate:<g> | net:<n> | bare_net\n"
+        << "\nDepth query\n"
+        << "  depth_query <mode> [args]\n"
+        << "  mode: net <net> | all_po | all_dff_d | global_critical | exceeding <depth>\n"
+        << "\nFunction query\n"
+        << "  func_query <mode> [args]\n"
+        << "  mode: equivalence <net_a> <net_b> | can_be_value <net> <0|1>\n"
+        << "        constant <net> <0|1> | always_zero <net> | always_one <net>\n"
+        << "        truth_status <net>\n";
+}
+
+} // namespace
 
 int main() {
     Netlist netlist;
     VerilogReader reader;
     VerilogWriter writer;
     std::string inputLine;
-    bool isRunning = true;
 
-    // 核心的 REPL 迴圈
-    while (isRunning) {
-        std::cout << "eda> "; // 提示符號
-        
-        // 讀取一整行輸入
+    while (true) {
+        std::cout << "eda> ";
         if (!std::getline(std::cin, inputLine)) {
-            break; // 遇到 EOF (Ctrl+D / Ctrl+Z) 則結束
+            break;
         }
 
-        // 使用 stringstream 解析指令與參數
         std::istringstream iss(inputLine);
         std::string command;
         iss >> command;
-
+        command = toLower(command);
         if (command.empty()) {
-            continue; // 如果只按了 Enter，則繼續等待輸入
+            continue;
         }
 
-        // 指令解析區 (Command Routing)
+        if (command == "quit" || command == "exit") {
+            break;
+        }
+
         if (command == "help") {
-            std::cout << "Available commands:\n";
-            std::cout << "  read <filepath>\n";
-            std::cout << "  getGateCount\n";
-            std::cout << "  countGatesByType\n";
-            std::cout << "  getGateCountByType <gate_type>\n";
-            std::cout << "  getPrimaryInputs\n";
-            std::cout << "  getPrimaryOutputs\n";
-            std::cout << "  getLogicalWireCount\n";
-            std::cout << "  getGateNamesWithConstInput [gate_type] [0/1]\n";
-            std::cout << "  countGatesWithConstInput [gate_type] [0/1]\n";
-            std::cout << "  getGateInfo <inst_name>\n";
-            std::cout << "  getWireLoadNames <wire_name>\n";
-            std::cout << "  getWireLoadCount <wire_name>\n";
-            std::cout << "  getGateFanoutNames <inst_name>\n";
-            std::cout << "  getGateFanoutCount <inst_name>\n";
-            std::cout << "  getTransitiveFaninConeGateNames <net_name>\n";
-            std::cout << "  getTransitiveFaninConeGateCount <net_name>\n";
-            std::cout << "  getTransitiveFanoutConeGateNames <net_name>\n";
-            std::cout << "  getTransitiveFanoutConeGateCount <net_name>\n";
-            std::cout << "  getGateTransitiveFaninConeGateNames <inst_name>\n";
-            std::cout << "  getGateTransitiveFaninConeGateCount <inst_name>\n";
-            std::cout << "  getGateTransitiveFanoutConeGateNames <inst_name>\n";
-            std::cout << "  getGateTransitiveFanoutConeGateCount <inst_name>\n";
-            std::cout << "\n--- Combinational Path Analysis ---\n";
-            std::cout << "  * Node Format: use 'gate:<name>' or 'net:<name>'. Default is net.\n";
-            std::cout << "  * Example: hasCombinationalPathThrough n1 n2 gate:U1\n";
-            std::cout << "  * Dual Args: use '-req ... -avoid ...' for ThroughAvoiding commands.\n\n";
-            std::cout << "  [Existence] hasCombinationalPath <start> <end>\n";
-            std::cout << "  [Existence] hasCombinationalPathAvoiding <start> <end> [nodes...]\n";
-            std::cout << "  [Existence] hasCombinationalPathThrough <start> <end> [nodes...]\n";
-            std::cout << "  [Existence] hasCombinationalPathThroughAvoiding <start> <end> -req [nodes...] -avoid [nodes...]\n";
-            std::cout << "  [Find Any]  findAnyCombinationalPath <start> <end>\n";
-            std::cout << "  [Find Any]  findAnyCombinationalPathAvoiding <start> <end> [nodes...]\n";
-            std::cout << "  [Find Any]  findAnyCombinationalPathThrough <start> <end> [nodes...]\n";
-            std::cout << "  [Find Any]  findAnyCombinationalPathThroughAvoiding <start> <end> -req [nodes...] -avoid [nodes...]\n";
-            std::cout << "  [Enumerate] enumerateCombinationalPaths <start> <end>\n";
-            std::cout << "  [Enumerate] enumerateCombinationalPathsAvoiding <start> <end> [nodes...]\n";
-            std::cout << "  [Enumerate] enumerateCombinationalPathsThrough <start> <end> [nodes...]\n";
-            std::cout << "  [Enumerate] enumerateCombinationalPathsThroughAvoiding <start> <end> -req [nodes...] -avoid [nodes...]\n";
-            std::cout << "  [Verify]    everyPathPassesThrough <start> <end> [nodes...]\n";
-            std::cout << "  [Verify]    everyPathAvoids <start> <end> [nodes...]\n";
-            std::cout << "  [Longest]   findLongestCombinationalPath <start> <end>\n";
-            std::cout << "  [Longest]   findLongestCombinationalPathAvoiding <start> <end> [nodes...]\n";
-            std::cout << "  [Longest]   findLongestCombinationalPathThrough <start> <end> [nodes...]\n";
-            std::cout << "  [Longest]   findLongestCombinationalPathThroughAvoiding <start> <end> -req [nodes...] -avoid [nodes...]\n";
-            std::cout << "  * NOTE: Add 'ToEndpoint' to any of the above commands for strict endpoint checking.\n";
-            std::cout << "  [Sequential] getMaximumLogicDepthFromPiToDffD\n";
-            std::cout << "\n--------------------------------\n";
-            std::cout << "  checkEquivalence <netA> <netB>\n";
-            std::cout << "  getTransitiveFaninConeLongestPath <net_name>\n";
-            std::cout << "  getTransitiveFaninConeShortestPath <net_name>\n";
-            std::cout << "  getTransitiveFanoutConeLongestPath <net_name>\n";
-            std::cout << "  getTransitiveFanoutConeShortestPath <net_name>\n";
-            std::cout << "  getGateTransitiveFaninConeLongestPath <gate_name>\n";
-            std::cout << "  getGateTransitiveFaninConeShortestPath <gate_name>\n";
-            std::cout << "  getGateTransitiveFanoutConeLongestPath <gate_name>\n";
-            std::cout << "  getGateTransitiveFanoutConeShortestPath <gate_name>\n";
-            std::cout << "  write <filepath> (This will save and exit the tool)\n";
-        } 
-        else if (command == "read") {
-            std::string filepath;
-            if (iss >> filepath) {
-                if (reader.read(filepath, netlist)) {
-                    std::cout << "Successfully read Verilog file: " << filepath << "\n";
-                } else {
-                    std::cout << "Error: Failed to read file " << filepath << "\n";
-                }
-            } else {
-                std::cout << "Usage: read <filepath>\n";
-            }
-        } 
-        else if (command == "getGateCount") {
-            std::cout << "Total Gates: " << netlist.getGateCount() << "\n";
-        } 
-        else if (command == "countGatesByType") {
-            auto counts = netlist.countGatesByType();
-            for (const auto& pair : counts) {
-                std::cout << netlist.gateTypeToString(pair.first) << " : " << pair.second << "\n";
-            }
-        } 
-        else if (command == "getGateCountByType") {
-            std::string typeStr;
-            if (iss >> typeStr) {
-                GateType type = netlist.stringToGateType(typeStr);
-                if (type == GateType::UNKNOWN) {
-                    std::cout << "Error: Unknown gate type '" << typeStr << "'\n";
-                } else {
-                    std::cout << "Total " << typeStr << " count: " 
-                              << netlist.getGateCountByType(type) << "\n";
-                }
-            } else {
-                std::cout << "Usage: getGateCountByType <AND|OR|DFF|...>\n";
-            }
-        } 
-        else if (command == "getPrimaryInputs") {
-            const auto& pis = netlist.getPrimaryInputs();
-            std::cout << "Total Primary Inputs: " << pis.size() << "\n";
-        } 
-        else if (command == "getPrimaryOutputs") {
-            const auto& pos = netlist.getPrimaryOutputs();
-            std::cout << "Total Primary Outputs: " << pos.size() << "\n";
-        } 
-        else if (command == "getLogicalWireCount") {
-            std::cout << "Total Logical Wires: " << netlist.getLogicalWireCount() << "\n";
-        } 
-        else if (command == "getGateNamesWithConstInput") {
-            GateType type = GateType::UNKNOWN;
-            int constVal = -1;
-            std::string typeStr;
-            
-            // 嘗試讀取選填參數
-            if (iss >> typeStr) {
-                type = netlist.stringToGateType(typeStr);
-                if (type == GateType::UNKNOWN) {
-                    std::cout << "Warning: Unknown gate type '" << typeStr << "', searching all types.\n";
-                }
-                iss >> constVal; // 如果還有數字就讀入常數值限制
-            }
-            
-            auto names = netlist.getGateNamesWithConstInput(type, constVal);
-            std::cout << "Gates with constant inputs (" << names.size() << " found):\n";
-            for (const auto& name : names) {
-                std::cout << "  - " << name << "\n";
-            }
+            printHelp();
+            continue;
         }
-        else if (command == "countGatesWithConstInput") {
-            GateType type = GateType::UNKNOWN;
-            int constVal = -1;
-            std::string typeStr;
-            
-            // 嘗試讀取選填參數
-            if (iss >> typeStr) {
-                type = netlist.stringToGateType(typeStr);
-                if (type == GateType::UNKNOWN) {
-                    std::cout << "Warning: Unknown gate type '" << typeStr << "', searching all types.\n";
-                }
-                iss >> constVal;
+
+        if (command == "read") {
+            const std::string filepath = readRestPath(iss);
+            if (filepath.empty()) {
+                std::cout << "Usage: read <verilog_file>\n";
+                continue;
             }
-            
-            std::cout << "Total gates with constant inputs: " 
-                      << netlist.countGatesWithConstInput(type, constVal) << "\n";
+            std::cout << (reader.read(filepath, netlist) ? "OK: loaded " : "Error: failed to read ")
+                      << filepath << "\n";
+            continue;
         }
-        else if (command == "getGateInfo") {
-            std::string instName;
-            // 檢查是否有給定必填的實例名稱
-            if (iss >> instName) {
-                std::cout << netlist.getGateInfo(instName) << "\n";
-            } else {
-                std::cout << "Usage: getGateInfo <inst_name>\n";
+
+        if (command == "write") {
+            const std::string filepath = readRestPath(iss);
+            if (filepath.empty()) {
+                std::cout << "Usage: write <verilog_file>\n";
+                continue;
             }
+            std::cout << (writer.write(filepath, netlist) ? "OK: wrote " : "Error: failed to write ")
+                      << filepath << "\n";
+            continue;
         }
-        else if (command == "getWireLoadNames") {
-            std::string wireName;
-            if (iss >> wireName) {
-                auto names = netlist.getWireLoadNames(wireName);
-                std::cout << "Wire '" << wireName << "' directly drives " << names.size() << " gates:\n";
-                for (const auto& name : names) {
-                    std::cout << "  - " << name << "\n";
-                }
-            } else {
-                std::cout << "Usage: getWireLoadNames <wire_name>\n";
+
+        if (command == "basic_query") {
+            std::string mode;
+            if (!(iss >> mode)) {
+                std::cout << "Usage: basic_query <mode> [args]\n";
+                continue;
             }
-        }
-        else if (command == "getWireLoadCount") {
-            std::string wireName;
-            if (iss >> wireName) {
-                std::cout << "Wire '" << wireName << "' directly drives " 
-                          << netlist.getWireLoadCount(wireName) << " gates.\n";
-            } else {
-                std::cout << "Usage: getWireLoadCount <wire_name>\n";
+            Netlist::BasicQuery query;
+            if (!buildBasicQuery(netlist, iss, mode, query)) {
+                std::cout << "Unknown basic_query mode: " << mode << "\n";
+                continue;
             }
+            printBasicReport(netlist, netlist.runBasicQuery(query));
+            continue;
         }
-        else if (command == "getGateFanoutNames") {
-            std::string instName;
-            if (iss >> instName) {
-                auto names = netlist.getGateFanoutNames(instName);
-                std::cout << "Gate '" << instName << "' directly drives " << names.size() << " gates:\n";
-                for (const auto& name : names) {
-                    std::cout << "  - " << name << "\n";
-                }
-            } else {
-                std::cout << "Usage: getGateFanoutNames <inst_name>\n";
+
+        if (command == "conn_query") {
+            std::string mode;
+            if (!(iss >> mode)) {
+                std::cout << "Usage: conn_query <mode> [args]\n";
+                continue;
             }
-        }
-        else if (command == "getGateFanoutCount") {
-            std::string instName;
-            if (iss >> instName) {
-                std::cout << "Gate '" << instName << "' has an immediate fanout of " 
-                          << netlist.getGateFanoutCount(instName) << ".\n";
-            } else {
-                std::cout << "Usage: getGateFanoutCount <inst_name>\n";
+            Netlist::DirectConnectivityQuery query;
+            if (!buildConnectivityQuery(iss, mode, query)) {
+                std::cout << "Unknown conn_query mode: " << mode << "\n";
+                continue;
             }
+            printConnectivityReport(netlist.runDirectConnectivityQuery(query));
+            continue;
         }
-        else if (command == "getTransitiveFaninConeGateNames") {
-            std::string netName;
-            if (iss >> netName) {
-                auto names = netlist.getTransitiveFaninConeGateNames(netName);
-                std::cout << "Net '" << netName << "' Fanin Cone contains " << names.size() << " gates:\n";
-                for (const auto& name : names) std::cout << "  - " << name << "\n";
-            } else {
-                std::cout << "Usage: getTransitiveFaninConeGateNames <net_name>\n";
+
+        if (command == "cone_query") {
+            std::string mode;
+            if (!(iss >> mode)) {
+                std::cout << "Usage: cone_query <mode> <name> [with_paths]\n";
+                continue;
             }
-        }
-        else if (command == "getTransitiveFaninConeGateCount") {
-            std::string netName;
-            if (iss >> netName) {
-                std::cout << "Net '" << netName << "' Fanin Cone contains " 
-                          << netlist.getTransitiveFaninConeGateCount(netName) << " gates.\n";
-            } else {
-                std::cout << "Usage: getTransitiveFaninConeGateCount <net_name>\n";
+            Netlist::ConeQuery query;
+            if (!buildConeQuery(iss, mode, query)) {
+                std::cout << "Unknown cone_query mode: " << mode << "\n";
+                continue;
             }
+            printConeReport(netlist, netlist.runConeQuery(query));
+            continue;
         }
-        // --- Net-based Fanout Cone ---
-        else if (command == "getTransitiveFanoutConeGateNames") {
-            std::string netName;
-            if (iss >> netName) {
-                auto names = netlist.getTransitiveFanoutConeGateNames(netName);
-                std::cout << "Net '" << netName << "' Fanout Cone contains " << names.size() << " gates:\n";
-                for (const auto& name : names) std::cout << "  - " << name << "\n";
-            } else {
-                std::cout << "Usage: getTransitiveFanoutConeGateNames <net_name>\n";
-            }
-        }
-        else if (command == "getTransitiveFanoutConeGateCount") {
-            std::string netName;
-            if (iss >> netName) {
-                std::cout << "Net '" << netName << "' Fanout Cone contains " 
-                          << netlist.getTransitiveFanoutConeGateCount(netName) << " gates.\n";
-            } else {
-                std::cout << "Usage: getTransitiveFanoutConeGateCount <net_name>\n";
-            }
-        }
-        // --- Gate-based Fanin Cone ---
-        else if (command == "getGateTransitiveFaninConeGateNames") {
-            std::string instName;
-            if (iss >> instName) {
-                auto names = netlist.getGateTransitiveFaninConeGateNames(instName);
-                std::cout << "Gate '" << instName << "' Fanin Cone contains " << names.size() << " gates:\n";
-                for (const auto& name : names) std::cout << "  - " << name << "\n";
-            } else {
-                std::cout << "Usage: getGateTransitiveFaninConeGateNames <inst_name>\n";
-            }
-        }
-        else if (command == "getGateTransitiveFaninConeGateCount") {
-            std::string instName;
-            if (iss >> instName) {
-                std::cout << "Gate '" << instName << "' Fanin Cone contains " 
-                          << netlist.getGateTransitiveFaninConeGateCount(instName) << " gates.\n";
-            } else {
-                std::cout << "Usage: getGateTransitiveFaninConeGateCount <inst_name>\n";
-            }
-        }
-        // --- Gate-based Fanout Cone ---
-        else if (command == "getGateTransitiveFanoutConeGateNames") {
-            std::string instName;
-            if (iss >> instName) {
-                auto names = netlist.getGateTransitiveFanoutConeGateNames(instName);
-                std::cout << "Gate '" << instName << "' Fanout Cone contains " << names.size() << " gates:\n";
-                for (const auto& name : names) std::cout << "  - " << name << "\n";
-            } else {
-                std::cout << "Usage: getGateTransitiveFanoutConeGateNames <inst_name>\n";
-            }
-        }
-        else if (command == "getGateTransitiveFanoutConeGateCount") {
-            std::string instName;
-            if (iss >> instName) {
-                std::cout << "Gate '" << instName << "' Fanout Cone contains " 
-                          << netlist.getGateTransitiveFanoutConeGateCount(instName) << " gates.\n";
-            } else {
-                std::cout << "Usage: getGateTransitiveFanoutConeGateCount <inst_name>\n";
-            }
-        }
-        else if (command == "getMaximumLogicDepthFromPiToDffD") {
-            auto result = netlist.getMaximumLogicDepthFromPiToDffD();
-            if (!result.second.exists()) {
-                std::cout << "No PI-to-DFF-D combinational path found.\n";
-            } else {
-                std::cout << "Maximum PI-to-DFF-D logic depth: " << result.first << "\n";
-                std::cout << "Path nets:\n";
-                for (int netId : result.second.netIds) {
-                    std::cout << "  -> " << netlist.getNet(netId).name << "\n";
-                }
-            }
-        }
-        else if (command.find("hasCombinationalPath") == 0 ||
-                 command.find("findAnyCombinationalPath") == 0 ||
-                 command.find("enumerateCombinationalPaths") == 0 ||
-                 command.find("everyPath") == 0 ||
-                 command.find("findLongestCombinationalPath") == 0) {
-            
-            std::string startNet, endNet;
-            if (!(iss >> startNet >> endNet)) {
-                std::cout << "Error: Missing startNet or endNet arguments.\n";
+
+        if (command == "path_query") {
+            std::string modeText;
+            std::string startToken;
+            std::string endToken;
+            if (!(iss >> modeText >> startToken >> endToken)) {
+                std::cout << "Usage: path_query <mode> <start> <end> [-req node...] [-avoid node...]\n";
                 continue;
             }
 
-            // 判斷是否為終點嚴格檢查
-            bool strictEndpoint = (command.find("ToEndpoint") != std::string::npos);
-            
-            // 判斷條件變體
-            bool hasAvoid = (command.find("Avoiding") != std::string::npos || command.find("everyPathAvoids") == 0);
-            bool hasThrough = (command.find("Through") != std::string::npos && command.find("everyPathAvoids") != 0);
+            Netlist::PathQuery query;
+            if (!parsePathMode(modeText, query.mode)) {
+                std::cout << "Unknown path_query mode: " << modeText << "\n";
+                continue;
+            }
+            query.startpoints.push_back(parseEndpoint(startToken));
+            query.endpoints.push_back(parseEndpoint(endToken));
 
-            // 解析後方的條件節點
-            std::vector<Netlist::PathNode> reqNodes, avoidNodes;
-            if (hasThrough && hasAvoid) {
-                parsePathArgs(iss, reqNodes, avoidNodes); // 雙條件
-            } else if (hasThrough) {
-                parsePathArgs(iss, reqNodes, reqNodes);   // 全塞入 req
-            } else if (hasAvoid) {
-                parsePathArgs(iss, avoidNodes, avoidNodes); // 全塞入 avoid
-            }
-            // 存在性檢查 (回傳 bool)
-            if (command.find("hasCombinationalPath") == 0) {
-                bool result = false;
-                if (strictEndpoint && !netlist.isEndpoint(Netlist::PathNode(Netlist::PathNodeType::Net, endNet))) {
-                    result = false;
-                    std::cout << "Rejected: '" << endNet << "' is not a valid endpoint.\n";
-                } else if (hasThrough && hasAvoid) {
-                    result = strictEndpoint ? netlist.hasCombinationalPathThroughAvoidingToEndpoint(startNet, endNet, reqNodes, avoidNodes)
-                                            : netlist.hasCombinationalPathThroughAvoiding(startNet, endNet, reqNodes, avoidNodes);
-                } else if (hasThrough) {
-                    result = strictEndpoint ? netlist.hasCombinationalPathThroughToEndpoint(startNet, endNet, reqNodes)
-                                            : netlist.hasCombinationalPathThrough(startNet, endNet, reqNodes);
-                } else if (hasAvoid) {
-                    result = strictEndpoint ? netlist.hasCombinationalPathAvoidingToEndpoint(startNet, endNet, avoidNodes)
-                                            : netlist.hasCombinationalPathAvoiding(startNet, endNet, avoidNodes);
-                } else {
-                    result = strictEndpoint ? netlist.hasCombinationalPathToEndpoint(startNet, endNet)
-                                            : netlist.hasCombinationalPath(startNet, endNet);
+            int listMode = 0; // 0=ignore, 1=required, 2=avoided
+            std::string token;
+            while (iss >> token) {
+                if (token == "-req") {
+                    listMode = 1;
+                    continue;
                 }
-                std::cout << (result ? "Yes, a path exists.\n" : "No path exists satisfying the conditions.\n");
-            }
-            // 全局約束驗證 (回傳 bool)
-            else if (command.find("everyPath") == 0) {
-                bool result = false;
-                if (command.find("everyPathPassesThrough") == 0) {
-                    result = strictEndpoint ? netlist.everyPathPassesThroughToEndpoint(startNet, endNet, reqNodes)
-                                            : netlist.everyPathPassesThrough(startNet, endNet, reqNodes);
-                } else {
-                    result = strictEndpoint ? netlist.everyPathAvoidsToEndpoint(startNet, endNet, avoidNodes)
-                                            : netlist.everyPathAvoids(startNet, endNet, avoidNodes);
+                if (token == "-avoid") {
+                    listMode = 2;
+                    continue;
                 }
-                std::cout << (result ? "Verification Passed.\n" : "Verification Failed (or no path exists).\n");
-            }
-            // 尋找單一路徑 (回傳 Path)
-            else if (command.find("findAnyCombinationalPath") == 0 || command.find("findLongestCombinationalPath") == 0) {
-                bool isLongest = (command.find("findLongest") == 0);
-                Netlist::CombinationalPath path;
-                
-                if (strictEndpoint && !netlist.isEndpoint(Netlist::PathNode(Netlist::PathNodeType::Net, endNet))) {
-                    std::cout << "Rejected: '" << endNet << "' is not a valid endpoint.\n";
-                } else if (hasThrough && hasAvoid) {
-                    path = isLongest ? (strictEndpoint ? netlist.findLongestCombinationalPathThroughAvoidingToEndpoint(startNet, endNet, reqNodes, avoidNodes) : netlist.findLongestCombinationalPathThroughAvoiding(startNet, endNet, reqNodes, avoidNodes))
-                                     : (strictEndpoint ? netlist.findAnyCombinationalPathThroughAvoidingToEndpoint(startNet, endNet, reqNodes, avoidNodes) : netlist.findAnyCombinationalPathThroughAvoiding(startNet, endNet, reqNodes, avoidNodes));
-                } else if (hasThrough) {
-                    path = isLongest ? (strictEndpoint ? netlist.findLongestCombinationalPathThroughToEndpoint(startNet, endNet, reqNodes) : netlist.findLongestCombinationalPathThrough(startNet, endNet, reqNodes))
-                                     : (strictEndpoint ? netlist.findAnyCombinationalPathThroughToEndpoint(startNet, endNet, reqNodes) : netlist.findAnyCombinationalPathThrough(startNet, endNet, reqNodes));
-                } else if (hasAvoid) {
-                    path = isLongest ? (strictEndpoint ? netlist.findLongestCombinationalPathAvoidingToEndpoint(startNet, endNet, avoidNodes) : netlist.findLongestCombinationalPathAvoiding(startNet, endNet, avoidNodes))
-                                     : (strictEndpoint ? netlist.findAnyCombinationalPathAvoidingToEndpoint(startNet, endNet, avoidNodes) : netlist.findAnyCombinationalPathAvoiding(startNet, endNet, avoidNodes));
-                } else {
-                    path = isLongest ? (strictEndpoint ? netlist.findLongestCombinationalPathToEndpoint(startNet, endNet) : netlist.findLongestCombinationalPath(startNet, endNet))
-                                     : (strictEndpoint ? netlist.findAnyCombinationalPathToEndpoint(startNet, endNet) : netlist.findAnyCombinationalPath(startNet, endNet));
-                }
-                
-                if (path.exists()) {
-                    std::cout << "Path found! Logic Depth (Gates): " << path.depth() << "\n";
-                } else {
-                    std::cout << "No path found.\n";
+                if (listMode == 1) {
+                    query.requiredNodes.push_back(parsePathNode(token));
+                } else if (listMode == 2) {
+                    query.avoidedNodes.push_back(parsePathNode(token));
                 }
             }
-            // 窮舉所有路徑 (回傳 vector<Path>)
-            else if (command.find("enumerateCombinationalPaths") == 0) {
-                std::vector<Netlist::CombinationalPath> paths;
-                
-                if (strictEndpoint && !netlist.isEndpoint(Netlist::PathNode(Netlist::PathNodeType::Net, endNet))) {
-                    std::cout << "Rejected: '" << endNet << "' is not a valid endpoint.\n";
-                } else if (hasThrough && hasAvoid) {
-                    paths = strictEndpoint ? netlist.enumerateCombinationalPathsThroughAvoidingToEndpoint(startNet, endNet, reqNodes, avoidNodes)
-                                           : netlist.enumerateCombinationalPathsThroughAvoiding(startNet, endNet, reqNodes, avoidNodes);
-                } else if (hasThrough) {
-                    paths = strictEndpoint ? netlist.enumerateCombinationalPathsThroughToEndpoint(startNet, endNet, reqNodes)
-                                           : netlist.enumerateCombinationalPathsThrough(startNet, endNet, reqNodes);
-                } else if (hasAvoid) {
-                    paths = strictEndpoint ? netlist.enumerateCombinationalPathsAvoidingToEndpoint(startNet, endNet, avoidNodes)
-                                           : netlist.enumerateCombinationalPathsAvoiding(startNet, endNet, avoidNodes);
-                } else {
-                    paths = strictEndpoint ? netlist.enumerateCombinationalPathsToEndpoint(startNet, endNet)
-                                           : netlist.enumerateCombinationalPaths(startNet, endNet);
-                }
-                
-                std::cout << "Total paths found: " << paths.size() << "\n";
-                if (!paths.empty()) {
-                    std::cout << "Max depth among found paths: " << paths.back().depth() << " (Assuming sorted, otherwise index needed)\n";
-                }
-            }
+
+            printPathResult(netlist, query.mode, netlist.runPathQuery(query));
+            continue;
         }
-        else if (command == "checkEquivalence") {
-            std::string netA, netB;
-            // 確認使用者有輸入兩個要比較的 Net 名稱
-            if (iss >> netA >> netB) {
-                bool isEquivalent = netlist.checkEquivalence(netA, netB);
-                if (isEquivalent) {
-                    std::cout << "[LEC PASSED] \033[1;32mIDENTICAL\033[0m: '" << netA << "' and '" << netB << "' have the exact same logic function.\n";
-                } else {
-                    std::cout << "[LEC FAILED] \033[1;31mDIFFERENT\033[0m: The logic behaviors of '" << netA << "' and '" << netB << "' do not match.\n";
-                }
-            } else {
-                std::cout << "Usage: checkEquivalence <netA> <netB>\n";
+
+        if (command == "depth_query") {
+            std::string mode;
+            if (!(iss >> mode)) {
+                std::cout << "Usage: depth_query <mode> [args]\n";
+                continue;
             }
-        }
-        else if (command == "getTransitiveFaninConeLongestPath" || command == "getTransitiveFaninConeShortestPath" || 
-                 command == "getTransitiveFanoutConeLongestPath" || command == "getTransitiveFanoutConeShortestPath" ||
-                 command == "getGateTransitiveFaninConeLongestPath" || command == "getGateTransitiveFaninConeShortestPath" ||
-                 command == "getGateTransitiveFanoutConeLongestPath" || command == "getGateTransitiveFanoutConeShortestPath") {
-            
-            std::string targetName;
-            if (iss >> targetName) {
-                std::pair<int, std::vector<std::string>> result;
-                
-                // 根據指令呼叫對應的 API
-                if (command == "getTransitiveFaninConeLongestPath") result = netlist.getTransitiveFaninConeLongestPath(targetName);
-                else if (command == "getTransitiveFaninConeShortestPath") result = netlist.getTransitiveFaninConeShortestPath(targetName);
-                else if (command == "getTransitiveFanoutConeLongestPath") result = netlist.getTransitiveFanoutConeLongestPath(targetName);
-                else if (command == "getTransitiveFanoutConeShortestPath") result = netlist.getTransitiveFanoutConeShortestPath(targetName);
-                else if (command == "getGateTransitiveFaninConeLongestPath") result = netlist.getGateTransitiveFaninConeLongestPath(targetName);
-                else if (command == "getGateTransitiveFaninConeShortestPath") result = netlist.getGateTransitiveFaninConeShortestPath(targetName);
-                else if (command == "getGateTransitiveFanoutConeLongestPath") result = netlist.getGateTransitiveFanoutConeLongestPath(targetName);
-                else if (command == "getGateTransitiveFanoutConeShortestPath") result = netlist.getGateTransitiveFanoutConeShortestPath(targetName);
-                
-                if (result.second.empty()) {
-                    std::cout << "No combinational path found in this cone.\n";
-                } else {
-                    std::cout << "Path Depth: " << result.first << " gates.\n";
-                    std::cout << "Path Nodes:\n";
-                    for (const auto& nodeName : result.second) {
-                        std::cout << "  -> " << nodeName << "\n";
-                    }
-                }
-            } else {
-                std::cout << "Usage: " << command << " <target_name>\n";
+            Netlist::DepthQuery query;
+            if (!buildDepthQuery(iss, mode, query)) {
+                std::cout << "Unknown depth_query mode: " << mode << "\n";
+                continue;
             }
+            printDepthReportSet(netlist, netlist.runDepthQuery(query));
+            continue;
         }
-        else if (command == "write") {
-            std::string filepath;
-            if (iss >> filepath) {
-                if (writer.write(filepath, netlist)) {
-                    std::cout << "Successfully wrote to Verilog file: " << filepath << "\n";
-                } else {
-                    std::cout << "Error: Failed to write to file " << filepath << "\n";
-                }
-                // 接收到 write 指令後結束程式
-                std::cout << "Exiting EDA Tool...\n";
-                isRunning = false; 
-            } else {
-                std::cout << "Usage: write <filepath>\n";
+
+        if (command == "func_query") {
+            std::string mode;
+            if (!(iss >> mode)) {
+                std::cout << "Usage: func_query <mode> [args]\n";
+                continue;
             }
-        } 
-        else {
-            std::cout << "Unknown command: '" << command << "'. Type 'help' for options.\n";
+            Netlist::FunctionQuery query;
+            if (!buildFunctionQuery(iss, mode, query)) {
+                std::cout << "Unknown func_query mode: " << mode << "\n";
+                continue;
+            }
+            printFunctionReport(netlist.runFunctionQuery(query));
+            continue;
         }
+
+        std::cout << "Unknown command: " << command << ". Type help for unified commands.\n";
     }
 
     return 0;
