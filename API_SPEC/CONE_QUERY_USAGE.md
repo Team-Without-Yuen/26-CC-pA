@@ -261,3 +261,14 @@ Netlist::ConeReport report = netlist.runConeQuery(query);
 | result net names/count | `getConeNetNames()`, `getConeNetCount()` |
 | result gate names/count | `getConeGateNames()`, `getConeGateCount()` |
 | local longest/shortest path | `findLongestPathInCone()`, `findShortestPathInCone()` |
+
+---
+
+## 13. 目前實作與測試狀態
+
+```text
+實作檔案：src/analysis/ConeAnalysis.cpp
+型別檔案：include/core/NetlistQueries.h
+tester：mini test/tester.cpp
+目前 regression：Summary: 45 passed, 0 failed.
+```

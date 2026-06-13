@@ -177,12 +177,22 @@ findRemovableBufferGatesOnCriticalPath(yCandidate)
 
 ## 5. Rewrite / Validation API 規劃
 
-這些 API 之後才實作：
+目前 rewrite / validation 的底層 building blocks 已部分存在：
 
 ```cpp
-// OptimizationResult cleanupBufferChain(const OptimizationCandidate& candidate);
-// bool validateStructure() const;
-// bool validateProblemAConstraints() const;
+bool validateStructure() const;
+bool validateProblemAConstraints() const;
+Netlist cloneForRollback() const;
+bool replaceAllLoadsOfNet(int oldNetId, int newNetId);
+bool bypassBufferGate(int bufGateId);
+std::vector<int> findAllRemovableBufferGates() const;
+int cleanupAllRemovableBuffers();
+```
+
+仍缺的是更高階、帶 report 的 candidate-driven rewrite wrapper，例如：
+
+```cpp
+// NetlistEditReport cleanupBufferChain(const OptimizationCandidate& candidate);
 ```
 
 ---
@@ -213,3 +223,17 @@ area / gate count tradeoff
 candidate 排序策略
 rollback transaction
 ```
+
+---
+
+## 8. 目前實作與測試狀態
+
+```text
+實作檔案：src/analysis/OptimizationAnalysis.cpp
+型別檔案：include/core/OptimizationTypes.h
+相關 cleanup 實作：src/optimization/NetlistOptimization.cpp
+tester：mini test/tester.cpp
+目前 regression：Summary: 45 passed, 0 failed.
+```
+
+目前 tester 已間接覆蓋 depth / critical path / optimization candidate 的輸入條件，但尚未完整覆蓋所有 cleanup pass。

@@ -434,6 +434,13 @@ struct BasicReport {
 
 ## 7. 目前完成狀態
 
+實作位置：
+
+```text
+include/core/NetlistQueries.h
+src/analysis/BasicAnalysis.cpp
+```
+
 已完成：
 
 ```text
@@ -448,22 +455,24 @@ Structural issue helper
 BasicQuery / BasicReport 高階統一 API
 ```
 
-尚未完成：
+測試狀態：
 
 ```text
-Direct Connectivity Query 的完整整理文件
-自然語言到 BasicQueryType 的自動 dispatch
+mini test/tester.cpp 已覆蓋 runBasicQuery() 的 Summary / GateInfo / NetInfo / GatesWithConstantInput。
+目前 regression 結果：Summary: 45 passed, 0 failed.
 ```
 
 ---
 
 ## 8. 建議下一步
 
-建議順序：
+Direct Connectivity / Cone / Function / Path / Depth 文件目前都已獨立整理。  
+BasicQuery 後續不需要再擴張成「所有查詢總入口」，它應維持只回答物件基本資訊。
+
+後續可補：
 
 ```text
-1. 先補 Direct Connectivity Query 文件與缺少的直接連線 helper。
-2. 再整理 Cone Query。
-3. 把 Basic / Direct / Cone / Path / Depth 組成完整 Analysis API 層級。
-4. 最後再做自然語言 prompt 到各類 Query struct 的 dispatch。
+1. 自然語言到 BasicQueryType 的 prompt routing。
+2. 更完整的 structural issue report，例如區分 undriven internal net / no-load internal net / unconnected pin。
+3. 和未來 unified AnalysisQuery routing 串接，但不改 BasicQuery 本身責任。
 ```

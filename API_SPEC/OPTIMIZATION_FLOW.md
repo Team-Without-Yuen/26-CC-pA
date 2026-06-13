@@ -176,17 +176,24 @@ constraint validation 可以先以保守 rewrite 規則代替，後續再獨立�
 DepthAnalysis
 OptimizationCandidate
 findBufferGatesOnCriticalPath()
+findRemovableBufferGatesOnCriticalPath()
+validateStructure()
+validateProblemAConstraints()
+cloneForRollback()
+replaceAllLoadsOfNet()
+bypassBufferGate()
+findAllRemovableBufferGates()
+cleanupAllRemovableBuffers()
 ```
 
 下一步：
 
 ```text
-1. findRemovableBufferGatesOnCriticalPath()
-2. cleanupBufferChain() 的 dry-run / 實作前檢查
-3. cleanupBufferChain() 真正修改 netlist
-4. structural validation
-5. LEC / equivalence check
-6. accept / rollback
+1. 設計統一 NetlistEditReport / OptimizationEditReport。
+2. 補 cleanupAllRemovableBuffers() 的 regression test。
+3. 包 candidate-driven cleanupBufferChain() dry-run / apply wrapper。
+4. 統一 structural validation + function validation + rollback flow。
+5. 將 accept / rollback decision 寫成固定流程，而不是散落在 pass 裡。
 ```
 
 第一版 buffer cleanup 的保守條件：
@@ -216,6 +223,14 @@ findRemovableBufferGatesOnCriticalPath(yCandidate)
 ```text
 g_buf output = n_buf，不是 PO，可先視為 removable。
 g_y output = y，是 PO，第一版先保守跳過。
+```
+
+目前測試狀態：
+
+```text
+mini test/tester.cpp 已覆蓋 analysis / path / depth / function API 與少量 mutation primitive。
+cleanup / optimization pass 尚需補專門 regression test。
+目前 regression：Summary: 45 passed, 0 failed.
 ```
 
 ---

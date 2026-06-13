@@ -252,6 +252,13 @@ struct ConeReport {
 
 ## 9. 目前完成狀態
 
+實作位置：
+
+```text
+include/core/NetlistQueries.h
+src/analysis/ConeAnalysis.cpp
+```
+
 已完成：
 
 ```text
@@ -260,11 +267,20 @@ ConeResult net/gate helper
 Cone gate names/count wrapper
 Cone local longest/shortest path wrapper
 ConeQuery / ConeReport 高階 API
-mini test 覆蓋四種 query type
 ```
 
-下一步：
+測試狀態：
 
 ```text
-整理更高階的 Analysis API 總入口，或繼續補 Boolean / function 類分析。
+mini test/tester.cpp 已覆蓋 runConeQuery() 的 NetTransitiveFanin / NetTransitiveFanout / GateTransitiveFanin。
+目前 regression 結果：Summary: 45 passed, 0 failed.
+```
+
+後續可補：
+
+```text
+1. 在 tester 補 GateTransitiveFanout 的高階 query case。
+2. 增加 cone size / cone gate type breakdown report。
+3. 增加 scope-aware cone query，供 transformation / optimization 限定修改範圍。
+4. 若遇到超大 cone，可加入 traversal budget 或 result limit。
 ```

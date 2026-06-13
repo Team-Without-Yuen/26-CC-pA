@@ -5,66 +5,10 @@
 #include <unordered_map>
 #include <unordered_set>
 
-// Defines the supported types of logic gates and sequential elements
-enum class GateType {
-    AND, OR, NAND, NOR, NOT, BUF, XOR, XNOR, DFF, UNKNOWN
-};
-
-// Represents a physical wire (net) connecting different components in the circuit
-struct Net {
-    int id;                      // Unique index in the Netlist's 'nets' vector
-    std::string name;            // The name of the wire (e.g., "n1", "clk")
-
-    int driverGateId;            // The ID of the gate driving this net (-1 if it's a Primary Input)
-    std::vector<int> loadGateIds;// A list of gate IDs that receive this net as an input
-
-    bool isPI = false;           // Flag indicating if this net is a Primary Input
-    bool isPO = false;           // Flag indicating if this net is a Primary Output
-    bool isConst = false;        // Flag indicating if this net is a constant
-    int  constVal = -1;          // 常數值：0 或 1；非常數時為 -1
-
-    Net(int _id, const std::string& _name) : id(_id), name(_name), driverGateId(-1) {}
-};
-
-// Represents an I/O port declaration, which can be a single wire or a multi-bit bus
-struct Port {
-    std::string name;            // The base name of the port
-    int msb;                     // Most Significant Bit index (-1 if single-bit)
-    int lsb;                     // Least Significant Bit index (-1 if single-bit)
-
-    std::vector<int> netIds;     // The underlying physical Net IDs associated with this port
-
-    // Helper function to check if this port is a multi-bit bus
-    bool isBus() const { return msb != -1 && lsb != -1; }
-
-    Port(const std::string& _name, int _msb = -1, int _lsb = -1)
-        : name(_name), msb(_msb), lsb(_lsb) {
-    }
-};
-
-// Represents an instantiated logic gate or sequential element (e.g., D-Flip-Flop)
-struct Gate {
-    int id;                      // Unique index in the Netlist's 'gates' vector
-    std::string instName;        // The instance name
-    GateType type;               // The functional logic type of the gate
-
-    std::vector<int> inputNetIds;// The Net IDs connected to the input pins of this gate
-    std::vector<std::string> inputPinNames;  // for dff
-    int outputNetId;             // The Net ID connected to the output pin (-1 if unconnected)
-
-    Gate(int _id, const std::string& _name, GateType _type)
-        : id(_id), instName(_name), type(_type), outputNetId(-1) {}
-};
-
-// --- Cone 查詢結果 ---
-// netIds    : cone 內所有 net 的 ID（flat set，適合快速查詢）
-// children  : 樹狀結構，children[A] = {B, C} 表示 A 的下一層是 B 和 C
-// rootNetId : 起點 net ID
-struct ConeResult {
-    std::unordered_set<int> netIds;
-    std::unordered_map<int, std::vector<int>> children;
-    std::vector<int> rootNetIds; // 支援多個 roots (支援 Bus)
-};
+#include "include/core/NetlistTypes.h"
+#include "include/core/NetlistQueries.h"
+#include "include/core/PathTypes.h"
+#include "include/core/OptimizationTypes.h"
 
 // The core data structure representing the entire circuit graph
 class Netlist {
@@ -83,25 +27,79 @@ private:
 
 public:
     Netlist() = default;
+
+    // =========================================================================
+    // Netlist.h API 分類索引
+    //
+    // 0. Construction / Writer Access
+    //    - parser 建立 netlist、writer 讀 port list 時使用。
+    //
+    // 1. Low-Level Analysis Helpers
+    //    - Basic object query、direct connectivity、function analysis、
+    //      cone analysis、path/depth analysis。
+    //
+    // 2. Low-Level Mutation / Cleanup Helpers
+    //    - rename / reconnect / remove / buffer insertion / cleanup execution。
+    //
+    // 3. Optimization Candidate / Strategy Helpers
+    //    - 從 analysis 結果整理 optimization candidate。
+    //
+    // 4. Unified High-Level Query APIs
+    //    - BasicQuery、DirectConnectivityQuery、FunctionQuery、ConeQuery、
+    //      PathQuery。這些是之後給 LLM / prompt dispatch 使用的穩定入口。
+    //
+    // 分類規則：
+    // - const 且只回傳資訊者，優先放 Analysis。
+    // - 會修改 gates/nets/connectivity 者，放 Mutation / Cleanup。
+    // - 只選目標或建立 plan，不直接修改者，放 Optimization Candidate / Strategy。
+    // - 給 LLM 使用的統一入口，放 Unified High-Level Query APIs。
+    // =========================================================================
     
-    // --- APIs for retrieving I/O definitions (used by Writer) ---
+    // =========================================================================
+    // 0. Construction / Writer Access API
+    //
+    // 這一層只負責建立 netlist 基本物件，以及讓 writer 讀回 port declaration。
+    // Parser / Reader 會使用 add/connect 系列 API 建立圖結構。
+    // Writer 會使用 getPrimaryInputs/getPrimaryOutputs 保留原始 port 順序。
+    // =========================================================================
+
+    // 取得 primary input declarations；主要給 VerilogWriter 使用。
     const std::vector<Port>& getPrimaryInputs() const { return primaryInputs; }
+
+    // 取得 primary output declarations；主要給 VerilogWriter 使用。
     const std::vector<Port>& getPrimaryOutputs() const { return primaryOutputs; }
 
-    // --- APIs for Adding I/O Ports ---
+    // 新增 primary input port；bus 會建立對應 bit nets。
     void addPrimaryInput(const std::string& portName, int msb = -1, int lsb = -1);
+
+    // 新增 primary output port；bus 會建立對應 bit nets。
     void addPrimaryOutput(const std::string& portName, int msb = -1, int lsb = -1);
 
-    // --- APIs for Adding Components ---
+    // 新增 gate / DFF instance，回傳 gate ID。
     int addGate(const std::string& name, GateType type);
+
+    // 新增 net，回傳 net ID。
     int addNet(const std::string& name);
 
-    // --- APIs for Establishing Connections ---
+    // 標記 net 是否為常數；parser 建立 1'b0 / 1'b1 常數 net 時使用。
+    void setNetConst(int netId, bool isConst, int val = -1);
+
+    // 將 net 接到 gate input；DFF 可透過 pinName 保存 D/CK/RN/SN 等 named pin。
     void connectGateInput(int gateId, int netId, const std::string& pinName = "");
+
+    // 將 gate output 接到 net。
     void connectGateOutput(int gateId, int netId);
 
     // =========================================================================
-    // Basic Netlist / ID / Type Query API
+    // 1. Low-Level Analysis API
+    //
+    // 這一大區塊只放 read-only analysis helper。
+    // 它們負責查詢、traversal、function/depth/path 分析，不直接修改 netlist。
+    // 會改變 gates/nets/connectivity 的 API 應放到後面的 Mutation / Cleanup 區塊。
+    // =========================================================================
+
+    // =========================================================================
+    // 1.1 Basic Netlist / ID / Type Query API
     //
     // 這一層只處理最基本的 netlist 物件查詢：
     // gate/net/port 數量、ID/name lookup、gate type、PI/PO/DFF/constant 判斷、
@@ -140,9 +138,6 @@ public:
 
     // 依 net name 取得 Net 指標；找不到回傳 nullptr
     const Net* findNet(const std::string& netName) const;
-
-    // 用於標記常數線的 API 
-    void setNetConst(int netId, bool isConst, int val = -1);
 
     // 判斷 gate ID 是否落在 gates vector 的合法範圍內。
     bool isValidGateId(int gateId) const;
@@ -192,6 +187,9 @@ public:
     // 依照 port bit 順序列出指定 PI/PO port 對應的 net names；找不到時回傳空陣列。
     std::vector<std::string> getPortBitNames(const std::string& portName) const;
 
+    // 將 scalar net 或 bus name 展開成照 index 排序的 net ID 陣列。
+    std::vector<int> expandNetToBits(const std::string& name) const;
+
     // 列出非 PI、非 constant，且沒有合法 driver gate 的 net names。
     std::vector<std::string> getUndrivenNetNames() const;
 
@@ -206,6 +204,9 @@ public:
 
     // 統計所有 gate type 的數量，包含 AND/OR/NOT/NAND/NOR/XOR/XNOR/BUF/DFF
     std::map<GateType, int> countGatesByType() const;
+
+    // 統計指定 gate type 的 gate 數量。
+    size_t getGateCountByType(GateType type) const;
 
     // 列出指定 gate type 的所有 gate ID
     std::vector<int> getGatesByType(GateType type) const;
@@ -223,7 +224,7 @@ public:
     std::string getGateInfo(const std::string& instName) const;
 
     // =========================================================================
-    // Direct Connectivity Low-level Query API
+    // 1.2 Direct Connectivity Low-Level Query API
     //
     // 這一層只查「直接相連」的 gate/net 關係，不做 transitive cone 或 path traversal。
     // 之後會作為高階 DirectConnectivityQuery 的底層 helper。
@@ -276,7 +277,7 @@ public:
     bool isNetDirectlyConnectedToGate(const std::string& netName,
                                       const std::string& gateInstName) const;
 
-    // return which gate input pins are connected to a wire (Wire/PI/PO) (support for multi-bit signals)
+    // 取得指定 wire / port / bus 直接 load 到的 gate IDs。
     std::vector<int> getWireLoads(const std::string& wireName) const;
 
     // 取得指定線路直接驅動的下一層邏輯閘名稱列表
@@ -285,7 +286,7 @@ public:
     // 計算指定線路直接驅動的下一層邏輯閘總數
     size_t getWireLoadCount(const std::string& wireName) const;
 
-    // return which gate input pins are connected to a gate output
+    // 取得指定 gate output 直接 fanout 到的 gate IDs。
     std::vector<int> getGateFanout(const std::string& gateInstName) const;
 
     // 取得指定邏輯閘輸出端直接驅動的下一層邏輯閘名稱列表
@@ -294,18 +295,8 @@ public:
     // 計算指定邏輯閘輸出端直接驅動的下一層邏輯閘總數
     size_t getGateFanoutCount(const std::string& gateInstName) const;
 
-    // Count the number of specific types of logic gates
-    size_t getGateCountByType(GateType type) const;
-
-    // 將字串展開成照 index 排序的 Net ID 陣列 (處理單一 bit 或 Bus)
-    std::vector<int> expandNetToBits(const std::string& name) const;
-
-    // --- Logic Equivalence Checking (LEC) ---
-    // 檢查兩個訊號（支援多位寬）是否在所有輸入情況下功能完全相同
-    bool checkEquivalence(const std::string& netA, const std::string& netB) const;
-
     // =========================================================================
-    // Boolean / Function Analysis API
+    // 1.3 Boolean / Function Analysis API
     //
     // 這一層回答「訊號功能」類問題，例如：
     // 1. 兩條 net / bus 是否功能等價。
@@ -317,6 +308,9 @@ public:
     // - DFF output 視為 pseudo primary input，不穿越 DFF 回到 D pin。
     // - canNetBeValue / isNetConstantFunction 第一版只支援 scalar net。
     // =========================================================================
+
+    // 底層 LEC helper：檢查兩個訊號（支援多位寬）是否在所有輸入情況下功能完全相同。
+    bool checkEquivalence(const std::string& netA, const std::string& netB) const;
 
     // 語意化 wrapper：檢查兩個 net / bus 是否在所有輸入組合下功能等價。
     bool areNetsEquivalent(const std::string& netA, const std::string& netB) const;
@@ -333,7 +327,13 @@ public:
     // 判斷 scalar net 是否在所有輸入組合下都為 1。
     bool isNetAlwaysOne(const std::string& netName) const;
 
-   // --- Cone Analysis ---
+    // =========================================================================
+    // 1.4 Cone Analysis API
+    //
+    // 這一層回答 transitive fanin / fanout cone 問題。
+    // DFF 是 sequential boundary，cone traversal 不會穿越 DFF。
+    // =========================================================================
+
     // Transitive Fanin Cone：從 net 往回追到所有 PI（DFF 不穿越）
     ConeResult getTransitiveFaninCone(const std::string& netName) const;
  
@@ -397,7 +397,7 @@ public:
     std::pair<int, std::vector<std::string>> getGateTransitiveFanoutConeShortestPath(const std::string& gateName) const;
 
     // =========================================================================
-    // 組合邏輯路徑分析 API (Combinational Path Analysis)
+    // 1.5 組合邏輯路徑分析 API (Combinational Path Analysis)
     //
     // 共通規則：
     // 1. 起點與終點固定以 net name 表示；一條路徑形式為 Net -> Gate -> Net -> ...。
@@ -408,41 +408,44 @@ public:
     // 5. requiredNodes 表示必須全部經過的節點；avoidedNodes 表示必須全部避開的節點。
     //    換句話說，路徑碰到 avoidedNodes 中任一節點即不符合條件。
     // 6. 若名稱不存在、條件矛盾，或起點到終點原本沒有路徑，布林查詢回傳 false。
-    // 7. A 至 E 類 API 的實作集中於 src/analysis/PathAnalysis.cpp。
+    // 7. Path resolver、A 至 F 類 API 與 runPathQuery() 的實作集中於 src/analysis/PathAnalysis.cpp。
     // =========================================================================
 
-    // 表示限制條件指定的節點種類；可用相同 API 查詢 net 或 gate。
-    enum class PathNodeType {
-        Net,
-        Gate
-    };
+    // 型別定義已拆到 PathTypes.h；using alias 保留 Netlist::Xxx 既有寫法。
+    using PathNodeType = ::PathNodeType;
+    using PathNode = ::PathNode;
+    using CombinationalPath = ::CombinationalPath;
+    using PathEndpointType = ::PathEndpointType;
+    using PathEndpoint = ::PathEndpoint;
+    using PathQueryMode = ::PathQueryMode;
+    using PathQuery = ::PathQuery;
+    using PathQueryResult = ::PathQueryResult;
 
-    // 表示路徑條件中的一個具名節點；多個條件以 std::vector<PathNode> 傳入。
-    struct PathNode {
-        PathNodeType type;
-        std::string name;
+    // --- Path Endpoint Resolver Helpers ---
 
-        // 建立一個路徑限制節點，type 決定 name 要在 nets 或 gates 中查找。
-        PathNode(PathNodeType _type, const std::string& _name)
-            : type(_type), name(_name) {
-        }
-    };
+    // 取得所有 Primary Input 對應的 net ID；bus 會展開成每一個 bit net。
+    std::vector<int> getPrimaryInputNetIds() const;
 
-    // 保存一條組合邏輯路徑；netIds 與 gateIds 都依照起點到終點排列。
-    struct CombinationalPath {
-        std::vector<int> netIds;   // 路徑經過的 nets，包含 startNet 與 endNet
-        std::vector<int> gateIds;  // 路徑中真正穿越的 combinational gates
+    // 取得所有 Primary Output 對應的 net ID；bus 會展開成每一個 bit net。
+    std::vector<int> getPrimaryOutputNetIds() const;
 
-        // 回傳此路徑的邏輯深度，也就是經過的 combinational gate 數量。
-        int depth() const {
-            return static_cast<int>(gateIds.size());
-        }
+    // 取得指定 DFF 的 Q/output net ID；若 gateId 無效、不是 DFF 或未連線，回傳 -1。
+    int getDffOutputNetId(int dffGateId) const;
 
-        // 判斷是否保存了一條有效路徑；沒有找到路徑時 netIds 為空。
-        bool exists() const {
-            return !netIds.empty();
-        }
-    };
+    // 取得指定 gate 的 output net ID；若 gateId 無效或 output 未連線，回傳 -1。
+    int getGateOutputNetId(int gateId) const;
+
+    // 依 positional input index 取得指定 gate 的 input net ID；若 index 無效回傳 -1。
+    int getGateInputNetId(int gateId, int pinIndex) const;
+
+    // 依 named input pin 取得指定 gate 的 input net ID；若 pinName 不存在回傳 -1。
+    int getGateInputNetId(int gateId, const std::string& pinName) const;
+
+    // 將單一抽象 PathEndpoint 解析成實際 net ID 陣列；解析失敗時回傳空陣列。
+    std::vector<int> resolvePathEndpoint(const PathEndpoint& endpoint) const;
+
+    // 將多個抽象 PathEndpoint 解析成實際 net ID 陣列；會自動移除重複 net ID。
+    std::vector<int> resolvePathEndpoints(const std::vector<PathEndpoint>& endpoints) const;
 
     // 判斷指定的節點 (Net 或 Gate) 是否為終點。
     bool isEndpoint(const PathNode& node, bool combinationalOnly = true) const;
@@ -717,165 +720,8 @@ public:
         return findLongestCombinationalPathThroughAvoiding(startNet, endNet, requiredNodes, avoidedNodes);
     }
 
-    // =================================================
-    // Netlist Mutation / ECO(Engineering Change Order)
-    // =================================================
-
-    // 重新命名 Gate。如果舊名字找不到，則回傳 false。
-    bool renameGate(const std::string& oldName, const std::string& newName);
-
-    // 重新命名 Net。如果舊名字找不到，則回傳 false。
-    bool renameNet(const std::string& oldName, const std::string& newName);
-
-    // 斷開連線：將指定 Gate 的輸入端與指定的 Net 斷開。
-    bool disconnectGateInput(const std::string& gateName, const std::string& netName);
-
-    // 建立連線：將指定 Gate 的輸入端連接到指定的 Net。
-    bool connectGateInput(const std::string& gateName, const std::string& netName, int pinIndex = -1);
-
-    // 斷開連線：將指定 Gate 的輸入與輸出斷開
-    bool disconnectAllPins(int gateId);
-    // 斷開連線 + 設為 UNKNOWN
-    bool removeGate(int gateId);
-
-    // 對 fanout > maxFanout 的 net 插入 buffer
-    // 讓每個 gate 的 fanout ≤ maxFanout，預設 maxFanout = 4
-    // 回傳插入的 buffer 數量
-    int insertBuffersForFanout(int maxFanout = 4);
-
-    // 針對特定的 Net (支援 Bus) 限制其 Fanout，插入 Cascaded Buffer
-    // 回傳值: 成功插入的 Buffer 數量
-    int insertBuffersForSpecificNet(const std::string& wireName, int maxFanout = 4);
-
-    // 為每個負載加上獨立 Buffer
-    // 回傳值: 成功插入的 Buffer 數量
-    int insertBuffersOnEachLoad(const std::string& wireName);
-
-    // 在訊號的驅動端加上單一 Buffer
-    // 回傳值: 成功插入的 Buffer 數量
-    int insertBufferAtDriver(const std::string& wireName);
-
-    // 在特定的 Gate 前面增加 Buffer (只阻斷指定的 wire 到該 Gate 的連線)
-    // 回傳值: 成功插入的 Buffer 數量
-    int insertBufferBeforeGate(const std::string& wireName, const std::string& targetGateName);
-
-    // 針對某種類型的 Gate，讓它的輸入或輸出都接上 Buffer
-    // 回傳值: 成功插入的 Buffer 數量
-    int insertBuffersByGateType(GateType type, bool bufferInputs = true, bool bufferOutputs = true);
-
-    // =================================================
-    // Netlist Optimization 
-    // =================================================
- 
-    int trimDeadLogic();
-    int collapseBackToBackInverters();
-    // 合併結構等價的 gate（相同 type + 相同 input net 集合）
-    // 回傳合併的 gate 數量
-    int mergeEquivalentGates();
- 
     // =========================================================================
-    // Section 1.5: Gate removed flag helpers
-    // =========================================================================
- 
-    // 查詢 gate 是否已被標記為 removed（type == UNKNOWN）
-    bool isGateRemoved(int gateId) const;
- 
-    // 把 gate 標記為 removed（type = UNKNOWN），同時清理雙向連線
-    bool markGateRemoved(int gateId);
- 
-    // 把所有 UNKNOWN gate 從 gates vector 中清除，並修正所有 ID
-    // 回傳移除的 gate 數量
-    int compactRemovedGates();
- 
-    // =========================================================================
-    // Section 1.7: Validation / Rollback
-    // =========================================================================
- 
-    // 檢查 gate/net graph 的雙向指標是否一致
-    bool validateStructure() const;
- 
-    // 檢查是否符合 Problem A 的限制（PO 有 driver、DFF.Q 有效等）
-    bool validateProblemAConstraints() const;
- 
-    // 回傳 Netlist 的深拷貝，供 rollback 使用
-    Netlist cloneForRollback() const;
- 
-    // =========================================================================
-    // Section 2.1: Buffer cleanup helpers
-    // =========================================================================
- 
-    // 把所有接到 oldNetId 的 gate 改接到 newNetId，同時更新 loadGateIds
-    bool replaceAllLoadsOfNet(int oldNetId, int newNetId);
- 
-    // bypass 一個 BUF gate：in -> BUF -> out -> loads  =>  in -> loads
-    bool bypassBufferGate(int bufGateId);
- 
-    // 找出全局所有可以安全 bypass 的 BUF gate ID 列表
-    std::vector<int> findAllRemovableBufferGates() const;
- 
-    // bypass 全局所有可移除的 BUF gate，回傳移除數量
-    int cleanupAllRemovableBuffers();
- 
-    // =========================================================================
-    // Section 2.3: Double inverter removal
-    // =========================================================================
- 
-    // 找出所有合法的 NOT -> NOT gate 對，回傳 (g1_id, g2_id)
-    std::vector<std::pair<int,int>> findDoubleInverterPairs() const;
- 
-    // bypass NOT(g1) -> NOT(g2)，讓 g1 的 input 直接接到 g2 的 loads
-    bool bypassDoubleInverter(int g1id, int g2id);
- 
-    // =========================================================================
-    // Section 2.4: Constant propagation helpers
-    // =========================================================================
- 
-    bool isConst0Net(int netId) const;
-    bool isConst1Net(int netId) const;
-    int getConst0NetId() const;
-    int getConst1NetId() const;
- 
-    // 對單一 gate 做 constant folding；回傳 true 若有簡化
-    bool simplifyGateWithConstant(int gateId);
- 
-    // =========================================================================
-    // Section 2.5: Same-input simplification
-    // =========================================================================
- 
-    // 找出所有兩個 input 相同的 gate（and(a,a) / xor(a,a) 等）
-    std::vector<int> findSameInputGates() const;
- 
-    // 套用 same-input 化簡規則到單一 gate；回傳 true 若有簡化
-    bool simplifySameInputGate(int gateId);
- 
-    // =========================================================================
-    // Section 2.6: Dangling logic removal
-    // =========================================================================
- 
-    // 從所有 PO 和 DFF input pin 往回 BFS，回傳所有有用的 gate ID 集合
-    std::unordered_set<int> getEssentialGateIdsForTimingEndpoints() const;
- 
-    // 回傳所有 dangling gate 的 ID（不影響任何 PO 或 DFF input 的 gate）
-    std::vector<int> findDanglingGateIds() const;
- 
-    // 移除所有 dangling gate，回傳移除數量
-    int removeDanglingLogic();
- 
-    // =========================================================================
-    // Section 2.7: Structural hashing
-    // =========================================================================
- 
-    // 為 gate 產生 structural hash key（commutative gate 的 input 先排序）
-    std::string makeStructuralKey(int gateId) const;
- 
-    // 回傳所有結構等價的 gate 群組（每個 group 至少 2 個，group[0] 是 canonical）
-    std::vector<std::vector<int>> findStructurallyEquivalentGateGroups() const;
- 
-    // 合併所有結構等價的 gate 群組，回傳合併數量
-    int mergeStructurallyEquivalentGates();
-
-    // =========================================================================
-    // Depth Analysis API
+    // 1.6 Depth Analysis API
     //
     // 第一階段只做 depth / level / critical path 分析，不直接修改 netlist。
     // 共通語意：
@@ -885,22 +731,9 @@ public:
     // 4. 回傳 -1 代表找不到、無法計算、或遇到不支援的情況。
     // =========================================================================
 
-    // 標記 DepthReport 的 endpoint 類型，方便回覆 prompt 與後續 optimization selector 使用。
-    enum class DepthEndpointType {
-        Unknown,
-        SpecificNet,
-        PrimaryOutput,
-        DffD
-    };
-
-    // 保存單一 endpoint 的 depth 分析結果。
-    struct DepthReport {
-        DepthEndpointType endpointType = DepthEndpointType::Unknown; // endpoint 的來源類型
-        std::string endpointName;        // 可讀名稱，例如 y、n10、ff1.D
-        int endpointNetId = -1;          // 被分析的 endpoint net ID
-        int depth = -1;                  // 到該 endpoint 的最大 combinational depth
-        CombinationalPath criticalPath;  // 到該 endpoint 的一條 critical path
-    };
+    // 型別定義已拆到 PathTypes.h；using alias 保留 Netlist::DepthReport 既有寫法。
+    using DepthEndpointType = ::DepthEndpointType;
+    using DepthReport = ::DepthReport;
 
     // 計算每個 net 的 combinational level；vector index 對應 net ID。
     std::vector<int> computeNetLevels() const;
@@ -935,73 +768,244 @@ public:
     // 找出所有 depth 大於 maxDepth 的 timing endpoints；endpoint 範圍包含 PO 與 DFF.D。
     std::vector<DepthReport> findEndpointsExceedingDepth(int maxDepth) const;
 
-    // 表示 DepthQuery 要執行哪一種 depth/timing 查詢。
-    enum class DepthQueryType {
-        SpecificNet,              // 分析單一 net 的最大 depth 與 critical path
-        PrimaryOutputs,           // 分析所有 primary output endpoints
-        DffD,                     // 分析所有 DFF D-pin endpoints
-        GlobalCriticalPath,       // 找出 PO 與 DFF.D 中最深的 timing endpoint
-        EndpointsExceedingDepth   // 找出所有 depth 大於 threshold 的 timing endpoints
-    };
-
-    // 描述一個 Depth Query；這一層只處理 depth/timing，不處理 function 或 through/avoid path 條件。
-    struct DepthQuery {
-        DepthQueryType type = DepthQueryType::SpecificNet;
-        std::string netName;             // SpecificNet 使用的 endpoint net name
-        int threshold = -1;              // EndpointsExceedingDepth 使用的 depth 門檻
-        bool includeCriticalPath = true; // false 時回傳 report 會清空 criticalPath，降低資料量
-    };
-
-    // 保存 DepthQuery 的統一回傳結果。
-    struct DepthReportSet {
-        bool ok = false;                 // query 是否成功
-        std::string message;             // 給 debug / LLM response 的簡短訊息
-        DepthQueryType type = DepthQueryType::SpecificNet;
-
-        std::vector<DepthReport> reports; // 查詢得到的一個或多個 endpoint report
-        DepthReport worst;                // reports 中 depth 最大者；GlobalCriticalPath 的主要結果
-
-        int threshold = -1;               // query 使用的 depth 門檻；未使用時為 -1
-        size_t count = 0;                 // reports 數量
-    };
+    // 型別定義已拆到 PathTypes.h；using alias 保留 Netlist::DepthQuery 既有寫法。
+    using DepthQueryType = ::DepthQueryType;
+    using DepthQuery = ::DepthQuery;
+    using DepthReportSet = ::DepthReportSet;
 
     // 執行統一 DepthQuery；內部只 dispatch 到既有 DepthAnalysis helper。
     DepthReportSet runDepthQuery(const DepthQuery& query) const;
 
     // =========================================================================
-    // Optimization Result API
+    // 2. Low-Level Mutation / Cleanup API
     //
-    // 這一層定義 optimization pass 的共用回傳格式。
-    // 之後每個真正會修改 netlist 的 pass 都應該用這個結果描述：
-    // 有沒有修改、depth 是否改善、是否做過等價檢查、是否接受或 rollback。
+    // 這一大區塊放會直接修改 netlist graph 的 API，以及與 cleanup pass 緊密相連的
+    // candidate finder / checker。
+    //
+    // 分類規則：
+    // - Mutation Primitive：單一步驟改圖，例如 rename、disconnect、remove、rewire。
+    // - Transformation Pass：一次套用一批修改，例如 trimDeadLogic、cleanupAllRemovableBuffers。
+    // - Candidate Finder：只找可修改目標，名稱通常是 find*/get*，本身不改圖。
+    // - Validation / Rollback：修改後檢查或建立 rollback snapshot。
+    //
+    // 使用會改圖的 API 後，建議搭配 validateStructure() / validateProblemAConstraints()
+    // 或後續統一 NetlistEditReport 流程檢查結果。
     // =========================================================================
 
-    // 保存單次 optimization pass 嘗試的結果。
-    struct OptimizationResult {
-        bool changed = false;            // netlist 是否真的被修改
-        bool depthImproved = false;      // 修改後 depth 是否變小
-        bool equivalenceChecked = false; // 是否已做等價檢查
-        bool equivalent = false;         // 等價檢查是否通過
-        int oldDepth = -1;               // 修改前 endpoint depth
-        int newDepth = -1;               // 修改後 endpoint depth
-        std::string passName;            // pass 名稱
-        std::string message;             // 給 debug / LLM response 的說明
-    };
+    // =========================================================================
+    // 2.1 Graph Mutation Primitives
+    //
+    // 這一層是最底層的 ECO 操作，只做單一種 graph 修改。
+    // 後續 cleanup / optimization pass 應優先組合這些 primitive，而不是直接手動改 vector。
+    // =========================================================================
+
+    // 重新命名 Gate。如果舊名字找不到，則回傳 false。
+    bool renameGate(const std::string& oldName, const std::string& newName);
+
+    // 重新命名 Net。如果舊名字找不到，則回傳 false。
+    bool renameNet(const std::string& oldName, const std::string& newName);
+
+    // 斷開連線：將指定 Gate 的輸入端與指定的 Net 斷開。
+    bool disconnectGateInput(const std::string& gateName, const std::string& netName);
+
+    // 建立連線：將指定 Gate 的輸入端連接到指定的 Net。
+    bool connectGateInput(const std::string& gateName, const std::string& netName, int pinIndex = -1);
+
+    // 斷開連線：將指定 Gate 的輸入與輸出斷開
+    bool disconnectAllPins(int gateId);
+    // 斷開連線 + 設為 UNKNOWN
+    bool removeGate(int gateId);
+
+    // 查詢 gate 是否已被標記為 removed（type == UNKNOWN）。
+    bool isGateRemoved(int gateId) const;
+ 
+    // 把 gate 標記為 removed（type = UNKNOWN），同時清理雙向連線。
+    bool markGateRemoved(int gateId);
+ 
+    // 把所有 UNKNOWN gate 從 gates vector 中清除，並修正所有 ID。
+    // 回傳移除的 gate 數量。
+    int compactRemovedGates();
+
+    // 把所有接到 oldNetId 的 gate 改接到 newNetId，同時更新 loadGateIds。
+    bool replaceAllLoadsOfNet(int oldNetId, int newNetId);
 
     // =========================================================================
-    // Optimization Candidate API
+    // 2.2 Buffer Insertion Transformation API
+    //
+    // 這一層會插入新的 BUF gate / net，主要用於 fanout constraint 或局部 rewiring。
+    // 回傳值通常是成功插入的 buffer 數量。
+    // =========================================================================
+
+    // 對 fanout > maxFanout 的 net 插入 buffer
+    // 讓每個 gate 的 fanout ≤ maxFanout，預設 maxFanout = 4
+    // 回傳插入的 buffer 數量
+    int insertBuffersForFanout(int maxFanout = 4);
+
+    // 針對特定的 Net (支援 Bus) 限制其 Fanout，插入 Cascaded Buffer
+    // 回傳值: 成功插入的 Buffer 數量
+    int insertBuffersForSpecificNet(const std::string& wireName, int maxFanout = 4);
+
+    // 為每個負載加上獨立 Buffer
+    // 回傳值: 成功插入的 Buffer 數量
+    int insertBuffersOnEachLoad(const std::string& wireName);
+
+    // 在訊號的驅動端加上單一 Buffer
+    // 回傳值: 成功插入的 Buffer 數量
+    int insertBufferAtDriver(const std::string& wireName);
+
+    // 在特定的 Gate 前面增加 Buffer (只阻斷指定的 wire 到該 Gate 的連線)
+    // 回傳值: 成功插入的 Buffer 數量
+    int insertBufferBeforeGate(const std::string& wireName, const std::string& targetGateName);
+
+    // 針對某種類型的 Gate，讓它的輸入或輸出都接上 Buffer
+    // 回傳值: 成功插入的 Buffer 數量
+    int insertBuffersByGateType(GateType type, bool bufferInputs = true, bool bufferOutputs = true);
+
+    // =========================================================================
+    // 2.3 Validation / Rollback Helpers
+    //
+    // 這一層不應改變原 netlist；validate* 只檢查，cloneForRollback() 回傳 snapshot。
+    // 之後若導入 NetlistEditReport / accept-rollback flow，會依賴這一層。
+    // =========================================================================
+ 
+    // 檢查 gate/net graph 的雙向指標是否一致。
+    bool validateStructure() const;
+ 
+    // 檢查是否符合 Problem A 的限制（PO 有 driver、DFF.Q 有效等）。
+    bool validateProblemAConstraints() const;
+ 
+    // 回傳 Netlist 的深拷貝，供 rollback 使用。
+    Netlist cloneForRollback() const;
+
+    // =========================================================================
+    // 2.4 Legacy Cleanup Execution Passes
+    //
+    // 這些是會直接修改 netlist 的既有一鍵 cleanup / simplification pass。
+    // 目前保留作為 legacy pass；新增 pass 時應盡量拆成：
+    // - Team A: find candidate / checker
+    // - Team B: mutation executor
+    // - Team A: NetlistEditReport building blocks
+    // =========================================================================
+ 
+    int trimDeadLogic();
+    int collapseBackToBackInverters();
+    // 合併結構等價的 gate（相同 type + 相同 input net 集合）
+    // 回傳合併的 gate 數量
+    int mergeEquivalentGates();
+
+    // =========================================================================
+    // 2.5 Buffer Cleanup Building Blocks
+    //
+    // findAllRemovableBufferGates() 是 analysis/candidate finder；
+    // bypassBufferGate() / cleanupAllRemovableBuffers() 會修改 netlist。
+    // =========================================================================
+ 
+    // bypass 一個 BUF gate：in -> BUF -> out -> loads  =>  in -> loads
+    bool bypassBufferGate(int bufGateId);
+ 
+    // 找出全局所有可以安全 bypass 的 BUF gate ID 列表
+    std::vector<int> findAllRemovableBufferGates() const;
+ 
+    // bypass 全局所有可移除的 BUF gate，回傳移除數量
+    int cleanupAllRemovableBuffers();
+ 
+    // =========================================================================
+    // 2.6 Double Inverter Removal Building Blocks
+    //
+    // findDoubleInverterPairs() 是 analysis/candidate finder；
+    // bypassDoubleInverter() 會修改 netlist。
+    // =========================================================================
+ 
+    // 找出所有合法的 NOT -> NOT gate 對，回傳 (g1_id, g2_id)
+    std::vector<std::pair<int,int>> findDoubleInverterPairs() const;
+ 
+    // bypass NOT(g1) -> NOT(g2)，讓 g1 的 input 直接接到 g2 的 loads
+    bool bypassDoubleInverter(int g1id, int g2id);
+ 
+    // =========================================================================
+    // 2.7 Constant Propagation Building Blocks
+    //
+    // isConst* / getConst* 是 analysis helper；
+    // simplifyGateWithConstant() 會修改 netlist。
+    // =========================================================================
+ 
+    bool isConst0Net(int netId) const;
+    bool isConst1Net(int netId) const;
+    int getConst0NetId() const;
+    int getConst1NetId() const;
+ 
+    // 對單一 gate 做 constant folding；回傳 true 若有簡化
+    bool simplifyGateWithConstant(int gateId);
+ 
+    // =========================================================================
+    // 2.8 Same-Input Simplification Building Blocks
+    //
+    // findSameInputGates() 是 analysis/candidate finder；
+    // simplifySameInputGate() 會修改 netlist。
+    // =========================================================================
+ 
+    // 找出所有兩個 input 相同的 gate（and(a,a) / xor(a,a) 等）
+    std::vector<int> findSameInputGates() const;
+ 
+    // 套用 same-input 化簡規則到單一 gate；回傳 true 若有簡化
+    bool simplifySameInputGate(int gateId);
+ 
+    // =========================================================================
+    // 2.9 Dangling Logic Removal Building Blocks
+    //
+    // getEssentialGateIdsForTimingEndpoints() / findDanglingGateIds() 是 analysis；
+    // removeDanglingLogic() 會修改 netlist。
+    // =========================================================================
+ 
+    // 從所有 PO 和 DFF input pin 往回 BFS，回傳所有有用的 gate ID 集合
+    std::unordered_set<int> getEssentialGateIdsForTimingEndpoints() const;
+ 
+    // 回傳所有 dangling gate 的 ID（不影響任何 PO 或 DFF input 的 gate）
+    std::vector<int> findDanglingGateIds() const;
+ 
+    // 移除所有 dangling gate，回傳移除數量
+    int removeDanglingLogic();
+ 
+    // =========================================================================
+    // 2.10 Structural Hashing Building Blocks
+    //
+    // makeStructuralKey() / findStructurallyEquivalentGateGroups() 是 analysis；
+    // mergeStructurallyEquivalentGates() 會修改 netlist。
+    // =========================================================================
+ 
+    // 為 gate 產生 structural hash key（commutative gate 的 input 先排序）
+    std::string makeStructuralKey(int gateId) const;
+ 
+    // 回傳所有結構等價的 gate 群組（每個 group 至少 2 個，group[0] 是 canonical）
+    std::vector<std::vector<int>> findStructurallyEquivalentGateGroups() const;
+ 
+    // 合併所有結構等價的 gate 群組，回傳合併數量
+    int mergeStructurallyEquivalentGates();
+
+    // =========================================================================
+    // 3. Optimization Candidate / Strategy API
+    //
+    // 這一大區塊只負責 optimization planning / target selection。
+    // 它可以讀取 depth / cone / path analysis 結果，整理出 candidate 或可處理目標。
+    // 除非明確標成 rewrite pass，這裡的 API 不應直接修改 netlist。
+    // =========================================================================
+
+    // =========================================================================
+    // 3.1 Optimization Result / Candidate Types
+    //
+    // 型別定義已拆到 OptimizationTypes.h；using alias 保留 Netlist::Xxx 既有寫法。
+    // OptimizationResult 目前是 legacy/transitional format，後續應逐步改成 NetlistEditReport。
+    // =========================================================================
+
+    using OptimizationResult = ::OptimizationResult;
+    using OptimizationCandidate = ::OptimizationCandidate;
+
+    // =========================================================================
+    // 3.2 Depth-Driven Candidate Builder
     //
     // 這一層只負責把 depth analysis 的結果整理成「準備最佳化的目標」。
     // 不直接修改 netlist，也不執行 rewrite。
     // =========================================================================
-
-    // 保存單一 depth optimization candidate。
-    struct OptimizationCandidate {
-        DepthReport endpoint;            // 要被最佳化的 endpoint 分析結果
-        int targetDepth = -1;            // 希望最佳化後達到的 depth 上限
-        ConeResult faninCone;            // endpoint 的 transitive fanin cone
-        CombinationalPath criticalPath;  // endpoint 目前的一條 critical path
-    };
 
     // 根據單一 endpoint report 建立 optimization candidate。
     OptimizationCandidate buildOptimizationCandidate(const DepthReport& endpoint,
@@ -1012,7 +1016,7 @@ public:
         int targetDepth) const;
 
     // =========================================================================
-    // Optimization Target Selection API
+    // 3.3 Optimization Target Selection API
     //
     // 這一層只負責從 candidate / critical path 裡找出「可能可以處理的 gate」。
     // 不直接修改 netlist，也不做等價檢查。
@@ -1027,7 +1031,7 @@ public:
         const OptimizationCandidate& candidate) const;
 
     // =========================================================================
-    // Optimization Rewrite Pass API
+    // 3.4 Future Optimization Rewrite Pass API
     //
     // 這一層未來會放真正修改 netlist 的 pass。
     // 所有 pass 都應該搭配 structural / function validation，失敗時 rollback。
@@ -1037,59 +1041,26 @@ public:
     // OptimizationResult cleanupBufferChain(const OptimizationCandidate& candidate);
 
     // =========================================================================
-    // Optimization Validation / Rollback API
+    // 3.5 Future Optimization Validation / Rollback API
     //
-    // 這一層未來會放結構驗證、限制驗證、功能等價檢查，以及 rollback 流程。
+    // 結構驗證、Problem A 限制檢查與 rollback snapshot 目前放在 2.3。
+    // 未來若加入 optimization-specific accept / rollback flow，應組合：
+    // - cloneForRollback()
+    // - validateStructure()
+    // - validateProblemAConstraints()
+    // - checkEquivalence() / future whole-design equivalence checker
+    // - NetlistEditReport
     // =========================================================================
 
-    // TODO: 檢查 gate/net graph 是否一致，例如 driver/load 關係是否同步。
-    //bool validateStructure() const;
-
-    // TODO: 檢查 transformation 後是否仍符合 Problem A 的 restricted primitive netlist 規則。
-    //bool validateProblemAConstraints() const;
-
-    struct PathEndpoint;
-
     // =========================================================================
-    // Startpoint-to-Endpoint Resolver Helpers
+    // 4. Unified High-Level Query APIs
     //
-    // 這些 helper 負責把常見的抽象起點/終點轉成實際 net ID。
-    // 它們是未來統一 PathQuery API 的底層 building blocks。
+    // 以下是之後給 LLM / prompt dispatch 使用的高階穩定入口。
+    // 原則：
+    // - query struct 描述輸入條件。
+    // - report struct 統一保存回傳結果。
+    // - run*Query() 只 dispatch 到底層 helper，不直接修改 netlist。
     // =========================================================================
-
-    // 取得所有 Primary Input 對應的 net ID；bus 會展開成每一個 bit net。
-    std::vector<int> getPrimaryInputNetIds() const;
-
-    // 取得所有 Primary Output 對應的 net ID；bus 會展開成每一個 bit net。
-    std::vector<int> getPrimaryOutputNetIds() const;
-
-    // 取得指定 DFF 的 Q/output net ID；若 gateId 無效、不是 DFF 或未連線，回傳 -1。
-    int getDffOutputNetId(int dffGateId) const;
-
-    // 取得指定 gate 的 output net ID；若 gateId 無效或 output 未連線，回傳 -1。
-    int getGateOutputNetId(int gateId) const;
-
-    // 依 positional input index 取得指定 gate 的 input net ID；若 index 無效回傳 -1。
-    int getGateInputNetId(int gateId, int pinIndex) const;
-
-    // 依 named input pin 取得指定 gate 的 input net ID；若 pinName 不存在回傳 -1。
-    int getGateInputNetId(int gateId, const std::string& pinName) const;
-
-    // 將單一抽象 PathEndpoint 解析成實際 net ID 陣列；解析失敗時回傳空陣列。
-    std::vector<int> resolvePathEndpoint(const PathEndpoint& endpoint) const;
-
-    // 將多個抽象 PathEndpoint 解析成實際 net ID 陣列；會自動移除重複 net ID。
-    std::vector<int> resolvePathEndpoints(const std::vector<PathEndpoint>& endpoints) const;
-
-
-
-
-
-
-
-
-//高階API放置區------------------------------------------------------------------------------------------------------------------------------
-    //以下為高階API，之後給LLM用的。
 
     // =========================================================================
     // 統一 Basic Query API
@@ -1100,72 +1071,10 @@ public:
     // 不做 direct connectivity、cone traversal、path search、depth analysis。
     // =========================================================================
 
-    // 表示 BasicQuery 要執行哪一種基礎查詢。
-    enum class BasicQueryType {
-        Summary,                 // 回傳 design 規模與 gate type 統計
-        ListGates,               // 列出所有 gate names
-        ListNets,                // 列出所有 net names
-        ListPrimaryInputs,       // 列出所有 primary input port names
-        ListPrimaryOutputs,      // 列出所有 primary output port names
-        ListDffs,                // 列出所有 DFF instance names
-        ListCombinationalGates,  // 列出所有 combinational gate names
-        GateInfo,                // 查單一 gate 的基本資訊
-        NetInfo,                 // 查單一 net 的基本資訊
-        PortInfo,                // 查單一 PI/PO port 的基本資訊
-        CountByGateType,         // 統計指定 gate type 數量；UNKNOWN 表示回傳全部統計
-        GatesByType,             // 列出指定 gate type 的 gates
-        GatesWithConstantInput,  // 列出 input 接 constant 的 gates
-        StructuralIssues         // 回報 undriven/no-load/floating/unconnected
-    };
-
-    // 描述一個 Basic Query；不同 type 會使用不同欄位。
-    struct BasicQuery {
-        BasicQueryType type = BasicQueryType::Summary;
-        std::string name;                       // GateInfo/NetInfo/PortInfo 使用的物件名稱
-        GateType gateType = GateType::UNKNOWN;  // gate type filter；UNKNOWN 表示不限制或列全部
-        int constValue = -1;                    // constant input filter：-1 不限制，0 表示 1'b0，1 表示 1'b1
-        bool includeIds = true;                 // 回傳 report 時是否填 gateIds/netIds
-        bool includeNames = true;               // 回傳 report 時是否填 gateNames/netNames/portNames
-    };
-
-    // 保存 BasicQuery 的統一回傳結果；不同 query type 會填不同欄位。
-    struct BasicReport {
-        bool ok = false;                        // 查詢是否成功；名稱不存在或 type 不合法時為 false
-        std::string message;                    // 給 debug / LLM response 使用的簡短訊息
-
-        size_t gateCount = 0;                   // design 或篩選後 gate 數量
-        size_t netCount = 0;                    // design 或篩選後 net 數量
-        size_t logicalWireCount = 0;            // Verilog declaration 層級的 wire 數量
-        size_t primaryInputCount = 0;           // primary input port 數量
-        size_t primaryOutputCount = 0;          // primary output port 數量
-
-        int objectId = -1;                      // GateInfo/NetInfo 的 ID
-        std::string objectName;                 // GateInfo/NetInfo/PortInfo 的名稱
-        std::string typeName;                   // gate type 或 net/port 類型描述
-        std::string formattedInfo;              // getGateInfo() 這類人類可讀格式
-
-        bool exists = false;                    // 指定 name 是否存在
-        bool isDff = false;                     // GateInfo 使用
-        bool isCombinational = false;           // GateInfo 使用
-        bool isPrimaryInput = false;            // NetInfo 使用
-        bool isPrimaryOutput = false;           // NetInfo 使用
-        bool isConstant = false;                // NetInfo 使用
-        bool isBus = false;                     // PortInfo 使用
-        int portWidth = -1;                     // PortInfo 使用
-
-        std::vector<int> gateIds;               // 查詢得到的 gate IDs
-        std::vector<int> netIds;                // 查詢得到的 net IDs
-        std::vector<std::string> gateNames;     // 查詢得到的 gate names
-        std::vector<std::string> netNames;      // 查詢得到的 net names
-        std::vector<std::string> portNames;     // 查詢得到的 port names
-
-        std::map<GateType, int> gateTypeCounts; // 各 gate type 統計
-
-        std::vector<std::string> undrivenNets;      // structural issue：無 driver 的 nets
-        std::vector<std::string> noLoadNets;        // structural issue：無 load 的 nets
-        std::vector<std::string> floatingNets;      // structural issue：undriven/no-load union
-        std::vector<std::string> unconnectedGates;  // structural issue：有未連接 pin 的 gates
-    };
+    // 型別定義已拆到 NetlistQueries.h；using alias 保留 Netlist::BasicQuery 既有寫法。
+    using BasicQueryType = ::BasicQueryType;
+    using BasicQuery = ::BasicQuery;
+    using BasicReport = ::BasicReport;
 
     // 執行統一 BasicQuery；內部只呼叫 Basic helper，不做跨層 traversal。
     BasicReport runBasicQuery(const BasicQuery& query) const;
@@ -1179,44 +1088,10 @@ public:
     // 不做 transitive cone traversal、path search 或 depth analysis。
     // =========================================================================
 
-    // 表示 DirectConnectivityQuery 要執行哪一種直接連線查詢。
-    enum class DirectConnectivityQueryType {
-        NetDriver,          // 查某個 net / bus 的直接 driver gate
-        NetLoads,           // 查某個 net / bus 直接 load 到哪些 gates
-        GateInputs,         // 查某個 gate 的直接 input nets
-        GateOutput,         // 查某個 gate 的 output net
-        GateFanin,          // 查直接驅動某 gate inputs 的上一層 gates
-        GateFanout,         // 查某 gate output 直接 fanout 到哪些 gates
-        DirectlyConnected   // 判斷指定 gate 與指定 net 是否直接相連
-    };
-
-    // 描述一個 Direct Connectivity Query；不同 type 會使用 gateName / netName。
-    struct DirectConnectivityQuery {
-        DirectConnectivityQueryType type = DirectConnectivityQueryType::NetDriver;
-        std::string gateName;     // GateInputs/GateOutput/GateFanin/GateFanout/DirectlyConnected 使用
-        std::string netName;      // NetDriver/NetLoads/DirectlyConnected 使用
-        bool includeIds = true;   // 是否填 gateIds/netIds
-        bool includeNames = true; // 是否填 gateNames/netNames
-    };
-
-    // 保存 DirectConnectivityQuery 的統一回傳結果。
-    struct DirectConnectivityReport {
-        bool ok = false;                    // query 是否成功；名稱不存在或必要欄位缺失時為 false
-        bool exists = false;                // 指定 gate/net 是否存在
-        bool connected = false;             // DirectlyConnected 的主要結果
-        std::string message;                // 給 debug / LLM response 的簡短訊息
-
-        std::string gateName;               // 查詢指定或解析出的 gate name
-        std::string netName;                // 查詢指定或解析出的 net name
-        int gateId = -1;                    // 單一 gate ID 結果；沒有唯一 gate 時為 -1
-        int netId = -1;                     // 單一 net ID 結果；沒有唯一 net 時為 -1
-        size_t count = 0;                   // 結果數量
-
-        std::vector<int> gateIds;           // 查詢結果中的 gate IDs
-        std::vector<int> netIds;            // 查詢結果中的 net IDs
-        std::vector<std::string> gateNames; // 查詢結果中的 gate names
-        std::vector<std::string> netNames;  // 查詢結果中的 net names
-    };
+    // 型別定義已拆到 NetlistQueries.h；using alias 保留 Netlist::DirectConnectivityQuery 既有寫法。
+    using DirectConnectivityQueryType = ::DirectConnectivityQueryType;
+    using DirectConnectivityQuery = ::DirectConnectivityQuery;
+    using DirectConnectivityReport = ::DirectConnectivityReport;
 
     // 執行統一 DirectConnectivityQuery；內部只呼叫 direct connectivity helper。
     DirectConnectivityReport runDirectConnectivityQuery(
@@ -1231,42 +1106,10 @@ public:
     // DFF.Q 會被視為 pseudo primary input，不會穿越 DFF 回到 D pin。
     // =========================================================================
 
-    // 表示 FunctionQuery 要執行哪一種功能分析。
-    enum class FunctionQueryType {
-        Equivalence,       // 檢查 netNameA 與 netNameB 是否功能等價
-        CanBeValue,        // 檢查 netNameA 是否存在某組輸入可等於 constValue
-        ConstantFunction,  // 檢查 netNameA 是否恆等於 constValue
-        AlwaysZero,        // 檢查 netNameA 是否永遠為 0
-        AlwaysOne,         // 檢查 netNameA 是否永遠為 1
-        TruthStatus        // 回報 netNameA 是 always 0、always 1，或 non-constant
-    };
-
-    // 描述一個 Function Analysis Query；不同 type 會使用不同欄位。
-    struct FunctionQuery {
-        FunctionQueryType type = FunctionQueryType::TruthStatus;
-        std::string netNameA;   // 主要分析目標；Equivalence 時代表第一個 net / bus
-        std::string netNameB;   // Equivalence 使用的第二個 net / bus
-        int constValue = -1;    // CanBeValue / ConstantFunction 使用；只能是 0 或 1
-    };
-
-    // 保存 FunctionQuery 的統一回傳結果。
-    struct FunctionReport {
-        bool ok = false;              // query 是否成功；名稱不存在或參數不合法時為 false
-        bool exists = false;          // 對 yes/no 問題的主要布林答案
-        std::string message;          // 給 debug / LLM response 的簡短訊息
-
-        std::string netNameA;         // 查詢目標 A
-        std::string netNameB;         // 查詢目標 B
-        int netIdA = -1;              // scalar net A 的 ID；bus 或不存在時可為 -1
-        int netIdB = -1;              // scalar net B 的 ID；bus 或不存在時可為 -1
-        int constValue = -1;          // query 指定或推導出的常數值；unknown 時為 -1
-
-        bool equivalent = false;      // Equivalence 結果
-        bool canBeZero = false;       // TruthStatus / CanBeValue 輔助資訊
-        bool canBeOne = false;        // TruthStatus / CanBeValue 輔助資訊
-        bool isConstant = false;      // TruthStatus 結果；always 0 或 always 1 時為 true
-        std::string status;           // "ALWAYS_ZERO"、"ALWAYS_ONE"、"NON_CONSTANT" 或錯誤描述
-    };
+    // 型別定義已拆到 NetlistQueries.h；using alias 保留 Netlist::FunctionQuery 既有寫法。
+    using FunctionQueryType = ::FunctionQueryType;
+    using FunctionQuery = ::FunctionQuery;
+    using FunctionReport = ::FunctionReport;
 
     // 執行統一 FunctionQuery；內部只呼叫 Boolean / Function Analysis 底層 helper。
     FunctionReport runFunctionQuery(const FunctionQuery& query) const;
@@ -1279,131 +1122,25 @@ public:
     // DFF 是 sequential boundary，cone traversal 不穿越 DFF。
     // =========================================================================
 
-    // 表示 ConeQuery 要從哪種物件與方向建立 transitive cone。
-    enum class ConeQueryType {
-        NetTransitiveFanin,   // 從指定 net 往 fanin 方向追溯
-        NetTransitiveFanout,  // 從指定 net 往 fanout 方向展開
-        GateTransitiveFanin,  // 從指定 gate output net 往 fanin 方向追溯
-        GateTransitiveFanout  // 從指定 gate output net 往 fanout 方向展開
-    };
-
-    // 描述一個 Cone Query；net 類 query 使用 netName，gate 類 query 使用 gateName。
-    struct ConeQuery {
-        ConeQueryType type = ConeQueryType::NetTransitiveFanin;
-        std::string netName;       // NetTransitiveFanin / NetTransitiveFanout 使用
-        std::string gateName;      // GateTransitiveFanin / GateTransitiveFanout 使用
-        bool includeIds = true;    // 是否填 netIds/gateIds/rootNetIds
-        bool includeNames = true;  // 是否填 netNames/gateNames/rootNetNames
-        bool includeLocalPaths = false; // 是否附帶 cone 內 longest/shortest net path
-    };
-
-    // 保存 ConeQuery 的統一回傳結果。
-    struct ConeReport {
-        bool ok = false;                       // query 是否成功
-        bool exists = false;                   // 指定 net/gate 是否存在並成功建立 cone
-        std::string message;                   // 給 debug / LLM response 的簡短訊息
-
-        ConeQueryType type = ConeQueryType::NetTransitiveFanin;
-        std::string sourceName;                // 使用者指定的來源名稱
-        int sourceId = -1;                     // 來源 net ID 或 gate ID
-        ConeResult cone;                       // 原始 cone 結果，供底層演算法繼續使用
-
-        size_t netCount = 0;                   // cone 內有效 net 數量
-        size_t gateCount = 0;                  // cone 內有效 combinational gate 數量
-        std::vector<int> rootNetIds;           // cone roots，支援 bus 多 root
-        std::vector<std::string> rootNetNames; // root net names
-        std::vector<int> netIds;               // cone 內 net IDs
-        std::vector<int> gateIds;              // cone 內 gate IDs
-        std::vector<std::string> netNames;     // cone 內 net names
-        std::vector<std::string> gateNames;    // cone 內 gate names
-
-        int longestDepth = -1;                 // cone 內 longest net path depth
-        int shortestDepth = -1;                // cone 內 shortest net path depth
-        std::vector<int> longestPathNetIds;    // cone 內 longest path 的 net IDs
-        std::vector<int> shortestPathNetIds;   // cone 內 shortest path 的 net IDs
-        std::vector<std::string> longestPathNetNames;  // cone 內 longest path 的 net names
-        std::vector<std::string> shortestPathNetNames; // cone 內 shortest path 的 net names
-    };
+    // 型別定義已拆到 NetlistQueries.h；using alias 保留 Netlist::ConeQuery 既有寫法。
+    using ConeQueryType = ::ConeQueryType;
+    using ConeQuery = ::ConeQuery;
+    using ConeReport = ::ConeReport;
 
     // 執行統一 ConeQuery；內部只呼叫 cone helper，不做 startpoint-to-endpoint path query。
     ConeReport runConeQuery(const ConeQuery& query) const;
 
     // =========================================================================
-    // 未來統一 Startpoint-to-Endpoint Path Query API 草稿
+    // 統一 Startpoint-to-Endpoint Path Query API
     //
-    // 這個區塊先獨立放在最下面，作為後續逐步整理 path analysis 的規格草稿。
-    // 目前既有功能仍使用上方 A/B/C/D/E/F 類 API；這裡先不急著替換既有實作。
-    //
-    // 設計目標：
-    // 1. 把 PI、PO、DFF.Q、DFF.D、Gate output、Gate input、Specific net
-    //    這些不同語意的起點/終點統一描述。
-    // 2. 之後由 resolver helper 將 PathEndpoint 轉成實際 net ID。
-    // 3. 再依 PathQueryMode 決定要做 exists、find any、enumerate、min/max depth
-    //    或 every-path 類查詢。
+    // 這一層把 PI、PO、DFF.Q、DFF.D、Gate output、Gate input、Specific net
+    // 這些不同語意的起點/終點統一描述，再由 1.5 的 resolver helper 轉成 net ID。
+    // PathQueryMode 決定要做 exists、find any、enumerate、min/max depth
+    // 或 every-path 類查詢。
     // =========================================================================
-
-    // 表示 path query 的抽象起點或終點類型。
-    enum class PathEndpointType {
-        SpecificNet,     // 指定某條 net，例如 "n16"
-        PrimaryInput,    // primary input，可表示單一 PI 或整個 PI bus
-        PrimaryOutput,   // primary output，可表示單一 PO 或整個 PO bus
-        DffQ,            // DFF 的 Q 輸出 pin，通常作為 register-to-* 的 startpoint
-        DffD,            // DFF 的 D 輸入 pin，通常作為 *-to-register 的 endpoint
-        DffClock,        // DFF clock pin，例如 CK；偏 control path
-        DffReset,        // DFF reset/set pin，例如 RN/SN；偏 control path
-        GateOutput,      // 指定 gate 的 output net
-        GateInput        // 指定 gate 的某個 input net
-    };
-
-    // 描述一個抽象 path 起點或終點；實際查詢前要先 resolve 成 net ID。
-    struct PathEndpoint {
-        PathEndpointType type;
-        std::string name;       // net name、port name、gate instance name 或 DFF instance name
-        std::string pinName;    // named pin 使用，例如 "D"、"Q"、"CK"、"RN"
-        int pinIndex = -1;      // positional gate input 使用，例如 input 0 / input 1
-
-        // 建立一個 path endpoint；不同 type 會使用不同欄位。
-        PathEndpoint(PathEndpointType _type,
-                     const std::string& _name,
-                     const std::string& _pinName = "",
-                     int _pinIndex = -1)
-            : type(_type), name(_name), pinName(_pinName), pinIndex(_pinIndex) {
-        }
-    };
-
-    // 表示同一組 startpoints/endpoints 要執行哪一種 path query。
-    enum class PathQueryMode {
-        Exists,             // 是否至少存在一條符合條件的路徑
-        FindAny,            // 回傳任意一條符合條件的路徑
-        EnumerateAll,       // 回傳所有符合條件的路徑
-        MinDepth,           // 回傳最短邏輯深度路徑
-        MaxDepth,           // 回傳最長邏輯深度路徑
-        EveryPathThrough,   // 判斷所有路徑是否都經過 requiredNodes
-        EveryPathAvoids     // 判斷所有路徑是否都避開 avoidedNodes
-    };
-
-    // 描述一個完整的 startpoint-to-endpoint path query。
-    struct PathQuery {
-        std::vector<PathEndpoint> startpoints;  // 一個或多個抽象起點
-        std::vector<PathEndpoint> endpoints;    // 一個或多個抽象終點
-        std::vector<PathNode> requiredNodes;    // 每條符合條件的路徑必須經過的 net/gate
-        std::vector<PathNode> avoidedNodes;     // 每條符合條件的路徑必須避開的 net/gate
-        PathQueryMode mode = PathQueryMode::Exists;
-        bool combinationalOnly = true;          // true 時遇到 DFF 視為 sequential boundary
-    };
-
-    // 保存統一 path query 的結果；不同 mode 會使用不同欄位。
-    struct PathQueryResult {
-        bool exists = false;                    // exists/every-path 類查詢的主要結果
-        int depth = -1;                         // min/max depth 類查詢的邏輯深度
-        CombinationalPath path;                 // find any/min/max depth 的代表路徑
-        std::vector<CombinationalPath> paths;   // enumerate all 的所有路徑
-    };
 
     // 執行統一 path query；目前支援 Exists、FindAny、EnumerateAll、MinDepth、MaxDepth、
     // EveryPathThrough、EveryPathAvoids。
     // 若 mode 尚未支援、端點解析失敗，或 combinationalOnly=false，回傳預設空結果。
     PathQueryResult runPathQuery(const PathQuery& query) const;
-
-//-----------------------------------------------------------------------------------------------------------------------------------
 };

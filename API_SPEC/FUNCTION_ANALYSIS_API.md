@@ -299,6 +299,13 @@ struct FunctionReport {
 
 ## 11. 目前完成狀態
 
+實作位置：
+
+```text
+include/core/NetlistQueries.h
+src/analysis/FunctionAnalysis.cpp
+```
+
 已完成：
 
 ```text
@@ -308,13 +315,20 @@ isNetConstantFunction()
 isNetAlwaysZero()
 isNetAlwaysOne()
 FunctionQuery / FunctionReport / runFunctionQuery()
-mini test 覆蓋所有 FunctionQueryType
+```
+
+測試狀態：
+
+```text
+mini test/tester.cpp 已覆蓋 runFunctionQuery() 的 Equivalence / CanBeValue / AlwaysZero。
+目前 regression 結果：Summary: 45 passed, 0 failed.
 ```
 
 未來可補：
 
 ```text
 bus constant status
+TruthStatus / AlwaysOne 的 explicit tester case
 batch classify all primary outputs
 Boolean equation derivation
 SAT counterexample model extraction

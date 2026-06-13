@@ -229,6 +229,13 @@ struct DirectConnectivityReport {
 
 ## 6. 目前完成狀態
 
+實作位置：
+
+```text
+include/core/NetlistQueries.h
+src/analysis/ConnectivityAnalysis.cpp
+```
+
 已完成：
 
 ```text
@@ -238,11 +245,19 @@ Gate input/output helper
 Gate immediate fanin/fanout helper
 Direct connection check
 DirectConnectivityQuery / DirectConnectivityReport 高階 API
-mini test 覆蓋所有 query type
 ```
 
-下一步：
+測試狀態：
 
 ```text
-整理 Cone Query，處理 reachable / transitive fanin / transitive fanout 類問題。
+mini test/tester.cpp 已覆蓋 runDirectConnectivityQuery() 的 NetDriver / NetLoads / GateInputs / GateFanout / DirectlyConnected。
+目前 regression 結果：Summary: 45 passed, 0 failed.
+```
+
+後續可補：
+
+```text
+1. 增加 pin-level report，例如 gate input pin index/name 與 net 的對應。
+2. 增加 whole-design fanout constraint report，例如列出 fanout > N 的 nets。
+3. 增加 clock/reset-aware direct connectivity classification。
 ```
