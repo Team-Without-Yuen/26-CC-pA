@@ -9,6 +9,7 @@
 #include "include/core/NetlistQueries.h"
 #include "include/core/PathTypes.h"
 #include "include/core/OptimizationTypes.h"
+#include "TransformationReport.h"
 
 // The core data structure representing the entire circuit graph
 class Netlist {
@@ -838,28 +839,25 @@ public:
 
     // 對 fanout > maxFanout 的 net 插入 buffer
     // 讓每個 gate 的 fanout ≤ maxFanout，預設 maxFanout = 4
-    // 回傳插入的 buffer 數量
-    int insertBuffersForFanout(int maxFanout = 4);
+    BufferInsertionReport insertBuffersForFanout(int maxFanout = 4);
 
     // 針對特定的 Net (支援 Bus) 限制其 Fanout，插入 Cascaded Buffer
-    // 回傳值: 成功插入的 Buffer 數量
-    int insertBuffersForSpecificNet(const std::string& wireName, int maxFanout = 4);
+    BufferInsertionReport insertBuffersForSpecificNet(const std::string& wireName, int maxFanout = 4);
+
+    //  解決 D-FF 的 Clock 與 Reset High-Fanout 問題，自動尋找控制線路並建立 Cascaded Buffer Tree
+    BufferInsertionReport insertBuffersForDffControl(int maxFanout, bool processClock, bool processReset);
 
     // 為每個負載加上獨立 Buffer
-    // 回傳值: 成功插入的 Buffer 數量
-    int insertBuffersOnEachLoad(const std::string& wireName);
+    BufferInsertionReport insertBuffersOnEachLoad(const std::string& wireName);
 
     // 在訊號的驅動端加上單一 Buffer
-    // 回傳值: 成功插入的 Buffer 數量
-    int insertBufferAtDriver(const std::string& wireName);
+    BufferInsertionReport insertBufferAtDriver(const std::string& wireName);
 
     // 在特定的 Gate 前面增加 Buffer (只阻斷指定的 wire 到該 Gate 的連線)
-    // 回傳值: 成功插入的 Buffer 數量
-    int insertBufferBeforeGate(const std::string& wireName, const std::string& targetGateName);
+    BufferInsertionReport insertBufferBeforeGate(const std::string& wireName, const std::string& targetGateName);
 
     // 針對某種類型的 Gate，讓它的輸入或輸出都接上 Buffer
-    // 回傳值: 成功插入的 Buffer 數量
-    int insertBuffersByGateType(GateType type, bool bufferInputs = true, bool bufferOutputs = true);
+    BufferInsertionReport insertBuffersByGateType(GateType type, bool bufferInputs = true, bool bufferOutputs = true);
 
     // =========================================================================
     // 2.3 Validation / Rollback Helpers
