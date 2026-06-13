@@ -1185,20 +1185,27 @@ int TechMapper::applyBackwardMapping(Netlist& netlist) {
 
 // targetTypes  : 使用者想要「拔除/替換掉」的 Gate 類型 (例如 {OR, AND})
 // allowedTypes : 使用者允許「新增/使用」的 Gate 類型 (例如 {NAND, NOT})
-// 回傳值       : 總共變動的 Gate 數量 (正數代表變多，負數代表變少)
+// 回傳值       : TechMapReport (包含所有變更與最終快照的報告)
 // isOneToMany=true=展開(面積增加), false=濃縮(面積減少)
 // scopeGates 是一個可選的參數，如果提供了，就只對這些 Gate 進行技術映射，其他 Gate 不受影響。
 // 底層的實作引擎
-int TechMapper::mapTechnologyCore(Netlist& netlist, 
-                              const std::vector<GateType>& targetTypes, 
-                              const std::vector<GateType>& allowedTypes,
-                              bool isOneToMany,
-                              const std::unordered_set<int>* scopeGates) {
+TechMapReport TechMapper::mapTechnologyCore(Netlist& netlist, 
+                                            const std::vector<GateType>& targetTypes, 
+                                            const std::vector<GateType>& allowedTypes,
+                                            bool isOneToMany,
+                                            const std::unordered_set<int>* scopeGates,
+                                            bool verbose) { // 加入 verbose 開關，讓使用者決定是否要在報告中列出被修改的 Gate 名稱
     
+    TechMapReport report;
+    report.isOneToMany = isOneToMany;
+
     std::unordered_set<GateType> targetSet(targetTypes.begin(), targetTypes.end());
     std::unordered_set<GateType> allowedSet(allowedTypes.begin(), allowedTypes.end());
 
-    int totalGateChange = 0;
+    // 預先紀錄初始的 Gate 數量
+    std::unordered_map<GateType, int> initialCounts;
+    for (GateType t : allowedTypes) initialCounts[t] = netlist.getGateCountByType(t);
+    for (GateType t : targetTypes)  initialCounts[t] = netlist.getGateCountByType(t);
 
     // 判斷邏輯：直接根據使用者明確傳入的指令執行
     if (!isOneToMany) {
@@ -1251,8 +1258,19 @@ int TechMapper::mapTechnologyCore(Netlist& netlist,
                     MatchContext ctx;
                     if (matchRootGate(netlist, rootId, rule, ctx)) {
                         if (isValidSubgraph(netlist, ctx, rootId)) {
+                            // 紀錄即將被拔除的目標 Gate
+                            for (int matchedGateId : ctx.matchedGates) {
+                                const Gate& g = netlist.getGate(matchedGateId);
+                                report.removedCountByType[g.type]++;
+                                if (verbose) report.modifiedGateNames.push_back(g.instName);
+                            }
+
+                            // 執行替換
                             replaceSubgraph(netlist, ctx, rootId, rule);
-                            totalGateChange -= (ctx.matchedGates.size() - 1); 
+                            
+                            // 紀錄明確新增的 Target Gate
+                            report.addedCountByType[rule.targetGate]++;
+                            
                             isChanged = true;
                             break; // 已經被替換了，跳出 Rule 迴圈
                         }
@@ -1317,26 +1335,53 @@ int TechMapper::mapTechnologyCore(Netlist& netlist,
             GateType type = netlist.getGate(gateId).type;
             if (bestForwardRule.count(type)) {
                 const TechMapRule* bestRule = bestForwardRule[type];
-                applyForwardMapping(netlist, gateId, *bestRule);
-                totalGateChange += (bestRule->addedGateCount - 1); 
+                
+                // 紀錄即將被拔除的目標 Gate
+                const Gate& g = netlist.getGate(gateId);
+                report.removedCountByType[g.type]++;
+                if (verbose) report.modifiedGateNames.push_back(g.instName);
+                
+                applyForwardMapping(netlist, gateId, *bestRule); 
+            }
+        }
+
+        // 利用 Snapshot 反推「新增數量」
+        // (因為 applyForwardMapping 內部可能建構了多種基礎閘)
+        for (GateType t : allowedTypes) {
+            int currentCount = netlist.getGateCountByType(t);
+            int explicitlyRemoved = report.removedCountByType[t]; // 防止同類型的閘被誤扣
+            int calculatedAdded = currentCount - initialCounts[t] + explicitlyRemoved;
+            
+            if (calculatedAdded > 0) {
+                report.addedCountByType[t] += calculatedAdded;
             }
         }
     }
 
-    return totalGateChange;
+    // 寫入最終的 Final 快照
+    for (GateType t : allowedTypes) report.finalGateCount[t] = netlist.getGateCountByType(t);
+    for (GateType t : targetTypes)  report.finalGateCount[t] = netlist.getGateCountByType(t);
+
+    return report;
 }
 
 // 萬用 API 實作 (直接呼叫 Core，scopeGates 給 nullptr 代表全部)
-int TechMapper::mapTechnology(Netlist& netlist, const std::vector<GateType>& targetTypes, const std::vector<GateType>& allowedTypes, bool isOneToMany) {
-    return mapTechnologyCore(netlist, targetTypes, allowedTypes, isOneToMany, nullptr);
+TechMapReport TechMapper::mapTechnology(Netlist& netlist, 
+                                        const std::vector<GateType>& targetTypes, 
+                                        const std::vector<GateType>& allowedTypes, 
+                                        bool isOneToMany,
+                                        bool verbose) {
+    // 直接將參數與 verbose 往下傳遞，回傳型態自動對齊 TechMapReport
+    return mapTechnologyCore(netlist, targetTypes, allowedTypes, isOneToMany, nullptr, verbose);
 }
 
 // 針對 Cone 的 API 實作 (使用 Netlist 內建的 getConeGateIds)
-int TechMapper::mapTechnologyForCone(Netlist& netlist, 
-                              const std::vector<GateType>& targetTypes, 
-                              const std::vector<GateType>& allowedTypes, 
-                              bool isOneToMany, 
-                              const ConeResult& targetCone) {
+TechMapReport TechMapper::mapTechnologyForCone(Netlist& netlist, 
+                                               const std::vector<GateType>& targetTypes, 
+                                               const std::vector<GateType>& allowedTypes, 
+                                               bool isOneToMany, 
+                                               const ConeResult& targetCone,
+                                               bool verbose) {
                               
     // 呼叫 Netlist 原本就有的 Function 取得 Gate 陣列
     std::vector<int> coneGateVec = netlist.getConeGateIds(targetCone);
@@ -1345,12 +1390,17 @@ int TechMapper::mapTechnologyForCone(Netlist& netlist,
     std::unordered_set<int> scopeGates(coneGateVec.begin(), coneGateVec.end());
     
     // 呼叫核心引擎！
-    return mapTechnologyCore(netlist, targetTypes, allowedTypes, isOneToMany, &scopeGates);
+    return mapTechnologyCore(netlist, targetTypes, allowedTypes, isOneToMany, &scopeGates, verbose);
 }
 
 // 核心輔助函式：給定「允許使用的基礎閘」，自動把其他所有的組合邏輯閘拆解
 // 核心輔助函式：根據 TargetScope 解析 Cone，並呼叫底層引擎
-int TechMapper::convertToBasis(Netlist& netlist, const std::vector<GateType>& allowedTypes, TargetScope scope, const std::string& name) {
+TechMapReport TechMapper::convertToBasis(Netlist& netlist, 
+                                         const std::vector<GateType>& allowedTypes, 
+                                         TargetScope scope, 
+                                         const std::string& name, 
+                                         bool verbose) {
+
     std::unordered_set<GateType> allowedSet(allowedTypes.begin(), allowedTypes.end());
     std::vector<GateType> targetTypes;
 
@@ -1369,108 +1419,109 @@ int TechMapper::convertToBasis(Netlist& netlist, const std::vector<GateType>& al
     // 如果是 WHOLE_NETLIST，就呼叫原本不需要 Cone 的 mapTechnology
     switch (scope) {
         case TargetScope::WHOLE_NETLIST:
-            return mapTechnology(netlist, targetTypes, allowedTypes, true);
+            return mapTechnology(netlist, targetTypes, allowedTypes, true, verbose);
             
         case TargetScope::NET_FANIN:
-            return mapTechnologyForCone(netlist, targetTypes, allowedTypes, true, netlist.getTransitiveFaninCone(name));
+            return mapTechnologyForCone(netlist, targetTypes, allowedTypes, true, netlist.getTransitiveFaninCone(name), verbose);
             
         case TargetScope::NET_FANOUT:
-            return mapTechnologyForCone(netlist, targetTypes, allowedTypes, true, netlist.getTransitiveFanoutCone(name));
+            return mapTechnologyForCone(netlist, targetTypes, allowedTypes, true, netlist.getTransitiveFanoutCone(name), verbose);
             
         case TargetScope::GATE_FANIN:
-            return mapTechnologyForCone(netlist, targetTypes, allowedTypes, true, netlist.getGateTransitiveFaninCone(name));
+            return mapTechnologyForCone(netlist, targetTypes, allowedTypes, true, netlist.getGateTransitiveFaninCone(name), verbose);
             
         case TargetScope::GATE_FANOUT:
-            return mapTechnologyForCone(netlist, targetTypes, allowedTypes, true, netlist.getGateTransitiveFanoutCone(name));
+            return mapTechnologyForCone(netlist, targetTypes, allowedTypes, true, netlist.getGateTransitiveFanoutCone(name), verbose);
             
         default:
-            return 0; // 防呆
+            return TechMapReport(); // 防呆：回傳空報告
     }
 }
 
 // 將整個 netlist 轉成 {AND, NOT} (AIG: And-Inverter Graph)
-int TechMapper::convertToAndNot(Netlist& netlist, TargetScope scope, const std::string& name) {
-    return convertToBasis(netlist, {GateType::AND, GateType::NOT}, scope, name);
+TechMapReport TechMapper::convertToAndNot(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
+    return convertToBasis(netlist, {GateType::AND, GateType::NOT}, scope, name, verbose);
 }
 
 // 將整個 netlist 轉成 {OR, NOT} (OIG: Or-Inverter Graph)
-int TechMapper::convertToOrNot(Netlist& netlist, TargetScope scope, const std::string& name) {
-    return convertToBasis(netlist, {GateType::OR, GateType::NOT}, scope, name);
+TechMapReport TechMapper::convertToOrNot(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
+    return convertToBasis(netlist, {GateType::OR, GateType::NOT}, scope, name, verbose);
 }
 
 // 將整個 netlist 轉成 {NAND} (純 NAND 網路)
 // 說明：NAND 是 Universal Gate (萬用閘)。在早期 TTL 或現代 CMOS 中，NAND 的電晶體堆疊最少，
 // 速度最快，這是一個非常符合物理特性的轉換。
-int TechMapper::convertToNand(Netlist& netlist, TargetScope scope, const std::string& name) {
-    return convertToBasis(netlist, {GateType::NAND}, scope, name);
+TechMapReport TechMapper::convertToNand(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
+    return convertToBasis(netlist, {GateType::NAND}, scope, name, verbose);
 }
 
 // 將整個 netlist 轉成 {NOR} (純 NOR 網路)
 // 說明：NOR 同樣是 Universal Gate，常用於一些特殊的記憶體周邊控制電路。
-int TechMapper::convertToNor(Netlist& netlist, TargetScope scope, const std::string& name) {
-    return convertToBasis(netlist, {GateType::NOR}, scope, name);
+TechMapReport TechMapper::convertToNor(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
+    return convertToBasis(netlist, {GateType::NOR}, scope, name, verbose);
 }
 
 // 將整個 netlist 轉成 XAG (XOR-AND Graph)
 // 說明：由 {XOR, AND, NOT} 組成。XAG 在現代 EDA 非常紅！
 // 在全同態加密 (FHE) 與量子運算中，XOR 通常是 Free (不用成本) 的，
 // 而 AND 需要消耗極大的資源，所以會特別使用 XAG 來做進一步的最佳化。
-int TechMapper::convertToXag(Netlist& netlist, TargetScope scope, const std::string& name) {
-    return convertToBasis(netlist, {GateType::XOR, GateType::AND, GateType::NOT}, scope, name);
+TechMapReport TechMapper::convertToXag(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
+    return convertToBasis(netlist, {GateType::XOR, GateType::AND, GateType::NOT}, scope, name, verbose);
 }
 
 // 將整個 netlist 轉成 {XOR, AND} (ANF: Algebraic Normal Form)
 // 說明：又稱 Reed-Muller 展開。這是一種沒有 NOT 閘的代數結構！
 // 引擎非常聰明，遇到 NOT 閘時，會自動使用查表裡的 A XOR 1 來替換，
-int TechMapper::convertToAnf(Netlist& netlist, TargetScope scope, const std::string& name) {
-    return convertToBasis(netlist, {GateType::XOR, GateType::AND}, scope, name);
+TechMapReport TechMapper::convertToAnf(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
+    return convertToBasis(netlist, {GateType::XOR, GateType::AND}, scope, name, verbose);
 }
 
 // 將整個 netlist 轉成 {XOR, OR}
 // 說明：這是另一種特化的代數基底映射。
-int TechMapper::convertToXorOr(Netlist& netlist, TargetScope scope, const std::string& name) {
-    return convertToBasis(netlist, {GateType::XOR, GateType::OR}, scope, name);
+TechMapReport TechMapper::convertToXorOr(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
+    return convertToBasis(netlist, {GateType::XOR, GateType::OR}, scope, name, verbose);
 }
 
 // 將整個 netlist 轉成 {XNOR, AND}
 // 說明：XNOR 與 XOR 具有對稱性，在某些 Cell Library 中 XNOR 的面積更小。
 // NOT 閘會被自動替換為 A XNOR 0。
-int TechMapper::convertToXnorAnd(Netlist& netlist, TargetScope scope, const std::string& name) {
-    return convertToBasis(netlist, {GateType::XNOR, GateType::AND}, scope, name);
+TechMapReport TechMapper::convertToXnorAnd(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
+    return convertToBasis(netlist, {GateType::XNOR, GateType::AND}, scope, name, verbose);
 }
 
 // 將整個 netlist 轉成 {XNOR, OR}
 // 說明：特化的邏輯合成基底。
-int TechMapper::convertToXnorOr(Netlist& netlist, TargetScope scope, const std::string& name) {
-    return convertToBasis(netlist, {GateType::XNOR, GateType::OR}, scope, name);
+TechMapReport TechMapper::convertToXnorOr(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
+    return convertToBasis(netlist, {GateType::XNOR, GateType::OR}, scope, name, verbose);
 }
 
 // 給使用者呼叫的任意修改 API 
-int TechMapper::customMapTechnology(Netlist& netlist, 
+TechMapReport TechMapper::customMapTechnology(Netlist& netlist, 
                                     const std::vector<GateType>& targetTypes, 
                                     const std::vector<GateType>& allowedTypes, 
                                     bool isOneToMany, 
                                     TargetScope scope, 
-                                    const std::string& name) {
+                                    const std::string& name,
+                                    bool verbose) {
     
     // 根據使用者指定的 Scope，自動產生對應的 Cone 並呼叫底層的 API
     switch (scope) {
         case TargetScope::WHOLE_NETLIST:
-            return mapTechnology(netlist, targetTypes, allowedTypes, isOneToMany);
+            return mapTechnology(netlist, targetTypes, allowedTypes, isOneToMany, verbose);
             
         case TargetScope::NET_FANIN:
-            return mapTechnologyForCone(netlist, targetTypes, allowedTypes, isOneToMany, netlist.getTransitiveFaninCone(name));
+            return mapTechnologyForCone(netlist, targetTypes, allowedTypes, isOneToMany, netlist.getTransitiveFaninCone(name), verbose);
             
         case TargetScope::NET_FANOUT:
-            return mapTechnologyForCone(netlist, targetTypes, allowedTypes, isOneToMany, netlist.getTransitiveFanoutCone(name));
+            return mapTechnologyForCone(netlist, targetTypes, allowedTypes, isOneToMany, netlist.getTransitiveFanoutCone(name), verbose);
             
         case TargetScope::GATE_FANIN:
-            return mapTechnologyForCone(netlist, targetTypes, allowedTypes, isOneToMany, netlist.getGateTransitiveFaninCone(name));
+            return mapTechnologyForCone(netlist, targetTypes, allowedTypes, isOneToMany, netlist.getGateTransitiveFaninCone(name), verbose);
             
         case TargetScope::GATE_FANOUT:
-            return mapTechnologyForCone(netlist, targetTypes, allowedTypes, isOneToMany, netlist.getGateTransitiveFanoutCone(name));
+            return mapTechnologyForCone(netlist, targetTypes, allowedTypes, isOneToMany, netlist.getGateTransitiveFanoutCone(name), verbose);
             
         default:
-            return 0; // 防呆機制
+            return TechMapReport(); // 防呆機制：回傳空報告
     }
 }
