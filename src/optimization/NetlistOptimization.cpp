@@ -109,6 +109,7 @@ int Netlist::trimDeadLogic() {
 //  回傳移除的 inverter pair 數量
 // ─────────────────────────────────────────────────────────────────────────────
 int Netlist::collapseBackToBackInverters() {
+    cleanupAllRemovableBuffers(); // 先清掉中間可能存在的 BUF
     int collapsed = 0;
     bool changed = true;
 
@@ -896,4 +897,449 @@ int Netlist::mergeStructurallyEquivalentGates() {
 
     if (merged > 0) trimDeadLogic();
     return merged;
+}
+
+// =============================================================================
+//  B-5: Unique name generator（P0）
+//  【說明】產生不會撞名的 gate / net 名稱，避免 repeated pass 後命名衝突。
+// =============================================================================
+
+std::string Netlist::makeUniqueGateName(const std::string& prefix) const {
+    int counter = 0;
+    while (true) {
+        std::string name = prefix + "_" + std::to_string(counter++);
+        if (gateNameToId.find(name) == gateNameToId.end()) return name;
+    }
+}
+
+std::string Netlist::makeUniqueNetName(const std::string& prefix) const {
+    int counter = 0;
+    while (true) {
+        std::string name = prefix + "_" + std::to_string(counter++);
+        if (netNameToId.find(name) == netNameToId.end()) return name;
+    }
+}
+
+int Netlist::addGateWithUniqueName(const std::string& prefix, GateType type) {
+    return addGate(makeUniqueGateName(prefix), type);
+}
+
+int Netlist::addNetWithUniqueName(const std::string& prefix) {
+    return addNet(makeUniqueNetName(prefix));
+}
+
+// =============================================================================
+//  B-4: Gate replacement primitives（P0）
+//  【說明】把 gate 直接替換成 net / NOT(net) / constant，是 constant propagation
+//          和 same-input 化簡的共同底層。
+// =============================================================================
+
+// 把 gate 的 output 改成直接由 sourceNet 驅動（gate 本身消失）
+bool Netlist::replaceGateWithNet(int gateId, int sourceNetId) {
+    if (gateId < 0 || gateId >= (int)gates.size()) return false;
+    if (sourceNetId < 0 || sourceNetId >= (int)nets.size()) return false;
+    Gate& g = gates[gateId];
+    if (g.type == GateType::UNKNOWN) return false;
+    int outNetId = g.outputNetId;
+    if (outNetId < 0) return false;
+    if (nets[outNetId].isPO) return false; // PO-safe 版本請用 preservePortNetAndReplaceDriver
+
+    replaceAllLoadsOfNet(outNetId, sourceNetId);
+    for (int inNetId : g.inputNetIds) {
+        if (inNetId < 0) continue;
+        auto& loads = nets[inNetId].loadGateIds;
+        loads.erase(std::remove(loads.begin(), loads.end(), gateId), loads.end());
+    }
+    nets[outNetId].driverGateId = -1;
+    g.type = GateType::UNKNOWN; g.inputNetIds.clear(); g.outputNetId = -1;
+    return true;
+}
+
+// 把 gate 替換成常數 net（直接改接所有 load）
+bool Netlist::replaceGateWithConstant(int gateId, int constNetId) {
+    return replaceGateWithNet(gateId, constNetId);
+}
+
+// 把 gate 替換成 NOT(sourceNet)（gate 被改寫成 NOT gate）
+bool Netlist::replaceGateWithNotOfNet(int gateId, int sourceNetId) {
+    if (gateId < 0 || gateId >= (int)gates.size()) return false;
+    if (sourceNetId < 0 || sourceNetId >= (int)nets.size()) return false;
+    Gate& g = gates[gateId];
+    if (g.type == GateType::UNKNOWN) return false;
+    if (g.outputNetId < 0 || nets[g.outputNetId].isPO) return false;
+
+    // 從所有原本的 input net 移除此 gate
+    for (int inNetId : g.inputNetIds) {
+        if (inNetId < 0) continue;
+        auto& loads = nets[inNetId].loadGateIds;
+        loads.erase(std::remove(loads.begin(), loads.end(), gateId), loads.end());
+    }
+    g.type = GateType::NOT;
+    g.inputNetIds = { sourceNetId };
+    nets[sourceNetId].loadGateIds.push_back(gateId);
+    return true;
+}
+
+// 新增一個 gate 並讓它驅動指定的 outputNet
+// 回傳新 gate 的 ID；失敗回傳 -1
+int Netlist::createGateDrivingNet(
+    GateType type,
+    const std::vector<int>& inputNetIds,
+    int outputNetId,
+    const std::string& nameHint)
+{
+    if (outputNetId < 0 || outputNetId >= (int)nets.size()) return -1;
+
+    int gateId = addGateWithUniqueName(nameHint.empty() ? "_cg" : nameHint, type);
+    gates[gateId].outputNetId = outputNetId;
+    nets[outputNetId].driverGateId = gateId;
+
+    for (int inNetId : inputNetIds) {
+        if (inNetId < 0 || inNetId >= (int)nets.size()) continue;
+        gates[gateId].inputNetIds.push_back(inNetId);
+        nets[inNetId].loadGateIds.push_back(gateId);
+    }
+    return gateId;
+}
+
+// 把 gate 的所有 pin 斷開，標記為 UNKNOWN（不 compact）
+bool Netlist::removeGateAndDetachPins(int gateId) {
+    return markGateRemoved(gateId);
+}
+
+// =============================================================================
+//  B-1: Pin-level 精準改線 primitive（P0）
+//  【說明】讓 rewrite pass 可以精確改指定的 input pin，不影響其他 pin。
+// =============================================================================
+
+// 斷開指定 gate 的第 pinIndex 個 input pin
+bool Netlist::disconnectGateInputPin(int gateId, int pinIndex) {
+    if (gateId < 0 || gateId >= (int)gates.size()) return false;
+    Gate& g = gates[gateId];
+    if (pinIndex < 0 || pinIndex >= (int)g.inputNetIds.size()) return false;
+
+    int oldNetId = g.inputNetIds[pinIndex];
+    if (oldNetId >= 0 && oldNetId < (int)nets.size()) {
+        auto& loads = nets[oldNetId].loadGateIds;
+        loads.erase(std::remove(loads.begin(), loads.end(), gateId), loads.end());
+    }
+    g.inputNetIds[pinIndex] = -1;
+    return true;
+}
+
+// 把指定 gate 的第 pinIndex 個 input pin 接到 netId
+bool Netlist::connectGateInputPin(int gateId, int pinIndex, int netId) {
+    if (gateId < 0 || gateId >= (int)gates.size()) return false;
+    if (netId < 0 || netId >= (int)nets.size()) return false;
+    Gate& g = gates[gateId];
+
+    // 如果 pinIndex 超出現有大小，先擴充
+    if (pinIndex >= (int)g.inputNetIds.size())
+        g.inputNetIds.resize(pinIndex + 1, -1);
+
+    // 先斷開舊的
+    int oldNetId = g.inputNetIds[pinIndex];
+    if (oldNetId >= 0 && oldNetId < (int)nets.size()) {
+        auto& loads = nets[oldNetId].loadGateIds;
+        loads.erase(std::remove(loads.begin(), loads.end(), gateId), loads.end());
+    }
+
+    g.inputNetIds[pinIndex] = netId;
+    nets[netId].loadGateIds.push_back(gateId);
+    return true;
+}
+
+// 把指定 gate 的第 pinIndex 個 input pin 改接到 newNetId（先斷舊再連新）
+bool Netlist::reconnectGateInputPin(int gateId, int pinIndex, int newNetId) {
+    return connectGateInputPin(gateId, pinIndex, newNetId);
+}
+
+// 用名稱版本：把指定 gate 的 pinName pin 改接到 newNetName
+bool Netlist::reconnectGateInputPinByName(
+    const std::string& gateName,
+    const std::string& pinName,
+    const std::string& newNetName)
+{
+    int gateId = getGateId(gateName);
+    int newNetId = getNetId(newNetName);
+    if (gateId < 0 || newNetId < 0) return false;
+
+    Gate& g = gates[gateId];
+    // 找 pinName 對應的 index
+    for (int i = 0; i < (int)g.inputPinNames.size(); i++) {
+        if (g.inputPinNames[i] == pinName) {
+            return reconnectGateInputPin(gateId, i, newNetId);
+        }
+    }
+    return false;
+}
+
+// =============================================================================
+//  B-2: PO-safe output rewrite primitive（P1）
+//  【說明】當 output net 是 PO 時，不能直接移掉 net，要保留 port name，改變 driver。
+// =============================================================================
+
+// 把 targetNet 的 driver 改成 newDriverGate
+// targetNet 保留（含 PO flag / name），只換掉是誰在驅動它
+bool Netlist::replaceDriverOfNet(int targetNetId, int newDriverGateId) {
+    if (targetNetId < 0 || targetNetId >= (int)nets.size()) return false;
+    if (newDriverGateId < 0 || newDriverGateId >= (int)gates.size()) return false;
+
+    int oldDriver = nets[targetNetId].driverGateId;
+    if (oldDriver >= 0 && oldDriver < (int)gates.size())
+        gates[oldDriver].outputNetId = -1;
+
+    nets[targetNetId].driverGateId = newDriverGateId;
+    gates[newDriverGateId].outputNetId = targetNetId;
+    return true;
+}
+
+// 把 gate 的 output 改接到 newOutputNetId（舊的 output net 不動，只斷開）
+bool Netlist::rewireGateOutputToExistingNet(int gateId, int newOutputNetId) {
+    if (gateId < 0 || gateId >= (int)gates.size()) return false;
+    if (newOutputNetId < 0 || newOutputNetId >= (int)nets.size()) return false;
+
+    int oldOutNet = gates[gateId].outputNetId;
+    if (oldOutNet >= 0 && oldOutNet < (int)nets.size())
+        if (nets[oldOutNet].driverGateId == gateId)
+            nets[oldOutNet].driverGateId = -1;
+
+    gates[gateId].outputNetId = newOutputNetId;
+    nets[newOutputNetId].driverGateId = gateId;
+    return true;
+}
+
+// 保留 PO net（不改名、不移除），但插入一個新 gate 來驅動它
+// 等於：新建 gate(type, inputNetIds) -> poNetId
+bool Netlist::preservePortNetAndReplaceDriver(
+    int poNetId,
+    GateType newGateType,
+    const std::vector<int>& inputNetIds)
+{
+    if (poNetId < 0 || poNetId >= (int)nets.size()) return false;
+
+    // 移除舊 driver 的 outputNetId
+    int oldDriver = nets[poNetId].driverGateId;
+    if (oldDriver >= 0 && oldDriver < (int)gates.size())
+        gates[oldDriver].outputNetId = -1;
+
+    // 新增一個 gate 驅動這個 PO net
+    int newGateId = createGateDrivingNet(newGateType, inputNetIds, poNetId, "_po_drv");
+    return newGateId >= 0;
+}
+
+// 把 targetNet 的功能換成 sourceNet 的功能，但保留 targetNet 的名稱與 PO flag
+// 做法：在 targetNet 前面插入一個 BUF，讓 sourceNet -> BUF -> targetNet
+bool Netlist::replaceNetFunctionWithNetKeepingName(int targetNetId, int sourceNetId) {
+    if (targetNetId < 0 || targetNetId >= (int)nets.size()) return false;
+    if (sourceNetId < 0 || sourceNetId >= (int)nets.size()) return false;
+    if (targetNetId == sourceNetId) return true;
+
+    // 如果 targetNet 不是 PO，直接 replaceAllLoadsOfNet 即可
+    if (!nets[targetNetId].isPO) {
+        return replaceAllLoadsOfNet(targetNetId, sourceNetId);
+    }
+
+    // 如果是 PO，插入一個 BUF：sourceNet -> BUF -> targetNet
+    return preservePortNetAndReplaceDriver(targetNetId, GateType::BUF, { sourceNetId });
+}
+
+// =============================================================================
+//  B-3: Net merge / net bypass primitive（P1）
+//  【說明】完整處理 PI / PO / constant / driver / loads 的 net merge。
+// =============================================================================
+
+// 把 fromNet 完全合併到 toNet：fromNet 的所有 load 改接到 toNet，fromNet 清空
+//把fromNet的東西繼承給toNet，刪除fromNet
+bool Netlist::mergeNetIntoNet(int fromNetId, int toNetId) {
+    if (fromNetId < 0 || fromNetId >= (int)nets.size()) return false;
+    if (toNetId < 0 || toNetId >= (int)nets.size()) return false;
+    if (fromNetId == toNetId) return true;
+
+    // 如果 fromNet 是 PO，把 PO 語意也轉移到 toNet
+    if (nets[fromNetId].isPO) {
+        nets[toNetId].isPO = true;
+        for (int pi = 0; pi < (int)primaryOutputs.size(); pi++)
+            for (int pj = 0; pj < (int)primaryOutputs[pi].netIds.size(); pj++)
+                if (primaryOutputs[pi].netIds[pj] == fromNetId)
+                    primaryOutputs[pi].netIds[pj] = toNetId;
+    }
+
+    replaceAllLoadsOfNet(fromNetId, toNetId);
+
+    // 清除 fromNet 的 driver 連線
+    int drv = nets[fromNetId].driverGateId;
+    if (drv >= 0 && drv < (int)gates.size())
+        if (gates[drv].outputNetId == fromNetId)
+            gates[drv].outputNetId = -1;
+    nets[fromNetId].driverGateId = -1;
+
+    return true;
+}
+
+// bypass removedNet，讓所有接到它的 gate 改接到 replacementNet
+// 同時保留 PO 語意（若 removedNet 是 PO）
+bool Netlist::bypassNetKeepingPortSemantics(int removedNetId, int replacementNetId) {
+    return mergeNetIntoNet(removedNetId, replacementNetId);
+}
+
+// 把 oldNet 的所有 load 改接到 newNet（allowDuplicateLoads 控制是否允許重複）
+bool Netlist::redirectAllLoads(int oldNetId, int newNetId, bool allowDuplicateLoads) {
+    if (oldNetId < 0 || oldNetId >= (int)nets.size()) return false;
+    if (newNetId < 0 || newNetId >= (int)nets.size()) return false;
+    if (oldNetId == newNetId) return false;
+
+    Net& oldNet = nets[oldNetId];
+    Net& newNet = nets[newNetId];
+
+    for (int lgid : oldNet.loadGateIds) {
+        if (lgid < 0 || lgid >= (int)gates.size()) continue;
+        Gate& g = gates[lgid];
+        for (int k = 0; k < (int)g.inputNetIds.size(); k++)
+            if (g.inputNetIds[k] == oldNetId) g.inputNetIds[k] = newNetId;
+
+        if (!allowDuplicateLoads) {
+            bool already = false;
+            for (int id : newNet.loadGateIds) if (id == lgid) { already = true; break; }
+            if (!already) newNet.loadGateIds.push_back(lgid);
+        } else {
+            newNet.loadGateIds.push_back(lgid);
+        }
+    }
+    oldNet.loadGateIds.clear();
+    return true;
+}
+
+// 如果 net 沒有任何 load 且不是 PO / PI / const，把它從 netlist 移除
+bool Netlist::removeNetIfUnused(int netId) {
+    if (netId < 0 || netId >= (int)nets.size()) return false;
+    const Net& n = nets[netId];
+    if (n.isPO || n.isPI || n.isConst) return false;
+    if (!n.loadGateIds.empty()) return false;
+
+    // 通知 driver gate
+    if (n.driverGateId >= 0 && n.driverGateId < (int)gates.size())
+        if (gates[n.driverGateId].outputNetId == netId)
+            gates[n.driverGateId].outputNetId = -1;
+
+    // 用 sentinel 標記（不真的 erase，避免 ID shift）
+    nets[netId].driverGateId = -1;
+    nets[netId].loadGateIds.clear();
+    // 不 erase，保留 slot，讓 compact 時處理
+    return true;
+}
+
+// 掃描所有 net，移除沒有 load 且非 PO/PI/const 的 net(計算出移除掉的net數量)
+int Netlist::removeUnusedNets() {
+    int removed = 0;
+    for (int i = 0; i < (int)nets.size(); i++)
+        if (removeNetIfUnused(i)) removed++;
+    return removed;
+}
+
+// =============================================================================
+//  B-6: Transaction / rollback primitive（P0）
+//  【說明】正式的 snapshot / restore API，讓 rewrite pass 失敗時可以乾淨還原。
+// =============================================================================
+
+bool Netlist::restoreFrom(const Netlist& backup) {
+    *this = backup;
+    return true;
+}
+
+bool Netlist::validateAfterMutation() const {
+    return validateStructure() && validateProblemAConstraints();
+}
+
+// =============================================================================
+//  B-7: Cleanup fixpoint runner（P1）
+//  【說明】反覆執行 constant propagation / same-input 化簡，直到沒有新的機會。
+// =============================================================================
+
+// 對所有 gate 執行一輪 constant propagation，回傳化簡的 gate 數
+int Netlist::simplifyAllGatesWithConstants() {
+    int count = 0;
+    for (int i = 0; i < (int)gates.size(); i++)
+        if (simplifyGateWithConstant(i)) count++;
+    return count;
+}
+
+// 對所有 gate 執行一輪 same-input 化簡，回傳化簡的 gate 數
+int Netlist::simplifyAllSameInputGates() {
+    int count = 0;
+    for (int i = 0; i < (int)gates.size(); i++)
+        if (simplifySameInputGate(i)) count++;
+    return count;
+}
+
+// 反覆執行所有 local simplification，直到 fixpoint（沒有任何改變）
+// 回傳總共化簡的 gate 數
+int Netlist::runLocalSimplificationFixpoint() {
+    int total = 0;
+    bool changed = true;
+    while (changed) {
+        changed = false;
+        int r1 = simplifyAllGatesWithConstants();
+        int r2 = simplifyAllSameInputGates();
+        int r3 = cleanupAllRemovableBuffers();
+        int r4 = collapseBackToBackInverters();
+        int r5 = removeDanglingLogic();
+        int round = r1 + r2 + r3 + r4 + r5;
+        total += round;
+        if (round > 0) changed = true;
+    }
+    return total;
+}
+
+// =============================================================================
+//  B-8: compactRemovedGatesWithIdMap（P2）
+//  【說明】compaction 後回傳 oldToNew / newToOld ID map，讓外部能追蹤 gate ID 變化。
+// =============================================================================
+
+Netlist::CompactResult Netlist::compactRemovedGatesWithIdMap() {
+    CompactResult result;
+    result.removedGateCount = 0;
+
+    std::unordered_set<int> deadSet;
+    for (int i = 0; i < (int)gates.size(); i++)
+        if (gates[i].type == GateType::UNKNOWN) deadSet.insert(i);
+
+    if (deadSet.empty()) return result;
+
+    for (int i = 0; i < (int)nets.size(); i++) {
+        std::vector<int> newLoads;
+        for (int lgid : nets[i].loadGateIds)
+            if (!deadSet.count(lgid)) newLoads.push_back(lgid);
+        nets[i].loadGateIds = newLoads;
+    }
+
+    std::vector<Gate> newGates;
+    for (int i = 0; i < (int)gates.size(); i++) {
+        if (!deadSet.count(i)) {
+            int newId = (int)newGates.size();
+            result.oldToNewGateId[i] = newId;
+            result.newToOldGateId[newId] = i;
+            newGates.push_back(gates[i]);
+            newGates.back().id = newId;
+        }
+    }
+
+    for (int i = 0; i < (int)nets.size(); i++) {
+        if (nets[i].driverGateId >= 0) {
+            auto it = result.oldToNewGateId.find(nets[i].driverGateId);
+            nets[i].driverGateId = (it != result.oldToNewGateId.end()) ? it->second : -1;
+        }
+        for (int& lgid : nets[i].loadGateIds) {
+            auto it = result.oldToNewGateId.find(lgid);
+            lgid = (it != result.oldToNewGateId.end()) ? it->second : -1;
+        }
+    }
+
+    gateNameToId.clear();
+    for (int i = 0; i < (int)newGates.size(); i++)
+        gateNameToId[newGates[i].instName] = i;
+
+    result.removedGateCount = (int)gates.size() - (int)newGates.size();
+    gates = newGates;
+    return result;
 }
