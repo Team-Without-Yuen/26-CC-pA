@@ -10,6 +10,7 @@
 #include "include/core/PathTypes.h"
 #include "include/core/OptimizationTypes.h"
 #include "TransformationReport.h"
+#include "include/core/SatTime.h"
 
 // The core data structure representing the entire circuit graph
 class Netlist {
@@ -230,9 +231,12 @@ public:
     // 這一層只查「直接相連」的 gate/net 關係，不做 transitive cone 或 path traversal。
     // 之後會作為高階 DirectConnectivityQuery 的底層 helper。
     // =========================================================================
-
+    
     // 取得指定 net 的 driver gate ID；若 net 不存在、無 driver，或 bus 有多個 driver，回傳 -1。
     int getNetDriverGateId(const std::string& netName) const;
+
+    // getNetDriverGateId 的 ID 版本 (多載)
+    int getNetDriverGateId(int netId) const;
 
     // 取得指定 net / bus 每個 bit 的 driver gate IDs；會移除重複，無 driver 的 bit 會略過。
     std::vector<int> getNetDriverGateIds(const std::string& netName) const;
@@ -309,6 +313,8 @@ public:
     // - DFF output 視為 pseudo primary input，不穿越 DFF 回到 D pin。
     // - canNetBeValue / isNetConstantFunction 第一版只支援 scalar net。
     // =========================================================================
+
+    void encodeGateToCNF(CaDiCaL::Solver& solver, const Gate& gate) const;
 
     // 底層 LEC helper：檢查兩個訊號（支援多位寬）是否在所有輸入情況下功能完全相同。
     bool checkEquivalence(const std::string& netA, const std::string& netB) const;

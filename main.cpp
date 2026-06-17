@@ -2,11 +2,80 @@
 #include <map>
 #include <string>
 #include <vector>
+#include <algorithm>
+#include <limits>
 #include "include/core/Netlist.h"
 #include "include/core/TechMapper.h"
 #include "include/io/VerilogReader.h"
 #include "include/io/VerilogWriter.h"
 
+// =====================================================================
+// 輔助函式：字串與 GateType 的互相轉換
+// =====================================================================
+GateType stringToGateType(std::string s) {
+    std::transform(s.begin(), s.end(), s.begin(), ::toupper);
+    if (s == "AND") return GateType::AND;
+    if (s == "OR") return GateType::OR;
+    if (s == "NAND") return GateType::NAND;
+    if (s == "NOR") return GateType::NOR;
+    if (s == "NOT") return GateType::NOT;
+    if (s == "BUF") return GateType::BUF;
+    if (s == "XOR") return GateType::XOR;
+    if (s == "XNOR") return GateType::XNOR;
+    return GateType::UNKNOWN;
+}
+
+std::string gateTypeToString(GateType type) {
+    switch (type) {
+        case GateType::AND: return "AND";
+        case GateType::OR: return "OR";
+        case GateType::NAND: return "NAND";
+        case GateType::NOR: return "NOR";
+        case GateType::NOT: return "NOT";
+        case GateType::BUF: return "BUF";
+        case GateType::XOR: return "XOR";
+        case GateType::XNOR: return "XNOR";
+        default: return "UNKNOWN";
+    }
+}
+
+// =====================================================================
+// 輔助函式：互動式建立 Constraints Map
+// =====================================================================
+void promptForConstraints(std::map<GateType, int>& constraints, const std::string& mapName) {
+    std::cout << "\n>>> Setting up [" << mapName << "] <<<\n";
+    std::cout << "Please enter Gate Type (e.g., AND, OR) and its Count (e.g., 1, or -1 for unlimited).\n";
+    std::cout << "Type 'DONE' when you are finished with this list.\n";
+    
+    while (true) {
+        std::string gateStr;
+        std::cout << "  Gate Type (or DONE): ";
+        std::cin >> gateStr;
+        
+        std::transform(gateStr.begin(), gateStr.end(), gateStr.begin(), ::toupper);
+        if (gateStr == "DONE") break;
+
+        GateType type = stringToGateType(gateStr);
+        if (type == GateType::UNKNOWN) {
+            std::cout << "  [Warning] Unknown gate type! Please try again.\n";
+            continue;
+        }
+
+        int count;
+        std::cout << "  Count for " << gateStr << ": ";
+        while (!(std::cin >> count)) { // 防呆：避免使用者輸入非數字字元導致無窮迴圈
+            std::cin.clear();
+            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+            std::cout << "  [Error] Invalid number. Please enter an integer: ";
+        }
+        
+        constraints[type] = count;
+    }
+}
+
+// =====================================================================
+// 主程式 Main
+// =====================================================================
 int main(int argc, char* argv[]) {
     std::string inputFilePath;
     std::string outputFilePath = "output.v"; 
@@ -38,51 +107,80 @@ int main(int argc, char* argv[]) {
         return -1; 
     }
 
-    // 印出修改前的電路狀態
     std::cout << "  -> Parsing Successful.\n";
     std::cout << "  -> Initial Gate Count : " << myCircuit.getGateCount() << "\n";
     std::cout << "  -> Initial Wire Count : " << myCircuit.getNetCount() << "\n\n";
 
     // ==========================================
-    // Step 2: 執行 Technology Mapping (電路改寫)
+    // Step 2: 執行 Technology Mapping (互動測試)
     // ==========================================
-    std::cout << "[Step 2] Executing Technology Mapping (Modification Mode)..." << std::endl;
+    std::cout << "[Step 2] Interactive Custom Technology Mapping" << std::endl;
     
-    TechMapper mapper; 
+    std::map<GateType, int> targetConstraints;
+    std::map<GateType, int> allowedConstraints;
 
-    // 設定情境：把所有複雜的邏輯閘拔除
-    std::vector<GateType> targetTypes = {
-        GateType::AND, GateType::OR, GateType::XOR, GateType::XNOR, GateType::BUF
-    };
-    // 允許使用的 Cell Library：只允許使用 NAND, NOR, NOT
-    std::vector<GateType> allowedTypes = {
-        GateType::NAND, GateType::NOR, GateType::NOT
-    };
+    // 1. 取得 Constraints
+    promptForConstraints(targetConstraints, "Target Constraints (Gates to Remove)");
+    promptForConstraints(allowedConstraints, "Allowed Constraints (Gates to Generate)");
 
-    // 【修改重點】設定為強制展開模式 (isOneToMany = true)
-    // 因為我們現在只是要「修改/拆解」電路，不需要做面積縮減的 Pattern Matching
-    bool isOneToMany = true;
+    // 2. 取得 Target Scope
+    std::cout << "\n>>> Select Target Scope <<<\n";
+    std::cout << "  0: WHOLE_NETLIST\n";
+    std::cout << "  1: NET_FANIN\n";
+    std::cout << "  2: NET_FANOUT\n";
+    std::cout << "  3: GATE_FANIN\n";
+    std::cout << "  4: GATE_FANOUT\n";
+    std::cout << "Enter choice (0-4): ";
     
-    // 啟動單向替換引擎
-    int gateChange = mapper.mapTechnology(myCircuit, targetTypes, allowedTypes, isOneToMany);
+    int scopeInput;
+    while (!(std::cin >> scopeInput) || scopeInput < 0 || scopeInput > 4) {
+        std::cin.clear();
+        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
+        std::cout << "  [Error] Invalid choice. Enter 0-4: ";
+    }
+    TargetScope scope = static_cast<TargetScope>(scopeInput);
 
-    std::cout << "  -> Modification Complete.\n";
-    if (gateChange < 0) {
-        std::cout << "  -> Gate count reduced by " << (-gateChange) << " gates.\n";
-    } else if (gateChange > 0) {
-        std::cout << "  -> Gate count increased by " << gateChange << " gates (due to decomposition).\n";
-    } else {
-        std::cout << "  -> Gate count remained unchanged.\n";
+    // 3. 取得 Target Name (若非 WHOLE_NETLIST)
+    std::string targetName = "";
+    if (scope != TargetScope::WHOLE_NETLIST) {
+        std::cout << "Enter the exact name of the Target Net/Gate: ";
+        std::cin >> targetName;
     }
 
-    // 計算真正存活的 Gate 數量 (過濾掉被標記為 UNKNOWN 的 Tombstone 墓碑)
-    size_t activeGateCount = 0;
-    for (size_t i = 0; i < myCircuit.getGateCount(); ++i) {
-        if (myCircuit.getGate(i).type != GateType::UNKNOWN) {
-            activeGateCount++;
-        }
+    // 4. 取得 Verbose 設定
+    std::cout << "\nEnable verbose logging? (1 for Yes, 0 for No): ";
+    bool verbose;
+    std::cin >> verbose;
+
+    // 5. 呼叫核心引擎！
+    TechMapper mapper;
+    std::cout << "\n[Info] Firing up the mapping engine...\n";
+    TechMapReport report = mapper.customMapTechnology(myCircuit, targetConstraints, allowedConstraints, scope, targetName, verbose);
+
+    // 6. 印出精美的結算報告
+    std::cout << "\n=========================================\n";
+    std::cout << "          TECH MAP REPORT                \n";
+    std::cout << "=========================================\n";
+    std::cout << "Status  : " << (int)report.status << " (" << report.message << ")\n";
+    
+    std::cout << "\n[Gates Removed]:\n";
+    if (report.removedCountByType.empty()) std::cout << "  (None)\n";
+    for (const auto& pair : report.removedCountByType) {
+        std::cout << "  - " << gateTypeToString(pair.first) << " : " << pair.second << "\n";
     }
-    std::cout << "  -> Final Active Gate Count : " << activeGateCount << "\n\n";
+
+    std::cout << "\n[Gates Added (Lookup Table & Exact Synthesis)]:\n";
+    if (report.addedCountByType.empty()) std::cout << "  (None)\n";
+    for (const auto& pair : report.addedCountByType) {
+        std::cout << "  - " << gateTypeToString(pair.first) << " : " << pair.second << "\n";
+    }
+
+    if (!report.synthesizedTopology.empty()) {
+        std::cout << "\n[Notice] Exact Synthesis was triggered and generated " 
+                  << report.synthesizedTopology.size() << " abstract gates.\n";
+    }
+
+    std::cout << "=========================================\n\n";
 
     // ==========================================
     // Step 3: 寫出修改後的 Verilog 檔案
