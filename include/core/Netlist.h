@@ -252,6 +252,28 @@ public:
     // 取得指定 net / bus 直接 load 到的 gate 數量；語意等同 getWireLoadCount。
     size_t getNetLoadGateCount(const std::string& netName) const;
 
+    // 依照 Problem A QA 的 fanout load 定義，回報指定 scalar net 的所有直接負載。
+    // 這個 API 不只看 gate input，也會把 primary output connection 算入。
+    // DFF input 會依 named pin 分成 D / CK / RN-SN / other。
+    FanoutLoadReport getFanoutLoadReport(int netId) const;
+
+    // 依照 Problem A QA 的 fanout load 定義，回報指定 net / bus 的所有直接負載。
+    // 若傳入 bus name，會 aggregate 每個 bit 的 fanout load。
+    FanoutLoadReport getFanoutLoadReport(const std::string& netName) const;
+
+    // 依照 Problem A QA 的 fanout load 定義，取得指定 net / bus 的總負載數。
+    // 注意：這和 getNetLoadGateCount() 不同；本 API 會把 primary output connection 算入。
+    size_t getFanoutLoadCount(const std::string& netName) const;
+
+    // 依照 Problem A QA 的 fanout load 定義掃描全設計或所有 primary inputs。
+    // maxFanoutLimit >= 0 時會填 violatingReports；primaryInputsOnly=true 時只檢查 PI nets。
+    GlobalFanoutReport getGlobalFanoutReport(int maxFanoutLimit = -1,
+                                             bool primaryInputsOnly = false,
+                                             bool includeZeroFanout = false) const;
+
+    // 判斷全設計是否符合指定 fanout limit；使用 Problem A QA fanout load 定義。
+    bool satisfiesFanoutLimit(int maxFanoutLimit) const;
+
     // 取得指定 gate 的所有有效 input net IDs；未連接 input 會被略過。
     std::vector<int> getGateInputNetIds(const std::string& gateInstName) const;
 
@@ -1090,6 +1112,8 @@ public:
     using DirectConnectivityQueryType = ::DirectConnectivityQueryType;
     using DirectConnectivityQuery = ::DirectConnectivityQuery;
     using DirectConnectivityReport = ::DirectConnectivityReport;
+    using FanoutLoadReport = ::FanoutLoadReport;
+    using GlobalFanoutReport = ::GlobalFanoutReport;
 
     // 執行統一 DirectConnectivityQuery；內部只呼叫 direct connectivity helper。
     DirectConnectivityReport runDirectConnectivityQuery(

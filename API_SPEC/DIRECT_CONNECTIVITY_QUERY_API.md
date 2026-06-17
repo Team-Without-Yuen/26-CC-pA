@@ -23,6 +23,8 @@ gate g1 的 input nets 是哪些？
 gate g1 的 output net 是什麼？
 哪些 gates 直接餵進 gate g1？
 gate g1 的 output 直接 fanout 到哪些 gates？
+net n1 依照 Problem A QA 定義有多少 fanout loads？
+net clk drive 哪些 DFF clock pins？
 gate g1 是否直接連到 net n2？
 ```
 
@@ -64,6 +66,24 @@ Gate immediate fanout = 該 gate output net 直接 load 到的下一層 gates
 若要跨多層找 reachable gates，應使用 Cone Query。
 ```
 
+Problem A QA fanout load 定義：
+
+```text
+fanout load =
+  primitive gate input pin
++ DFF D pin
++ DFF CK pin
++ DFF RN/SN pin
++ primary output connection
+```
+
+因此：
+
+```text
+NetLoads / GateFanout 只回答 gate instance adjacency。
+FanoutLoadReport 回答 QA 定義的 pin-level fanout load。
+```
+
 ---
 
 ## 3. 低階 Helper
@@ -103,7 +123,41 @@ size_t getNetLoadGateCount(const std::string& netName) const;
 
 ---
 
-### 3.3 Gate Inputs / Output
+### 3.3 Problem A Fanout Load Report
+
+```cpp
+FanoutLoadReport getFanoutLoadReport(int netId) const;
+FanoutLoadReport getFanoutLoadReport(const std::string& netName) const;
+size_t getFanoutLoadCount(const std::string& netName) const;
+```
+
+語意：
+
+```text
+依照 Problem A QA 的 fanout load 定義，回報 net 的 pin-level loads。
+它會把 primary output connection 算入，也會把 DFF input 依 named pin 分類。
+```
+
+| 欄位 | 意思 |
+|---|---|
+| `combinationalGateLoads` | primitive gate input pin loads |
+| `dffDataLoads` | DFF `.D` pin loads |
+| `dffClockLoads` | DFF `.CK` pin loads |
+| `dffResetSetLoads` | DFF `.RN` / `.SN` pin loads |
+| `dffOtherLoads` | 其他 DFF input pin loads |
+| `drivesPrimaryOutput` | 是否直接連到 primary output |
+| `primaryOutputLoadCount` | primary output connection 數 |
+| `totalLoadCount` | 符合 QA 定義的總 fanout load 數 |
+
+注意：
+
+```text
+同一顆 DFF 如果 .RN(net) 和 .SN(net) 都接同一條 net，會算成兩個 sink pin loads。
+```
+
+---
+
+### 3.4 Gate Inputs / Output
 
 ```cpp
 std::vector<int> getGateInputNetIds(const std::string& gateInstName) const;
@@ -120,7 +174,7 @@ std::string getGateOutputNetName(const std::string& gateInstName) const;
 
 ---
 
-### 3.4 Gate Immediate Fanin / Fanout
+### 3.5 Gate Immediate Fanin / Fanout
 
 ```cpp
 std::vector<int> getGateFaninGateIds(const std::string& gateInstName) const;
@@ -141,7 +195,7 @@ GateFanout 只看 gate output net 直接 load 到的下一層 gates。
 
 ---
 
-### 3.5 Direct Connection Check
+### 3.6 Direct Connection Check
 
 ```cpp
 bool isGateDirectlyConnectedToNet(const std::string& gateInstName,
@@ -175,6 +229,8 @@ DirectConnectivityReport runDirectConnectivityQuery(
 |---|---|
 | `NetDriver` | 查某個 net / bus 的直接 driver gate |
 | `NetLoads` | 查某個 net / bus 直接 load 到哪些 gates |
+| `FanoutLoadReport` | 依 Problem A QA fanout load 定義回報 pin-level loads |
+| `GlobalFanoutReport` | 掃描全設計或所有 PI 的 fanout loads / max / violations |
 | `GateInputs` | 查某個 gate 的直接 input nets |
 | `GateOutput` | 查某個 gate 的 output net |
 | `GateFanin` | 查直接驅動某 gate inputs 的上一層 gates |
@@ -219,6 +275,10 @@ struct DirectConnectivityReport {
 |---|---|
 | Which gate drives net n1? | `NetDriver` |
 | Report every gate connected to net n1. | `NetLoads` |
+| How many fanout loads does net n1 have? | `FanoutLoadReport` |
+| List DFF clock/reset loads driven by n1. | `FanoutLoadReport` |
+| Which primary input has the highest fanout? | `GlobalFanoutReport` with `primaryInputsOnly = true` |
+| Does every signal satisfy max fanout 16? | `GlobalFanoutReport` with `fanoutLimit = 16` |
 | Report every gate connected to the output of g0. | `GateFanout` |
 | What are the input nets of g1? | `GateInputs` |
 | What is the output net of g1? | `GateOutput` |
@@ -241,6 +301,7 @@ src/analysis/ConnectivityAnalysis.cpp
 ```text
 Net driver helper
 Net load helper
+Problem A fanout load report helper
 Gate input/output helper
 Gate immediate fanin/fanout helper
 Direct connection check
@@ -250,14 +311,13 @@ DirectConnectivityQuery / DirectConnectivityReport 高階 API
 測試狀態：
 
 ```text
-mini test/tester.cpp 已覆蓋 runDirectConnectivityQuery() 的 NetDriver / NetLoads / GateInputs / GateFanout / DirectlyConnected。
-目前 regression 結果：Summary: 45 passed, 0 failed.
+mini test/tester.cpp 已覆蓋 runDirectConnectivityQuery() 的 NetDriver / NetLoads / FanoutLoadReport / GlobalFanoutReport / GateInputs / GateFanout / DirectlyConnected。
+目前 regression 結果：Summary: 57 passed, 0 failed.
 ```
 
 後續可補：
 
 ```text
-1. 增加 pin-level report，例如 gate input pin index/name 與 net 的對應。
-2. 增加 whole-design fanout constraint report，例如列出 fanout > N 的 nets。
-3. 增加 clock/reset-aware direct connectivity classification。
+1. 若需要更細的 pin-level output，可補 gate input pin index/name 的文字化 report。
+2. 其他非 fanout-limit transformation / optimization pass 若有 fanout 判斷，也應逐步改用 pin-level sink。
 ```

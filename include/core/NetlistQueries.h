@@ -92,6 +92,8 @@ struct BasicReport {
 enum class DirectConnectivityQueryType {
     NetDriver,          // 查某個 net / bus 的直接 driver gate
     NetLoads,           // 查某個 net / bus 直接 load 到哪些 gates
+    FanoutLoadReport,   // 依 Problem A QA fanout load 定義回報 pin-level loads
+    GlobalFanoutReport, // 掃描全設計或所有 PI 的 fanout loads / max / violations
     GateInputs,         // 查某個 gate 的直接 input nets
     GateOutput,         // 查某個 gate 的 output net
     GateFanin,          // 查直接驅動某 gate inputs 的上一層 gates
@@ -102,9 +104,56 @@ enum class DirectConnectivityQueryType {
 struct DirectConnectivityQuery {
     DirectConnectivityQueryType type = DirectConnectivityQueryType::NetDriver;
     std::string gateName;     // GateInputs/GateOutput/GateFanin/GateFanout/DirectlyConnected 使用
-    std::string netName;      // NetDriver/NetLoads/DirectlyConnected 使用
+    std::string netName;      // NetDriver/NetLoads/FanoutLoadReport/DirectlyConnected 使用
+    int fanoutLimit = -1;     // GlobalFanoutReport 使用；-1 表示只回報 max，不檢查 violation
+    bool primaryInputsOnly = false; // GlobalFanoutReport 使用；true 時只掃 PI nets
+    bool includeZeroFanout = false; // GlobalFanoutReport 使用；true 時保留 0 fanout nets
     bool includeIds = true;   // 是否填 gateIds/netIds
     bool includeNames = true; // 是否填 gateNames/netNames
+};
+
+struct FanoutLoadReport {
+    bool ok = false;                         // net 是否存在並成功建立 report
+    std::string message;                     // debug / LLM response 用簡短訊息
+
+    int netId = -1;                          // scalar net ID；bus aggregate 時可為 -1
+    std::string netName;                     // scalar net 或 query name
+
+    // Problem A QA fanout load 分類：
+    // totalLoadCount =
+    //   combinational gate input pins
+    // + DFF D pins
+    // + DFF CK pins
+    // + DFF RN/SN pins
+    // + DFF other named input pins
+    // + primary output connections
+    std::vector<int> combinationalGateLoads; // primitive gate input pin loads；同 gate 多 pin 可能重複
+    std::vector<int> dffDataLoads;           // DFF .D pin loads
+    std::vector<int> dffClockLoads;          // DFF .CK pin loads
+    std::vector<int> dffResetSetLoads;       // DFF .RN / .SN pin loads
+    std::vector<int> dffOtherLoads;          // 其他 DFF input pin loads，保留給未來擴充
+    std::vector<int> allGateLoadIds;         // 上面所有 gate/DFF pin loads 的合併結果
+
+    bool drivesPrimaryOutput = false;        // 是否直接連到 primary output
+    size_t primaryOutputLoadCount = 0;       // scalar PO 為 1；bus aggregate 可大於 1
+    size_t totalLoadCount = 0;               // 符合 QA 定義的總 fanout load 數
+};
+
+struct GlobalFanoutReport {
+    bool ok = false;                         // 是否成功建立全域 report
+    std::string message;                     // debug / LLM response 用簡短訊息
+
+    int fanoutLimit = -1;                    // 檢查限制；-1 表示未指定
+    bool primaryInputsOnly = false;          // 是否只掃 primary input nets
+    bool includeZeroFanout = false;          // 是否包含 0 fanout nets
+    bool satisfiesLimit = true;              // fanoutLimit >= 0 時，是否沒有 violation
+
+    size_t checkedNetCount = 0;              // 實際納入統計的 net 數
+    size_t maxFanout = 0;                    // 最大 QA fanout load count
+
+    std::vector<FanoutLoadReport> netReports;       // 所有納入統計的 net reports
+    std::vector<FanoutLoadReport> maxFanoutReports; // fanout 等於 maxFanout 的 nets
+    std::vector<FanoutLoadReport> violatingReports; // fanoutLimit >= 0 且超標的 nets
 };
 
 struct DirectConnectivityReport {
@@ -123,6 +172,9 @@ struct DirectConnectivityReport {
     std::vector<int> netIds;            // 查詢結果中的 net IDs
     std::vector<std::string> gateNames; // 查詢結果中的 gate names
     std::vector<std::string> netNames;  // 查詢結果中的 net names
+
+    FanoutLoadReport fanoutLoadReport;  // FanoutLoadReport query 的完整分類結果
+    GlobalFanoutReport globalFanoutReport; // GlobalFanoutReport query 的完整彙整結果
 };
 
 // =========================================================================

@@ -83,6 +83,28 @@ void printStringList(const std::string& title,
     }
 }
 
+// 印出 gate ID 陣列對應的 instance names；fanout pin-level report 會用到。
+void printGateIdList(const Netlist& netlist,
+                     const std::string& title,
+                     const std::vector<int>& gateIds) {
+    std::cout << title << " (" << gateIds.size() << "):\n";
+    for (int gateId : gateIds) {
+        if (netlist.isValidGateId(gateId)) {
+            std::cout << "  " << netlist.getGate(gateId).instName << "\n";
+        }
+    }
+}
+
+// 印出 fanout report 中的 net name 清單。
+void printFanoutNetList(const std::string& title,
+                        const std::vector<Netlist::FanoutLoadReport>& reports) {
+    std::cout << title << " (" << reports.size() << "):\n";
+    for (const Netlist::FanoutLoadReport& report : reports) {
+        std::cout << "  " << report.netName
+                  << " fanout=" << report.totalLoadCount << "\n";
+    }
+}
+
 // 印出 path 的 net/gate 序列，供 path/depth 類 query 共用。
 void printPath(const Netlist& netlist, const Netlist::CombinationalPath& path) {
     if (!path.exists()) {
@@ -221,7 +243,8 @@ void printBasicReport(const Netlist& netlist, const Netlist::BasicReport& report
 }
 
 // 印出 DirectConnectivityQuery 的統一 report。
-void printConnectivityReport(const Netlist::DirectConnectivityReport& report) {
+void printConnectivityReport(const Netlist& netlist,
+                             const Netlist::DirectConnectivityReport& report) {
     if (!report.ok) {
         std::cout << "Error: " << report.message << "\n";
         return;
@@ -237,6 +260,35 @@ void printConnectivityReport(const Netlist::DirectConnectivityReport& report) {
     std::cout << "  count: " << report.count << "\n";
     if (report.connected) {
         std::cout << "  connected: yes\n";
+    }
+    if (report.fanoutLoadReport.ok) {
+        const Netlist::FanoutLoadReport& fanout = report.fanoutLoadReport;
+        std::cout << "  fanout load count (QA definition): "
+                  << fanout.totalLoadCount << "\n";
+        std::cout << "  drives primary output: "
+                  << (fanout.drivesPrimaryOutput ? "yes" : "no") << "\n";
+        std::cout << "  primary output load count: "
+                  << fanout.primaryOutputLoadCount << "\n";
+        printGateIdList(netlist, "Combinational gate input loads",
+                        fanout.combinationalGateLoads);
+        printGateIdList(netlist, "DFF D-pin loads", fanout.dffDataLoads);
+        printGateIdList(netlist, "DFF clock-pin loads", fanout.dffClockLoads);
+        printGateIdList(netlist, "DFF reset/set-pin loads", fanout.dffResetSetLoads);
+        printGateIdList(netlist, "DFF other-pin loads", fanout.dffOtherLoads);
+    }
+    if (report.globalFanoutReport.ok) {
+        const Netlist::GlobalFanoutReport& global = report.globalFanoutReport;
+        std::cout << "  checked nets: " << global.checkedNetCount << "\n";
+        std::cout << "  max fanout: " << global.maxFanout << "\n";
+        if (global.fanoutLimit >= 0) {
+            std::cout << "  fanout limit: " << global.fanoutLimit << "\n";
+            std::cout << "  satisfies limit: "
+                      << (global.satisfiesLimit ? "yes" : "no") << "\n";
+        }
+        printFanoutNetList("Max-fanout nets", global.maxFanoutReports);
+        if (!global.violatingReports.empty()) {
+            printFanoutNetList("Violating nets", global.violatingReports);
+        }
     }
     if (!report.gateNames.empty()) {
         printStringList("Gate names", report.gateNames);
@@ -413,6 +465,21 @@ bool buildConnectivityQuery(std::istringstream& iss,
     } else if (m == "net_loads") {
         query.type = Netlist::DirectConnectivityQueryType::NetLoads;
         iss >> query.netName;
+    } else if (m == "fanout_load" || m == "fanout_report") {
+        query.type = Netlist::DirectConnectivityQueryType::FanoutLoadReport;
+        iss >> query.netName;
+    } else if (m == "global_fanout") {
+        query.type = Netlist::DirectConnectivityQueryType::GlobalFanoutReport;
+        iss >> query.fanoutLimit;
+    } else if (m == "pi_fanout") {
+        query.type = Netlist::DirectConnectivityQueryType::GlobalFanoutReport;
+        query.primaryInputsOnly = true;
+        iss >> query.fanoutLimit;
+    } else if (m == "fanout_violations") {
+        query.type = Netlist::DirectConnectivityQueryType::GlobalFanoutReport;
+        if (!(iss >> query.fanoutLimit)) {
+            return false;
+        }
     } else if (m == "gate_inputs") {
         query.type = Netlist::DirectConnectivityQueryType::GateInputs;
         iss >> query.gateName;
@@ -556,6 +623,8 @@ void printHelp() {
         << "\nDirect connectivity query\n"
         << "  conn_query <mode> [args]\n"
         << "  mode: net_driver <net> | net_loads <net> | gate_inputs <gate>\n"
+        << "        fanout_load <net> | fanout_report <net>\n"
+        << "        global_fanout [limit] | pi_fanout [limit] | fanout_violations <limit>\n"
         << "        gate_output <gate> | gate_fanin <gate> | gate_fanout <gate>\n"
         << "        is_connected <gate> <net>\n"
         << "\nCone query\n"
@@ -658,7 +727,7 @@ int main() {
                 std::cout << "Unknown conn_query mode: " << mode << "\n";
                 continue;
             }
-            printConnectivityReport(netlist.runDirectConnectivityQuery(query));
+            printConnectivityReport(netlist, netlist.runDirectConnectivityQuery(query));
             continue;
         }
 
