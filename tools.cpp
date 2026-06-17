@@ -331,20 +331,35 @@ void printConeReport(const Netlist& netlist, const Netlist::ConeReport& report) 
 
 // 印出 PathQuery 的統一 result。
 void printPathResult(const Netlist& netlist,
-                     Netlist::PathQueryMode mode,
+                     const Netlist::PathQuery& query,
                      const Netlist::PathQueryResult& result) {
-    if (mode == Netlist::PathQueryMode::Exists ||
-        mode == Netlist::PathQueryMode::EveryPathThrough ||
-        mode == Netlist::PathQueryMode::EveryPathAvoids) {
+    if (query.mode == Netlist::PathQueryMode::Exists ||
+        query.mode == Netlist::PathQueryMode::EveryPathThrough ||
+        query.mode == Netlist::PathQueryMode::EveryPathAvoids) {
         std::cout << (result.exists ? "Yes\n" : "No\n");
         return;
     }
 
-    if (mode == Netlist::PathQueryMode::EnumerateAll) {
-        std::cout << "Total paths: " << result.paths.size() << "\n";
-        for (size_t i = 0; i < result.paths.size(); ++i) {
+    if (query.mode == Netlist::PathQueryMode::EnumerateAll) {
+        std::cout << "Total paths: " << result.pathCount << "\n";
+        std::cout << "Complete enumeration: "
+                  << (result.completeEnumeration ? "yes" : "no") << "\n";
+        if (result.wrotePathsToFile) {
+            std::cout << "Wrote paths to file: yes\n";
+            std::cout << "Output file: " << result.outputFilePath << "\n";
+        }
+        const size_t pathsToPrint = std::min(query.maxPrintedPaths, result.paths.size());
+        for (size_t i = 0; i < pathsToPrint; ++i) {
             std::cout << "Path " << (i + 1) << ":\n";
             printPath(netlist, result.paths[i]);
+        }
+        if (pathsToPrint < result.paths.size()) {
+            std::cout << "... omitted " << (result.paths.size() - pathsToPrint)
+                      << " paths from terminal output";
+            if (result.wrotePathsToFile) {
+                std::cout << "; see " << result.outputFilePath;
+            }
+            std::cout << "\n";
         }
         return;
     }
@@ -460,10 +475,10 @@ bool buildConnectivityQuery(std::istringstream& iss,
                             Netlist::DirectConnectivityQuery& query) {
     const std::string m = toLower(mode);
     if (m == "net_driver") {
-        query.type = Netlist::DirectConnectivityQueryType::NetDriver;
+        query.type = Netlist::DirectConnectivityQueryType::NetDriverGates;
         iss >> query.netName;
     } else if (m == "net_loads") {
-        query.type = Netlist::DirectConnectivityQueryType::NetLoads;
+        query.type = Netlist::DirectConnectivityQueryType::NetLoadGates;
         iss >> query.netName;
     } else if (m == "fanout_load" || m == "fanout_report") {
         query.type = Netlist::DirectConnectivityQueryType::FanoutLoadReport;
@@ -631,7 +646,7 @@ void printHelp() {
         << "  cone_query <mode> <name> [with_paths]\n"
         << "  mode: net_fanin | net_fanout | gate_fanin | gate_fanout\n"
         << "\nPath query\n"
-        << "  path_query <mode> <start_endpoint> <end_endpoint> [-req node...] [-avoid node...]\n"
+        << "  path_query <mode> <start_endpoint> <end_endpoint> [-req node...] [-avoid node...] [-out file] [-max_print n]\n"
         << "  mode: exists | find_any | enumerate | min_depth | max_depth\n"
         << "        every_through | every_avoids\n"
         << "  endpoint: net:<n> | pi:<p> | po:<p> | dff_q:<ff> | dff_d:<ff>\n"
@@ -751,7 +766,7 @@ int main() {
             std::string startToken;
             std::string endToken;
             if (!(iss >> modeText >> startToken >> endToken)) {
-                std::cout << "Usage: path_query <mode> <start> <end> [-req node...] [-avoid node...]\n";
+                std::cout << "Usage: path_query <mode> <start> <end> [-req node...] [-avoid node...] [-out file] [-max_print n]\n";
                 continue;
             }
 
@@ -774,6 +789,23 @@ int main() {
                     listMode = 2;
                     continue;
                 }
+                if (token == "-out") {
+                    std::string outputPath;
+                    if (iss >> outputPath) {
+                        query.writePathsToFile = true;
+                        query.outputFilePath = outputPath;
+                    }
+                    listMode = 0;
+                    continue;
+                }
+                if (token == "-max_print") {
+                    size_t maxPrinted = 0;
+                    if (iss >> maxPrinted) {
+                        query.maxPrintedPaths = maxPrinted;
+                    }
+                    listMode = 0;
+                    continue;
+                }
                 if (listMode == 1) {
                     query.requiredNodes.push_back(parsePathNode(token));
                 } else if (listMode == 2) {
@@ -781,7 +813,7 @@ int main() {
                 }
             }
 
-            printPathResult(netlist, query.mode, netlist.runPathQuery(query));
+            printPathResult(netlist, query, netlist.runPathQuery(query));
             continue;
         }
 

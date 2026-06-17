@@ -80,7 +80,7 @@ fanout load =
 因此：
 
 ```text
-NetLoads / GateFanout 只回答 gate instance adjacency。
+NetLoadGates / GateFanout 只回答 gate instance adjacency。
 FanoutLoadReport 回答 QA 定義的 pin-level fanout load。
 ```
 
@@ -227,8 +227,8 @@ DirectConnectivityReport runDirectConnectivityQuery(
 
 | Query type | 用途 |
 |---|---|
-| `NetDriver` | 查某個 net / bus 的直接 driver gate |
-| `NetLoads` | 查某個 net / bus 直接 load 到哪些 gates |
+| `NetDriverGates` | 查某個 net / bus 的直接 driver gates |
+| `NetLoadGates` | 查某個 net / bus 直接 load 到哪些 gates |
 | `FanoutLoadReport` | 依 Problem A QA fanout load 定義回報 pin-level loads |
 | `GlobalFanoutReport` | 掃描全設計或所有 PI 的 fanout loads / max / violations |
 | `GateInputs` | 查某個 gate 的直接 input nets |
@@ -273,8 +273,8 @@ struct DirectConnectivityReport {
 
 | Prompt 類型 | 高階 query |
 |---|---|
-| Which gate drives net n1? | `NetDriver` |
-| Report every gate connected to net n1. | `NetLoads` |
+| Which gate drives net n1? | `NetDriverGates` |
+| Report every gate connected to net n1. | `NetLoadGates` |
 | How many fanout loads does net n1 have? | `FanoutLoadReport` |
 | List DFF clock/reset loads driven by n1. | `FanoutLoadReport` |
 | Which primary input has the highest fanout? | `GlobalFanoutReport` with `primaryInputsOnly = true` |
@@ -311,7 +311,7 @@ DirectConnectivityQuery / DirectConnectivityReport 高階 API
 測試狀態：
 
 ```text
-mini test/tester.cpp 已覆蓋 runDirectConnectivityQuery() 的 NetDriver / NetLoads / FanoutLoadReport / GlobalFanoutReport / GateInputs / GateFanout / DirectlyConnected。
+mini test/tester.cpp 已覆蓋 runDirectConnectivityQuery() 的 NetDriverGates / NetLoadGates / FanoutLoadReport / GlobalFanoutReport / GateInputs / GateFanout / DirectlyConnected。
 目前 regression 結果：Summary: 57 passed, 0 failed.
 ```
 

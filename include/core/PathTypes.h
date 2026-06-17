@@ -139,6 +139,9 @@ struct PathQuery {
     std::vector<PathNode> avoidedNodes;     // 每條符合條件的路徑必須避開的 net/gate
     PathQueryMode mode = PathQueryMode::Exists;
     bool combinationalOnly = true;          // true 時遇到 DFF 視為 sequential boundary
+    bool writePathsToFile = true;           // EnumerateAll 使用；預設自動將完整路徑列表寫入檔案
+    std::string outputFilePath;             // EnumerateAll 寫檔路徑；空字串時使用預設檔名
+    size_t maxPrintedPaths = 20;            // CLI / report 顯示用；不限制 result.paths 的完整內容
 };
 
 // 保存統一 path query 的結果；不同 mode 會使用不同欄位。
@@ -147,4 +150,8 @@ struct PathQueryResult {
     int depth = -1;                         // min/max depth 類查詢的邏輯深度
     CombinationalPath path;                 // find any/min/max depth 的代表路徑
     std::vector<CombinationalPath> paths;   // enumerate all 的所有路徑
+    size_t pathCount = 0;                   // enumerate all 的完整路徑數量
+    bool wrotePathsToFile = false;          // 是否已將完整 enumerate 結果寫到檔案
+    std::string outputFilePath;             // 實際輸出檔案路徑
+    bool completeEnumeration = true;        // true 表示沒有截斷 enumerate 結果
 };

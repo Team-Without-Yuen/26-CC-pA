@@ -45,8 +45,8 @@ DirectConnectivityQuery 只查 immediate connection。
 
 | Query type | 問題類型 | 需要設定 | 主要讀取欄位 |
 |---|---|---|---|
-| `NetDriver` | 誰 drive 這條 net / bus | `netName` | `gateIds`, `gateNames`, `count` |
-| `NetLoads` | 這條 net / bus load 到哪些 gates | `netName` | `gateIds`, `gateNames`, `count` |
+| `NetDriverGates` | 誰 drive 這條 net / bus | `netName` | `gateIds`, `gateNames`, `count` |
+| `NetLoadGates` | 這條 net / bus load 到哪些 gates | `netName` | `gateIds`, `gateNames`, `count` |
 | `FanoutLoadReport` | 依 Problem A QA 定義統計 pin-level fanout loads | `netName` | `fanoutLoadReport`, `count` |
 | `GlobalFanoutReport` | 全設計或 PI-only fanout max / violations | `fanoutLimit`, `primaryInputsOnly` | `globalFanoutReport` |
 | `GateInputs` | 這顆 gate 的 input nets | `gateName` | `netIds`, `netNames`, `count` |
@@ -61,7 +61,7 @@ DirectConnectivityQuery 只查 immediate connection。
 
 | 欄位 | 型別 | 預設值 | 用途 |
 |---|---|---|---|
-| `type` | `DirectConnectivityQueryType` | `NetDriver` | 決定查詢類型 |
+| `type` | `DirectConnectivityQueryType` | `NetDriverGates` | 決定查詢類型 |
 | `gateName` | `std::string` | `""` | gate 相關 query 使用 |
 | `netName` | `std::string` | `""` | net 相關 query 使用 |
 | `includeIds` | `bool` | `true` | 是否填 `gateIds` / `netIds` |
@@ -91,7 +91,7 @@ DirectConnectivityQuery 只查 immediate connection。
 
 ---
 
-## 5. NetDriver
+## 5. NetDriverGates
 
 用途：
 
@@ -103,7 +103,7 @@ DirectConnectivityQuery 只查 immediate connection。
 
 ```cpp
 Netlist::DirectConnectivityQuery query;
-query.type = Netlist::DirectConnectivityQueryType::NetDriver;
+query.type = Netlist::DirectConnectivityQueryType::NetDriverGates;
 query.netName = "n1";
 
 Netlist::DirectConnectivityReport report =
@@ -120,7 +120,7 @@ Netlist::DirectConnectivityReport report =
 
 ---
 
-## 6. NetLoads
+## 6. NetLoadGates
 
 用途：
 
@@ -132,7 +132,7 @@ Netlist::DirectConnectivityReport report =
 
 ```cpp
 Netlist::DirectConnectivityQuery query;
-query.type = Netlist::DirectConnectivityQueryType::NetLoads;
+query.type = Netlist::DirectConnectivityQueryType::NetLoadGates;
 query.netName = "n1";
 
 Netlist::DirectConnectivityReport report =
@@ -150,7 +150,7 @@ Netlist::DirectConnectivityReport report =
 注意：
 
 ```text
-NetLoads 只回答「這條 net 接到哪些 gate/DFF instance」。
+NetLoadGates 只回答「這條 net 接到哪些 gate/DFF instance」。
 它不會把 primary output connection 算成 load，也不會區分 DFF.D / DFF.CK / DFF.RN / DFF.SN。
 若題目問 fanout load count，應使用 FanoutLoadReport。
 ```
@@ -395,8 +395,8 @@ Netlist::DirectConnectivityReport report =
 
 | Prompt | 建議 Query type | 需要設定 | 主要讀取 |
 |---|---|---|---|
-| Which gate drives net n1? | `NetDriver` | `netName = "n1"` | `gateNames` |
-| Report every gate connected to net n1. | `NetLoads` | `netName = "n1"` | `gateNames` |
+| Which gate drives net n1? | `NetDriverGates` | `netName = "n1"` | `gateNames` |
+| Report every gate connected to net n1. | `NetLoadGates` | `netName = "n1"` | `gateNames` |
 | How many fanout loads does n1 have? | `FanoutLoadReport` | `netName = "n1"` | `fanoutLoadReport.totalLoadCount` |
 | List DFF clock/reset loads driven by n1. | `FanoutLoadReport` | `netName = "n1"` | `dffClockLoads`, `dffResetSetLoads` |
 | Does n1 directly drive a primary output? | `FanoutLoadReport` | `netName = "n1"` | `drivesPrimaryOutput` |
@@ -426,8 +426,8 @@ Netlist::DirectConnectivityReport report =
 
 | Query type | 底層 helper |
 |---|---|
-| `NetDriver` | `getNetDriverGateIds()`, `getNetDriverGateNames()` |
-| `NetLoads` | `getNetLoadGateIds()`, `getNetLoadGateNames()`, `getNetLoadGateCount()` |
+| `NetDriverGates` | `getNetDriverGateIds()`, `getNetDriverGateNames()` |
+| `NetLoadGates` | `getNetLoadGateIds()`, `getNetLoadGateNames()`, `getNetLoadGateCount()` |
 | `FanoutLoadReport` | `getFanoutLoadReport()`, `getFanoutLoadCount()` |
 | `GlobalFanoutReport` | `getGlobalFanoutReport()`, `satisfiesFanoutLimit()` |
 | `GateInputs` | `getGateInputNetIds()`, `getGateInputNetNames()` |

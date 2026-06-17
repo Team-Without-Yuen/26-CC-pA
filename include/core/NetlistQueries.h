@@ -90,8 +90,8 @@ struct BasicReport {
 // =========================================================================
 
 enum class DirectConnectivityQueryType {
-    NetDriver,          // 查某個 net / bus 的直接 driver gate
-    NetLoads,           // 查某個 net / bus 直接 load 到哪些 gates
+    NetDriverGates,     // 查某個 net / bus 的直接 driver gates
+    NetLoadGates,       // 查某個 net / bus 直接 load 到哪些 gates
     FanoutLoadReport,   // 依 Problem A QA fanout load 定義回報 pin-level loads
     GlobalFanoutReport, // 掃描全設計或所有 PI 的 fanout loads / max / violations
     GateInputs,         // 查某個 gate 的直接 input nets
@@ -102,9 +102,9 @@ enum class DirectConnectivityQueryType {
 };
 
 struct DirectConnectivityQuery {
-    DirectConnectivityQueryType type = DirectConnectivityQueryType::NetDriver;
+    DirectConnectivityQueryType type = DirectConnectivityQueryType::NetDriverGates;
     std::string gateName;     // GateInputs/GateOutput/GateFanin/GateFanout/DirectlyConnected 使用
-    std::string netName;      // NetDriver/NetLoads/FanoutLoadReport/DirectlyConnected 使用
+    std::string netName;      // NetDriverGates/NetLoadGates/FanoutLoadReport/DirectlyConnected 使用
     int fanoutLimit = -1;     // GlobalFanoutReport 使用；-1 表示只回報 max，不檢查 violation
     bool primaryInputsOnly = false; // GlobalFanoutReport 使用；true 時只掃 PI nets
     bool includeZeroFanout = false; // GlobalFanoutReport 使用；true 時保留 0 fanout nets

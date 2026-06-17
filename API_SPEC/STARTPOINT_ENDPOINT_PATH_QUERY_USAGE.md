@@ -137,7 +137,7 @@ query.mode
 |---|---|---|---|
 | `Exists` | 是否存在至少一條合法路徑？ | `result.exists` | 最快的存在性檢查 |
 | `FindAny` | 找任意一條合法路徑 | `result.path`, `result.depth` | 底層用 BFS，通常會找到較短的一條 |
-| `EnumerateAll` | 列出所有合法路徑 | `result.paths` | 大型電路可能爆量 |
+| `EnumerateAll` | 列出所有合法路徑 | `result.paths`, `result.pathCount` | 預設會將完整結果寫檔 |
 | `MinDepth` | 找最短 logic depth 路徑 | `result.path`, `result.depth` | depth = combinational gate 數量 |
 | `MaxDepth` | 找最長 logic depth 路徑 | `result.path`, `result.depth` | 可用於 critical path 類問題 |
 | `EveryPathThrough` | 所有既有路徑是否都經過 requiredNodes？ | `result.exists` | 沒有任何原始路徑時回 false |
@@ -204,6 +204,10 @@ Netlist::PathQueryResult result = netlist.runPathQuery(query);
 | `depth` | `path` 的 logic depth；沒找到時為 `-1` |
 | `path` | 單一路徑，供 `FindAny` / `MinDepth` / `MaxDepth` 使用 |
 | `paths` | 多條路徑，供 `EnumerateAll` 使用 |
+| `pathCount` | `EnumerateAll` 的完整路徑數 |
+| `wrotePathsToFile` | 是否已將完整路徑列表寫到檔案 |
+| `outputFilePath` | 實際輸出檔案路徑 |
+| `completeEnumeration` | 是否完整列舉，未截斷 |
 
 `path` 裡面存的是 ID：
 
@@ -226,9 +230,51 @@ for (int gateId : result.path.gateIds) {
 
 ---
 
-## 7. 使用範例
+## 7. EnumerateAll 自動寫檔
 
-### 7.1 是否存在 a 到 y 的路徑
+大型 testcase 若要求完整列出所有 paths，`EnumerateAll` 會預設寫出完整 path list，避免 terminal 輸出過大。
+若沒有指定 `outputFilePath`，預設輸出到 `path_enumeration_output.txt`。
+
+```cpp
+Netlist::PathQuery query;
+query.mode = Netlist::PathQueryMode::EnumerateAll;
+query.startpoints.push_back(Netlist::PathEndpoint(
+    Netlist::PathEndpointType::PrimaryInput, "n0"));
+query.endpoints.push_back(Netlist::PathEndpoint(
+    Netlist::PathEndpointType::PrimaryOutput, "n12"));
+query.outputFilePath = "paths_output.txt";  // 可省略；省略時使用預設檔名
+query.maxPrintedPaths = 20;                 // 只影響 CLI / report 顯示，不影響完整檔案
+
+Netlist::PathQueryResult result = netlist.runPathQuery(query);
+```
+
+結果讀取：
+
+| 想知道 | 讀取欄位 |
+|---|---|
+| 完整 path 數 | `result.pathCount` |
+| 是否寫檔成功 | `result.wrotePathsToFile` |
+| 輸出檔案 | `result.outputFilePath` |
+| 是否完整 enumerate | `result.completeEnumeration` |
+
+輸出檔格式：
+
+```text
+Total paths: 123
+
+Path 0
+  depth: 3
+  nets: a -> n1 -> y
+  gates: g1 -> g2
+```
+
+目前版本仍會先把完整 `result.paths` 保存在 memory。測試環境有 128GB RAM，因此第一版先不做 streaming DFS。
+
+---
+
+## 8. 使用範例
+
+### 8.1 是否存在 a 到 y 的路徑
 
 ```cpp
 Netlist::PathQuery query;
@@ -242,7 +288,7 @@ Netlist::PathQueryResult result = netlist.runPathQuery(query);
 bool answer = result.exists;
 ```
 
-### 7.2 找一條 PI a 到 PO y 的路徑
+### 8.2 找一條 PI a 到 PO y 的路徑
 
 ```cpp
 Netlist::PathQuery query;
@@ -255,7 +301,7 @@ query.endpoints.push_back(Netlist::PathEndpoint(
 Netlist::PathQueryResult result = netlist.runPathQuery(query);
 ```
 
-### 7.3 找所有 PI 到 ff1.D 的最大 logic depth
+### 8.3 找所有 PI 到 ff1.D 的最大 logic depth
 
 ```cpp
 Netlist::PathQuery query;
@@ -268,7 +314,7 @@ query.endpoints.push_back(Netlist::PathEndpoint(
 Netlist::PathQueryResult result = netlist.runPathQuery(query);
 ```
 
-### 7.4 找 a 到 y 且避開 n3 的最短路徑
+### 8.4 找 a 到 y 且避開 n3 的最短路徑
 
 ```cpp
 Netlist::PathQuery query;
@@ -283,7 +329,7 @@ query.avoidedNodes.push_back(Netlist::PathNode(
 Netlist::PathQueryResult result = netlist.runPathQuery(query);
 ```
 
-### 7.5 所有 a 到 y 的路徑是否都經過 g1
+### 8.5 所有 a 到 y 的路徑是否都經過 g1
 
 ```cpp
 Netlist::PathQuery query;
@@ -298,7 +344,7 @@ query.requiredNodes.push_back(Netlist::PathNode(
 Netlist::PathQueryResult result = netlist.runPathQuery(query);
 ```
 
-### 7.6 所有 a 到 y 的路徑是否都避開 n3
+### 8.6 所有 a 到 y 的路徑是否都避開 n3
 
 ```cpp
 Netlist::PathQuery query;
@@ -315,7 +361,7 @@ Netlist::PathQueryResult result = netlist.runPathQuery(query);
 
 ---
 
-## 8. 注意事項
+## 9. 注意事項
 
 ```text
 1. PathEndpoint 和 PathNode 都會自動解析 ID。
@@ -328,13 +374,13 @@ Netlist::PathQueryResult result = netlist.runPathQuery(query);
 
 ---
 
-## 9. 目前實作與測試狀態
+## 10. 目前實作與測試狀態
 
 ```text
 實作檔案：src/analysis/PathAnalysis.cpp
 型別檔案：include/core/PathTypes.h
 tester：mini test/tester.cpp
-目前 regression：Summary: 45 passed, 0 failed.
+目前 regression：Summary: 58 passed, 0 failed.
 ```
 
 目前 `runPathQuery()` 已覆蓋：

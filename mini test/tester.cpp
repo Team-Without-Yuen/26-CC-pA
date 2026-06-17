@@ -3,7 +3,9 @@
 #include "include/io/VerilogWriter.h"
 
 #include <algorithm>
+#include <fstream>
 #include <iostream>
+#include <iterator>
 #include <string>
 #include <vector>
 
@@ -139,16 +141,16 @@ void testBasicQuery(TestReport& report, const Netlist& netlist) {
 // 測試 Direct Connectivity Query：driver、loads、gate input/output、fanin/fanout。
 void testDirectConnectivityQuery(TestReport& report, const Netlist& netlist) {
     Netlist::DirectConnectivityQuery query;
-    query.type = Netlist::DirectConnectivityQueryType::NetDriver;
+    query.type = Netlist::DirectConnectivityQueryType::NetDriverGates;
     query.netName = "n_or";
     Netlist::DirectConnectivityReport direct = netlist.runDirectConnectivityQuery(query);
     report.check(direct.ok &&
                  direct.count == 1 &&
                  containsString(direct.gateNames, "g_or"),
-                 "runDirectConnectivityQuery NetDriver");
+                 "runDirectConnectivityQuery NetDriverGates");
 
     query = Netlist::DirectConnectivityQuery();
-    query.type = Netlist::DirectConnectivityQueryType::NetLoads;
+    query.type = Netlist::DirectConnectivityQueryType::NetLoadGates;
     query.netName = "n_or";
     direct = netlist.runDirectConnectivityQuery(query);
     report.check(direct.ok &&
@@ -156,7 +158,7 @@ void testDirectConnectivityQuery(TestReport& report, const Netlist& netlist) {
                  containsString(direct.gateNames, "g_nand") &&
                  containsString(direct.gateNames, "g_not") &&
                  containsString(direct.gateNames, "g_z"),
-                 "runDirectConnectivityQuery NetLoads");
+                 "runDirectConnectivityQuery NetLoadGates");
 
     query = Netlist::DirectConnectivityQuery();
     query.type = Netlist::DirectConnectivityQueryType::GateInputs;
@@ -385,6 +387,24 @@ void testPathQuery(TestReport& report, const Netlist& netlist) {
     query.avoidedNodes.push_back(netNode("z"));
     path = netlist.runPathQuery(query);
     report.check(path.exists, "runPathQuery EveryPathAvoids");
+
+    query = Netlist::PathQuery();
+    query.mode = Netlist::PathQueryMode::EnumerateAll;
+    query.startpoints.push_back(Netlist::PathEndpoint(Netlist::PathEndpointType::SpecificNet, "a"));
+    query.endpoints.push_back(Netlist::PathEndpoint(Netlist::PathEndpointType::SpecificNet, "y"));
+    query.outputFilePath = "mini test/path_enum_output.txt";
+    path = netlist.runPathQuery(query);
+
+    std::ifstream pathFile(query.outputFilePath);
+    std::string pathFileContents((std::istreambuf_iterator<char>(pathFile)),
+                                 std::istreambuf_iterator<char>());
+    report.check(path.exists &&
+                 path.pathCount == path.paths.size() &&
+                 path.wrotePathsToFile &&
+                 path.outputFilePath == query.outputFilePath &&
+                 pathFileContents.find("Total paths:") != std::string::npos &&
+                 pathFileContents.find("Path 0") != std::string::npos,
+                 "runPathQuery EnumerateAll writes complete paths to file");
 }
 
 // 測試 Depth Query：level、critical path、PO/DFF.D endpoint report。
