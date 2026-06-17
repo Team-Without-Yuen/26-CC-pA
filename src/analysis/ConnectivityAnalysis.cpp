@@ -364,9 +364,9 @@ Netlist::DirectConnectivityReport Netlist::runDirectConnectivityQuery(
     report.netName = query.netName;
 
     switch (query.type) {
-    case DirectConnectivityQueryType::NetDriver:
+    case DirectConnectivityQueryType::NetDriverGates:
         if (query.netName.empty()) {
-            report.message = "NetDriver requires netName";
+            report.message = "NetDriverGates requires netName";
             return report;
         }
         report.netId = getNetId(query.netName);
@@ -392,9 +392,9 @@ Netlist::DirectConnectivityReport Netlist::runDirectConnectivityQuery(
         report.count = query.includeIds ? report.gateIds.size() : report.gateNames.size();
         return report;
 
-    case DirectConnectivityQueryType::NetLoads:
+    case DirectConnectivityQueryType::NetLoadGates:
         if (query.netName.empty()) {
-            report.message = "NetLoads requires netName";
+            report.message = "NetLoadGates requires netName";
             return report;
         }
         report.netId = getNetId(query.netName);

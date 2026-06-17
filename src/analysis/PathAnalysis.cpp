@@ -1,5 +1,6 @@
 #include "include/core/Netlist.h"
 #include <algorithm>
+#include <fstream>
 #include <queue>
 #include <string>
 #include <unordered_set>
@@ -20,6 +21,46 @@ struct SearchState {
     int previousStateIndex;
     int previousGateId;
 };
+
+// 將 ID 序列以名稱形式寫成 a -> b -> c，供完整 path enumeration 檔案使用。
+void writeNamedSequence(std::ostream& out,
+                        const Netlist& netlist,
+                        const std::vector<int>& ids,
+                        bool isNetSequence) {
+    for (size_t i = 0; i < ids.size(); ++i) {
+        if (i != 0) {
+            out << " -> ";
+        }
+        if (isNetSequence) {
+            out << netlist.getNet(ids[i]).name;
+        } else {
+            out << netlist.getGate(ids[i]).instName;
+        }
+    }
+}
+
+// 將完整 enumerate 結果寫入文字檔；成功回傳 true。
+bool writeCombinationalPathsToFile(const Netlist& netlist,
+                                   const std::vector<Netlist::CombinationalPath>& paths,
+                                   const std::string& outputFilePath) {
+    std::ofstream out(outputFilePath);
+    if (!out) {
+        return false;
+    }
+
+    out << "Total paths: " << paths.size() << "\n\n";
+    for (size_t i = 0; i < paths.size(); ++i) {
+        out << "Path " << i << "\n";
+        out << "  depth: " << paths[i].depth() << "\n";
+        out << "  nets: ";
+        writeNamedSequence(out, netlist, paths[i].netIds, true);
+        out << "\n";
+        out << "  gates: ";
+        writeNamedSequence(out, netlist, paths[i].gateIds, false);
+        out << "\n\n";
+    }
+    return true;
+}
 
 // 將一組 PathNode 名稱轉成 ID；任一名稱不存在代表查詢條件無效。
 bool resolvePathNodes(const Netlist& netlist,
@@ -996,10 +1037,18 @@ Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
                 result.paths.insert(result.paths.end(), paths.begin(), paths.end());
             }
         }
+        result.pathCount = result.paths.size();
         result.exists = !result.paths.empty();
         if (result.exists) {
             result.path = result.paths.front();
             result.depth = result.path.depth();
+        }
+        if (query.writePathsToFile) {
+            result.outputFilePath = query.outputFilePath.empty()
+                                        ? "path_enumeration_output.txt"
+                                        : query.outputFilePath;
+            result.wrotePathsToFile =
+                writeCombinationalPathsToFile(*this, result.paths, result.outputFilePath);
         }
         return result;
 

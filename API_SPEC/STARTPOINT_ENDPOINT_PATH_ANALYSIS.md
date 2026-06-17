@@ -171,7 +171,7 @@ Clock / reset / enable path 通常不完全等同 data path，但在 netlist exp
 |---|---|---|
 | Exists | 是否存在 path？ | 已支援 |
 | FindAny | 回傳任意一條 path | 已支援 |
-| EnumerateAll | 列出所有 path | 已支援，但大型電路可能爆炸 |
+| EnumerateAll | 列出所有 path | 已支援；預設自動寫檔保存完整 enumeration |
 | MinDepth | 最短 logic depth | 已支援 |
 | MaxDepth | 最長 logic depth | 已支援 start/end net；PI->DFF.D 已有 wrapper |
 | EveryPathThrough | 所有 path 是否都經過指定節點 | 已支援 |

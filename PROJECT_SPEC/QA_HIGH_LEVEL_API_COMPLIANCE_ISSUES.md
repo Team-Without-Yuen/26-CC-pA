@@ -40,7 +40,7 @@
 | ID | 問題 | 涉及 API / 模組 | QA 要求 | 目前狀態 | 風險 | 優先度 | 建議修正 |
 |---|---|---|---|---|---|---|---|
 | QAC-001 | fanout load 定義不完整 | `DirectConnectivityQuery`, fanout optimization, constraint checker | fanout load 要包含 primitive gate input、DFF D、DFF CK、DFF RN/SN、primary output connection | 已新增 `FanoutLoadReport` 與 `GlobalFanoutReport`，可分類單一 net loads、查全域 max fanout、PI max fanout、fanout limit violations | fanout buffer insertion / optimization 若仍直接看 `loadGateIds.size()`，可能少算 PO load | P0 | 下一步把 fanout buffer insertion / optimization 改成依賴 `FanoutLoadReport` |
-| QAC-002 | complete path enumeration 缺寫檔模式 | `PathQuery::EnumerateAll`, CLI tools | 若要求列出所有 paths，必須 literal listing；大型結果可寫到 file 並回報 path | 目前把所有 path 放在 memory 的 `result.paths` | 大型 testcase path 數量可能爆 memory 或輸出不可控 | P0 | 新增 path enumerate file output / streaming writer，回傳 count 與 output file path |
+| QAC-002 | complete path enumeration 缺寫檔模式 | `PathQuery::EnumerateAll`, CLI tools | 若要求列出所有 paths，必須 literal listing；大型結果可寫到 file 並回報 path | `EnumerateAll` 預設自動寫檔，已新增 `outputFilePath` / `pathCount`，CLI 支援 `path_query enumerate ... -out file` 覆蓋檔名；目前仍保留 in-memory enumerate | 大型 testcase path 數量極端爆炸時仍可能需要 streaming DFS，但測試環境 128GB RAM 下第一版可接受 | P0 | 後續若實測 memory 壓力過大，再新增 streaming callback 版 enumerate |
 | QAC-003 | 缺 original vs current design equivalence | `FunctionQuery`, transformation validation | transformation 後要能驗證 current design 和 original loaded netlist 功能等價 | 目前只能比較同一份 netlist 內兩個 net / bus | 修改後無法正式回答「是否和 original equivalent」 | P0 | 建立 original snapshot，新增 whole-design combinational equivalence report |
 | QAC-004 | DFF initial state = 0 尚未建模 | `FunctionQuery`, constant analysis | QA 說 DFF initial state is 0，X ignored | 目前 DFF.Q 在 combinational analysis 中視為 pseudo PI | 若 prompt 涉及初始狀態，always 0/1 可能回答不完整 | P1 | 先在文件標註目前只做 combinational function；若要支援 initial-state query，新增 sequential-initial query mode |
 | QAC-005 | 缺 DFF clock/reset fanout classification 高階 API | `DirectConnectivityQuery`, DFF helpers | CK / RN / SN 都可能是 fanout 類問題的一部分 | 底層可查 DFF named pin，但沒有直接 report 某 net 驅動哪些 CK/RN/SN | clock/reset fanout prompt 需要手動組合，容易漏 | P1 | 在 fanout report 中加入 DFF pin role 分類 |
@@ -110,7 +110,7 @@
 
 目標：
 
-- `EnumerateAll` 支援寫檔模式。
+- `EnumerateAll` 預設自動寫檔。
 - result 回傳：
   - `pathCount`
   - `outputFilePath`

@@ -212,7 +212,7 @@ cone_query gate_fanout g10 with_paths
 格式：
 
 ```text
-path_query <mode> <start_endpoint> <end_endpoint> [-req node...] [-avoid node...]
+path_query <mode> <start_endpoint> <end_endpoint> [-req node...] [-avoid node...] [-out file] [-max_print n]
 ```
 
 ### 8.1 Modes
@@ -221,7 +221,7 @@ path_query <mode> <start_endpoint> <end_endpoint> [-req node...] [-avoid node...
 | --- | --- |
 | `exists` | 判斷是否至少存在一條合法路徑 |
 | `find_any` | 回傳任意一條合法路徑 |
-| `enumerate` | 列出所有合法路徑 |
+| `enumerate` | 列出所有合法路徑；預設會將完整結果寫入檔案 |
 | `min_depth` | 找最短 logic depth path |
 | `max_depth` | 找最長 logic depth path |
 | `every_through` | 判斷所有路徑是否都經過指定節點 |
@@ -259,6 +259,7 @@ path_query <mode> <start_endpoint> <end_endpoint> [-req node...] [-avoid node...
 path_query exists net:a net:y
 path_query find_any pi:a po:y
 path_query enumerate net:a net:y
+path_query enumerate net:a net:y -out paths_output.txt -max_print 0
 path_query min_depth net:a net:y
 path_query max_depth net:a net:y
 path_query exists net:a net:y -avoid gate:g3 net:n5
@@ -275,6 +276,9 @@ path_query exists dff_q:ff1 po:y
 - 目前 path query 預設 combinationalOnly=true。
 - DFF 是 sequential boundary，路徑搜尋不會穿越 DFF。
 - 如果要查 register-to-register path，應使用 dff_q:<ff> 作為起點、dff_d:<ff> 作為終點。
+- `enumerate` 會把完整路徑列表寫到檔案；CLI 只印摘要與前 `-max_print` 條。
+- `-out <file>` 可覆蓋輸出檔名；未指定時使用 `path_enumeration_output.txt`。
+- `-out` 建議使用不含空白的路徑。
 ```
 
 ## 9. Depth Query
