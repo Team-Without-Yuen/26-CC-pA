@@ -64,8 +64,10 @@ int main(int argc, char* argv[]) {
     bool isOneToMany = true;
     
     // 啟動單向替換引擎
-    int gateChange = mapper.mapTechnology(myCircuit, targetTypes, allowedTypes, isOneToMany);
-
+    
+    // main.cpp 第 67 行，改成
+    //TechMapReport gateChange = mapper.mapTechnology(myCircuit, targetTypes, allowedTypes, isOneToMany);
+    /*int gateChange = mapper.mapTechnology(myCircuit, targetTypes, allowedTypes, isOneToMany);
     std::cout << "  -> Modification Complete.\n";
     if (gateChange < 0) {
         std::cout << "  -> Gate count reduced by " << (-gateChange) << " gates.\n";
@@ -73,7 +75,7 @@ int main(int argc, char* argv[]) {
         std::cout << "  -> Gate count increased by " << gateChange << " gates (due to decomposition).\n";
     } else {
         std::cout << "  -> Gate count remained unchanged.\n";
-    }
+    }*/
 
     // 計算真正存活的 Gate 數量 (過濾掉被標記為 UNKNOWN 的 Tombstone 墓碑)
     size_t activeGateCount = 0;
