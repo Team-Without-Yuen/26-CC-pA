@@ -39,10 +39,27 @@ struct BufferInsertionReport {
     }
 };
 
+// 定義 ECO 替換的狀態碼，方便程式邏輯判斷
+enum class TechMapStatus {
+    SUCCESS,                  // 替換成功
+    ERROR_RULE_NOT_FOUND,     // 找不到符合數量/類型的替換規則
+    ERROR_NOT_EQUIVALENT,     // (真值表驗證) 邏輯不等價
+    ERROR_UNSAT,              // (SAT Solver) 數學證明無法拼出該邏輯
+    ERROR_SIMULATION_FAILED,  // 真值表模擬失敗
+    ERROR_INVALID_CONSTRAINTS // 沒有給合理的CONSTRAINTS
+};
+
+// 描述由 SAT Solver 合成出來的抽象閘與接線
+struct SynthesizedGate {
+    GateType type;
+    // 儲存輸入來源的 ID。
+    // 如果值 < N (PI 數量)，代表接到了 PI_0, PI_1 等。
+    // 如果值 >= N，代表接到了之前生成的另一顆 SynthesizedGate (ID = 值 - N)
+    std::vector<int> inputSourceIds; 
+};
+
 // TechMapper 邏輯替換報告
 struct TechMapReport {
-    bool isOneToMany; // 是展開還是濃縮
-
     // 紀錄被拔除/替換掉的 Gate 數量 (分類統計，屬於 targetTypes)
     std::unordered_map<GateType, int> removedCountByType;
 
@@ -55,8 +72,21 @@ struct TechMapReport {
     // 修改後，整個電路的 Gate 數量快照 (僅統計 allowedTypes 裡的類型)
     std::unordered_map<GateType, int> finalGateCount;
 
-    // 用來合併多個小操作的報告
+    // 狀態與訊息回報
+    TechMapStatus status = TechMapStatus::SUCCESS;
+    std::string message = "Success";
+
+    // 用來儲存 Exact Synthesis 算出來的全新電路拓樸
+    std::vector<SynthesizedGate> synthesizedTopology;
+
+    // 輔助函式：用來合併多個小操作的報告
     void merge(const TechMapReport& other) {
+        // 如果遇到失敗狀態，優先保留失敗狀態與錯誤訊息
+        if (other.status != TechMapStatus::SUCCESS) {
+            this->status = other.status;
+            this->message = other.message;
+        }
+
         for (const auto& pair : other.removedCountByType) removedCountByType[pair.first] += pair.second;
         for (const auto& pair : other.addedCountByType) addedCountByType[pair.first] += pair.second;
         
@@ -64,7 +94,6 @@ struct TechMapReport {
                                  other.modifiedGateNames.begin(), 
                                  other.modifiedGateNames.end());
         
-        // finalGateCount 通常只以最後一次的快照為主，所以合併時直接覆蓋或保留最新
         finalGateCount = other.finalGateCount; 
     }
 };

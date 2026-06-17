@@ -70,6 +70,15 @@ void mergeFanoutLoadReport(FanoutLoadReport& lhs, const FanoutLoadReport& rhs) {
 
 } // namespace
 
+// getNetDriverGateId 的 ID 版本 (多載)
+int Netlist::getNetDriverGateId(int netId) const {
+    const int driverGateId = nets[netId].driverGateId;
+    if (!isValidGateId(driverGateId)) {
+        return -1;
+    }
+    return driverGateId;
+}
+
 // 取得指定 net 的唯一 driver gate ID；bus 或多 driver 情況請使用 getNetDriverGateIds。
 int Netlist::getNetDriverGateId(const std::string& netName) const {
     const int netId = getNetId(netName);
