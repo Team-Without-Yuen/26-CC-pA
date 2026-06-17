@@ -1,6 +1,7 @@
 #include "include/core/Netlist.h"
 
 #include <algorithm>
+#include <cctype>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -31,6 +32,40 @@ std::vector<int> uniqueValidGateIds(const Netlist& netlist,
         }
     }
     return uniqueIds;
+}
+
+// 將 pin name 正規化成大寫，方便辨識 DFF 的 D/CK/RN/SN。
+std::string uppercasePinName(std::string pinName) {
+    std::transform(pinName.begin(), pinName.end(), pinName.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
+    return pinName;
+}
+
+// 將 rhs 的 fanout load 分類合併到 lhs；bus aggregate 會使用這個 helper。
+void mergeFanoutLoadReport(FanoutLoadReport& lhs, const FanoutLoadReport& rhs) {
+    lhs.ok = lhs.ok || rhs.ok;
+    lhs.drivesPrimaryOutput = lhs.drivesPrimaryOutput || rhs.drivesPrimaryOutput;
+    lhs.primaryOutputLoadCount += rhs.primaryOutputLoadCount;
+    lhs.totalLoadCount += rhs.totalLoadCount;
+
+    lhs.combinationalGateLoads.insert(lhs.combinationalGateLoads.end(),
+                                      rhs.combinationalGateLoads.begin(),
+                                      rhs.combinationalGateLoads.end());
+    lhs.dffDataLoads.insert(lhs.dffDataLoads.end(),
+                            rhs.dffDataLoads.begin(),
+                            rhs.dffDataLoads.end());
+    lhs.dffClockLoads.insert(lhs.dffClockLoads.end(),
+                             rhs.dffClockLoads.begin(),
+                             rhs.dffClockLoads.end());
+    lhs.dffResetSetLoads.insert(lhs.dffResetSetLoads.end(),
+                                rhs.dffResetSetLoads.begin(),
+                                rhs.dffResetSetLoads.end());
+    lhs.dffOtherLoads.insert(lhs.dffOtherLoads.end(),
+                             rhs.dffOtherLoads.begin(),
+                             rhs.dffOtherLoads.end());
+    lhs.allGateLoadIds.insert(lhs.allGateLoadIds.end(),
+                              rhs.allGateLoadIds.begin(),
+                              rhs.allGateLoadIds.end());
 }
 
 } // namespace
@@ -103,6 +138,144 @@ std::vector<std::string> Netlist::getNetLoadGateNames(const std::string& netName
 // 取得指定 net / bus 直接 load 到的 gate 數量。
 size_t Netlist::getNetLoadGateCount(const std::string& netName) const {
     return getWireLoadCount(netName);
+}
+
+// 依照 Problem A QA 的 fanout load 定義，回報指定 scalar net 的 pin-level loads。
+FanoutLoadReport Netlist::getFanoutLoadReport(int netId) const {
+    FanoutLoadReport report;
+    report.netId = netId;
+
+    if (!isValidNetId(netId)) {
+        report.message = "Invalid net ID";
+        return report;
+    }
+
+    const Net& net = nets[netId];
+    report.ok = true;
+    report.netName = net.name;
+    report.message = "Fanout load report";
+
+    std::vector<int> loadGateIds = uniqueValidGateIds(*this, net.loadGateIds);
+    for (int gateId : loadGateIds) {
+        const Gate& gate = gates[gateId];
+
+        for (size_t pinIndex = 0; pinIndex < gate.inputNetIds.size(); ++pinIndex) {
+            if (gate.inputNetIds[pinIndex] != netId) {
+                continue;
+            }
+
+            report.allGateLoadIds.push_back(gateId);
+            if (gate.type != GateType::DFF) {
+                report.combinationalGateLoads.push_back(gateId);
+                continue;
+            }
+
+            const std::string pinName =
+                (pinIndex < gate.inputPinNames.size()) ? uppercasePinName(gate.inputPinNames[pinIndex])
+                                                       : "";
+            if (pinName == "D") {
+                report.dffDataLoads.push_back(gateId);
+            } else if (pinName == "CK") {
+                report.dffClockLoads.push_back(gateId);
+            } else if (pinName == "RN" || pinName == "SN") {
+                report.dffResetSetLoads.push_back(gateId);
+            } else {
+                report.dffOtherLoads.push_back(gateId);
+            }
+        }
+    }
+
+    if (net.isPO) {
+        report.drivesPrimaryOutput = true;
+        report.primaryOutputLoadCount = 1;
+    }
+
+    report.totalLoadCount = report.allGateLoadIds.size() + report.primaryOutputLoadCount;
+    return report;
+}
+
+// 依照 Problem A QA 的 fanout load 定義，回報指定 net / bus 的 pin-level loads。
+FanoutLoadReport Netlist::getFanoutLoadReport(const std::string& netName) const {
+    FanoutLoadReport report;
+    report.netName = netName;
+
+    const int scalarNetId = getNetId(netName);
+    if (isValidNetId(scalarNetId)) {
+        return getFanoutLoadReport(scalarNetId);
+    }
+
+    const std::vector<int> bitNetIds = expandNetToBits(netName);
+    if (bitNetIds.empty()) {
+        report.message = "Net not found: " + netName;
+        return report;
+    }
+
+    report.message = "Fanout load report for bus";
+    for (int bitNetId : bitNetIds) {
+        mergeFanoutLoadReport(report, getFanoutLoadReport(bitNetId));
+    }
+    report.netId = -1;
+    report.netName = netName;
+    return report;
+}
+
+// 依照 Problem A QA 的 fanout load 定義，取得指定 net / bus 的總負載數。
+size_t Netlist::getFanoutLoadCount(const std::string& netName) const {
+    return getFanoutLoadReport(netName).totalLoadCount;
+}
+
+// 依照 Problem A QA 的 fanout load 定義掃描全設計或所有 primary inputs。
+GlobalFanoutReport Netlist::getGlobalFanoutReport(int maxFanoutLimit,
+                                                  bool primaryInputsOnly,
+                                                  bool includeZeroFanout) const {
+    GlobalFanoutReport report;
+    report.ok = true;
+    report.message = primaryInputsOnly ? "Primary-input fanout report"
+                                       : "Global fanout report";
+    report.fanoutLimit = maxFanoutLimit;
+    report.primaryInputsOnly = primaryInputsOnly;
+    report.includeZeroFanout = includeZeroFanout;
+
+    for (const Net& net : nets) {
+        if (primaryInputsOnly && !net.isPI) {
+            continue;
+        }
+
+        FanoutLoadReport netReport = getFanoutLoadReport(net.id);
+        if (!netReport.ok) {
+            continue;
+        }
+        if (!includeZeroFanout && netReport.totalLoadCount == 0) {
+            continue;
+        }
+
+        report.netReports.push_back(netReport);
+        ++report.checkedNetCount;
+
+        if (netReport.totalLoadCount > report.maxFanout) {
+            report.maxFanout = netReport.totalLoadCount;
+            report.maxFanoutReports.clear();
+            report.maxFanoutReports.push_back(netReport);
+        } else if (netReport.totalLoadCount == report.maxFanout) {
+            report.maxFanoutReports.push_back(netReport);
+        }
+
+        if (maxFanoutLimit >= 0 &&
+            netReport.totalLoadCount > static_cast<size_t>(maxFanoutLimit)) {
+            report.violatingReports.push_back(netReport);
+        }
+    }
+
+    report.satisfiesLimit = report.violatingReports.empty();
+    return report;
+}
+
+// 判斷全設計是否符合指定 fanout limit；使用 Problem A QA fanout load 定義。
+bool Netlist::satisfiesFanoutLimit(int maxFanoutLimit) const {
+    if (maxFanoutLimit < 0) {
+        return false;
+    }
+    return getGlobalFanoutReport(maxFanoutLimit).satisfiesLimit;
 }
 
 // 取得指定 gate 的所有有效 input net IDs；未連接 pin 以 -1 表示時會被略過。
@@ -200,9 +373,9 @@ Netlist::DirectConnectivityReport Netlist::runDirectConnectivityQuery(
     report.netName = query.netName;
 
     switch (query.type) {
-    case DirectConnectivityQueryType::NetDriver:
+    case DirectConnectivityQueryType::NetDriverGates:
         if (query.netName.empty()) {
-            report.message = "NetDriver requires netName";
+            report.message = "NetDriverGates requires netName";
             return report;
         }
         report.netId = getNetId(query.netName);
@@ -228,9 +401,9 @@ Netlist::DirectConnectivityReport Netlist::runDirectConnectivityQuery(
         report.count = query.includeIds ? report.gateIds.size() : report.gateNames.size();
         return report;
 
-    case DirectConnectivityQueryType::NetLoads:
+    case DirectConnectivityQueryType::NetLoadGates:
         if (query.netName.empty()) {
-            report.message = "NetLoads requires netName";
+            report.message = "NetLoadGates requires netName";
             return report;
         }
         report.netId = getNetId(query.netName);
@@ -248,6 +421,54 @@ Netlist::DirectConnectivityReport Netlist::runDirectConnectivityQuery(
             report.gateNames = getNetLoadGateNames(query.netName);
         }
         report.count = getNetLoadGateCount(query.netName);
+        return report;
+
+    case DirectConnectivityQueryType::FanoutLoadReport:
+        if (query.netName.empty()) {
+            report.message = "FanoutLoadReport requires netName";
+            return report;
+        }
+        report.fanoutLoadReport = getFanoutLoadReport(query.netName);
+        if (!report.fanoutLoadReport.ok) {
+            report.message = report.fanoutLoadReport.message;
+            return report;
+        }
+        report.ok = true;
+        report.exists = true;
+        report.netId = report.fanoutLoadReport.netId;
+        report.netName = report.fanoutLoadReport.netName;
+        report.message = "Fanout load report";
+        report.count = report.fanoutLoadReport.totalLoadCount;
+        if (query.includeIds) {
+            report.gateIds = report.fanoutLoadReport.allGateLoadIds;
+        }
+        if (query.includeNames) {
+            report.gateNames = gateIdsToNames(*this, report.fanoutLoadReport.allGateLoadIds);
+        }
+        return report;
+
+    case DirectConnectivityQueryType::GlobalFanoutReport:
+        report.globalFanoutReport = getGlobalFanoutReport(query.fanoutLimit,
+                                                          query.primaryInputsOnly,
+                                                          query.includeZeroFanout);
+        report.ok = report.globalFanoutReport.ok;
+        report.exists = report.globalFanoutReport.ok;
+        report.message = report.globalFanoutReport.message;
+        report.count = report.globalFanoutReport.checkedNetCount;
+        if (!report.globalFanoutReport.maxFanoutReports.empty()) {
+            report.netId = report.globalFanoutReport.maxFanoutReports.front().netId;
+            report.netName = report.globalFanoutReport.maxFanoutReports.front().netName;
+        }
+        if (query.includeIds) {
+            for (const FanoutLoadReport& maxReport : report.globalFanoutReport.maxFanoutReports) {
+                report.netIds.push_back(maxReport.netId);
+            }
+        }
+        if (query.includeNames) {
+            for (const FanoutLoadReport& maxReport : report.globalFanoutReport.maxFanoutReports) {
+                report.netNames.push_back(maxReport.netName);
+            }
+        }
         return report;
 
     case DirectConnectivityQueryType::GateInputs:

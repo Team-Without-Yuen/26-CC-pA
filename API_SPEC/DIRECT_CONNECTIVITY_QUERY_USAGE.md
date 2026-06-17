@@ -45,8 +45,10 @@ DirectConnectivityQuery 只查 immediate connection。
 
 | Query type | 問題類型 | 需要設定 | 主要讀取欄位 |
 |---|---|---|---|
-| `NetDriver` | 誰 drive 這條 net / bus | `netName` | `gateIds`, `gateNames`, `count` |
-| `NetLoads` | 這條 net / bus load 到哪些 gates | `netName` | `gateIds`, `gateNames`, `count` |
+| `NetDriverGates` | 誰 drive 這條 net / bus | `netName` | `gateIds`, `gateNames`, `count` |
+| `NetLoadGates` | 這條 net / bus load 到哪些 gates | `netName` | `gateIds`, `gateNames`, `count` |
+| `FanoutLoadReport` | 依 Problem A QA 定義統計 pin-level fanout loads | `netName` | `fanoutLoadReport`, `count` |
+| `GlobalFanoutReport` | 全設計或 PI-only fanout max / violations | `fanoutLimit`, `primaryInputsOnly` | `globalFanoutReport` |
 | `GateInputs` | 這顆 gate 的 input nets | `gateName` | `netIds`, `netNames`, `count` |
 | `GateOutput` | 這顆 gate 的 output net | `gateName` | `netId`, `netName`, `netIds`, `netNames` |
 | `GateFanin` | 哪些 gates 直接餵進這顆 gate | `gateName` | `gateIds`, `gateNames`, `count` |
@@ -59,7 +61,7 @@ DirectConnectivityQuery 只查 immediate connection。
 
 | 欄位 | 型別 | 預設值 | 用途 |
 |---|---|---|---|
-| `type` | `DirectConnectivityQueryType` | `NetDriver` | 決定查詢類型 |
+| `type` | `DirectConnectivityQueryType` | `NetDriverGates` | 決定查詢類型 |
 | `gateName` | `std::string` | `""` | gate 相關 query 使用 |
 | `netName` | `std::string` | `""` | net 相關 query 使用 |
 | `includeIds` | `bool` | `true` | 是否填 `gateIds` / `netIds` |
@@ -84,10 +86,12 @@ DirectConnectivityQuery 只查 immediate connection。
 | `netIds` | 查詢結果中的 net IDs |
 | `gateNames` | 查詢結果中的 gate names |
 | `netNames` | 查詢結果中的 net names |
+| `fanoutLoadReport` | `FanoutLoadReport` 查詢的分類結果 |
+| `globalFanoutReport` | `GlobalFanoutReport` 查詢的全域彙整結果 |
 
 ---
 
-## 5. NetDriver
+## 5. NetDriverGates
 
 用途：
 
@@ -99,7 +103,7 @@ DirectConnectivityQuery 只查 immediate connection。
 
 ```cpp
 Netlist::DirectConnectivityQuery query;
-query.type = Netlist::DirectConnectivityQueryType::NetDriver;
+query.type = Netlist::DirectConnectivityQueryType::NetDriverGates;
 query.netName = "n1";
 
 Netlist::DirectConnectivityReport report =
@@ -116,7 +120,7 @@ Netlist::DirectConnectivityReport report =
 
 ---
 
-## 6. NetLoads
+## 6. NetLoadGates
 
 用途：
 
@@ -128,7 +132,7 @@ Netlist::DirectConnectivityReport report =
 
 ```cpp
 Netlist::DirectConnectivityQuery query;
-query.type = Netlist::DirectConnectivityQueryType::NetLoads;
+query.type = Netlist::DirectConnectivityQueryType::NetLoadGates;
 query.netName = "n1";
 
 Netlist::DirectConnectivityReport report =
@@ -143,9 +147,104 @@ Netlist::DirectConnectivityReport report =
 | load gate IDs | `report.gateIds` |
 | load 數量 | `report.count` |
 
+注意：
+
+```text
+NetLoadGates 只回答「這條 net 接到哪些 gate/DFF instance」。
+它不會把 primary output connection 算成 load，也不會區分 DFF.D / DFF.CK / DFF.RN / DFF.SN。
+若題目問 fanout load count，應使用 FanoutLoadReport。
+```
+
 ---
 
-## 7. GateInputs
+## 7. FanoutLoadReport
+
+用途：
+
+```text
+依照 Problem A QA 的 fanout load 定義，查某條 net 的 pin-level loads。
+```
+
+QA fanout load 包含：
+
+```text
+primitive gate input pin
+DFF D pin
+DFF CK pin
+DFF RN/SN pin
+primary output connection
+```
+
+寫法：
+
+```cpp
+Netlist::DirectConnectivityQuery query;
+query.type = Netlist::DirectConnectivityQueryType::FanoutLoadReport;
+query.netName = "n1";
+
+Netlist::DirectConnectivityReport report =
+    netlist.runDirectConnectivityQuery(query);
+```
+
+讀取：
+
+| 想知道 | 讀取欄位 |
+|---|---|
+| QA fanout load 總數 | `report.fanoutLoadReport.totalLoadCount` 或 `report.count` |
+| primitive gate input loads | `report.fanoutLoadReport.combinationalGateLoads` |
+| DFF D-pin loads | `report.fanoutLoadReport.dffDataLoads` |
+| DFF clock loads | `report.fanoutLoadReport.dffClockLoads` |
+| DFF reset/set loads | `report.fanoutLoadReport.dffResetSetLoads` |
+| 是否直接 drive PO | `report.fanoutLoadReport.drivesPrimaryOutput` |
+| PO load 數 | `report.fanoutLoadReport.primaryOutputLoadCount` |
+
+例子：
+
+```verilog
+dff ff1(.D(n1), .CK(clk), .RN(rst_n), .SN(rst_n), .Q(q));
+```
+
+```text
+FanoutLoadReport("rst_n").dffResetSetLoads.size() == 2
+```
+
+因為 `.RN(rst_n)` 和 `.SN(rst_n)` 是兩個不同 sink pins。
+
+---
+
+## 8. GlobalFanoutReport
+
+用途：
+
+```text
+掃描全設計或所有 primary inputs 的 fanout loads，找最大 fanout 與 fanout limit violations。
+```
+
+寫法：
+
+```cpp
+Netlist::DirectConnectivityQuery query;
+query.type = Netlist::DirectConnectivityQueryType::GlobalFanoutReport;
+query.fanoutLimit = 16;          // -1 表示只找 max，不檢查 violation
+query.primaryInputsOnly = false; // true 時只掃 PI nets
+
+Netlist::DirectConnectivityReport report =
+    netlist.runDirectConnectivityQuery(query);
+```
+
+讀取：
+
+| 想知道 | 讀取欄位 |
+|---|---|
+| 最大 fanout | `report.globalFanoutReport.maxFanout` |
+| 最大 fanout 的 nets | `report.globalFanoutReport.maxFanoutReports` |
+| 是否符合 limit | `report.globalFanoutReport.satisfiesLimit` |
+| 違反 limit 的 nets | `report.globalFanoutReport.violatingReports` |
+| 實際檢查 net 數 | `report.globalFanoutReport.checkedNetCount` |
+
+---
+
+## 9. GateInputs
 
 用途：
 
@@ -174,7 +273,7 @@ Netlist::DirectConnectivityReport report =
 
 ---
 
-## 8. GateOutput
+## 10. GateOutput
 
 用途：
 
@@ -202,7 +301,7 @@ Netlist::DirectConnectivityReport report =
 
 ---
 
-## 9. GateFanin
+## 11. GateFanin
 
 用途：
 
@@ -230,7 +329,7 @@ PI 或 constant input 沒有 driver gate，會被略過。
 
 ---
 
-## 10. GateFanout
+## 12. GateFanout
 
 用途：
 
@@ -257,7 +356,7 @@ Report every gate connected to the output of g0.
 
 ---
 
-## 11. DirectlyConnected
+## 13. DirectlyConnected
 
 用途：
 
@@ -292,12 +391,17 @@ Netlist::DirectConnectivityReport report =
 
 ---
 
-## 12. Prompt 對應表
+## 14. Prompt 對應表
 
 | Prompt | 建議 Query type | 需要設定 | 主要讀取 |
 |---|---|---|---|
-| Which gate drives net n1? | `NetDriver` | `netName = "n1"` | `gateNames` |
-| Report every gate connected to net n1. | `NetLoads` | `netName = "n1"` | `gateNames` |
+| Which gate drives net n1? | `NetDriverGates` | `netName = "n1"` | `gateNames` |
+| Report every gate connected to net n1. | `NetLoadGates` | `netName = "n1"` | `gateNames` |
+| How many fanout loads does n1 have? | `FanoutLoadReport` | `netName = "n1"` | `fanoutLoadReport.totalLoadCount` |
+| List DFF clock/reset loads driven by n1. | `FanoutLoadReport` | `netName = "n1"` | `dffClockLoads`, `dffResetSetLoads` |
+| Does n1 directly drive a primary output? | `FanoutLoadReport` | `netName = "n1"` | `drivesPrimaryOutput` |
+| Which primary input has the highest fanout? | `GlobalFanoutReport` | `primaryInputsOnly = true` | `maxFanoutReports` |
+| Does every signal satisfy max fanout 16? | `GlobalFanoutReport` | `fanoutLimit = 16` | `satisfiesLimit`, `violatingReports` |
 | What are the input nets of g1? | `GateInputs` | `gateName = "g1"` | `netNames` |
 | What is the output net of g1? | `GateOutput` | `gateName = "g1"` | `netName` |
 | Which gates feed g1? | `GateFanin` | `gateName = "g1"` | `gateNames` |
@@ -306,7 +410,7 @@ Netlist::DirectConnectivityReport report =
 
 ---
 
-## 13. 何時不要用 DirectConnectivityQuery
+## 15. 何時不要用 DirectConnectivityQuery
 
 | 問題 | 應改用 |
 |---|---|
@@ -318,12 +422,14 @@ Netlist::DirectConnectivityReport report =
 
 ---
 
-## 14. 低階 Helper 對照
+## 16. 低階 Helper 對照
 
 | Query type | 底層 helper |
 |---|---|
-| `NetDriver` | `getNetDriverGateIds()`, `getNetDriverGateNames()` |
-| `NetLoads` | `getNetLoadGateIds()`, `getNetLoadGateNames()`, `getNetLoadGateCount()` |
+| `NetDriverGates` | `getNetDriverGateIds()`, `getNetDriverGateNames()` |
+| `NetLoadGates` | `getNetLoadGateIds()`, `getNetLoadGateNames()`, `getNetLoadGateCount()` |
+| `FanoutLoadReport` | `getFanoutLoadReport()`, `getFanoutLoadCount()` |
+| `GlobalFanoutReport` | `getGlobalFanoutReport()`, `satisfiesFanoutLimit()` |
 | `GateInputs` | `getGateInputNetIds()`, `getGateInputNetNames()` |
 | `GateOutput` | `getGateOutputNetId()`, `getGateOutputNetName()` |
 | `GateFanin` | `getGateFaninGateIds()`, `getGateFaninGateNames()`, `getGateFaninGateCount()` |
@@ -332,11 +438,11 @@ Netlist::DirectConnectivityReport report =
 
 ---
 
-## 15. 目前實作與測試狀態
+## 17. 目前實作與測試狀態
 
 ```text
 實作檔案：src/analysis/ConnectivityAnalysis.cpp
 型別檔案：include/core/NetlistQueries.h
 tester：mini test/tester.cpp
-目前 regression：Summary: 45 passed, 0 failed.
+目前 regression：Summary: 57 passed, 0 failed.
 ```

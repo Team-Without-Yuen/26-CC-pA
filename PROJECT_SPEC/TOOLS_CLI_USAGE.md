@@ -132,6 +132,11 @@ conn_query <mode> [args]
 | --- | --- | --- |
 | `net_driver` | `<net>` | 查 net 的直接 driver gate |
 | `net_loads` | `<net>` | 查 net 直接 load 到哪些 gates |
+| `fanout_load` | `<net>` | 依 Problem A QA 定義回報 net 的 pin-level fanout loads |
+| `fanout_report` | `<net>` | `fanout_load` 的別名 |
+| `global_fanout` | `[limit]` | 掃描全設計 fanout max；給 limit 時同時列 violations |
+| `pi_fanout` | `[limit]` | 只掃 primary inputs，找最高 fanout PI |
+| `fanout_violations` | `<limit>` | 列出 fanout 超過 limit 的 nets |
 | `gate_inputs` | `<gate>` | 查 gate 的 input nets |
 | `gate_output` | `<gate>` | 查 gate 的 output net |
 | `gate_fanin` | `<gate>` | 查直接驅動 gate inputs 的上一層 gates |
@@ -143,6 +148,12 @@ conn_query <mode> [args]
 ```text
 conn_query net_driver n16
 conn_query net_loads n2
+conn_query fanout_load n2
+conn_query fanout_report clk
+conn_query global_fanout
+conn_query global_fanout 16
+conn_query pi_fanout
+conn_query fanout_violations 16
 conn_query gate_inputs g5
 conn_query gate_output g5
 conn_query gate_fanin g5
@@ -155,6 +166,7 @@ conn_query is_connected g5 n2
 ```text
 conn_query 只回答一層直接相連。
 如果題目問 reachable、fanin cone、fanout cone，不應使用 conn_query，應改用 cone_query。
+如果題目問 fanout load count，尤其包含 DFF CK/RN/SN 或 primary output load，應使用 conn_query fanout_load。
 ```
 
 ## 7. Cone Query
@@ -200,7 +212,7 @@ cone_query gate_fanout g10 with_paths
 格式：
 
 ```text
-path_query <mode> <start_endpoint> <end_endpoint> [-req node...] [-avoid node...]
+path_query <mode> <start_endpoint> <end_endpoint> [-req node...] [-avoid node...] [-out file] [-max_print n]
 ```
 
 ### 8.1 Modes
@@ -209,7 +221,7 @@ path_query <mode> <start_endpoint> <end_endpoint> [-req node...] [-avoid node...
 | --- | --- |
 | `exists` | 判斷是否至少存在一條合法路徑 |
 | `find_any` | 回傳任意一條合法路徑 |
-| `enumerate` | 列出所有合法路徑 |
+| `enumerate` | 列出所有合法路徑；預設會將完整結果寫入檔案 |
 | `min_depth` | 找最短 logic depth path |
 | `max_depth` | 找最長 logic depth path |
 | `every_through` | 判斷所有路徑是否都經過指定節點 |
@@ -247,6 +259,7 @@ path_query <mode> <start_endpoint> <end_endpoint> [-req node...] [-avoid node...
 path_query exists net:a net:y
 path_query find_any pi:a po:y
 path_query enumerate net:a net:y
+path_query enumerate net:a net:y -out paths_output.txt -max_print 0
 path_query min_depth net:a net:y
 path_query max_depth net:a net:y
 path_query exists net:a net:y -avoid gate:g3 net:n5
@@ -263,6 +276,9 @@ path_query exists dff_q:ff1 po:y
 - 目前 path query 預設 combinationalOnly=true。
 - DFF 是 sequential boundary，路徑搜尋不會穿越 DFF。
 - 如果要查 register-to-register path，應使用 dff_q:<ff> 作為起點、dff_d:<ff> 作為終點。
+- `enumerate` 會把完整路徑列表寫到檔案；CLI 只印摘要與前 `-max_print` 條。
+- `-out <file>` 可覆蓋輸出檔名；未指定時使用 `path_enumeration_output.txt`。
+- `-out` 建議使用不含空白的路徑。
 ```
 
 ## 9. Depth Query
@@ -342,6 +358,7 @@ LLM / parser 可以先用下面規則判斷要呼叫哪個入口：
 | --- | --- |
 | gate/net/PI/PO/DFF 數量、列出物件、查 type | `basic_query` |
 | 某 net 的 driver/load、某 gate 的 input/output | `conn_query` |
+| 某 net 依 QA 定義的 fanout load 數、DFF clock/reset loads、是否 drive PO | `conn_query fanout_load` |
 | reachable、transitive fanin/fanout、cone size | `cone_query` |
 | A 到 B 是否有路徑、找路徑、避開/必經節點 | `path_query` |
 | critical path、depth、depth > threshold endpoints | `depth_query` |

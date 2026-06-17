@@ -83,6 +83,28 @@ void printStringList(const std::string& title,
     }
 }
 
+// 印出 gate ID 陣列對應的 instance names；fanout pin-level report 會用到。
+void printGateIdList(const Netlist& netlist,
+                     const std::string& title,
+                     const std::vector<int>& gateIds) {
+    std::cout << title << " (" << gateIds.size() << "):\n";
+    for (int gateId : gateIds) {
+        if (netlist.isValidGateId(gateId)) {
+            std::cout << "  " << netlist.getGate(gateId).instName << "\n";
+        }
+    }
+}
+
+// 印出 fanout report 中的 net name 清單。
+void printFanoutNetList(const std::string& title,
+                        const std::vector<Netlist::FanoutLoadReport>& reports) {
+    std::cout << title << " (" << reports.size() << "):\n";
+    for (const Netlist::FanoutLoadReport& report : reports) {
+        std::cout << "  " << report.netName
+                  << " fanout=" << report.totalLoadCount << "\n";
+    }
+}
+
 // 印出 path 的 net/gate 序列，供 path/depth 類 query 共用。
 void printPath(const Netlist& netlist, const Netlist::CombinationalPath& path) {
     if (!path.exists()) {
@@ -221,7 +243,8 @@ void printBasicReport(const Netlist& netlist, const Netlist::BasicReport& report
 }
 
 // 印出 DirectConnectivityQuery 的統一 report。
-void printConnectivityReport(const Netlist::DirectConnectivityReport& report) {
+void printConnectivityReport(const Netlist& netlist,
+                             const Netlist::DirectConnectivityReport& report) {
     if (!report.ok) {
         std::cout << "Error: " << report.message << "\n";
         return;
@@ -237,6 +260,35 @@ void printConnectivityReport(const Netlist::DirectConnectivityReport& report) {
     std::cout << "  count: " << report.count << "\n";
     if (report.connected) {
         std::cout << "  connected: yes\n";
+    }
+    if (report.fanoutLoadReport.ok) {
+        const Netlist::FanoutLoadReport& fanout = report.fanoutLoadReport;
+        std::cout << "  fanout load count (QA definition): "
+                  << fanout.totalLoadCount << "\n";
+        std::cout << "  drives primary output: "
+                  << (fanout.drivesPrimaryOutput ? "yes" : "no") << "\n";
+        std::cout << "  primary output load count: "
+                  << fanout.primaryOutputLoadCount << "\n";
+        printGateIdList(netlist, "Combinational gate input loads",
+                        fanout.combinationalGateLoads);
+        printGateIdList(netlist, "DFF D-pin loads", fanout.dffDataLoads);
+        printGateIdList(netlist, "DFF clock-pin loads", fanout.dffClockLoads);
+        printGateIdList(netlist, "DFF reset/set-pin loads", fanout.dffResetSetLoads);
+        printGateIdList(netlist, "DFF other-pin loads", fanout.dffOtherLoads);
+    }
+    if (report.globalFanoutReport.ok) {
+        const Netlist::GlobalFanoutReport& global = report.globalFanoutReport;
+        std::cout << "  checked nets: " << global.checkedNetCount << "\n";
+        std::cout << "  max fanout: " << global.maxFanout << "\n";
+        if (global.fanoutLimit >= 0) {
+            std::cout << "  fanout limit: " << global.fanoutLimit << "\n";
+            std::cout << "  satisfies limit: "
+                      << (global.satisfiesLimit ? "yes" : "no") << "\n";
+        }
+        printFanoutNetList("Max-fanout nets", global.maxFanoutReports);
+        if (!global.violatingReports.empty()) {
+            printFanoutNetList("Violating nets", global.violatingReports);
+        }
     }
     if (!report.gateNames.empty()) {
         printStringList("Gate names", report.gateNames);
@@ -279,20 +331,35 @@ void printConeReport(const Netlist& netlist, const Netlist::ConeReport& report) 
 
 // 印出 PathQuery 的統一 result。
 void printPathResult(const Netlist& netlist,
-                     Netlist::PathQueryMode mode,
+                     const Netlist::PathQuery& query,
                      const Netlist::PathQueryResult& result) {
-    if (mode == Netlist::PathQueryMode::Exists ||
-        mode == Netlist::PathQueryMode::EveryPathThrough ||
-        mode == Netlist::PathQueryMode::EveryPathAvoids) {
+    if (query.mode == Netlist::PathQueryMode::Exists ||
+        query.mode == Netlist::PathQueryMode::EveryPathThrough ||
+        query.mode == Netlist::PathQueryMode::EveryPathAvoids) {
         std::cout << (result.exists ? "Yes\n" : "No\n");
         return;
     }
 
-    if (mode == Netlist::PathQueryMode::EnumerateAll) {
-        std::cout << "Total paths: " << result.paths.size() << "\n";
-        for (size_t i = 0; i < result.paths.size(); ++i) {
+    if (query.mode == Netlist::PathQueryMode::EnumerateAll) {
+        std::cout << "Total paths: " << result.pathCount << "\n";
+        std::cout << "Complete enumeration: "
+                  << (result.completeEnumeration ? "yes" : "no") << "\n";
+        if (result.wrotePathsToFile) {
+            std::cout << "Wrote paths to file: yes\n";
+            std::cout << "Output file: " << result.outputFilePath << "\n";
+        }
+        const size_t pathsToPrint = std::min(query.maxPrintedPaths, result.paths.size());
+        for (size_t i = 0; i < pathsToPrint; ++i) {
             std::cout << "Path " << (i + 1) << ":\n";
             printPath(netlist, result.paths[i]);
+        }
+        if (pathsToPrint < result.paths.size()) {
+            std::cout << "... omitted " << (result.paths.size() - pathsToPrint)
+                      << " paths from terminal output";
+            if (result.wrotePathsToFile) {
+                std::cout << "; see " << result.outputFilePath;
+            }
+            std::cout << "\n";
         }
         return;
     }
@@ -408,11 +475,26 @@ bool buildConnectivityQuery(std::istringstream& iss,
                             Netlist::DirectConnectivityQuery& query) {
     const std::string m = toLower(mode);
     if (m == "net_driver") {
-        query.type = Netlist::DirectConnectivityQueryType::NetDriver;
+        query.type = Netlist::DirectConnectivityQueryType::NetDriverGates;
         iss >> query.netName;
     } else if (m == "net_loads") {
-        query.type = Netlist::DirectConnectivityQueryType::NetLoads;
+        query.type = Netlist::DirectConnectivityQueryType::NetLoadGates;
         iss >> query.netName;
+    } else if (m == "fanout_load" || m == "fanout_report") {
+        query.type = Netlist::DirectConnectivityQueryType::FanoutLoadReport;
+        iss >> query.netName;
+    } else if (m == "global_fanout") {
+        query.type = Netlist::DirectConnectivityQueryType::GlobalFanoutReport;
+        iss >> query.fanoutLimit;
+    } else if (m == "pi_fanout") {
+        query.type = Netlist::DirectConnectivityQueryType::GlobalFanoutReport;
+        query.primaryInputsOnly = true;
+        iss >> query.fanoutLimit;
+    } else if (m == "fanout_violations") {
+        query.type = Netlist::DirectConnectivityQueryType::GlobalFanoutReport;
+        if (!(iss >> query.fanoutLimit)) {
+            return false;
+        }
     } else if (m == "gate_inputs") {
         query.type = Netlist::DirectConnectivityQueryType::GateInputs;
         iss >> query.gateName;
@@ -556,13 +638,15 @@ void printHelp() {
         << "\nDirect connectivity query\n"
         << "  conn_query <mode> [args]\n"
         << "  mode: net_driver <net> | net_loads <net> | gate_inputs <gate>\n"
+        << "        fanout_load <net> | fanout_report <net>\n"
+        << "        global_fanout [limit] | pi_fanout [limit] | fanout_violations <limit>\n"
         << "        gate_output <gate> | gate_fanin <gate> | gate_fanout <gate>\n"
         << "        is_connected <gate> <net>\n"
         << "\nCone query\n"
         << "  cone_query <mode> <name> [with_paths]\n"
         << "  mode: net_fanin | net_fanout | gate_fanin | gate_fanout\n"
         << "\nPath query\n"
-        << "  path_query <mode> <start_endpoint> <end_endpoint> [-req node...] [-avoid node...]\n"
+        << "  path_query <mode> <start_endpoint> <end_endpoint> [-req node...] [-avoid node...] [-out file] [-max_print n]\n"
         << "  mode: exists | find_any | enumerate | min_depth | max_depth\n"
         << "        every_through | every_avoids\n"
         << "  endpoint: net:<n> | pi:<p> | po:<p> | dff_q:<ff> | dff_d:<ff>\n"
@@ -658,7 +742,7 @@ int main() {
                 std::cout << "Unknown conn_query mode: " << mode << "\n";
                 continue;
             }
-            printConnectivityReport(netlist.runDirectConnectivityQuery(query));
+            printConnectivityReport(netlist, netlist.runDirectConnectivityQuery(query));
             continue;
         }
 
@@ -682,7 +766,7 @@ int main() {
             std::string startToken;
             std::string endToken;
             if (!(iss >> modeText >> startToken >> endToken)) {
-                std::cout << "Usage: path_query <mode> <start> <end> [-req node...] [-avoid node...]\n";
+                std::cout << "Usage: path_query <mode> <start> <end> [-req node...] [-avoid node...] [-out file] [-max_print n]\n";
                 continue;
             }
 
@@ -705,6 +789,23 @@ int main() {
                     listMode = 2;
                     continue;
                 }
+                if (token == "-out") {
+                    std::string outputPath;
+                    if (iss >> outputPath) {
+                        query.writePathsToFile = true;
+                        query.outputFilePath = outputPath;
+                    }
+                    listMode = 0;
+                    continue;
+                }
+                if (token == "-max_print") {
+                    size_t maxPrinted = 0;
+                    if (iss >> maxPrinted) {
+                        query.maxPrintedPaths = maxPrinted;
+                    }
+                    listMode = 0;
+                    continue;
+                }
                 if (listMode == 1) {
                     query.requiredNodes.push_back(parsePathNode(token));
                 } else if (listMode == 2) {
@@ -712,7 +813,7 @@ int main() {
                 }
             }
 
-            printPathResult(netlist, query.mode, netlist.runPathQuery(query));
+            printPathResult(netlist, query, netlist.runPathQuery(query));
             continue;
         }
 

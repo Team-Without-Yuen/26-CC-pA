@@ -256,6 +256,28 @@ public:
     // 取得指定 net / bus 直接 load 到的 gate 數量；語意等同 getWireLoadCount。
     size_t getNetLoadGateCount(const std::string& netName) const;
 
+    // 依照 Problem A QA 的 fanout load 定義，回報指定 scalar net 的所有直接負載。
+    // 這個 API 不只看 gate input，也會把 primary output connection 算入。
+    // DFF input 會依 named pin 分成 D / CK / RN-SN / other。
+    FanoutLoadReport getFanoutLoadReport(int netId) const;
+
+    // 依照 Problem A QA 的 fanout load 定義，回報指定 net / bus 的所有直接負載。
+    // 若傳入 bus name，會 aggregate 每個 bit 的 fanout load。
+    FanoutLoadReport getFanoutLoadReport(const std::string& netName) const;
+
+    // 依照 Problem A QA 的 fanout load 定義，取得指定 net / bus 的總負載數。
+    // 注意：這和 getNetLoadGateCount() 不同；本 API 會把 primary output connection 算入。
+    size_t getFanoutLoadCount(const std::string& netName) const;
+
+    // 依照 Problem A QA 的 fanout load 定義掃描全設計或所有 primary inputs。
+    // maxFanoutLimit >= 0 時會填 violatingReports；primaryInputsOnly=true 時只檢查 PI nets。
+    GlobalFanoutReport getGlobalFanoutReport(int maxFanoutLimit = -1,
+                                             bool primaryInputsOnly = false,
+                                             bool includeZeroFanout = false) const;
+
+    // 判斷全設計是否符合指定 fanout limit；使用 Problem A QA fanout load 定義。
+    bool satisfiesFanoutLimit(int maxFanoutLimit) const;
+
     // 取得指定 gate 的所有有效 input net IDs；未連接 input 會被略過。
     std::vector<int> getGateInputNetIds(const std::string& gateInstName) const;
 
@@ -987,6 +1009,107 @@ public:
     int mergeStructurallyEquivalentGates();
 
     // =========================================================================
+    // B-5: Unique name generator
+    // =========================================================================
+
+    // 產生不會和現有 gate 名稱衝突的唯一名稱
+    std::string makeUniqueGateName(const std::string& prefix) const;
+    // 產生不會和現有 net 名稱衝突的唯一名稱
+    std::string makeUniqueNetName(const std::string& prefix) const;
+    // 用唯一名稱新增 gate
+    int addGateWithUniqueName(const std::string& prefix, GateType type);
+    // 用唯一名稱新增 net
+    int addNetWithUniqueName(const std::string& prefix);
+
+    // =========================================================================
+    // B-4: Gate replacement primitives
+    // =========================================================================
+
+    // 把 gate 的所有 load 改接到 sourceNet，gate 本身消失
+    bool replaceGateWithNet(int gateId, int sourceNetId);
+    // 把 gate 替換成常數 net
+    bool replaceGateWithConstant(int gateId, int constNetId);
+    // 把 gate 改寫成 NOT(sourceNet)
+    bool replaceGateWithNotOfNet(int gateId, int sourceNetId);
+    // 新增一個 gate 並讓它驅動 outputNet，回傳新 gate ID
+    int createGateDrivingNet(GateType type, const std::vector<int>& inputNetIds,
+                            int outputNetId, const std::string& nameHint = "");
+    // 把 gate 所有 pin 斷開並標記為 UNKNOWN
+    bool removeGateAndDetachPins(int gateId);
+
+    // =========================================================================
+    // B-1: Pin-level 精準改線 primitive
+    // =========================================================================
+
+    // 斷開指定 gate 的第 pinIndex 個 input pin
+    bool disconnectGateInputPin(int gateId, int pinIndex);
+    // 把指定 gate 的第 pinIndex 個 input pin 接到 netId
+    bool connectGateInputPin(int gateId, int pinIndex, int netId);
+    // 把指定 gate 的第 pinIndex 個 input pin 改接到 newNetId
+    bool reconnectGateInputPin(int gateId, int pinIndex, int newNetId);
+    // 用名稱把指定 gate 的 pinName pin 改接到 newNetName（支援 DFF D/CK/RN/SN）
+    bool reconnectGateInputPinByName(const std::string& gateName,
+                                    const std::string& pinName,
+                                    const std::string& newNetName);
+
+    // =========================================================================
+    // B-2: PO-safe output rewrite primitive
+    // =========================================================================
+
+    // 把 targetNet 的 driver 換成 newDriverGate（保留 net 名稱與 PO flag）
+    bool replaceDriverOfNet(int targetNetId, int newDriverGateId);
+    // 把 gate 的 output 改接到 newOutputNetId
+    bool rewireGateOutputToExistingNet(int gateId, int newOutputNetId);
+    // 保留 PO net，插入新 gate 驅動它
+    bool preservePortNetAndReplaceDriver(int poNetId, GateType newGateType,
+                                        const std::vector<int>& inputNetIds);
+    // 把 targetNet 的功能換成 sourceNet，保留 targetNet 名稱
+    bool replaceNetFunctionWithNetKeepingName(int targetNetId, int sourceNetId);
+
+    // =========================================================================
+    // B-3: Net merge / net bypass primitive
+    // =========================================================================
+
+    // 把 fromNet 完全合併到 toNet
+    bool mergeNetIntoNet(int fromNetId, int toNetId);
+    // bypass removedNet，讓所有 load 改接到 replacementNet（保留 PO 語意）
+    bool bypassNetKeepingPortSemantics(int removedNetId, int replacementNetId);
+    // 把 oldNet 的所有 load 改接到 newNet
+    bool redirectAllLoads(int oldNetId, int newNetId, bool allowDuplicateLoads = false);
+    // 如果 net 沒有任何 load 且非 PO/PI/const，移除它
+    bool removeNetIfUnused(int netId);
+    // 掃描所有 net，移除所有未使用的 net
+    int removeUnusedNets();
+
+    // =========================================================================
+    // B-6: Transaction / rollback primitive
+    // =========================================================================
+   
+    bool restoreFrom(const Netlist& backup);
+    bool validateAfterMutation() const;
+
+    // =========================================================================
+    // B-7: Cleanup fixpoint runner
+    // =========================================================================
+
+    int simplifyAllGatesWithConstants();
+    int simplifyAllSameInputGates();
+    int runLocalSimplificationFixpoint();
+
+    // =========================================================================
+    // B-8: compactRemovedGatesWithIdMap
+    // =========================================================================
+
+    struct CompactResult {
+        int removedGateCount;
+        std::unordered_map<int, int> oldToNewGateId;
+        std::unordered_map<int, int> newToOldGateId;
+    };
+    CompactResult compactRemovedGatesWithIdMap();
+
+
+
+    // =========================================================================
     // 3. Optimization Candidate / Strategy API
     //
     // 這一大區塊只負責 optimization planning / target selection。
@@ -1096,6 +1219,8 @@ public:
     using DirectConnectivityQueryType = ::DirectConnectivityQueryType;
     using DirectConnectivityQuery = ::DirectConnectivityQuery;
     using DirectConnectivityReport = ::DirectConnectivityReport;
+    using FanoutLoadReport = ::FanoutLoadReport;
+    using GlobalFanoutReport = ::GlobalFanoutReport;
 
     // 執行統一 DirectConnectivityQuery；內部只呼叫 direct connectivity helper。
     DirectConnectivityReport runDirectConnectivityQuery(

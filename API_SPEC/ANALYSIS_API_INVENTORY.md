@@ -177,8 +177,8 @@ Is gate g1 directly connected to net n3?
 
 | 問題類型 | Query type |
 |---|---|
-| net 的直接 driver | `NetDriver` |
-| net 的直接 loads | `NetLoads` |
+| net 的直接 driver | `NetDriverGates` |
+| net 的直接 loads | `NetLoadGates` |
 | gate 的 input nets | `GateInputs` |
 | gate 的 output net | `GateOutput` |
 | gate 的 immediate fanin gates | `GateFanin` |
@@ -309,7 +309,7 @@ ConeQuery 的 includeLocalPaths 只能作為 cone 內 local summary。
 
 | 問題 | 正確 API |
 |---|---|
-| net n2 直接 load 到哪些 gate | `DirectConnectivityQuery::NetLoads` |
+| net n2 直接 load 到哪些 gate | `DirectConnectivityQuery::NetLoadGates` |
 | 從 net n2 可到達哪些 gate | `ConeQuery::NetTransitiveFanout` |
 | a 到 y 是否有路徑 | `PathQuery::Exists` |
 | y 的 fanin cone 內有哪些 gate | `ConeQuery::NetTransitiveFanin` |
