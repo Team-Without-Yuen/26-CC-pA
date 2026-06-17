@@ -184,6 +184,77 @@ void testDirectConnectivityQuery(TestReport& report, const Netlist& netlist) {
     query.netName = "n_and";
     direct = netlist.runDirectConnectivityQuery(query);
     report.check(direct.ok && direct.connected, "runDirectConnectivityQuery DirectlyConnected");
+
+    const Netlist::FanoutLoadReport nBufFanout = netlist.getFanoutLoadReport("n_buf");
+    report.check(nBufFanout.ok &&
+                 nBufFanout.totalLoadCount == 2 &&
+                 nBufFanout.combinationalGateLoads.size() == 1 &&
+                 nBufFanout.dffDataLoads.size() == 1 &&
+                 containsInt(nBufFanout.combinationalGateLoads, netlist.getGateId("g_y")) &&
+                 containsInt(nBufFanout.dffDataLoads, netlist.getGateId("ff1")),
+                 "fanout load report classifies gate input and DFF D");
+
+    const Netlist::FanoutLoadReport clkFanout = netlist.getFanoutLoadReport("clk");
+    report.check(clkFanout.ok &&
+                 clkFanout.totalLoadCount == 1 &&
+                 clkFanout.dffClockLoads.size() == 1 &&
+                 containsInt(clkFanout.dffClockLoads, netlist.getGateId("ff1")),
+                 "fanout load report classifies DFF CK");
+
+    const Netlist::FanoutLoadReport rstFanout = netlist.getFanoutLoadReport("rst_n");
+    report.check(rstFanout.ok &&
+                 rstFanout.totalLoadCount == 2 &&
+                 rstFanout.dffResetSetLoads.size() == 2,
+                 "fanout load report counts DFF RN and SN as separate loads");
+
+    const Netlist::FanoutLoadReport yFanout = netlist.getFanoutLoadReport("y");
+    report.check(yFanout.ok &&
+                 yFanout.drivesPrimaryOutput &&
+                 yFanout.primaryOutputLoadCount == 1 &&
+                 yFanout.totalLoadCount == 1 &&
+                 netlist.getGateFanoutCount("g_y") == 0,
+                 "fanout load report includes primary output load");
+
+    query = Netlist::DirectConnectivityQuery();
+    query.type = Netlist::DirectConnectivityQueryType::FanoutLoadReport;
+    query.netName = "rst_n";
+    direct = netlist.runDirectConnectivityQuery(query);
+    report.check(direct.ok &&
+                 direct.count == 2 &&
+                 direct.fanoutLoadReport.dffResetSetLoads.size() == 2,
+                 "runDirectConnectivityQuery FanoutLoadReport");
+
+    const Netlist::GlobalFanoutReport globalFanout =
+        netlist.getGlobalFanoutReport(/*maxFanoutLimit=*/2);
+    report.check(globalFanout.ok &&
+                 globalFanout.maxFanout == 3 &&
+                 !globalFanout.satisfiesLimit &&
+                 !globalFanout.violatingReports.empty(),
+                 "global fanout report finds max and violations");
+
+    const Netlist::GlobalFanoutReport piFanout =
+        netlist.getGlobalFanoutReport(/*maxFanoutLimit=*/-1,
+                                      /*primaryInputsOnly=*/true);
+    bool hasA = false;
+    bool hasC = false;
+    for (const Netlist::FanoutLoadReport& fanout : piFanout.maxFanoutReports) {
+        hasA = hasA || fanout.netName == "a";
+        hasC = hasC || fanout.netName == "c";
+    }
+    report.check(piFanout.ok &&
+                 piFanout.maxFanout == 3 &&
+                 hasA &&
+                 hasC,
+                 "primary-input global fanout report finds highest PI fanout");
+
+    query = Netlist::DirectConnectivityQuery();
+    query.type = Netlist::DirectConnectivityQueryType::GlobalFanoutReport;
+    query.fanoutLimit = 2;
+    direct = netlist.runDirectConnectivityQuery(query);
+    report.check(direct.ok &&
+                 direct.globalFanoutReport.maxFanout == 3 &&
+                 !direct.globalFanoutReport.satisfiesLimit,
+                 "runDirectConnectivityQuery GlobalFanoutReport");
 }
 
 // 測試 Function Query：SAT-based equivalence、可能值、常數函數判斷。
@@ -381,6 +452,72 @@ void testWriterAndSmallMutation(TestReport& report, const Netlist& original) {
                  "connectGateInput restores path");
 }
 
+// 測試 fanout buffer transformation 使用 QA fanout load 定義：
+// primary output 要算 load，同一 DFF 的 RN/SN 也要算成兩個 sink pins。
+void testFanoutBufferTransformation(TestReport& report) {
+    Netlist poNetlist;
+    poNetlist.addPrimaryInput("a");
+    poNetlist.addPrimaryInput("b");
+    poNetlist.addPrimaryOutput("y");
+
+    const int a = poNetlist.getNetId("a");
+    const int b = poNetlist.getNetId("b");
+    const int y = poNetlist.getNetId("y");
+    const int n1 = poNetlist.addNet("n1");
+    const int n2 = poNetlist.addNet("n2");
+
+    const int g0 = poNetlist.addGate("g0", GateType::AND);
+    poNetlist.connectGateInput(g0, a);
+    poNetlist.connectGateInput(g0, b);
+    poNetlist.connectGateOutput(g0, y);
+
+    const int g1 = poNetlist.addGate("g1", GateType::NOT);
+    poNetlist.connectGateInput(g1, y);
+    poNetlist.connectGateOutput(g1, n1);
+
+    const int g2 = poNetlist.addGate("g2", GateType::BUF);
+    poNetlist.connectGateInput(g2, y);
+    poNetlist.connectGateOutput(g2, n2);
+
+    report.check(poNetlist.getFanoutLoadReport("y").totalLoadCount == 3,
+                 "fanout buffer setup counts primary output load");
+    poNetlist.insertBuffersForSpecificNet("y", 2);
+    report.check(poNetlist.satisfiesFanoutLimit(2),
+                 "fanout buffer insertion respects primary output load");
+
+    Netlist dffNetlist;
+    dffNetlist.addPrimaryInput("d");
+    dffNetlist.addPrimaryInput("clk");
+    dffNetlist.addPrimaryInput("rst_n");
+    dffNetlist.addPrimaryOutput("q1");
+
+    const int d = dffNetlist.getNetId("d");
+    const int clk = dffNetlist.getNetId("clk");
+    const int rst = dffNetlist.getNetId("rst_n");
+    const int q1 = dffNetlist.getNetId("q1");
+    const int q2 = dffNetlist.addNet("q2");
+
+    const int ff1 = dffNetlist.addGate("ff1", GateType::DFF);
+    dffNetlist.connectGateInput(ff1, d, "D");
+    dffNetlist.connectGateInput(ff1, clk, "CK");
+    dffNetlist.connectGateInput(ff1, rst, "RN");
+    dffNetlist.connectGateInput(ff1, rst, "SN");
+    dffNetlist.connectGateOutput(ff1, q1);
+
+    const int ff2 = dffNetlist.addGate("ff2", GateType::DFF);
+    dffNetlist.connectGateInput(ff2, d, "D");
+    dffNetlist.connectGateInput(ff2, clk, "CK");
+    dffNetlist.connectGateInput(ff2, rst, "RN");
+    dffNetlist.connectGateInput(ff2, rst, "SN");
+    dffNetlist.connectGateOutput(ff2, q2);
+
+    report.check(dffNetlist.getFanoutLoadReport("rst_n").totalLoadCount == 4,
+                 "fanout buffer setup counts DFF RN/SN sink pins");
+    dffNetlist.insertBuffersForSpecificNet("rst_n", 2);
+    report.check(dffNetlist.satisfiesFanoutLimit(2),
+                 "fanout buffer insertion respects DFF RN/SN sink pins");
+}
+
 } // namespace
 
 // 執行 mini Verilog 整合測試；可用 argv[1] 指定其他 Verilog 檔。
@@ -404,6 +541,7 @@ int main(int argc, char* argv[]) {
     testPathQuery(report, netlist);
     testDepthQuery(report, netlist);
     testWriterAndSmallMutation(report, netlist);
+    testFanoutBufferTransformation(report);
 
     std::cout << "\nSummary: " << report.passed << " passed, "
               << report.failed << " failed.\n";
