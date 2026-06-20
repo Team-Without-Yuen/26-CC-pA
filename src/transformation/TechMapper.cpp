@@ -9,34 +9,122 @@
 #include <queue>
 #include <unordered_set>
 
-// 輔助函式：將 NodeType 對應回 Input Vector 的 Index (0, 1, 2...)
-int TechMapper::getLeafIndex(NodeType type) const {
-    switch (type) {
-        case NodeType::LEAF_A: return 0;
-        case NodeType::LEAF_B: return 1;
-        case NodeType::LEAF_C: return 2;
-        case NodeType::LEAF_D: return 3;
-        case NodeType::LEAF_E: return 4;
-        case NodeType::LEAF_F: return 5;
-        case NodeType::LEAF_G: return 6; // 新增對應
-        default: return -1; 
+// 輔助函式：走訪 PatternNode ，並計算計算最大輸入數
+int TechMapper::countPrimaryInputs(const std::shared_ptr<PatternNode>& root) const {
+    if (!root) return 0;
+
+    int maxIndex = -1;
+    std::unordered_set<PatternNode*> visited;
+    std::vector<std::shared_ptr<PatternNode>> queue = {root};
+
+    while (!queue.empty()) {
+        auto curr = queue.back();
+        queue.pop_back();
+
+        // 防呆與防止 DAG 重複走訪
+        if (!curr || visited.count(curr.get())) continue;
+        visited.insert(curr.get());
+
+        // 如果遇到 PI，檢查它的 index
+        if (curr->nodeType == NodeType::PI) {
+            if (curr->piIndex > maxIndex) {
+                maxIndex = curr->piIndex;
+            }
+        }
+
+        // 繼續走訪子節點
+        for (const auto& next : curr->inputs) {
+            if (next) queue.push_back(next);
+        }
     }
+
+    // 如果 maxIndex 是 3 (代表有 A, B, C, D)，則需要 4 個 Input
+    // 如果完全沒找到 PI (全是常數)，回傳 0
+    return maxIndex + 1; 
 }
 
-// 輔助函式：根據 Input Index 產生對應的 LEAF 節點 (A=0, B=1, C=2...)
-std::shared_ptr<PatternNode> TechMapper::createLeafNode(int index) const{
-    NodeType type;
-    switch (index) {
-        case 0: type = NodeType::LEAF_A; break;
-        case 1: type = NodeType::LEAF_B; break;
-        case 2: type = NodeType::LEAF_C; break;
-        case 3: type = NodeType::LEAF_D; break;
-        case 4: type = NodeType::LEAF_E; break;
-        case 5: type = NodeType::LEAF_F; break;
-        case 6: type = NodeType::LEAF_G; break; // 新增對應
-        default: throw std::out_of_range("Leaf index exceeds maximum supported inputs (7)."); // 順手把錯誤訊息的上限改為 7
+// 輔助函式：走訪 PatternNode ，並計算使用到的gate的數量
+std::pair<std::map<GateType, int>, int> TechMapper::countGates(const std::shared_ptr<PatternNode>& root) const {
+    std::map<GateType, int> counts;
+    std::unordered_set<PatternNode*> visited;
+    std::vector<std::shared_ptr<PatternNode>> queue = {root};
+    int totalCount = 0;
+    
+    while (!queue.empty()) {
+        auto curr = queue.back();
+        queue.pop_back();
+        
+        // 防呆與 DAG 走訪防護
+        if (!curr || visited.count(curr.get())) continue;
+        visited.insert(curr.get());
+        
+        if (curr->nodeType == NodeType::GATE) {
+            counts[curr->gateType]++;
+            totalCount++;
+        }
+        for (const auto& next : curr->inputs) {
+            if (next) queue.push_back(next);
+        }
     }
-    return std::make_shared<PatternNode>(PatternNode{type, GateType::UNKNOWN, {}});
+    return std::make_pair(counts, totalCount);
+}
+
+// 輔助函式：計算邏輯閘的關鍵路徑層數
+int TechMapper::calculateDepth(const std::shared_ptr<PatternNode>& node) const {
+    // 防呆或到達輸入端 (PI, CONST) 都是 0 層
+    if (!node || node->nodeType != NodeType::GATE) {
+        return 0;
+    }
+    
+    int maxInputDepth = 0;
+    for (const auto& input : node->inputs) {
+        int d = calculateDepth(input);
+        if (d > maxInputDepth) {
+            maxInputDepth = d;
+        }
+    }
+    // 自己的這層 +1
+    return maxInputDepth + 1;
+}
+
+// 輔助函式：真值表雜湊編碼
+std::string TechMapper::generateTruthTableHash(const std::vector<bool>& truthTable) const {
+    if (truthTable.empty()) return "EMPTY";
+
+    std::string hashStr = "";
+    int currentHex = 0;
+    int bitCount = 0;
+
+    // 將 vector<bool> 每 4 個 bit 壓縮成一個 16 進位字元
+    for (size_t i = 0; i < truthTable.size(); ++i) {
+        if (truthTable[i]) {
+            currentHex |= (1 << bitCount);
+        }
+        bitCount++;
+
+        // 滿 4 個 bit 結算一次
+        if (bitCount == 4) {
+            if (currentHex < 10) {
+                hashStr += std::to_string(currentHex); // 0~9
+            } else {
+                hashStr += (char)('A' + (currentHex - 10)); // A~F
+            }
+            currentHex = 0;
+            bitCount = 0;
+        }
+    }
+
+    // 處理最後如果剩下不足 4 個 bit 的尾數
+    if (bitCount > 0) {
+        if (currentHex < 10) {
+            hashStr += std::to_string(currentHex);
+        } else {
+            hashStr += (char)('A' + (currentHex - 10));
+        }
+    }
+
+    // 回傳類似 "7F0A" 這種極短的字串
+    return hashStr;
 }
 
 // 輔助函式：用來單獨檢查「某一側 (LHS 或 RHS)」是否符合給定的數量限制
@@ -84,18 +172,23 @@ bool TechMapper::checkSideConstraints(const std::map<GateType, int>& ruleCounts,
 
 // 輔助函式：註冊雙向規則 (Bidirectional Rule Registration)
 void TechMapper::addBidirectionalRule(const std::string& baseName, 
-                            std::shared_ptr<PatternNode> patternA, 
-                            std::shared_ptr<PatternNode> patternB) {
+                                      std::shared_ptr<PatternNode> patternA, 
+                                      std::shared_ptr<PatternNode> patternB,
+                                      RuleSource source = RuleSource::STANDARD_LIBRARY) { // 預設為標準庫
     // 防呆：確保兩棵樹都存在
     if (!patternA || !patternB) return;
 
-    // 註冊正向規則 (PatternA -> PatternB)
-    // 命名加上 "_Forward" 後綴方便 Debug
-    rules.emplace_back(baseName + "_Forward", patternA, patternB);
+    // 自動萃取這條規則的真值表與 Hash
+    int N = countPrimaryInputs(patternA);
+    TechMapReport dummyReport;
+    std::vector<bool> truthTable = simulatePattern(patternA, N, dummyReport, false);
+    std::string hash = generateTruthTableHash(truthTable);
+
+    // 註冊正向規則 (帶入 Source 與 Hash)
+    rules.emplace_back(baseName + "_Forward", source, hash, patternA, patternB);
     
-    // 註冊反向規則 (PatternB -> PatternA)
-    // 直接將傳入的兩棵樹參數對調即可！
-    rules.emplace_back(baseName + "_Backward", patternB, patternA);
+    // 註冊反向規則 (帶入 Source 與 Hash)
+    rules.emplace_back(baseName + "_Backward", source, hash, patternB, patternA);
 }
 
 // 檢查某個 Rule 的「左邊與右邊」是否都滿足使用者的數量約束
@@ -437,11 +530,6 @@ bool TechMapper::executeMappingPass(Netlist& netlist,
     return actualChangesMade;
 }
 
-// targetConstraints  : 使用者想要「拔除/替換掉」的 Gate 類型與數量限制
-// allowedConstraints : 使用者允許「新增/使用」的 Gate 類型與數量限制
-// scopeGates         : 作用範圍 (Scope)。若提供，則僅對名單內的 Gate 進行操作；若為 nullptr 則掃描全電路。
-// verbose            : 是否輸出詳細的替換 Log
-// 回傳值             : TechMapReport (包含變更狀態、增刪數量統計與最終快照)
 // 底層的實作引擎，約束驅動型 ECO 技術映射核心引擎
 TechMapReport TechMapper::mapTechnologyCore(Netlist& netlist, 
                                             const std::map<GateType, int>& targetConstraints, // 拔除目標限制
@@ -530,6 +618,112 @@ TechMapReport TechMapper::mapTechnologyForCone(Netlist& netlist,
     
     // 呼叫核心引擎，並將 scopeGates 的記憶體位址傳入
     return mapTechnologyCore(netlist, targetConstraints, allowedConstraints, &scopeGates, verbose);
+}
+
+// 精確規則應用引擎，繞過 mapTechnologyCore 的查表與約束過濾機制
+// 直接將唯一指定的一條規則 (Rule) 餵給最底層的執行引擎 executeMappingPass
+TechMapReport TechMapper::applySpecificRule(Netlist& netlist, 
+                                            const TechMapRule& rule, 
+                                            TargetScope scope, 
+                                            const std::string& name, 
+                                            bool verbose) {
+    TechMapReport report;
+    
+    if (verbose) {
+        std::cout << "[Info] Direct Application Mode: Bypassing LUT search.\n";
+        std::cout << "[Info] Rule locked: [" << rule.name << "] (Hash: " << rule.truthTableHash << ")\n";
+    }
+
+    // 預先紀錄初始快照 (為了結算新增數量的數學反推法)
+    std::unordered_map<GateType, int> initialCounts;
+    for (const auto& pair : rule.allowedCounts) initialCounts[pair.first] = netlist.getGateCountByType(pair.first);
+    for (const auto& pair : rule.targetCounts)  initialCounts[pair.first] = netlist.getGateCountByType(pair.first);
+
+    // 處理 Scope 解析 (將 TargetScope 轉為 unordered_set)
+    std::unordered_set<int> scopeGatesSet;
+    std::unordered_set<int>* scopePtr = nullptr;
+    
+    if (scope != TargetScope::WHOLE_NETLIST) {
+        bool scopeResolved = false;
+        std::vector<int> gateIds;
+        
+        switch (scope) {
+            case TargetScope::NET_FANIN:
+                gateIds = netlist.getConeGateIds(netlist.getTransitiveFaninCone(name));
+                scopeResolved = true;
+                break;
+            case TargetScope::NET_FANOUT:
+                gateIds = netlist.getConeGateIds(netlist.getTransitiveFanoutCone(name));
+                scopeResolved = true;
+                break;
+            case TargetScope::GATE_FANIN:
+                gateIds = netlist.getConeGateIds(netlist.getGateTransitiveFaninCone(name));
+                scopeResolved = true;
+                break;
+            case TargetScope::GATE_FANOUT:
+                gateIds = netlist.getConeGateIds(netlist.getGateTransitiveFanoutCone(name));
+                scopeResolved = true;
+                break;
+            default:
+                break;
+        }
+
+        // 將取得的 vector 一次性倒入 unordered_set 中
+        if (scopeResolved) {
+            scopeGatesSet.insert(gateIds.begin(), gateIds.end());
+        }
+
+        // 防呆：如果找不到目標 Name 或算出來的錐體是空的，提早報錯退出
+        if (!scopeResolved || scopeGatesSet.empty()) {
+            report.status = TechMapStatus::ERROR_SIMULATION_FAILED;
+            report.message = "Failed: Could not resolve scope target '" + name + "' or the cone is empty.";
+            if (verbose) std::cout << "[Error] " << report.message << "\n";
+            return report;
+        }
+        
+        // 解析成功，將指標指向我們算出來的集合
+        scopePtr = &scopeGatesSet;
+        if (verbose) std::cout << "[Info] Scope limited to " << scopeGatesSet.size() << " gates for target '" << name << "'.\n";
+    }
+
+    // 把唯一的黃金規則包裝成 Vector
+    std::vector<TechMapRule> lockedRuleList = { rule };
+
+    // 直接呼叫最底層的「執行引擎」！完美繞過查表機制！
+    bool mappingChanged = executeMappingPass(netlist, scopePtr, lockedRuleList, report, verbose);
+
+    // 統一結算新增數量
+    for (const auto& pair : rule.allowedCounts) {
+        GateType t = pair.first;
+        int currentCount = netlist.getGateCountByType(t);
+        int explicitlyRemoved = 0;
+        
+        auto it = report.removedCountByType.find(t);
+        if (it != report.removedCountByType.end()) {
+            explicitlyRemoved = it->second;
+        }
+        
+        // 新增的 = 現在擁有的 - 最初擁有的 + 被拔掉的
+        int calculatedAdded = currentCount - initialCounts[t] + explicitlyRemoved;
+        if (calculatedAdded > 0) {
+            report.addedCountByType[t] += calculatedAdded;
+        }
+    }
+
+    // 狀態判定與回報
+    if (mappingChanged) {
+        report.status = TechMapStatus::SUCCESS;
+        report.message = "Success: Optimal technology mapping rule applied successfully.";
+    } else {
+        report.status = TechMapStatus::SUCCESS;
+        report.message = "Notice: Optimal rule identified, but no matching subgraphs in the netlist required modification.";
+    }
+
+    // 寫入最終電路快照
+    for (const auto& pair : rule.allowedCounts) report.finalGateCount[pair.first] = netlist.getGateCountByType(pair.first);
+    for (const auto& pair : rule.targetCounts)  report.finalGateCount[pair.first] = netlist.getGateCountByType(pair.first);
+
+    return report;
 }
 
 // 輔助函式：取得指定邏輯閘的輸入腳位數量 (Fan-in)
@@ -811,7 +1005,7 @@ std::shared_ptr<PatternNode> TechMapper::buildPatternFromTopology(int N, const s
 
     // 初始化 PI (Leaves)
     for (int i = 0; i < N; ++i) {
-        nodes[i] = createLeafNode(i);
+        nodes[i] = PatternNode::makePI(i);
     }
 
     // 依照拓樸順序建立 Gate Nodes (DAG)
@@ -824,7 +1018,7 @@ std::shared_ptr<PatternNode> TechMapper::buildPatternFromTopology(int N, const s
             inputs.push_back(nodes[srcId]);
         }
 
-        nodes[N + g] = std::make_shared<PatternNode>(PatternNode{NodeType::GATE, synGate.type, inputs});
+        nodes[N + g] = std::make_shared<PatternNode>(PatternNode{NodeType::GATE, synGate.type, -1, inputs});
     }
 
     // 拓樸陣列的最後一個 Gate 就是整個電路的 Root
@@ -947,7 +1141,7 @@ std::vector<std::shared_ptr<PatternNode>> TechMapper::generateAllValidTopologies
 
         if (result == 10) { // SAT：找到一組合法拓樸
             std::vector<std::shared_ptr<PatternNode>> nodes(N + M);
-            for (int i = 0; i < N; ++i) nodes[i] = createLeafNode(i);
+            for (int i = 0; i < N; ++i) nodes[i] = PatternNode::makePI(i);
 
             for (int g = 0; g < M; ++g) {
                 std::vector<std::shared_ptr<PatternNode>> inputs;
@@ -959,7 +1153,7 @@ std::vector<std::shared_ptr<PatternNode>> TechMapper::generateAllValidTopologies
                         }
                     }
                 }
-                nodes[N + g] = std::make_shared<PatternNode>(PatternNode{NodeType::GATE, gateArray[g], inputs});
+                nodes[N + g] = std::make_shared<PatternNode>(PatternNode{NodeType::GATE, gateArray[g], -1, inputs});
             }
             
             validTopologies.push_back(nodes[N + M - 1]);
@@ -1030,11 +1224,11 @@ bool TechMapper::evaluateNode(const std::shared_ptr<PatternNode>& node,
     else if (node->nodeType == NodeType::CONST_1) {
         result = true;
     } 
-    else if (node->nodeType != NodeType::GATE) {
-        int idx = getLeafIndex(node->nodeType);
+    else if (node->nodeType == NodeType::PI) {
+        int idx = node->piIndex;
         if (idx < 0 || idx >= inputVector.size()) {
             report.status = TechMapStatus::ERROR_UNSAT;
-            report.message = "Simulation Failed: Leaf index out of range for current N.";
+            report.message = "Simulation Failed: PI index out of range for current N.";
             return false;
         }
         result = inputVector[idx];
@@ -1131,31 +1325,6 @@ bool TechMapper::createAndRegisterCustomRule(const std::string& ruleName,
         return false;
     }
 
-    // 輔助函式：計算真實的閘數
-    auto countGates = [](std::shared_ptr<PatternNode> root) {
-        std::map<GateType, int> counts;
-        std::unordered_set<PatternNode*> visited;
-        std::vector<std::shared_ptr<PatternNode>> queue = {root};
-        int totalCount = 0;
-        
-        while (!queue.empty()) {
-            auto curr = queue.back();
-            queue.pop_back();
-            
-            if (!curr || visited.count(curr.get())) continue;
-            visited.insert(curr.get());
-            
-            if (curr->nodeType == NodeType::GATE) {
-                counts[curr->gateType]++;
-                totalCount++;
-            }
-            for (const auto& next : curr->inputs) {
-                if (next) queue.push_back(next);
-            }
-        }
-        return std::make_pair(counts, totalCount);
-    };
-
     int candidateIdx = 0;
     // 新增追蹤變數，以便找出所有合法的rule
     bool foundAnyValidMapping = false; 
@@ -1238,18 +1407,22 @@ bool TechMapper::createAndRegisterCustomRule(const std::string& ruleName,
             auto lhsData = countGates(lhsRoot);
 
             // 註冊規則
+            // 產生真值表特徵 Hash
+            std::string variantHash = generateTruthTableHash(truthTable);
             // 在命名上加上 Variant 編號，這樣規則庫名字才不會全部重複
             std::string variantName = ruleName + "_Variant_" + std::to_string(successCount + 1);
-            TechMapRule forwardRule(variantName + "_Forward", lhsRoot, rhsRoot);
-            forwardRule.targetCounts = lhsData.first; 
-            forwardRule.allowedCounts = rhsData.first; // 綁定真實數量 (已經通過 strictMatch 檢查)
+            // 建立正向規則 (標記為 AUTO_LEARNED_SAT)
+            TechMapRule forwardRule(variantName + "_Forward", RuleSource::AUTO_LEARNED_SAT, variantHash, lhsRoot, rhsRoot);
+            forwardRule.targetCounts = lhsConstraints;  // 保持強制綁定，避免嚴格過濾器誤殺
+            forwardRule.allowedCounts = rhsConstraints;
             forwardRule.removedGateCount = lhsData.second;
             forwardRule.addedGateCount = rhsData.second;
             rules.push_back(forwardRule);
 
-            TechMapRule backwardRule(variantName + "_Backward", rhsRoot, lhsRoot);
-            backwardRule.targetCounts = rhsData.first;
-            backwardRule.allowedCounts = lhsData.first;
+            // 建立反向規則 (標記為 AUTO_LEARNED_SAT)
+            TechMapRule backwardRule(variantName + "_Backward", RuleSource::AUTO_LEARNED_SAT, variantHash, rhsRoot, lhsRoot);
+            backwardRule.targetCounts = rhsConstraints;
+            backwardRule.allowedCounts = lhsConstraints;
             backwardRule.removedGateCount = rhsData.second;
             backwardRule.addedGateCount = lhsData.second;
             rules.push_back(backwardRule);
@@ -1389,6 +1562,97 @@ TechMapReport TechMapper::convertToBasis(Netlist& netlist,
     return finalReport;
 }
 
+// 輔助函式：產生所有積木組合 (重複組合)
+void TechMapper::generateCombosRec(const std::vector<GateType>& lib, 
+                                   int k, 
+                                   int startIdx, 
+                                   std::map<GateType, int>& current, 
+                                   std::vector<std::map<GateType, int>>& result) const {
+    if (k == 0) {
+        result.push_back(current);
+        return;
+    }
+    for (size_t i = startIdx; i < lib.size(); ++i) {
+        current[lib[i]]++;
+        generateCombosRec(lib, k - 1, i, current, result);
+        current[lib[i]]--; // 回溯 (Backtracking)
+        if (current[lib[i]] == 0) {
+            current.erase(lib[i]);
+        }
+    }
+}
+
+// 輔助函式：尋找絕對最小面積的拓樸
+std::shared_ptr<PatternNode> TechMapper::findMinimumAreaPattern(const std::vector<bool>& truthTable, 
+                                                                int N, 
+                                                                int currentArea, 
+                                                                TechMapReport& report, 
+                                                                bool verbose) {
+    if (verbose) {
+        std::cout << "  [Exact Synthesis] Searching for pattern with Area < " << currentArea << "...\n";
+    }
+
+    // 定義你允許 SAT 引擎用來發明電路的「基礎積木庫」
+    std::vector<GateType> baseLibrary = {
+        GateType::NAND, GateType::NOR, GateType::AND, GateType::OR, GateType::NOT, GateType::XOR, GateType::XNOR
+    };
+
+    // 核心邏輯：從 1 顆閘開始，慢慢增加到 currentArea - 1
+    for (int k = 1; k < currentArea; ++k) {
+        if (verbose) std::cout << "  [Exact Synthesis] Testing Area = " << k << " gates...\n";
+
+        // 產生大小為 k 的所有積木組合
+        std::vector<std::map<GateType, int>> combinations;
+        std::map<GateType, int> currentCombo;
+        generateCombosRec(baseLibrary, k, 0, currentCombo, combinations);
+
+        if (verbose) std::cout << "    -> Generated " << combinations.size() << " combinations to try.\n";
+
+        // 逐一測試每種組合
+        for (size_t i = 0; i < combinations.size(); ++i) {
+            const auto& allowedConstraints = combinations[i];
+            TechMapReport stepReport;
+            
+            bool isSat = synthesizeFromTruthTable(truthTable, N, allowedConstraints, stepReport, false); // 內部設為 false 避免洗頻
+
+            // 判斷求解結果
+            if (isSat && stepReport.status == TechMapStatus::SUCCESS) {
+                if (verbose) {
+                    std::cout << "  [Exact Synthesis] SUCCESS! Found optimal topology with " << k << " gates.\n";
+                }
+                
+                // 這裡不用 report.merge，因為 stepReport 裡面的增刪數字是局部拓樸的，我們只要拿走實體就好
+                report.status = TechMapStatus::SUCCESS;
+                report.message = "Minimum area pattern found.";
+
+                return buildPatternFromTopology(N, stepReport.synthesizedTopology);
+            } 
+            else if (stepReport.status == TechMapStatus::ERROR_SIMULATION_FAILED || 
+                     stepReport.message.find("Timeout") != std::string::npos) {
+                
+                // 一旦遇到 SAT Timeout，代表該層級太複雜算不出來
+                // 繼續試更大的 k 只是白費力氣，果斷放棄。
+                if (verbose) {
+                    std::cout << "  [Exact Synthesis] Timeout at Area = " << k << " (Combo " << i+1 << "). Aborting search.\n";
+                }
+                report.status = TechMapStatus::ERROR_UNSAT;
+                report.message = "Exact synthesis timed out before finding a smaller pattern.";
+                return nullptr;
+            }
+        } // 結束當前 k 的組合測試
+    } // 結束 k 迴圈
+
+    // 如果迴圈跑完都找不到，代表 currentArea 已經是數學上的極限
+    if (verbose) {
+        std::cout << "  [Exact Synthesis] Exhausted up to Area = " << (currentArea - 1) 
+                  << ". The original pattern is already area-optimal.\n";
+    }
+    report.status = TechMapStatus::ERROR_UNSAT;
+    report.message = "Original pattern is mathematically optimal in area.";
+    
+    return nullptr;
+}
+
 // 將整個 netlist 轉成 {AND, NOT} (AIG: And-Inverter Graph)
 TechMapReport TechMapper::convertToAndNot(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
     return convertToBasis(netlist, {GateType::AND, GateType::NOT}, scope, name, verbose);
@@ -1446,7 +1710,9 @@ TechMapReport TechMapper::convertToXnorOr(Netlist& netlist, TargetScope scope, c
     return convertToBasis(netlist, {GateType::XNOR, GateType::OR}, scope, name, verbose);
 }
 
-// 給使用者呼叫的萬用任意修改 API (自動推導方向 + 約束驅動 + 智慧 Fallback)
+// 自訂規則映射引擎 (Interactive Custom Technology Mapping)
+// 此函式允許使用者透過指定一個替換規則中的「欲拔除的積木 (Target)」與「欲生成的積木 (Allowed)」的數量限制
+// 在電路上進行子圖同構掃描 (Subgraph Matching) 與結構替換，一次只會進行一個規則的替換。
 TechMapReport TechMapper::customMapTechnology(Netlist& netlist, 
                                               const std::map<GateType, int>& targetConstraints, 
                                               const std::map<GateType, int>& allowedConstraints, 
@@ -1545,9 +1811,9 @@ TechMapReport TechMapper::customMapTechnology(Netlist& netlist,
 
         bool hasAnyUnlimited = !unlimitedTargets.empty() || !unlimitedAlloweds.empty();
         
-        // 如果有 -1，我們設定一個搜尋上限防止跑太久 (例如最多用到 4 顆 Gate)
+        // 如果有 -1，我們設定一個搜尋上限防止跑太久 (例如最多用到 3 顆 Gate)
         // 如果沒有 -1，那就只跑 1 次迴圈 (使用原本的確切數量)
-        int maxDepth = hasAnyUnlimited ? 4 : 1; 
+        int maxDepth = hasAnyUnlimited ? 3 : 1; 
         
         TechMapReport fallbackReport;
         std::string customRuleName = "AutoLearnedRule_" + std::to_string(rules.size() / 2);
@@ -1594,4 +1860,162 @@ TechMapReport TechMapper::customMapTechnology(Netlist& netlist,
     }
 
     return report;
+}
+
+// 全域電路優化引擎 (Pattern Optimization Engine)
+// 針對給定的目標形狀 (LHS) 進行自動化的「面積」或「深度」化簡。
+TechMapReport TechMapper::optimizePattern(Netlist& netlist,
+                                          std::shared_ptr<PatternNode> lhsTarget,
+                                          OptimizationGoal goal,
+                                          TargetScope scope, 
+                                          const std::string& name, 
+                                          bool verbose) {
+    TechMapReport finalReport;
+
+    if (!lhsTarget) {
+        finalReport.status = TechMapStatus::ERROR_INVALID_CONSTRAINTS;
+        finalReport.message = "Failed: lhsTarget is null.";
+        return finalReport;
+    }
+
+    if (verbose) {
+        std::cout << "=================================================\n";
+        std::cout << "[Optimize Engine] Target: " << name << "\n";
+        std::cout << "[Optimize Engine] Goal: " << (goal == OptimizationGoal::AREA ? "AREA" : "DEPTH") << " Reduction\n";
+    }
+
+    // 分析目標 LHS，萃取真值表與當前成本
+    int N = countPrimaryInputs(lhsTarget); 
+    TechMapReport simReport;
+    std::vector<bool> truthTable = simulatePattern(lhsTarget, N, simReport, false);
+
+    if (simReport.status != TechMapStatus::SUCCESS || truthTable.empty()) {
+        finalReport.status = TechMapStatus::ERROR_SIMULATION_FAILED;
+        finalReport.message = "Failed to extract truth table from the provided LHS pattern.";
+        if (verbose) std::cout << "[Error] " << finalReport.message << "\n";
+        return finalReport;
+    }
+
+    // 計算目前的基準代價 (Baseline Cost)
+    auto lhsData = countGates(lhsTarget); 
+    int currentArea = lhsData.second;
+    int currentDepth = calculateDepth(lhsTarget); 
+    int currentCost = (goal == OptimizationGoal::AREA) ? currentArea : currentDepth;
+
+    // 產生真值表 Hash
+    std::string targetHash = generateTruthTableHash(truthTable);
+
+    if (verbose) {
+        std::cout << "[Info] Extracted Truth Table Hash: [" << targetHash << "] (N = " << N << ")\n";
+        std::cout << "[Info] Baseline " << (goal == OptimizationGoal::AREA ? "Area" : "Depth") 
+                  << " = " << currentCost << " gates/levels.\n";
+    }
+
+    std::string ruleName = "OptRule_" + (goal == OptimizationGoal::AREA ? std::string("A_") : std::string("D_")) + targetHash;
+
+    // 用來追蹤目前找到的最佳解 (初始為無效規則)
+    bool ruleExistsAndIsOptimal = false;
+    int bestCostSoFar = currentCost; 
+    // 預設一條「空轉」規則，代表尚未找到任何比現狀更好的方案
+    TechMapRule bestRule("Baseline_No_Op", RuleSource::USER_CUSTOM, targetHash, lhsTarget, lhsTarget); 
+    bestRule.targetCounts = lhsData.first;
+    bestRule.allowedCounts = lhsData.first; // 允許的等於目標，等於沒換
+
+    // 檢查快取 / 查找表 (防污染與分級檢查)
+    for (const auto& rule : rules) {
+        // 條件 1：真值表必須一模一樣 (邏輯等價)
+        if (rule.truthTableHash == targetHash) {
+            
+            // 計算這條規則的實際 Cost
+            int ruleCost = (goal == OptimizationGoal::AREA) ? rule.addedGateCount : calculateDepth(rule.replacementPattern);
+            
+            // 條件 2a：這條規則已經是經過認證的「絕對最佳解」
+            if ((goal == OptimizationGoal::AREA && rule.source == RuleSource::OPTIMIZED_AREA) ||
+                (goal == OptimizationGoal::DEPTH && rule.source == RuleSource::OPTIMIZED_DEPTH)) {
+                
+                ruleExistsAndIsOptimal = true;
+                bestRule = rule;
+                bestCostSoFar = ruleCost;
+                if (verbose) std::cout << "[Info] Hit verified OPTIMAL cache: " << rule.name << " (Cost: " << ruleCost << ").\n";
+                break; // 找到了絕對極限，直接跳出迴圈下班！
+            }
+            
+            // 條件 2b：這是一條標準庫的次佳解，如果比目前的電路小，先當作備胎！
+            if (rule.source == RuleSource::STANDARD_LIBRARY || rule.source == RuleSource::AUTO_LEARNED_SAT) {
+                if (ruleCost < bestCostSoFar) {
+                    bestCostSoFar = ruleCost;
+                    bestRule = rule;
+                    if (verbose) std::cout << "[Info] Found better baseline in cache: " << rule.name << " (Cost: " << ruleCost << ").\n";
+                    // 不 break，因為我們還要看有沒有更完美的 OPTIMIZED 規則
+                }
+            }
+        }
+    }
+
+    // 啟動 SAT 引擎尋找絕對最佳解
+    if (!ruleExistsAndIsOptimal && bestCostSoFar > 1) {
+        if (verbose) std::cout << "[Info] No verified optimal rule found. Firing up EXACT SYNTHESIS engine to beat Cost < " << bestCostSoFar << "...\n";
+
+        TechMapReport optReport;
+        std::shared_ptr<PatternNode> bestRhs = nullptr;
+
+        // 核心呼叫：尋找嚴格小於 bestCostSoFar 的結構
+        if (goal == OptimizationGoal::AREA) {
+            bestRhs = findMinimumAreaPattern(truthTable, N, bestCostSoFar, optReport, verbose);
+        } /*else {
+            bestRhs = findMinimumDepthPattern(truthTable, N, bestCostSoFar, optReport, verbose);
+        }
+        */
+
+        if (bestRhs && optReport.status == TechMapStatus::SUCCESS) {
+            // SAT 成功找到了突破極限的解！
+            auto rhsData = countGates(bestRhs);
+            RuleSource newSource = (goal == OptimizationGoal::AREA) ? RuleSource::OPTIMIZED_AREA : RuleSource::OPTIMIZED_DEPTH;
+            
+            // 建立並註冊這條黃金規則 (使用新的建構子)
+            TechMapRule newRule(ruleName, newSource, targetHash, lhsTarget, bestRhs);
+            newRule.targetCounts = lhsData.first;
+            newRule.allowedCounts = rhsData.first;
+            newRule.removedGateCount = lhsData.second;
+            newRule.addedGateCount = rhsData.second;
+            rules.push_back(newRule);
+            
+            rules.push_back(newRule);
+            bestRule = newRule;
+            
+            if (verbose) std::cout << "[Success] Exact synthesis found a smaller pattern! Registered as: " << ruleName << "\n";
+        } 
+        else if (bestRule.replacementPattern != nullptr) {
+            // SAT 引擎找不到更小的 (或 Timeout 了)，但我們在查找表中剛好有找到比原本還小的標準庫規則！
+            if (verbose) std::cout << "[Info] SAT couldn't beat the baseline. Using the best known cached rule instead.\n";
+        } 
+        else {
+            // SAT 找不到，且快取也沒有比原本更好的解 (代表原電路已經是極限了)
+            finalReport.status = TechMapStatus::ERROR_UNSAT;
+            finalReport.message = "Optimization Failed: The given LHS is already mathematically optimal (or SAT timed out).";
+            if (verbose) std::cout << "[Failed] " << finalReport.message << "\n";
+            return finalReport;
+        }
+    }
+
+    // 執行電路替換
+    int finalCost = (goal == OptimizationGoal::AREA) ? bestRule.addedGateCount : calculateDepth(bestRule.replacementPattern);
+    
+    if (finalCost >= currentCost) {
+        finalReport.status = TechMapStatus::SUCCESS;
+        finalReport.message = "Optimization complete: The original circuit is already mathematically optimal. No changes made.";
+        if (verbose) {
+            std::cout << "[Success] " << finalReport.message << "\n";
+            std::cout << "=================================================\n";
+        }
+        return finalReport;
+    }
+
+    if (verbose) std::cout << "[Info] Applying rule [" << bestRule.name << "] (Cost: " << finalCost << ") to the netlist...\n";
+
+    return applySpecificRule(netlist, 
+                             bestRule, 
+                             scope, 
+                             name, 
+                             verbose);
 }

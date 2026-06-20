@@ -45,7 +45,7 @@ enum class TechMapStatus {
     ERROR_RULE_NOT_FOUND,     // 找不到符合數量/類型的替換規則
     ERROR_NOT_EQUIVALENT,     // (真值表驗證) 邏輯不等價
     ERROR_UNSAT,              // (SAT Solver) 數學證明無法拼出該邏輯
-    ERROR_SIMULATION_FAILED,  // 真值表模擬失敗
+    ERROR_SIMULATION_FAILED,  // 非預期錯誤，造成模擬失敗
     ERROR_INVALID_CONSTRAINTS // 沒有給合理的CONSTRAINTS
 };
 
