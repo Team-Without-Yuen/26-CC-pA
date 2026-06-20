@@ -1157,6 +1157,10 @@ bool TechMapper::createAndRegisterCustomRule(const std::string& ruleName,
     };
 
     int candidateIdx = 0;
+    // 新增追蹤變數，以便找出所有合法的rule
+    bool foundAnyValidMapping = false; 
+    int successCount = 0; // 順便算一下總共學到了幾種變體
+
     for (const auto& lhsRoot : lhsCandidates) {
         candidateIdx++;
         
@@ -1234,14 +1238,16 @@ bool TechMapper::createAndRegisterCustomRule(const std::string& ruleName,
             auto lhsData = countGates(lhsRoot);
 
             // 註冊規則
-            TechMapRule forwardRule(ruleName + "_Forward", lhsRoot, rhsRoot);
+            // 在命名上加上 Variant 編號，這樣規則庫名字才不會全部重複
+            std::string variantName = ruleName + "_Variant_" + std::to_string(successCount + 1);
+            TechMapRule forwardRule(variantName + "_Forward", lhsRoot, rhsRoot);
             forwardRule.targetCounts = lhsData.first; 
             forwardRule.allowedCounts = rhsData.first; // 綁定真實數量 (已經通過 strictMatch 檢查)
             forwardRule.removedGateCount = lhsData.second;
             forwardRule.addedGateCount = rhsData.second;
             rules.push_back(forwardRule);
 
-            TechMapRule backwardRule(ruleName + "_Backward", rhsRoot, lhsRoot);
+            TechMapRule backwardRule(variantName + "_Backward", rhsRoot, lhsRoot);
             backwardRule.targetCounts = rhsData.first;
             backwardRule.allowedCounts = lhsData.first;
             backwardRule.removedGateCount = rhsData.second;
@@ -1250,17 +1256,28 @@ bool TechMapper::createAndRegisterCustomRule(const std::string& ruleName,
 
             finalReport.status = TechMapStatus::SUCCESS;
             finalReport.message = "Successfully created and registered bidirectional rule: " + ruleName;
-            
+            // 標記成功
+            foundAnyValidMapping = true;
+            successCount++;
+
             if (verbose) {
                 std::cout << "  -> [Success] Learned exact matching rule from LHS candidate #" << candidateIdx << "!\n";
                 std::cout << "=================================================\n";
             }
-            
-            // 找到了完美且合法的替換規則，馬上中斷，省下巨量時間！
-            return true; 
         } 
     }
+    // 迴圈全部跑完後，根據追蹤變數決定最終結果
+    if (foundAnyValidMapping) {
+        finalReport.status = TechMapStatus::SUCCESS;
+        finalReport.message = "Successfully created and registered " + std::to_string(successCount) + " bidirectional rule variants for: " + ruleName;
+        if (verbose) {
+            std::cout << "[Info] " << finalReport.message << "\n";
+            std::cout << "=================================================\n";
+        }
+        return true;
+    }
 
+    // 全部都 UNSAT 或被 strictMatch 擋下來了
     finalReport.status = TechMapStatus::ERROR_UNSAT;
     finalReport.message = "Exhausted all LHS candidates. None could strictly satisfy the given conditions.";
     if (verbose) std::cout << "=================================================\n";
