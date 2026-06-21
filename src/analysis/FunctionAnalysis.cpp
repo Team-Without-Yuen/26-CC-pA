@@ -8,35 +8,52 @@
 #include <string>
 #include <vector>
 
-// 客製化 CaDiCaL 終止器：用來設定 Wall-clock Time 限制
-class TimeLimitTerminator : public CaDiCaL::Terminator {
-private:
-    std::chrono::time_point<std::chrono::steady_clock> start_time;
-    double time_limit_seconds;
-    int call_counter; // 新增一個計數器
+// 把邏輯閘轉換為 CNF 格式
+void Netlist::encodeGateToCNF(CaDiCaL::Solver& solver, const Gate& gate) const {
+    int outLit = gate.outputNetId + 1;
+    const auto& in = gate.inputNetIds;
 
-public:
-    // 傳入想設定的秒數，並記錄當下時間
-    TimeLimitTerminator(double limit) : time_limit_seconds(limit) {
-        start_time = std::chrono::steady_clock::now();
+    if (gate.type == GateType::AND) {
+        for (int id : in) { solver.add(id + 1); solver.add(-outLit); solver.add(0); }
+        for (int id : in) { solver.add(-(id + 1)); } solver.add(outLit); solver.add(0);
+    } 
+    else if (gate.type == GateType::OR) {
+        for (int id : in) { solver.add(-(id + 1)); solver.add(outLit); solver.add(0); }
+        for (int id : in) { solver.add(id + 1); } solver.add(-outLit); solver.add(0);
+    } 
+    else if (gate.type == GateType::NAND) {
+        for (int id : in) { solver.add(id + 1); solver.add(outLit); solver.add(0); }
+        for (int id : in) { solver.add(-(id + 1)); } solver.add(-outLit); solver.add(0);
+    } 
+    else if (gate.type == GateType::NOR) {
+        for (int id : in) { solver.add(-(id + 1)); solver.add(-outLit); solver.add(0); }
+        for (int id : in) { solver.add(id + 1); } solver.add(outLit); solver.add(0);
+    } 
+    else if (gate.type == GateType::NOT) {
+        int inLit = in[0] + 1;
+        solver.add(inLit); solver.add(outLit); solver.add(0);
+        solver.add(-inLit); solver.add(-outLit); solver.add(0);
+    } 
+    else if (gate.type == GateType::BUF) {
+        int inLit = in[0] + 1;
+        solver.add(-inLit); solver.add(outLit); solver.add(0);
+        solver.add(inLit); solver.add(-outLit); solver.add(0);
+    } 
+    else if (gate.type == GateType::XOR) { // 假設 Gate-Level XOR 為 2-input
+        int a = in[0] + 1, b = in[1] + 1;
+        solver.add(-a); solver.add(-b); solver.add(-outLit); solver.add(0);
+        solver.add(a); solver.add(b); solver.add(-outLit); solver.add(0);
+        solver.add(a); solver.add(-b); solver.add(outLit); solver.add(0);
+        solver.add(-a); solver.add(b); solver.add(outLit); solver.add(0);
+    } 
+    else if (gate.type == GateType::XNOR) {
+        int a = in[0] + 1, b = in[1] + 1;
+        solver.add(-a); solver.add(-b); solver.add(outLit); solver.add(0);
+        solver.add(a); solver.add(b); solver.add(outLit); solver.add(0);
+        solver.add(a); solver.add(-b); solver.add(-outLit); solver.add(0);
+        solver.add(-a); solver.add(b); solver.add(-outLit); solver.add(0);
     }
-
-    // CaDiCaL 內部會在解題過程中頻繁呼叫這個函式
-    // 如果回傳 true，CaDiCaL 就會立刻中斷並回傳 UNKNOWN (0)
-    bool terminate() override {
-        // 每被呼叫 1000 次，才真正去讀取一次系統時間，以減少頻繁讀取時間帶來的效能影響
-        if (++call_counter < 1000) {
-            return false; 
-        }
-        
-        call_counter = 0; // 重置計數器
-
-        // 真正檢查時間
-        auto now = std::chrono::steady_clock::now();
-        std::chrono::duration<double> elapsed = now - start_time;
-        return elapsed.count() >= time_limit_seconds; 
-    }
-};
+}
 
 // 將一個 combinational gate 的布林功能轉成 CNF clause，加入 SAT solver。
 // 回傳 false 代表 gate 腳位不完整或 gate type 不支援，呼叫端應保守視為分析失敗。
@@ -161,7 +178,7 @@ bool Netlist::checkEquivalence(const std::string& nameA, const std::string& name
     // 初始化 CaDiCaL 引擎
     CaDiCaL::Solver solver;
     // 關閉 factor 演算法
-    solver.set("factor", 0); 
+    // solver.set("factor", 0); 
     // 提前宣告最大的變數 ID
     int maxSolverVar = nets.size() + netsA.size();
     solver.resize(maxSolverVar);
@@ -179,50 +196,8 @@ bool Netlist::checkEquivalence(const std::string& nameA, const std::string& name
 
     // Tseitin Transformation (將 Gate 轉為 CNF)
     for (int gateId : gatesToEncode) {
-        const Gate& gate = gates[gateId];
-        int outLit = gate.outputNetId + 1;
-        const auto& in = gate.inputNetIds;
-
-        if (gate.type == GateType::AND) {
-            for (int id : in) { solver.add(id + 1); solver.add(-outLit); solver.add(0); }
-            for (int id : in) { solver.add(-(id + 1)); } solver.add(outLit); solver.add(0);
-        } 
-        else if (gate.type == GateType::OR) {
-            for (int id : in) { solver.add(-(id + 1)); solver.add(outLit); solver.add(0); }
-            for (int id : in) { solver.add(id + 1); } solver.add(-outLit); solver.add(0);
-        } 
-        else if (gate.type == GateType::NAND) {
-            for (int id : in) { solver.add(id + 1); solver.add(outLit); solver.add(0); }
-            for (int id : in) { solver.add(-(id + 1)); } solver.add(-outLit); solver.add(0);
-        } 
-        else if (gate.type == GateType::NOR) {
-            for (int id : in) { solver.add(-(id + 1)); solver.add(-outLit); solver.add(0); }
-            for (int id : in) { solver.add(id + 1); } solver.add(outLit); solver.add(0);
-        } 
-        else if (gate.type == GateType::NOT) {
-            int inLit = in[0] + 1;
-            solver.add(inLit); solver.add(outLit); solver.add(0);
-            solver.add(-inLit); solver.add(-outLit); solver.add(0);
-        } 
-        else if (gate.type == GateType::BUF) {
-            int inLit = in[0] + 1;
-            solver.add(-inLit); solver.add(outLit); solver.add(0);
-            solver.add(inLit); solver.add(-outLit); solver.add(0);
-        } 
-        else if (gate.type == GateType::XOR) { // 假設 Gate-Level XOR 為 2-input
-            int a = in[0] + 1, b = in[1] + 1;
-            solver.add(-a); solver.add(-b); solver.add(-outLit); solver.add(0);
-            solver.add(a); solver.add(b); solver.add(-outLit); solver.add(0);
-            solver.add(a); solver.add(-b); solver.add(outLit); solver.add(0);
-            solver.add(-a); solver.add(b); solver.add(outLit); solver.add(0);
-        } 
-        else if (gate.type == GateType::XNOR) {
-            int a = in[0] + 1, b = in[1] + 1;
-            solver.add(-a); solver.add(-b); solver.add(outLit); solver.add(0);
-            solver.add(a); solver.add(b); solver.add(outLit); solver.add(0);
-            solver.add(a); solver.add(-b); solver.add(-outLit); solver.add(0);
-            solver.add(-a); solver.add(b); solver.add(-outLit); solver.add(0);
-        }
+        // 呼叫獨立的 Function 來處理每一個 Gate 的 CNF 編碼
+        encodeGateToCNF(solver, gates[gateId]);
     }
 
     // 建立 Miter 電路 (比對 Diff)
