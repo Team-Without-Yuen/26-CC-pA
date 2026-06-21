@@ -138,6 +138,14 @@ Netlist::PathNode parsePathNode(const std::string& token) {
 // 將 CLI endpoint token 轉成 PathEndpoint。
 // 支援 net/pi/po/dff_q/dff_d/dff_clk/dff_reset/gate_out/gate_in。
 Netlist::PathEndpoint parseEndpoint(const std::string& token) {
+    const std::string loweredToken = toLower(token);
+    if (loweredToken == "all_dff_q" || loweredToken == "dff_q:*") {
+        return Netlist::PathEndpoint(Netlist::PathEndpointType::DffQ, "");
+    }
+    if (loweredToken == "all_dff_d" || loweredToken == "dff_d:*") {
+        return Netlist::PathEndpoint(Netlist::PathEndpointType::DffD, "");
+    }
+
     std::vector<std::string> parts = split(token, ':');
     if (parts.size() < 2) {
         return Netlist::PathEndpoint(Netlist::PathEndpointType::SpecificNet, token);
@@ -369,6 +377,64 @@ void printPathResult(const Netlist& netlist,
         return;
     }
     printPath(netlist, result.path);
+}
+
+// 印出 RegisterPathQuery 的統一 report。
+void printRegisterPathReport(const Netlist& netlist,
+                             const Netlist::RegisterPathQuery& query,
+                             const Netlist::RegisterPathReport& report) {
+    if (!report.ok) {
+        std::cout << "Error: " << report.message << "\n";
+        return;
+    }
+
+    std::cout << "OK: " << report.message << "\n";
+    std::cout << "Start DFFs: " << report.startDffNames.size() << "\n";
+    std::cout << "End DFFs: " << report.endDffNames.size() << "\n";
+
+    if (query.mode == Netlist::RegisterPathQueryMode::Exists) {
+        std::cout << (report.exists ? "Yes\n" : "No\n");
+        return;
+    }
+
+    if (query.mode == Netlist::RegisterPathQueryMode::EnumerateAll) {
+        std::cout << "Total register paths: " << report.pathResult.pathCount << "\n";
+        std::cout << "Complete enumeration: "
+                  << (report.pathResult.completeEnumeration ? "yes" : "no") << "\n";
+        if (report.pathResult.wrotePathsToFile) {
+            std::cout << "Wrote paths to file: yes\n";
+            std::cout << "Output file: " << report.pathResult.outputFilePath << "\n";
+        }
+        const size_t pathsToPrint =
+            std::min(query.maxPrintedPaths, report.pathResult.paths.size());
+        for (size_t i = 0; i < pathsToPrint; ++i) {
+            std::cout << "Path " << (i + 1) << ":\n";
+            printPath(netlist, report.pathResult.paths[i]);
+        }
+        if (pathsToPrint < report.pathResult.paths.size()) {
+            std::cout << "... omitted " << (report.pathResult.paths.size() - pathsToPrint)
+                      << " paths from terminal output";
+            if (report.pathResult.wrotePathsToFile) {
+                std::cout << "; see " << report.pathResult.outputFilePath;
+            }
+            std::cout << "\n";
+        }
+        return;
+    }
+
+    if (!report.exists) {
+        std::cout << "No register-to-register path found.\n";
+        return;
+    }
+
+    if (!report.startDffName.empty() || !report.endDffName.empty()) {
+        std::cout << "Representative DFF pair: "
+                  << (report.startDffName.empty() ? "(unknown)" : report.startDffName)
+                  << " -> "
+                  << (report.endDffName.empty() ? "(unknown)" : report.endDffName)
+                  << "\n";
+    }
+    printPath(netlist, report.pathResult.path);
 }
 
 // 印出 DepthQuery 的統一 report。
@@ -621,6 +687,26 @@ bool parsePathMode(const std::string& mode, Netlist::PathQueryMode& outMode) {
     return true;
 }
 
+// 將 reg_path_query 的 mode 轉成 RegisterPathQueryMode。
+bool parseRegisterPathMode(const std::string& mode,
+                           Netlist::RegisterPathQueryMode& outMode) {
+    const std::string m = toLower(mode);
+    if (m == "exists") {
+        outMode = Netlist::RegisterPathQueryMode::Exists;
+    } else if (m == "find_any") {
+        outMode = Netlist::RegisterPathQueryMode::FindAny;
+    } else if (m == "enumerate") {
+        outMode = Netlist::RegisterPathQueryMode::EnumerateAll;
+    } else if (m == "min_depth") {
+        outMode = Netlist::RegisterPathQueryMode::MinDepth;
+    } else if (m == "max_depth") {
+        outMode = Netlist::RegisterPathQueryMode::MaxDepth;
+    } else {
+        return false;
+    }
+    return true;
+}
+
 // 印出統一 CLI 的 help；只保留分類式高階入口，避免 LLM 選到低階散裝 API。
 void printHelp() {
     std::cout
@@ -653,6 +739,10 @@ void printHelp() {
         << "            dff_clk:<ff>[:pin] | dff_reset:<ff>[:pin]\n"
         << "            gate_out:<g> | gate_in:<g>:<index_or_pin> | bare_net\n"
         << "  node: gate:<g> | net:<n> | bare_net\n"
+        << "\nRegister-to-register path query\n"
+        << "  reg_path_query <mode> [-from dff...] [-to dff...] [-req node...] [-avoid node...] [-out file] [-max_print n]\n"
+        << "  mode: exists | find_any | enumerate | min_depth | max_depth\n"
+        << "  omit -from/-to to use all DFF.Q startpoints and all DFF.D endpoints\n"
         << "\nDepth query\n"
         << "  depth_query <mode> [args]\n"
         << "  mode: net <net> | all_po | all_dff_d | global_critical | exceeding <depth>\n"
@@ -814,6 +904,70 @@ int main() {
             }
 
             printPathResult(netlist, query, netlist.runPathQuery(query));
+            continue;
+        }
+
+        if (command == "reg_path_query") {
+            std::string modeText;
+            if (!(iss >> modeText)) {
+                std::cout << "Usage: reg_path_query <mode> [-from dff...] [-to dff...] [-req node...] [-avoid node...] [-out file] [-max_print n]\n";
+                continue;
+            }
+
+            Netlist::RegisterPathQuery query;
+            if (!parseRegisterPathMode(modeText, query.mode)) {
+                std::cout << "Unknown reg_path_query mode: " << modeText << "\n";
+                continue;
+            }
+
+            int listMode = 0; // 0=ignore, 1=from, 2=to, 3=required, 4=avoided
+            std::string token;
+            while (iss >> token) {
+                if (token == "-from") {
+                    listMode = 1;
+                    continue;
+                }
+                if (token == "-to") {
+                    listMode = 2;
+                    continue;
+                }
+                if (token == "-req") {
+                    listMode = 3;
+                    continue;
+                }
+                if (token == "-avoid") {
+                    listMode = 4;
+                    continue;
+                }
+                if (token == "-out") {
+                    std::string outputPath;
+                    if (iss >> outputPath) {
+                        query.outputFilePath = outputPath;
+                    }
+                    listMode = 0;
+                    continue;
+                }
+                if (token == "-max_print") {
+                    size_t maxPrinted = 0;
+                    if (iss >> maxPrinted) {
+                        query.maxPrintedPaths = maxPrinted;
+                    }
+                    listMode = 0;
+                    continue;
+                }
+
+                if (listMode == 1) {
+                    query.startDffNames.push_back(token);
+                } else if (listMode == 2) {
+                    query.endDffNames.push_back(token);
+                } else if (listMode == 3) {
+                    query.requiredNodes.push_back(parsePathNode(token));
+                } else if (listMode == 4) {
+                    query.avoidedNodes.push_back(parsePathNode(token));
+                }
+            }
+
+            printRegisterPathReport(netlist, query, netlist.runRegisterPathQuery(query));
             continue;
         }
 

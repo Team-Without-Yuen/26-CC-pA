@@ -454,6 +454,79 @@ void testDepthQuery(TestReport& report, const Netlist& netlist) {
                  "runDepthQuery GlobalCriticalPath");
 }
 
+// 測試 RegisterPathQuery：自動把 DFF.Q 展開成起點、DFF.D 展開成終點。
+void testRegisterPathQuery(TestReport& report) {
+    Netlist regNetlist;
+    const int d1 = regNetlist.addNet("d1");
+    const int q1 = regNetlist.addNet("q1");
+    const int a = regNetlist.addNet("a");
+    const int mid = regNetlist.addNet("mid");
+    const int d2 = regNetlist.addNet("d2");
+    const int q2 = regNetlist.addNet("q2");
+
+    const int ff1 = regNetlist.addGate("ff1", GateType::DFF);
+    regNetlist.connectGateInput(ff1, d1, "D");
+    regNetlist.connectGateOutput(ff1, q1);
+
+    const int g1 = regNetlist.addGate("g1", GateType::AND);
+    regNetlist.connectGateInput(g1, q1);
+    regNetlist.connectGateInput(g1, a);
+    regNetlist.connectGateOutput(g1, mid);
+
+    const int g2 = regNetlist.addGate("g2", GateType::BUF);
+    regNetlist.connectGateInput(g2, mid);
+    regNetlist.connectGateOutput(g2, d2);
+
+    const int ff2 = regNetlist.addGate("ff2", GateType::DFF);
+    regNetlist.connectGateInput(ff2, d2, "D");
+    regNetlist.connectGateOutput(ff2, q2);
+
+    Netlist::RegisterPathQuery query;
+    query.mode = Netlist::RegisterPathQueryMode::MaxDepth;
+    Netlist::RegisterPathReport regPath = regNetlist.runRegisterPathQuery(query);
+    report.check(regPath.ok &&
+                 regPath.exists &&
+                 regPath.depth == 2 &&
+                 regPath.startDffName == "ff1" &&
+                 regPath.endDffName == "ff2",
+                 "runRegisterPathQuery MaxDepth all DFFs");
+
+    query.mode = Netlist::RegisterPathQueryMode::Exists;
+    query.startDffNames = {"ff1"};
+    query.endDffNames = {"ff2"};
+    regPath = regNetlist.runRegisterPathQuery(query);
+    report.check(regPath.ok && regPath.exists,
+                 "runRegisterPathQuery Exists specific DFFs");
+
+    query.mode = Netlist::RegisterPathQueryMode::Exists;
+    query.avoidedNodes.push_back(gateNode("g1"));
+    regPath = regNetlist.runRegisterPathQuery(query);
+    report.check(regPath.ok && !regPath.exists,
+                 "runRegisterPathQuery avoided gate blocks path");
+
+    query = Netlist::RegisterPathQuery();
+    query.mode = Netlist::RegisterPathQueryMode::EnumerateAll;
+    query.outputFilePath = "mini test/reg_path_enum_output.txt";
+    regPath = regNetlist.runRegisterPathQuery(query);
+    std::ifstream regPathFile(query.outputFilePath);
+    std::string regPathFileContents((std::istreambuf_iterator<char>(regPathFile)),
+                                    std::istreambuf_iterator<char>());
+    report.check(regPath.ok &&
+                 regPath.exists &&
+                 regPath.pathResult.pathCount == 1 &&
+                 regPath.pathResult.wrotePathsToFile &&
+                 regPath.pathResult.outputFilePath == query.outputFilePath &&
+                 regPathFileContents.find("Path 0") != std::string::npos,
+                 "runRegisterPathQuery EnumerateAll writes file");
+
+    query = Netlist::RegisterPathQuery();
+    query.mode = Netlist::RegisterPathQueryMode::MaxDepth;
+    query.startDffNames = {"missing_ff"};
+    regPath = regNetlist.runRegisterPathQuery(query);
+    report.check(!regPath.ok && !regPath.message.empty(),
+                 "runRegisterPathQuery rejects invalid DFF");
+}
+
 // 測試 writer 與少量 transformation primitive，確保 tester 仍覆蓋基本修改流程。
 void testWriterAndSmallMutation(TestReport& report, const Netlist& original) {
     VerilogWriter writer;
@@ -560,6 +633,7 @@ int main(int argc, char* argv[]) {
     testConeQuery(report, netlist);
     testPathQuery(report, netlist);
     testDepthQuery(report, netlist);
+    testRegisterPathQuery(report);
     testWriterAndSmallMutation(report, netlist);
     testFanoutBufferTransformation(report);
 

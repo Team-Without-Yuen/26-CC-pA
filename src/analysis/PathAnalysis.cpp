@@ -3,6 +3,7 @@
 #include <fstream>
 #include <queue>
 #include <string>
+#include <unordered_map>
 #include <unordered_set>
 #include <vector>
 
@@ -79,6 +80,52 @@ bool resolvePathNodes(const Netlist& netlist,
         }
         resolvedNodes.push_back(resolved);
     }
+    return true;
+}
+
+// 將 RegisterPathQueryMode 對應到底層 PathQueryMode。
+Netlist::PathQueryMode toPathQueryMode(Netlist::RegisterPathQueryMode mode) {
+    switch (mode) {
+    case Netlist::RegisterPathQueryMode::Exists:
+        return Netlist::PathQueryMode::Exists;
+    case Netlist::RegisterPathQueryMode::FindAny:
+        return Netlist::PathQueryMode::FindAny;
+    case Netlist::RegisterPathQueryMode::EnumerateAll:
+        return Netlist::PathQueryMode::EnumerateAll;
+    case Netlist::RegisterPathQueryMode::MinDepth:
+        return Netlist::PathQueryMode::MinDepth;
+    case Netlist::RegisterPathQueryMode::MaxDepth:
+        return Netlist::PathQueryMode::MaxDepth;
+    }
+    return Netlist::PathQueryMode::Exists;
+}
+
+// 解析 register path query 的 DFF 名稱；空清單代表使用設計中所有 DFF。
+bool resolveDffNameList(const Netlist& netlist,
+                        const std::vector<std::string>& requestedNames,
+                        std::vector<std::string>& resolvedNames,
+                        std::string& message) {
+    resolvedNames = requestedNames.empty() ? netlist.getDffNames() : requestedNames;
+    if (resolvedNames.empty()) {
+        message = "No DFF instances are available";
+        return false;
+    }
+
+    std::unordered_set<std::string> seen;
+    std::vector<std::string> uniqueNames;
+    uniqueNames.reserve(resolvedNames.size());
+    for (const std::string& dffName : resolvedNames) {
+        const int gateId = netlist.getGateId(dffName);
+        if (!netlist.isDffGate(gateId)) {
+            message = "Unknown or non-DFF instance: " + dffName;
+            return false;
+        }
+        if (seen.insert(dffName).second) {
+            uniqueNames.push_back(dffName);
+        }
+    }
+
+    resolvedNames = std::move(uniqueNames);
     return true;
 }
 
@@ -915,6 +962,10 @@ std::vector<int> Netlist::resolvePathEndpoint(const PathEndpoint& endpoint) cons
         }
     };
 
+    auto endpointRequestsAllDffs = [&]() {
+        return endpoint.name.empty() || endpoint.name == "*";
+    };
+
     switch (endpoint.type) {
     case PathEndpointType::SpecificNet:
         appendValidNet(getNetId(endpoint.name));
@@ -926,10 +977,22 @@ std::vector<int> Netlist::resolvePathEndpoint(const PathEndpoint& endpoint) cons
         appendPortNets(primaryOutputs);
         break;
     case PathEndpointType::DffQ:
-        appendValidNet(getDffOutputNetId(getGateId(endpoint.name)));
+        if (endpointRequestsAllDffs()) {
+            for (int gateId : getGatesByType(GateType::DFF)) {
+                appendValidNet(getDffOutputNetId(gateId));
+            }
+        } else {
+            appendValidNet(getDffOutputNetId(getGateId(endpoint.name)));
+        }
         break;
     case PathEndpointType::DffD:
-        appendValidNet(getGateInputNetId(getGateId(endpoint.name), "D"));
+        if (endpointRequestsAllDffs()) {
+            for (int gateId : getGatesByType(GateType::DFF)) {
+                appendValidNet(getGateInputNetId(gateId, "D"));
+            }
+        } else {
+            appendValidNet(getGateInputNetId(getGateId(endpoint.name), "D"));
+        }
         break;
     case PathEndpointType::DffClock:
         appendValidNet(getGateInputNetId(getGateId(endpoint.name),
@@ -1137,6 +1200,83 @@ Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
     }
 
     return result;
+}
+
+// 執行 register-to-register path query。
+// 這一層不重寫 traversal，而是把 DFF.Q / DFF.D 自動展開成 PathQuery endpoint。
+Netlist::RegisterPathReport
+Netlist::runRegisterPathQuery(const RegisterPathQuery& query) const {
+    RegisterPathReport report;
+    report.mode = query.mode;
+
+    if (!query.combinationalOnly) {
+        report.message = "Register path query currently supports combinationalOnly=true only";
+        return report;
+    }
+
+    if (!resolveDffNameList(*this, query.startDffNames, report.startDffNames, report.message) ||
+        !resolveDffNameList(*this, query.endDffNames, report.endDffNames, report.message)) {
+        return report;
+    }
+
+    PathQuery pathQuery;
+    pathQuery.mode = toPathQueryMode(query.mode);
+    pathQuery.requiredNodes = query.requiredNodes;
+    pathQuery.avoidedNodes = query.avoidedNodes;
+    pathQuery.combinationalOnly = query.combinationalOnly;
+    pathQuery.maxPrintedPaths = query.maxPrintedPaths;
+
+    if (query.mode == RegisterPathQueryMode::EnumerateAll) {
+        pathQuery.writePathsToFile = true;
+        pathQuery.outputFilePath = query.outputFilePath.empty()
+                                       ? "register_path_enumeration_output.txt"
+                                       : query.outputFilePath;
+    }
+
+    std::unordered_map<int, std::string> startDffByNet;
+    std::unordered_map<int, std::string> endDffByNet;
+
+    for (const std::string& dffName : report.startDffNames) {
+        const int qNetId = getDffOutputNetId(getGateId(dffName));
+        if (!isValidNetId(qNetId)) {
+            report.message = "DFF has no valid Q/output net: " + dffName;
+            return report;
+        }
+        pathQuery.startpoints.push_back(PathEndpoint(PathEndpointType::DffQ, dffName));
+        startDffByNet.emplace(qNetId, dffName);
+    }
+
+    for (const std::string& dffName : report.endDffNames) {
+        const int dNetId = getGateInputNetId(getGateId(dffName), "D");
+        if (!isValidNetId(dNetId)) {
+            report.message = "DFF has no valid D input net: " + dffName;
+            return report;
+        }
+        pathQuery.endpoints.push_back(PathEndpoint(PathEndpointType::DffD, dffName));
+        endDffByNet.emplace(dNetId, dffName);
+    }
+
+    report.pathResult = runPathQuery(pathQuery);
+    report.ok = true;
+    report.exists = report.pathResult.exists;
+    report.depth = report.pathResult.depth;
+    report.message = report.exists ? "Register-to-register path query succeeded"
+                                   : "No register-to-register path found";
+
+    const CombinationalPath& representativePath = report.pathResult.path;
+    if (representativePath.exists()) {
+        const auto startIt = startDffByNet.find(representativePath.netIds.front());
+        if (startIt != startDffByNet.end()) {
+            report.startDffName = startIt->second;
+        }
+
+        const auto endIt = endDffByNet.find(representativePath.netIds.back());
+        if (endIt != endDffByNet.end()) {
+            report.endDffName = endIt->second;
+        }
+    }
+
+    return report;
 }
 
 // 掃描所有 PI bit 到所有 DFF D-pin 的組合路徑，找出最大的 logic depth 與 witness path。

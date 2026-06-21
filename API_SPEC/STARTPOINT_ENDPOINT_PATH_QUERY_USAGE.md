@@ -56,6 +56,7 @@ query.startpoints
 | `PrimaryInput` | `PathEndpoint(PrimaryInput, "a")` | PI port name | 不使用 | 從指定 PI 出發 |
 | `PrimaryInput` | `PathEndpoint(PrimaryInput, "")` | 空字串代表全部 PI | 不使用 | 從所有 PI 出發 |
 | `DffQ` | `PathEndpoint(DffQ, "ff1")` | DFF instance name | 不使用 | 從 DFF Q-pin 出發 |
+| `DffQ` | `PathEndpoint(DffQ, "")` | 空字串或 `"*"` | 不使用 | 從所有 DFF Q-pin 出發 |
 | `GateOutput` | `PathEndpoint(GateOutput, "g1")` | gate instance name | 不使用 | 從 gate output net 出發 |
 | `DffClock` | `PathEndpoint(DffClock, "ff1")` | DFF instance name | 預設 `CK` | 從 DFF clock pin net 出發，偏 control path |
 | `DffReset` | `PathEndpoint(DffReset, "ff1", "RN")` | DFF instance name | 指定 `RN` 或 `SN` | 從 reset/set pin net 出發，偏 control path |
@@ -97,6 +98,7 @@ query.endpoints
 | `PrimaryOutput` | `PathEndpoint(PrimaryOutput, "y")` | PO port name | 不使用 | 到指定 PO 結束 |
 | `PrimaryOutput` | `PathEndpoint(PrimaryOutput, "")` | 空字串代表全部 PO | 不使用 | 到所有 PO 中任一個 |
 | `DffD` | `PathEndpoint(DffD, "ff1")` | DFF instance name | 預設 `D` | 到 DFF D-pin 結束 |
+| `DffD` | `PathEndpoint(DffD, "")` | 空字串或 `"*"` | 預設 `D` | 到所有 DFF D-pin 結束 |
 | `DffClock` | `PathEndpoint(DffClock, "ff1")` | DFF instance name | 預設 `CK` | 到 DFF clock pin 結束 |
 | `DffReset` | `PathEndpoint(DffReset, "ff1")` | DFF instance name | 空字串代表嘗試 `RN` 和 `SN` | 到 DFF reset/set pin 結束 |
 | `DffReset` | `PathEndpoint(DffReset, "ff1", "SN")` | DFF instance name | 指定 `SN` | 到指定 reset/set pin 結束 |
@@ -273,6 +275,38 @@ Path 0
 ---
 
 ## 8. 使用範例
+
+### 8.0 全域 register-to-register path
+
+如果問題是「所有 register-to-register paths」、「任意 DFF.Q 到任意 DFF.D」、
+「最長 register-to-register path」，`PathQuery` 可直接使用 all-DFF endpoint，
+不需要手動列出所有 DFF pair。
+
+```cpp
+Netlist::PathQuery query;
+query.mode = Netlist::PathQueryMode::MaxDepth;
+query.startpoints.push_back(Netlist::PathEndpoint(
+    Netlist::PathEndpointType::DffQ, "")); // all DFF.Q
+query.endpoints.push_back(Netlist::PathEndpoint(
+    Netlist::PathEndpointType::DffD, "")); // all DFF.D
+
+Netlist::PathQueryResult result = netlist.runPathQuery(query);
+```
+
+CLI 寫法：
+
+```text
+path_query max_depth all_dff_q all_dff_d
+path_query enumerate all_dff_q all_dff_d -out reg_paths.txt -max_print 0
+```
+
+也可使用 `dff_q:*` / `dff_d:*`：
+
+```text
+path_query max_depth dff_q:* dff_d:*
+```
+
+`RegisterPathQuery` 仍保留作為便利 wrapper，但主要語意已整合進 `PathQuery` endpoint resolver。
 
 ### 8.1 是否存在 a 到 y 的路徑
 

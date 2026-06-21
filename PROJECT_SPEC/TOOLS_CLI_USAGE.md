@@ -7,7 +7,7 @@
 ```text
 - 不直接暴露大量低階 API command。
 - 使用「分類式高階入口」：
-  basic_query / conn_query / cone_query / path_query / depth_query / func_query
+  basic_query / conn_query / cone_query / path_query / reg_path_query / depth_query / func_query
 - 每個入口再用 mode 決定實際查詢種類。
 - CLI command 主要作為 LLM dispatch、人工 debug、testcase prompt 驗證的介面。
 ```
@@ -64,7 +64,7 @@ write "mini test\out.v"
 
 ## 4. Unified Command Overview
 
-目前主要只有六個高階查詢入口：
+目前主要只有七個高階查詢入口：
 
 | Entry Command | 負責問題類型 | 對應 C++ 高階 API |
 | --- | --- | --- |
@@ -72,6 +72,7 @@ write "mini test\out.v"
 | `conn_query` | gate/net 直接連線關係 | `runDirectConnectivityQuery()` |
 | `cone_query` | transitive fanin/fanout cone | `runConeQuery()` |
 | `path_query` | startpoint-to-endpoint path analysis | `runPathQuery()` |
+| `reg_path_query` | all / selected register-to-register path analysis | `runRegisterPathQuery()` |
 | `depth_query` | timing endpoint depth / critical path | `runDepthQuery()` |
 | `func_query` | Boolean function / equivalence / constant status | `runFunctionQuery()` |
 
@@ -237,6 +238,8 @@ path_query <mode> <start_endpoint> <end_endpoint> [-req node...] [-avoid node...
 | `po:<port>` | 指定 primary output port；可支援 bus port 展開 |
 | `dff_q:<ff>` | DFF Q/output pin |
 | `dff_d:<ff>` | DFF D input pin |
+| `all_dff_q` 或 `dff_q:*` | 所有 DFF Q/output pins |
+| `all_dff_d` 或 `dff_d:*` | 所有 DFF D input pins |
 | `dff_clk:<ff>` | DFF clock pin，預設 pin name 為 `CK` |
 | `dff_clk:<ff>:<pin>` | 指定 DFF clock pin name |
 | `dff_reset:<ff>` | DFF reset/set pin，預設嘗試 `RN` / `SN` |
@@ -268,6 +271,8 @@ path_query every_through net:a net:y -req gate:g2
 path_query every_avoids net:a net:y -avoid gate:g3
 path_query max_depth pi:a dff_d:ff1
 path_query exists dff_q:ff1 po:y
+path_query max_depth all_dff_q all_dff_d
+path_query enumerate all_dff_q all_dff_d -out reg_paths.txt -max_print 0
 ```
 
 注意：
@@ -281,7 +286,54 @@ path_query exists dff_q:ff1 po:y
 - `-out` 建議使用不含空白的路徑。
 ```
 
-## 9. Depth Query
+## 9. Register Path Query
+
+格式：
+
+```text
+reg_path_query <mode> [-from dff...] [-to dff...] [-req node...] [-avoid node...] [-out file] [-max_print n]
+```
+
+### 9.1 Modes
+
+| Mode | 用途 |
+| --- | --- |
+| `exists` | 判斷是否存在任一 DFF.Q 到任一 DFF.D path |
+| `find_any` | 找任意一條 register-to-register path |
+| `enumerate` | 列出所有 register-to-register paths；預設自動寫檔 |
+| `min_depth` | 找最短 register-to-register path |
+| `max_depth` | 找最長 register-to-register path |
+
+### 9.2 Options
+
+| Option | 意義 |
+| --- | --- |
+| `-from ff1 ff2` | 指定起點 DFF；未指定時使用所有 DFF.Q |
+| `-to ff3 ff4` | 指定終點 DFF；未指定時使用所有 DFF.D |
+| `-req gate:g1 net:n1` | 路徑必須經過指定 gate/net |
+| `-avoid gate:g2 net:n2` | 路徑必須避開指定 gate/net |
+| `-out file` | enumerate 輸出檔名；未指定時使用 `register_path_enumeration_output.txt` |
+| `-max_print n` | terminal 最多顯示幾條 path |
+
+### 9.3 Examples
+
+```text
+reg_path_query exists
+reg_path_query max_depth
+reg_path_query min_depth -from ff1 -to ff2
+reg_path_query enumerate -out reg_paths.txt -max_print 0
+reg_path_query exists -from ff1 ff2 -to ff3 -avoid gate:g_bad
+```
+
+注意：
+
+```text
+reg_path_query 是 path_query 的便利 wrapper。
+若只需要 all DFF.Q 到 all DFF.D，也可以直接用：
+path_query max_depth all_dff_q all_dff_d
+```
+
+## 10. Depth Query
 
 格式：
 
@@ -314,7 +366,7 @@ depth_query 偏 timing endpoint analysis。
 如果只是問 A 到 B 是否有路徑，應使用 path_query。
 ```
 
-## 10. Function Query
+## 11. Function Query
 
 格式：
 
@@ -350,7 +402,7 @@ func_query truth_status n16
 - scalar constant status 請優先使用 func_query。
 ```
 
-## 11. Prompt Dispatch 建議
+## 12. Prompt Dispatch 建議
 
 LLM / parser 可以先用下面規則判斷要呼叫哪個入口：
 
@@ -361,6 +413,8 @@ LLM / parser 可以先用下面規則判斷要呼叫哪個入口：
 | 某 net 依 QA 定義的 fanout load 數、DFF clock/reset loads、是否 drive PO | `conn_query fanout_load` |
 | reachable、transitive fanin/fanout、cone size | `cone_query` |
 | A 到 B 是否有路徑、找路徑、避開/必經節點 | `path_query` |
+| 所有 DFF.Q 到所有 DFF.D 的 register-to-register path | `path_query all_dff_q all_dff_d` |
+| 指定 DFF subset 的 register-to-register path | `reg_path_query` |
 | critical path、depth、depth > threshold endpoints | `depth_query` |
 | equivalence、always 0/1、constant status | `func_query` |
 
@@ -379,11 +433,14 @@ Is output n16 always 0 regardless of all inputs?
 What is the maximum logic depth from any primary input to any DFF D-pin?
 => depth_query all_dff_d
 
+What is the longest register-to-register path?
+=> path_query max_depth all_dff_q all_dff_d
+
 Find a path from n1 to n8 avoiding g3.
 => path_query find_any net:n1 net:n8 -avoid gate:g3
 ```
 
-## 12. Current Boundary
+## 13. Current Boundary
 
 目前這份 tool 是 analysis/query CLI，不是完整 transformation CLI。
 
