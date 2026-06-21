@@ -15,20 +15,26 @@ enum class TargetScope {
     GATE_FANOUT     // 針對 Gate 的 Fanout
 };
 
+// 定義優化目標
+enum class OptimizationGoal {
+    AREA,   // 最小化總閘數
+    DEPTH   // 最小化關鍵路徑層數 (Critical Path)
+};
+
 // 宣告 PatternNode 的類型
-enum class NodeType { GATE, LEAF_A, LEAF_B, LEAF_C, LEAF_D, LEAF_E, LEAF_F, LEAF_G, CONST_1, CONST_0 };
+// 只保留一個代表「輸入」的類型 PI (Primary Input)
+enum class NodeType { GATE, PI, CONST_1, CONST_0 };
 
 struct PatternNode {
     NodeType nodeType;
     GateType gateType; // 只有當 nodeType == GATE 時有效
+    int piIndex; // 只有當 nodeType == PI 時有效 (0=A, 1=B, 2=C...)
     std::vector<std::shared_ptr<PatternNode>> inputs;
 
     // --- Helpers for building the tree easily ---
-    static std::shared_ptr<PatternNode> A() {
-        return std::make_shared<PatternNode>(PatternNode{NodeType::LEAF_A, GateType::UNKNOWN, {}});
-    }
-    static std::shared_ptr<PatternNode> B() {
-        return std::make_shared<PatternNode>(PatternNode{NodeType::LEAF_B, GateType::UNKNOWN, {}});
+    // 一個動態生成 PI 的 Helper
+    static std::shared_ptr<PatternNode> makePI(int index) {
+        return std::make_shared<PatternNode>(PatternNode{NodeType::PI, GateType::UNKNOWN, index, {}});
     }
     static std::shared_ptr<PatternNode> Const1() {
         return std::make_shared<PatternNode>(PatternNode{NodeType::CONST_1, GateType::UNKNOWN, {}});
@@ -39,13 +45,23 @@ struct PatternNode {
     static std::shared_ptr<PatternNode> Gate(GateType type, std::shared_ptr<PatternNode> in1, std::shared_ptr<PatternNode> in2 = nullptr) {
         std::vector<std::shared_ptr<PatternNode>> ins = {in1};
         if (in2) ins.push_back(in2);
-        return std::make_shared<PatternNode>(PatternNode{NodeType::GATE, type, ins});
+        return std::make_shared<PatternNode>(PatternNode{NodeType::GATE, type, -1, ins});
     }
+};
+
+enum class RuleSource {
+    STANDARD_LIBRARY,   // 原本就內建在 LUT 中的標準規則 (最安全、最基礎)
+    USER_CUSTOM,        // 使用者強制指定的替換
+    AUTO_LEARNED_SAT,   // SAT Fallback 學會的拓樸變體
+    OPTIMIZED_AREA,     // 化簡引擎算出的面積絕對最佳解
+    OPTIMIZED_DEPTH     // 化簡引擎算出的深度絕對最佳解
 };
 
 // 替換規則結構
 struct TechMapRule {
     std::string name; // 規則名稱 (例如: "OR3_to_NOR2_NAND1")
+    RuleSource source;         // 這條規則是誰產生的？
+    std::string truthTableHash; // 這條規則對應的真值表特徵
 
     // 左邊 (LHS)：目標要在電路裡尋找的形狀
     std::shared_ptr<PatternNode> targetPattern;  
@@ -57,11 +73,15 @@ struct TechMapRule {
     std::map<GateType, int> allowedCounts; // 例: {NOR: 2, NAND: 1}
     int addedGateCount;                      
     
-    // 建構子：傳入兩棵樹，並自動計算兩邊的 Cost
+    // 建構子
     TechMapRule(std::string ruleName, 
+                RuleSource ruleSource,
+                std::string hash,
                 std::shared_ptr<PatternNode> lhs_target, 
                 std::shared_ptr<PatternNode> rhs_replacement) 
         : name(std::move(ruleName)), 
+          source(ruleSource),
+          truthTableHash(std::move(hash)),
           targetPattern(lhs_target), 
           replacementPattern(rhs_replacement), 
           removedGateCount(0), 
@@ -107,14 +127,15 @@ private:
 // --- Syntax Sugar ---
 using NodePtr = std::shared_ptr<PatternNode>;
 
-inline NodePtr A() { return PatternNode::A(); }
-inline NodePtr B() { return PatternNode::B(); }
-//擴充 C() 或 D() 以支援超過 2 個輸入的 Pattern
-inline NodePtr C() { return std::make_shared<PatternNode>(PatternNode{NodeType::LEAF_C, GateType::UNKNOWN, {}}); }
-inline NodePtr D() { return std::make_shared<PatternNode>(PatternNode{NodeType::LEAF_D, GateType::UNKNOWN, {}}); }
-inline NodePtr E() { return std::make_shared<PatternNode>(PatternNode{NodeType::LEAF_E, GateType::UNKNOWN, {}}); }
-inline NodePtr F() { return std::make_shared<PatternNode>(PatternNode{NodeType::LEAF_F, GateType::UNKNOWN, {}}); }
-inline NodePtr G() { return std::make_shared<PatternNode>(PatternNode{NodeType::LEAF_G, GateType::UNKNOWN, {}}); }
+inline NodePtr A() { return PatternNode::makePI(0); }
+inline NodePtr B() { return PatternNode::makePI(1); }
+inline NodePtr C() { return PatternNode::makePI(2); }
+inline NodePtr D() { return PatternNode::makePI(3); }
+inline NodePtr E() { return PatternNode::makePI(4); }
+inline NodePtr F() { return PatternNode::makePI(5); }
+inline NodePtr G() { return PatternNode::makePI(6); }
+// 需要寫 H, I, J... 或更多腳位時，直接呼叫 PI(index) 即可
+inline NodePtr PI(int index) { return PatternNode::makePI(index); }
 inline NodePtr C1() { return PatternNode::Const1(); }  
 inline NodePtr C0() { return PatternNode::Const0(); }  
 inline NodePtr _NOT(NodePtr in) { return PatternNode::Gate(GateType::NOT, in); }
@@ -130,19 +151,19 @@ inline NodePtr _XNOR(NodePtr in1, NodePtr in2) { return PatternNode::Gate(GateTy
 // 用來記錄比對過程中的狀態 
 struct MatchContext {
     // 將 netA, netB 改為 Map。
-    // 紀錄 Pattern 中的葉節點 (LEAF_A, LEAF_B, LEAF_C...) 分別對應到物理電路上的哪條 Net ID
-    std::unordered_map<NodeType, int> boundLeaves; 
+    // 紀錄 Pattern 中的輸入接腳 (PI) 分別對應到物理電路上的哪條 Net ID
+    std::unordered_map<int, int> boundLeaves; 
     // 紀錄 Pattern 節點對應到物理的哪個 Gate ID (解決 DAG 共用節點比對)
     std::unordered_map<PatternNode*, int> mappedNodes; 
     // 記錄這個子圖到底包含了哪些實體 Gate ID (用於替換時拔除舊 Gate)
     std::unordered_set<int> matchedGates; 
-    // 檢查某個 NodeType (如 LEAF_A) 是否已經綁定過實體 Net
-    bool isLeafBound(NodeType leafType) const {
-        return boundLeaves.count(leafType) > 0;
+    // 檢查某個 piIndex 是否已經綁定過實體 Net
+    bool isLeafBound(int piIndex) const {
+        return boundLeaves.count(piIndex) > 0;
     }
-    // 取得綁定的實體 Net ID
-    int getBoundNet(NodeType leafType) const {
-        auto it = boundLeaves.find(leafType);
+    // 取得該 piIndex 綁定的實體 Net ID
+    int getBoundNet(int piIndex) const {
+        auto it = boundLeaves.find(piIndex);
         return (it != boundLeaves.end()) ? it->second : -1;
     }
 };
@@ -157,85 +178,68 @@ public:
         // NOT 閘的替換規則
         // =======================================================
         // 用 NAND：A NAND A
-        rules.emplace_back("NOT_to_NAND_AA", _NOT(A()), _NAND(A(), A()));
-        rules.emplace_back("NAND_AA_to_NOT", _NAND(A(), A()), _NOT(A()));
+        addBidirectionalRule("NOT_to_NAND_AA", _NOT(A()), _NAND(A(), A()));
         
         // 用 NOR：A NOR A
-        rules.emplace_back("NOT_to_NOR_AA",  _NOT(A()), _NOR(A(), A()));
-        rules.emplace_back("NOR_AA_to_NOT",  _NOR(A(), A()), _NOT(A()));
+        addBidirectionalRule("NOT_to_NOR_AA",  _NOT(A()), _NOR(A(), A()));
         
         // 用 XOR：A XOR 1
-        rules.emplace_back("NOT_to_XOR_1",   _NOT(A()), _XOR(A(), C1()));
-        rules.emplace_back("XOR_1_to_NOT",   _XOR(A(), C1()), _NOT(A()));
+        addBidirectionalRule("NOT_to_XOR_1",   _NOT(A()), _XOR(A(), C1()));
         
         // 用 XNOR：A XNOR 0
-        rules.emplace_back("NOT_to_XNOR_0",  _NOT(A()), _XNOR(A(), C0()));
-        rules.emplace_back("XNOR_0_to_NOT",  _XNOR(A(), C0()), _NOT(A()));
+       addBidirectionalRule("NOT_to_XNOR_0",  _NOT(A()), _XNOR(A(), C0()));
         
         // 用 NAND：A NAND 1
-        rules.emplace_back("NOT_to_NAND_1",  _NOT(A()), _NAND(A(), C1()));
-        rules.emplace_back("NAND_1_to_NOT",  _NAND(A(), C1()), _NOT(A()));
+        addBidirectionalRule("NOT_to_NAND_1",  _NOT(A()), _NAND(A(), C1()));
         
         // 用 NOR：A NOR 0
-        rules.emplace_back("NOT_to_NOR_0",   _NOT(A()), _NOR(A(), C0()));
-        rules.emplace_back("NOR_0_to_NOT",   _NOR(A(), C0()), _NOT(A()));
+        addBidirectionalRule("NOT_to_NOR_0",   _NOT(A()), _NOR(A(), C0()));
 
         // =======================================================
         // BUF 閘的替換規則
         // =======================================================
         // --- 只用 1 種閘 ---
         // 用 AND：A AND A
-        rules.emplace_back("BUF_to_AND_AA", _BUF(A()), _AND(A(), A()));
-        rules.emplace_back("AND_AA_to_BUF", _AND(A(), A()), _BUF(A()));
+        addBidirectionalRule("BUF_to_AND_AA", _BUF(A()), _AND(A(), A()));
         
         // 用 AND：A AND 1
-        rules.emplace_back("BUF_to_AND_1",  _BUF(A()), _AND(A(), C1()));
-        rules.emplace_back("AND_1_to_BUF",  _AND(A(), C1()), _BUF(A()));
+        addBidirectionalRule("BUF_to_AND_1",  _BUF(A()), _AND(A(), C1()));
         
         // 用 OR：A OR A
-        rules.emplace_back("BUF_to_OR_AA",  _BUF(A()), _OR(A(), A()));
-        rules.emplace_back("OR_AA_to_BUF",  _OR(A(), A()), _BUF(A()));
+        addBidirectionalRule("BUF_to_OR_AA",  _BUF(A()), _OR(A(), A()));
         
         // 用 OR：A OR 0
-        rules.emplace_back("BUF_to_OR_0",   _BUF(A()), _OR(A(), C0()));
-        rules.emplace_back("OR_0_to_BUF",   _OR(A(), C0()), _BUF(A()));
+        addBidirectionalRule("BUF_to_OR_0",   _BUF(A()), _OR(A(), C0()));
         
         // 用 NOT：NOT (NOT A)
-        rules.emplace_back("BUF_to_NOT_NOT",_BUF(A()), _NOT(_NOT(A())));
-        rules.emplace_back("NOT_NOT_to_BUF",_NOT(_NOT(A())), _BUF(A()));
+        addBidirectionalRule("BUF_to_NOT_NOT",_BUF(A()), _NOT(_NOT(A())));
         
         // 用 XOR：A XOR 0
-        rules.emplace_back("BUF_to_XOR_0",  _BUF(A()), _XOR(A(), C0()));
-        rules.emplace_back("XOR_0_to_BUF",  _XOR(A(), C0()), _BUF(A()));
+        addBidirectionalRule("BUF_to_XOR_0",  _BUF(A()), _XOR(A(), C0()));
         
         // 用 XNOR：A XNOR 1
-        rules.emplace_back("BUF_to_XNOR_1", _BUF(A()), _XNOR(A(), C1()));
-        rules.emplace_back("XNOR_1_to_BUF", _XNOR(A(), C1()), _BUF(A()));
+        addBidirectionalRule("BUF_to_XNOR_1", _BUF(A()), _XNOR(A(), C1()));
         
         // 用 NAND：(A NAND A) NAND (A NAND A)
         {
             // 建立 DAG 結構，並同時註冊展開與濃縮規則
             auto nand_a = _NAND(A(), A());
-            rules.emplace_back("BUF_to_NAND_NAND", _BUF(A()), _NAND(nand_a, nand_a));
-            rules.emplace_back("NAND_NAND_to_BUF", _NAND(nand_a, nand_a), _BUF(A()));
+            addBidirectionalRule("BUF_to_NAND_NAND", _BUF(A()), _NAND(nand_a, nand_a));
         }
         
         // 用 NOR：(A NOR A) NOR (A NOR A)
         {
             // 建立 DAG 結構，並同時註冊展開與濃縮規則
             auto nor_a = _NOR(A(), A());
-            rules.emplace_back("BUF_to_NOR_NOR", _BUF(A()), _NOR(nor_a, nor_a));
-            rules.emplace_back("NOR_NOR_to_BUF", _NOR(nor_a, nor_a), _BUF(A()));
+            addBidirectionalRule("BUF_to_NOR_NOR", _BUF(A()), _NOR(nor_a, nor_a));
         }
 
         // --- 用 2 種閘 ---
         // 用 {NOT, NAND}：NOT (A NAND 1)
-        rules.emplace_back("BUF_to_NOT_NAND_1", _BUF(A()), _NOT(_NAND(A(), C1())));
-        rules.emplace_back("NOT_NAND_1_to_BUF", _NOT(_NAND(A(), C1())), _BUF(A()));
+        addBidirectionalRule("BUF_to_NOT_NAND_1", _BUF(A()), _NOT(_NAND(A(), C1())));
         
         // 用 {NOT, NOR}：NOT (A NOR 0)
-        rules.emplace_back("BUF_to_NOT_NOR_0",  _BUF(A()), _NOT(_NOR(A(), C0())));
-        rules.emplace_back("NOT_NOR_0_to_BUF",  _NOT(_NOR(A(), C0())), _BUF(A()));
+        addBidirectionalRule("BUF_to_NOT_NOR_0",  _BUF(A()), _NOT(_NOR(A(), C0())));
 
         // =======================================================
         // AND 閘的替換規則
@@ -245,71 +249,57 @@ public:
         {
             // 建立 DAG：確保共用同一顆內部 NAND 閘
             auto nand_ab = _NAND(A(), B());
-            rules.emplace_back("AND_to_NAND_NAND", _AND(A(), B()), _NAND(nand_ab, nand_ab));
-            rules.emplace_back("NAND_NAND_to_AND", _NAND(nand_ab, nand_ab), _AND(A(), B()));
+            addBidirectionalRule("AND_to_NAND_NAND", _AND(A(), B()), _NAND(nand_ab, nand_ab));
         }
         
         // 用 NOR：(A NOR A) NOR (B NOR B)
-        rules.emplace_back("AND_to_NOR_NOR", _AND(A(), B()), _NOR(_NOR(A(), A()), _NOR(B(), B())));
-        rules.emplace_back("NOR_NOR_to_AND", _NOR(_NOR(A(), A()), _NOR(B(), B())), _AND(A(), B()));
+        addBidirectionalRule("AND_to_NOR_NOR", _AND(A(), B()), _NOR(_NOR(A(), A()), _NOR(B(), B())));
 
         // --- 用 2 種閘 ---
         // 用 {NOT, OR}：NOT ((NOT A) OR (NOT B))  (迪摩根定律)
-        rules.emplace_back("AND_to_NOT_OR", _AND(A(), B()), _NOT(_OR(_NOT(A()), _NOT(B()))));
-        rules.emplace_back("NOT_OR_to_AND", _NOT(_OR(_NOT(A()), _NOT(B()))), _AND(A(), B()));
+        addBidirectionalRule("AND_to_NOT_OR", _AND(A(), B()), _NOT(_OR(_NOT(A()), _NOT(B()))));
         
         // 用 {NOT, NAND}：NOT (A NAND B)
-        rules.emplace_back("AND_to_NOT_NAND", _AND(A(), B()), _NOT(_NAND(A(), B())));
-        rules.emplace_back("NOT_NAND_to_AND", _NOT(_NAND(A(), B())), _AND(A(), B()));
+        addBidirectionalRule("AND_to_NOT_NAND", _AND(A(), B()), _NOT(_NAND(A(), B())));
         
         // 用 {NOT, NOR}：(NOT A) NOR (NOT B)
-        rules.emplace_back("AND_to_NOT_NOR", _AND(A(), B()), _NOR(_NOT(A()), _NOT(B())));
-        rules.emplace_back("NOT_NOR_to_AND", _NOR(_NOT(A()), _NOT(B())), _AND(A(), B()));
+        addBidirectionalRule("AND_to_NOT_NOR", _AND(A(), B()), _NOR(_NOT(A()), _NOT(B())));
         
         // 用 {XOR, OR}：(A XOR B) XOR (A OR B)
-        rules.emplace_back("AND_to_XOR_OR", _AND(A(), B()), _XOR(_XOR(A(), B()), _OR(A(), B())));
-        rules.emplace_back("XOR_OR_to_AND", _XOR(_XOR(A(), B()), _OR(A(), B())), _AND(A(), B()));
+        addBidirectionalRule("AND_to_XOR_OR", _AND(A(), B()), _XOR(_XOR(A(), B()), _OR(A(), B())));
         
         // 用 {XNOR, OR}：(A XNOR B) XNOR (A OR B)
-        rules.emplace_back("AND_to_XNOR_OR", _AND(A(), B()), _XNOR(_XNOR(A(), B()), _OR(A(), B())));
-        rules.emplace_back("XNOR_OR_to_AND", _XNOR(_XNOR(A(), B()), _OR(A(), B())), _AND(A(), B()));
+        addBidirectionalRule("AND_to_XNOR_OR", _AND(A(), B()), _XNOR(_XNOR(A(), B()), _OR(A(), B())));
 
         // =======================================================
         // OR 閘的替換規則
         // =======================================================
         // --- 只用 1 種閘 ---
         // 用 NAND：(A NAND A) NAND (B NAND B)
-        rules.emplace_back("OR_to_NAND_NAND", _OR(A(), B()), _NAND(_NAND(A(), A()), _NAND(B(), B())));
-        rules.emplace_back("NAND_NAND_to_OR", _NAND(_NAND(A(), A()), _NAND(B(), B())), _OR(A(), B()));
+        addBidirectionalRule("OR_to_NAND_NAND", _OR(A(), B()), _NAND(_NAND(A(), A()), _NAND(B(), B())));
         
         // 用 NOR：(A NOR B) NOR (A NOR B)
         {
             // 建立 DAG：確保共用同一顆內部 NOR 閘
             auto nor_ab = _NOR(A(), B());
-            rules.emplace_back("OR_to_NOR_NOR", _OR(A(), B()), _NOR(nor_ab, nor_ab));
-            rules.emplace_back("NOR_NOR_to_OR", _NOR(nor_ab, nor_ab), _OR(A(), B()));
+            addBidirectionalRule("OR_to_NOR_NOR", _OR(A(), B()), _NOR(nor_ab, nor_ab));
         }
 
         // --- 用 2 種閘 ---
         // 用 {NOT, AND}：NOT ((NOT A) AND (NOT B)) (迪摩根定律)
-        rules.emplace_back("OR_to_NOT_AND", _OR(A(), B()), _NOT(_AND(_NOT(A()), _NOT(B()))));
-        rules.emplace_back("NOT_AND_to_OR", _NOT(_AND(_NOT(A()), _NOT(B()))), _OR(A(), B()));
+        addBidirectionalRule("OR_to_NOT_AND", _OR(A(), B()), _NOT(_AND(_NOT(A()), _NOT(B()))));
         
         // 用 {NOT, NAND}：(NOT A) NAND (NOT B)
-        rules.emplace_back("OR_to_NOT_NAND", _OR(A(), B()), _NAND(_NOT(A()), _NOT(B())));
-        rules.emplace_back("NOT_NAND_to_OR", _NAND(_NOT(A()), _NOT(B())), _OR(A(), B()));
+        addBidirectionalRule("OR_to_NOT_NAND", _OR(A(), B()), _NAND(_NOT(A()), _NOT(B())));
         
         // 用 {NOT, NOR}：NOT (A NOR B)
-        rules.emplace_back("OR_to_NOT_NOR", _OR(A(), B()), _NOT(_NOR(A(), B())));
-        rules.emplace_back("NOT_NOR_to_OR", _NOT(_NOR(A(), B())), _OR(A(), B()));
+        addBidirectionalRule("OR_to_NOT_NOR", _OR(A(), B()), _NOT(_NOR(A(), B())));
         
         // 用 {XOR, AND}：(A XOR B) XOR (A AND B)
-        rules.emplace_back("OR_to_XOR_AND", _OR(A(), B()), _XOR(_XOR(A(), B()), _AND(A(), B())));
-        rules.emplace_back("XOR_AND_to_OR", _XOR(_XOR(A(), B()), _AND(A(), B())), _OR(A(), B()));
+        addBidirectionalRule("OR_to_XOR_AND", _OR(A(), B()), _XOR(_XOR(A(), B()), _AND(A(), B())));
         
         // 用 {XNOR, AND}：(A XNOR B) XNOR (A AND B)
-        rules.emplace_back("OR_to_XNOR_AND", _OR(A(), B()), _XNOR(_XNOR(A(), B()), _AND(A(), B())));
-        rules.emplace_back("XNOR_AND_to_OR", _XNOR(_XNOR(A(), B()), _AND(A(), B())), _OR(A(), B()));
+        addBidirectionalRule("OR_to_XNOR_AND", _OR(A(), B()), _XNOR(_XNOR(A(), B()), _AND(A(), B())));
 
         // =======================================================
         // NAND 閘的替換規則
@@ -319,22 +309,18 @@ public:
         {
             // 建立 DAG：inner 節點被最外層的 NOR 使用了兩次 (Fanout = 2)
             auto inner = _NOR(_NOR(A(), A()), _NOR(B(), B()));
-            rules.emplace_back("NAND_to_NOR_DAG", _NAND(A(), B()), _NOR(inner, inner));
-            rules.emplace_back("NOR_DAG_to_NAND", _NOR(inner, inner), _NAND(A(), B()));
+            addBidirectionalRule("NAND_to_NOR_DAG", _NAND(A(), B()), _NOR(inner, inner));
         }
 
         // --- 用 2 種閘 ---
         // 用 {NOT, AND}：NOT (A AND B)
-        rules.emplace_back("NAND_to_NOT_AND", _NAND(A(), B()), _NOT(_AND(A(), B())));
-        rules.emplace_back("NOT_AND_to_NAND", _NOT(_AND(A(), B())), _NAND(A(), B()));
+        addBidirectionalRule("NAND_to_NOT_AND", _NAND(A(), B()), _NOT(_AND(A(), B())));
         
         // 用 {NOT, OR}：(NOT A) OR (NOT B)  (迪摩根定律)
-        rules.emplace_back("NAND_to_NOT_OR",  _NAND(A(), B()), _OR(_NOT(A()), _NOT(B())));
-        rules.emplace_back("NOT_OR_to_NAND",  _OR(_NOT(A()), _NOT(B())), _NAND(A(), B()));
+        addBidirectionalRule("NAND_to_NOT_OR",  _NAND(A(), B()), _OR(_NOT(A()), _NOT(B())));
         
         // 用 {NOT, NOR}：NOT ((NOT A) NOR (NOT B))
-        rules.emplace_back("NAND_to_NOT_NOR", _NAND(A(), B()), _NOT(_NOR(_NOT(A()), _NOT(B()))));
-        rules.emplace_back("NOT_NOR_to_NAND", _NOT(_NOR(_NOT(A()), _NOT(B()))), _NAND(A(), B()));
+        addBidirectionalRule("NAND_to_NOT_NOR", _NAND(A(), B()), _NOT(_NOR(_NOT(A()), _NOT(B()))));
 
         // =======================================================
         // NOR 閘的替換規則
@@ -344,22 +330,18 @@ public:
         {
             // 建立 DAG：inner 節點被最外層的 NAND 使用了兩次 (Fanout = 2)
             auto inner = _NAND(_NAND(A(), A()), _NAND(B(), B()));
-            rules.emplace_back("NOR_to_NAND_DAG", _NOR(A(), B()), _NAND(inner, inner));
-            rules.emplace_back("NAND_DAG_to_NOR", _NAND(inner, inner), _NOR(A(), B()));
+            addBidirectionalRule("NOR_to_NAND_DAG", _NOR(A(), B()), _NAND(inner, inner));
         }
 
         // --- 用 2 種閘 ---
         // 用 {NOT, OR}：NOT (A OR B)
-        rules.emplace_back("NOR_to_NOT_OR",   _NOR(A(), B()), _NOT(_OR(A(), B())));
-        rules.emplace_back("NOT_OR_to_NOR",   _NOT(_OR(A(), B())), _NOR(A(), B()));
+        addBidirectionalRule("NOR_to_NOT_OR",   _NOR(A(), B()), _NOT(_OR(A(), B())));
         
         // 用 {NOT, AND}：(NOT A) AND (NOT B) (迪摩根定律)
-        rules.emplace_back("NOR_to_NOT_AND",  _NOR(A(), B()), _AND(_NOT(A()), _NOT(B())));
-        rules.emplace_back("NOT_AND_to_NOR",  _AND(_NOT(A()), _NOT(B())), _NOR(A(), B()));
+        addBidirectionalRule("NOR_to_NOT_AND",  _NOR(A(), B()), _AND(_NOT(A()), _NOT(B())));
         
         // 用 {NOT, NAND}：NOT ((NOT A) NAND (NOT B))
-        rules.emplace_back("NOR_to_NOT_NAND", _NOR(A(), B()), _NOT(_NAND(_NOT(A()), _NOT(B()))));
-        rules.emplace_back("NOT_NAND_to_NOR", _NOT(_NAND(_NOT(A()), _NOT(B()))), _NOR(A(), B()));
+        addBidirectionalRule("NOR_to_NOT_NAND", _NOR(A(), B()), _NOT(_NAND(_NOT(A()), _NOT(B()))));
 
         // =======================================================
         // XOR 閘的替換規則
@@ -369,27 +351,21 @@ public:
         {
             // 建立 DAG：nand_ab 被使用了 2 次 (Fanout = 2)
             auto nand_ab = _NAND(A(), B());
-            rules.emplace_back("XOR_to_NAND_DAG", _XOR(A(), B()), _NAND(_NAND(A(), nand_ab), _NAND(B(), nand_ab)));
-            rules.emplace_back("NAND_DAG_to_XOR", _NAND(_NAND(A(), nand_ab), _NAND(B(), nand_ab)), _XOR(A(), B()));
+            addBidirectionalRule("XOR_to_NAND_DAG", _XOR(A(), B()), _NAND(_NAND(A(), nand_ab), _NAND(B(), nand_ab)));
         }
         
         // 用 NOR: (A NOR B) NOR ((A NOR A) NOR (B NOR B))
-        rules.emplace_back("XOR_to_NOR_Tree", _XOR(A(), B()), _NOR(_NOR(A(), B()), _NOR(_NOR(A(), A()), _NOR(B(), B()))));
-        rules.emplace_back("NOR_Tree_to_XOR", _NOR(_NOR(A(), B()), _NOR(_NOR(A(), A()), _NOR(B(), B()))), _XOR(A(), B()));
+        addBidirectionalRule("XOR_to_NOR_Tree", _XOR(A(), B()), _NOR(_NOR(A(), B()), _NOR(_NOR(A(), A()), _NOR(B(), B()))));
 
         // --- 用 2 種閘 ---
         // 用 {NOT, XNOR}: NOT (A XNOR B)
-        rules.emplace_back("XOR_to_NOT_XNOR", _XOR(A(), B()), _NOT(_XNOR(A(), B())));
-        rules.emplace_back("NOT_XNOR_to_XOR", _NOT(_XNOR(A(), B())), _XOR(A(), B()));
+        addBidirectionalRule("XOR_to_NOT_XNOR", _XOR(A(), B()), _NOT(_XNOR(A(), B())));
         
         // 用 {NOT, AND}: NOT ((NOT A) AND (NOT B)) AND (NOT (A AND B))
-        rules.emplace_back("XOR_to_NOT_AND", _XOR(A(), B()), _AND(_NOT(_AND(_NOT(A()), _NOT(B()))), _NOT(_AND(A(), B()))));
-        rules.emplace_back("NOT_AND_to_XOR", _AND(_NOT(_AND(_NOT(A()), _NOT(B()))), _NOT(_AND(A(), B()))), _XOR(A(), B()));
+        addBidirectionalRule("XOR_to_NOT_AND", _XOR(A(), B()), _AND(_NOT(_AND(_NOT(A()), _NOT(B()))), _NOT(_AND(A(), B()))));
                              
         // 用 {NOT, OR}: (NOT ((NOT A) OR B)) OR (NOT (A OR (NOT B)))
-        rules.emplace_back("XOR_to_NOT_OR", _XOR(A(), B()), _OR(_NOT(_OR(_NOT(A()), B())), _NOT(_OR(A(), _NOT(B())))));
-        rules.emplace_back("NOT_OR_to_XOR", _OR(_NOT(_OR(_NOT(A()), B())), _NOT(_OR(A(), _NOT(B())))), _XOR(A(), B()));
-
+        addBidirectionalRule("XOR_to_NOT_OR", _XOR(A(), B()), _OR(_NOT(_OR(_NOT(A()), B())), _NOT(_OR(A(), _NOT(B())))));
 
         // =======================================================
         // XNOR 閘的替換規則
@@ -399,32 +375,34 @@ public:
         {
             // 建立 DAG：nor_ab 被使用了 2 次 (Fanout = 2)
             auto nor_ab = _NOR(A(), B());
-            rules.emplace_back("XNOR_to_NOR_DAG", _XNOR(A(), B()), _NOR(_NOR(A(), nor_ab), _NOR(B(), nor_ab)));
-            rules.emplace_back("NOR_DAG_to_XNOR", _NOR(_NOR(A(), nor_ab), _NOR(B(), nor_ab)), _XNOR(A(), B()));
+            addBidirectionalRule("XNOR_to_NOR_DAG", _XNOR(A(), B()), _NOR(_NOR(A(), nor_ab), _NOR(B(), nor_ab)));
         }
         
         // 用 NAND: (A NAND B) NAND ((A NAND A) NAND (B NAND B))
-        rules.emplace_back("XNOR_to_NAND_Tree", _XNOR(A(), B()), _NAND(_NAND(A(), B()), _NAND(_NAND(A(), A()), _NAND(B(), B()))));
-        rules.emplace_back("NAND_Tree_to_XNOR", _NAND(_NAND(A(), B()), _NAND(_NAND(A(), A()), _NAND(B(), B()))), _XNOR(A(), B()));
+        addBidirectionalRule("XNOR_to_NAND_Tree", _XNOR(A(), B()), _NAND(_NAND(A(), B()), _NAND(_NAND(A(), A()), _NAND(B(), B()))));
 
         // --- 用 2 種閘 ---
         // 用 {NOT, XOR}: NOT (A XOR B)
-        rules.emplace_back("XNOR_to_NOT_XOR", _XNOR(A(), B()), _NOT(_XOR(A(), B())));
-        rules.emplace_back("NOT_XOR_to_XNOR", _NOT(_XOR(A(), B())), _XNOR(A(), B()));
+        addBidirectionalRule("XNOR_to_NOT_XOR", _XNOR(A(), B()), _NOT(_XOR(A(), B())));
         
         // 用 {NOT, AND}: NOT ( NOT ((NOT A) AND (NOT B)) AND (NOT (A AND B)) )
-        rules.emplace_back("XNOR_to_NOT_AND", _XNOR(A(), B()), _NOT(_AND(_NOT(_AND(_NOT(A()), _NOT(B()))), _NOT(_AND(A(), B())))));
-        rules.emplace_back("NOT_AND_to_XNOR", _NOT(_AND(_NOT(_AND(_NOT(A()), _NOT(B()))), _NOT(_AND(A(), B())))), _XNOR(A(), B()));
+        addBidirectionalRule("XNOR_to_NOT_AND", _XNOR(A(), B()), _NOT(_AND(_NOT(_AND(_NOT(A()), _NOT(B()))), _NOT(_AND(A(), B())))));
                              
         // 用 {NOT, OR}: NOT ( (NOT (A OR (NOT B))) OR (NOT ((NOT A) OR B)) )
-        rules.emplace_back("XNOR_to_NOT_OR", _XNOR(A(), B()), _NOT(_OR(_NOT(_OR(A(), _NOT(B()))), _NOT(_OR(_NOT(A()), B())))));
-        rules.emplace_back("NOT_OR_to_XNOR", _NOT(_OR(_NOT(_OR(A(), _NOT(B()))), _NOT(_OR(_NOT(A()), B())))), _XNOR(A(), B()));
+        addBidirectionalRule("XNOR_to_NOT_OR", _XNOR(A(), B()), _NOT(_OR(_NOT(_OR(A(), _NOT(B()))), _NOT(_OR(_NOT(A()), B())))));
     }
 
-    // 輔助函式：將 NodeType 對應回 Input Vector 的 Index (0, 1, 2...)
-    int getLeafIndex(NodeType type) const;
-    // 輔助函式：根據 Input Index 產生對應的 LEAF 節點 (A=0, B=1, C=2...)
-    std::shared_ptr<PatternNode> createLeafNode(int index) const;
+    // 輔助函式：走訪 PatternNode ，並計算計算最大輸入數
+    int countPrimaryInputs(const std::shared_ptr<PatternNode>& root) const;
+
+    // 輔助函式：走訪 PatternNode ，並計算使用到的gate的數量
+    std::pair<std::map<GateType, int>, int> countGates(const std::shared_ptr<PatternNode>& root) const;
+
+    // 輔助函式：計算邏輯閘的關鍵路徑層數
+    int calculateDepth(const std::shared_ptr<PatternNode>& node) const;
+
+    // 輔助函式：真值表雜湊編碼
+    std::string generateTruthTableHash(const std::vector<bool>& truthTable) const;
 
     // 輔助函式：用來單獨檢查「某一側 (LHS 或 RHS)」是否符合給定的數量限制
     bool checkSideConstraints(const std::map<GateType, int>& ruleCounts, const std::map<GateType, int>& constraints) const;
@@ -432,7 +410,8 @@ public:
     // 輔助函式：註冊雙向規則 (Bidirectional Rule Registration)
     void addBidirectionalRule(const std::string& baseName, 
                              std::shared_ptr<PatternNode> patternA, 
-                             std::shared_ptr<PatternNode> patternB);
+                             std::shared_ptr<PatternNode> patternB,
+                             RuleSource source = RuleSource::STANDARD_LIBRARY);
 
     // 檢查某個 Rule 的「左邊與右邊」是否都滿足使用者的數量約束
     bool isRuleSatisfyingConstraints(const TechMapRule& rule, 
@@ -465,11 +444,6 @@ public:
                             TechMapReport& report, 
                             bool verbose);
 
-    // targetConstraints  : 使用者想要「拔除/替換掉」的 Gate 類型與數量限制
-    // allowedConstraints : 使用者允許「新增/使用」的 Gate 類型與數量限制
-    // scopeGates         : 作用範圍 (Scope)。若提供，則僅對名單內的 Gate 進行操作；若為 nullptr 則掃描全電路。
-    // verbose            : 是否輸出詳細的替換 Log
-    // 回傳值             : TechMapReport (包含變更狀態、增刪數量統計與最終快照)
     // 底層的實作引擎
     TechMapReport mapTechnologyCore(Netlist& netlist, 
                                 const std::map<GateType, int>& targetConstraints, 
@@ -487,6 +461,13 @@ public:
                                        const std::map<GateType, int>& allowedConstraints, 
                                        const ConeResult& targetCone = ConeResult(), 
                                        bool verbose = false);
+
+    // 精確規則應用引擎，繞過 mapTechnologyCore 的查表與約束過濾機制
+    TechMapReport applySpecificRule(Netlist& netlist, 
+                                    const TechMapRule& rule, 
+                                    TargetScope scope, 
+                                    const std::string& name, 
+                                    bool verbose);
 
     // 根據給定的 Gate 組成，計算最大可能的輸入腳位數 (N_max)
     int calculateMaxInputs(const std::map<GateType, int>& gateCounts) const;
@@ -530,10 +511,58 @@ public:
                                     TechMapReport& finalReport, 
                                     bool verbose);
 
-    //--------------------------------------------------------------------------------------------------------
-
     // 輔助函式：自動過濾不需要的 Gate，並呼叫轉換引擎
-    TechMapReport convertToBasis(Netlist& netlist, const std::vector<GateType>& allowedTypes, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);
+    TechMapReport convertToBasis(Netlist& netlist, 
+                                 const std::vector<GateType>& allowedTypes, 
+                                 TargetScope scope = TargetScope::WHOLE_NETLIST, 
+                                 const std::string& name = "", 
+                                 bool verbose = false);
+
+    // 輔助函式：產生所有積木組合 (重複組合)
+    void generateCombosRec(const std::vector<GateType>& lib, 
+                           int k, 
+                           int startIdx, 
+                           std::map<GateType, int>& current, 
+                           std::vector<std::map<GateType, int>>& result) const;
+
+    // 輔助函式：尋找絕對最小面積的拓樸
+    std::shared_ptr<PatternNode> findMinimumAreaPattern(const std::vector<bool>& truthTable, 
+                                                        int N, 
+                                                        int currentArea, 
+                                                        TechMapReport& report, 
+                                                        bool verbose);
+
+    // 輔助函式：遞迴生成合法的 Fence (層級分配)
+    // remaining_nodes: 剩下還有幾顆閘可以分配
+    // remaining_levels: 剩下還有幾層需要分配
+    // current_fence: 遞迴過程中暫存的分配狀態
+    // result: 收集所有合法分配的容器
+    void generateFencesRec(int remaining_nodes, 
+                           int remaining_levels, 
+                           std::vector<int>& current_fence, 
+                           std::vector<std::vector<int>>& result) const;
+
+    // 輔助函式：給定總閘數 k 與 目標深度 D，回傳所有合法的形狀
+    std::vector<std::vector<int>> generateValidFences(int k, int D) const;
+
+    // 精確合成引擎 (加入 Fence 深度約束)
+    bool synthesizeFromTruthTableWithFence(const std::vector<bool>& targetTruthTable, 
+                                           int N, 
+                                           const std::map<GateType, int>& allowedConstraints, 
+                                           const std::vector<int>& fenceShape, 
+                                           TechMapReport& report, 
+                                           bool verbose);
+
+    // 輔助函式：尋找絕對最小深度的拓樸
+    std::shared_ptr<PatternNode> findMinimumDepthPattern(const std::vector<bool>& truthTable, 
+                                                         int N, 
+                                                         int currentDepth, 
+                                                         int currentArea, 
+                                                         TechMapReport& report, 
+                                                         bool verbose,
+                                                         int maxAreaOverhead);
+
+    //----------------------------------------------------------------------------------------------------------------------------------------------------
 
     // 如果不傳入後兩個參數，預設就是執行 WHOLE_NETLIST 的轉換
     // 基礎網路轉換 (AIG 相關)
@@ -562,12 +591,40 @@ public:
     // 轉為 {XNOR, OR}
     TechMapReport convertToXnorOr(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);
         
-    // 提供給使用者的萬用任意修改 API
-    // 預設對整個電路 (WHOLE_NETLIST) 進行操作，此時 name 不需填寫
+    // 自訂規則映射引擎 (Interactive Custom Technology Mapping)
+    // 此函式允許使用者透過指定一個替換規則中的「欲拔除的積木 (Target)」與「欲生成的積木 (Allowed)」的數量限制
+    // 在電路上進行子圖同構掃描 (Subgraph Matching) 與結構替換，一次只會進行一個規則的替換。
+    // 若內建查找表 (LUT) 中無符合的規則，會自動觸發 SAT 引擎進行等價拓樸的學習，會學習多個規則，但是只會套用一個規則至電路。
+    // netlist            : 要進行掃描與結構替換的實體電路網表 (Netlist)
+    // targetConstraints  : 替換條件 (LHS) - 使用者想要「拔除/尋找」的 Gate 類型與數量限制 ( -1 為無限制)
+    // allowedConstraints : 替換條件 (RHS) - 使用者允許「新增/替換成」的 Gate 類型與數量限制 ( -1 無限制)
+    // targetConstraints 與 allowedConstraints 中必須至少有一個 Gate 的類型大於 1
+    // scope              : 圖形匹配的掃描範圍 (例如 WHOLE_NETLIST 掃描全圖，或 GATE_FANIN 掃描特定邏輯錐)
+    // name               : 搭配 scope 使用的目標基準名稱 (例如特定的 Net 名稱或 Gate ID)
+    // verbose            : 是否印出詳細的匹配過程、SAT 學習日誌與替換報表 (true 為開啟)
+    // 回傳值             : TechMapReport (包含執行結果狀態、實際增減的邏輯閘數量統計與詳細訊息)
     TechMapReport customMapTechnology(Netlist& netlist, 
                                       const std::map<GateType, int>& targetConstraints, 
                                       const std::map<GateType, int>& allowedConstraints, 
                                       TargetScope scope, 
                                       const std::string& name,
                                       bool verbose);
+
+    // 全域電路優化引擎 (Pattern Optimization Engine)
+    // 針對給定的目標形狀 (LHS) 進行自動化的「面積」或「深度」化簡。
+    // netlist   : 要進行操作與替換的實體電路網表 (Netlist)
+    // lhsTarget : 欲進行化簡的目標局部電路形狀 (Abstract Syntax Tree, PatternNode 結構)
+    // goal      : 優化的目標方向。支援 OptimizationGoal::AREA (最小化閘數) 或 OptimizationGoal::DEPTH (層數)
+    // scope     : 圖形匹配與替換的掃描範圍 (例如 WHOLE_NETLIST 掃描全圖，或 GATE_FANIN 掃描特定錐體)
+    // name      : 搭配 scope 使用的目標名稱 (例如指定特定的 Net ID 或 Gate ID)
+    // verbose   : 是否印出詳細的推論過程與優化日誌 (true 為開啟)
+    // maxAreaOverhead : 針對深度優化時，容許的額外面積極限 (預設為 0，代表由引擎動態決定)
+    // 回傳值    : TechMapReport (包含優化執行的結果狀態、增減的邏輯閘數量以及詳細訊息)
+    TechMapReport optimizePattern(Netlist& netlist,
+                                  std::shared_ptr<PatternNode> lhsTarget,
+                                  OptimizationGoal goal,
+                                  TargetScope scope, 
+                                  const std::string& name, 
+                                  bool verbose,
+                                  int maxAreaOverhead = 0);
 };
