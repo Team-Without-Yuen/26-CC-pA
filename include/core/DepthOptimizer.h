@@ -19,7 +19,7 @@ struct DepthOptimizerConfig {
     int targetDepthPerPath = -1;
 
     // 策略開關 (Strategy Toggles)
-    bool enableBufferBypass = true;
+    bool enableBufferAndNotBypass = true;
     bool enableDeMorganPushing = true;
     bool enableConeResynthesis = true;
 };
@@ -45,34 +45,15 @@ public:
     // 針對單一 Candidate 進行深度縮減
     OptimizationResult reduceDepth(Netlist& netlist, const OptimizationCandidate& candidate);
 
+    // 不應該在最一開始就把所有 Candidate 的 Cone 和 Path 都死死地算好，若有電路重構發生，將無法只用unknow來判斷新舊
     // 針對多個 Candidates 進行批次深度縮減
     // 可傳入由 Netlist::findOptimizationCandidatesExceedingDepth() 找出的目標清單
-    std::vector<OptimizationResult> optimizeDesign(Netlist& netlist, const std::vector<OptimizationCandidate>& candidates);
+    // std::vector<OptimizationResult> optimizeDesign(Netlist& netlist, const std::vector<OptimizationCandidate>& candidates);
 
 private:
-    DepthOptimizerConfig m_config;
-    // -------------------------------------------------------------------------
-    // 底層縮減策略 (Reduction Strategies)
-    // 這些策略由 reduceDepth 內部依序呼叫，嘗試不同的邏輯轉換手法
-    // -------------------------------------------------------------------------
+    DepthOptimizerConfig config; // 用來儲存引擎的設定值
 
-    // 策略 1: Buffer Bypass / Cleanup
-    // 檢查 Critical Path 上是否有不必要的 BUF 閘可以被 Bypass，這是最便宜且縮減深度的改法
-    bool tryBufferBypass(Netlist& netlist, const OptimizationCandidate& candidate, OptimizationResult& result);
-
-    // 策略 2: DeMorgan Pushing (NOT 閘推移)
-    // 將 NOT 閘推過 AND/OR 等閘，試圖消除冗餘的層級
-    bool tryDeMorganPushing(Netlist& netlist, const OptimizationCandidate& candidate, OptimizationResult& result);
-
-    // 策略 3: Cone Resynthesis / Technology Mapping
-    // 針對 Critical Path 所屬的 Fanin Cone，呼叫 TechMapper 進行局部的重新合成
-    bool tryConeResynthesis(Netlist& netlist, const OptimizationCandidate& candidate, OptimizationResult& result);
-
-    // -------------------------------------------------------------------------
-    // 輔助函式 (Helper Methods)
-    // -------------------------------------------------------------------------
-    
-    // 用於評估單一策略執行後的成果，並決定是否要 Rollback
-    // 如果修改有效且面積成本合理，回傳 true 接受修改；否則 Rollback 回傳 false
-    bool evaluateAndCommit(Netlist& netlist, const Netlist& backup, int oldDepth, OptimizationResult& result);
+    // 輔助函式：針對特定的 Fanin Cone 執行 Buffer 與 連續 NOT 的消除
+    // 回傳值：是否有對電路進行任何修改
+    bool applyBufferAndNotBypass(Netlist& netlist, const OptimizationCandidate& candidate);
 };

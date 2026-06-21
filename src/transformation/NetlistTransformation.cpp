@@ -247,6 +247,30 @@ bool Netlist::removeGate(int gateId) {
     return true;
 }
 
+// 移除舊的 PO 中的一個 bit (oldNetId)，改為使用 newNetId
+bool Netlist::swapPrimaryOutputNet(int oldNetId, int newNetId) {
+    if (!isValidNetId(oldNetId) || !isValidNetId(newNetId)) {
+        return false;
+    }
+
+    // 1. 更新底層 Net 的屬性標記
+    nets[oldNetId].isPO = false;
+    nets[newNetId].isPO = true;
+
+    // 2. 尋找並更新 primaryOutputs 列表中的對應 ID
+    // 這樣寫可以完美支援 Bus，確保替換後該 bit 依然在正確的匯流排位置上
+    for (auto& port : primaryOutputs) {
+        for (size_t i = 0; i < port.netIds.size(); ++i) {
+            if (port.netIds[i] == oldNetId) {
+                port.netIds[i] = newNetId;
+                return true; // 替換成功，安全下班
+            }
+        }
+    }
+
+    return false; //  oldNetId 根本不在 PO 列表裡
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  insertBuffersForFanout
 //  對 fanout > maxFanout 的 net 插入 buffer，採用 Cascaded Buffer 結構

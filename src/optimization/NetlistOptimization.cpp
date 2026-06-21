@@ -434,23 +434,37 @@ Netlist Netlist::cloneForRollback() const {
 bool Netlist::replaceAllLoadsOfNet(int oldNetId, int newNetId) {
     if (oldNetId < 0 || oldNetId >= (int)nets.size()) return false;
     if (newNetId < 0 || newNetId >= (int)nets.size()) return false;
-    if (oldNetId == newNetId) return false;
+    if (oldNetId == newNetId) return true; // 已經是同一個，直接成功
 
     Net& oldNet = nets[oldNetId];
     Net& newNet = nets[newNetId];
 
-    if (oldNet.loadGateIds.empty()) return false;
+    if (oldNet.loadGateIds.empty()) return true; // 沒東西要搬，視為成功
 
+    // 1. 把所有 Load Gate 內部的腳位接線換掉，並把 ID 丟給 newNet
     for (int lgid : oldNet.loadGateIds) {
         if (lgid < 0 || lgid >= (int)gates.size()) continue;
+        
         Gate& g = gates[lgid];
-        for (int k = 0; k < (int)g.inputNetIds.size(); k++)
-            if (g.inputNetIds[k] == oldNetId)
+        for (int k = 0; k < (int)g.inputNetIds.size(); k++) {
+            if (g.inputNetIds[k] == oldNetId) {
                 g.inputNetIds[k] = newNetId;
+            }
+        }
+        
+        // 先無腦加進去，等一下一次性清理
         newNet.loadGateIds.push_back(lgid);
     }
 
+    // 2. 清除舊 Net 的負載
     oldNet.loadGateIds.clear();
+
+    // 3. 確保 newNet 的 loadGateIds 裡面沒有重複的 Gate ID
+    // 這樣可以防止同一個 Gate 接了多個相同的 Net 時，產生重複的記錄
+    std::sort(newNet.loadGateIds.begin(), newNet.loadGateIds.end());
+    auto last = std::unique(newNet.loadGateIds.begin(), newNet.loadGateIds.end());
+    newNet.loadGateIds.erase(last, newNet.loadGateIds.end());
+
     return true;
 }
 
