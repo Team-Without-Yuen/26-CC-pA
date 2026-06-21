@@ -174,7 +174,7 @@ bool TechMapper::checkSideConstraints(const std::map<GateType, int>& ruleCounts,
 void TechMapper::addBidirectionalRule(const std::string& baseName, 
                                       std::shared_ptr<PatternNode> patternA, 
                                       std::shared_ptr<PatternNode> patternB,
-                                      RuleSource source = RuleSource::STANDARD_LIBRARY) { // 預設為標準庫
+                                      RuleSource source) { // 預設為標準庫
     // 防呆：確保兩棵樹都存在
     if (!patternA || !patternB) return;
 
@@ -240,27 +240,23 @@ bool TechMapper::isCommutative(GateType type) const {
 bool TechMapper::matchNet(Netlist& netlist, std::shared_ptr<PatternNode> pNode, int physNetId, MatchContext& ctx) {
     if (physNetId == -1) return false;
 
-    // 處理 Leaf 節點 (動態支援任意數量的 LEAF)
-    // 只要不是 GATE 也不是 CONST，那就是 LEAF (如 LEAF_A, LEAF_B, LEAF_C)
-    if (pNode->nodeType != NodeType::GATE && 
-        pNode->nodeType != NodeType::CONST_1 && 
-        pNode->nodeType != NodeType::CONST_0) 
-    {
-        if (!ctx.isLeafBound(pNode->nodeType)) {
-            // 第一次遇到這個 LEAF 類型，把物理 Net ID 綁定上去
-            ctx.boundLeaves[pNode->nodeType] = physNetId; 
-            return true; 
-        }
-        // 之後遇到同一個 LEAF，物理 Net ID 必須是同一條線
-        return ctx.getBoundNet(pNode->nodeType) == physNetId; 
-    }
-
     // 處理常數比對
     if (pNode->nodeType == NodeType::CONST_1 || pNode->nodeType == NodeType::CONST_0) {
         const Net& net = netlist.getNet(physNetId);
         if (!net.isConst) return false;
         std::string expectedName = (pNode->nodeType == NodeType::CONST_1) ? "1'b1" : "1'b0";
         return net.name == expectedName;
+    }
+
+    // 處理 Primary Input (LEAF) 節點，使用 piIndex 作為唯一識別
+    if (pNode->nodeType == NodeType::PI) {
+        if (ctx.boundLeaves.find(pNode->piIndex) == ctx.boundLeaves.end()) {
+            // 第一次遇到這個 PI，把物理 Net ID 綁定上去
+            ctx.boundLeaves[pNode->piIndex] = physNetId; 
+            return true; 
+        }
+        // 之後遇到同一個 PI (例如 A() 出現第二次)，物理 Net ID 必須是同一條線
+        return ctx.boundLeaves[pNode->piIndex] == physNetId; 
     }
 
     // 處理內部 Gate 節點
@@ -402,13 +398,10 @@ void TechMapper::applyRule(Netlist& netlist, const MatchContext& ctx, int rootGa
         int outNetId = -1;
 
         // 情況 A：遇到葉節點 (LEAF_A, LEAF_B, LEAF_C...)
-        if (node->nodeType != NodeType::GATE && 
-            node->nodeType != NodeType::CONST_1 && 
-            node->nodeType != NodeType::CONST_0) 
-        {
-            // 直接從 ctx 中取出當初 Match 到的真實物理線路 ID
-            outNetId = ctx.getBoundNet(node->nodeType);
-        } 
+        if (node->nodeType == NodeType::PI) {
+            // 這裡必須傳入 piIndex 去查表！
+            outNetId = ctx.getBoundNet(node->piIndex);
+        }
         // 情況 B：遇到常數節點
         else if (node->nodeType == NodeType::CONST_1 || node->nodeType == NodeType::CONST_0) {
             std::string constName = (node->nodeType == NodeType::CONST_1) ? "1'b1" : "1'b0";
@@ -518,7 +511,10 @@ bool TechMapper::executeMappingPass(Netlist& netlist,
                         isChanged = true;
                         actualChangesMade = true;
                         break; // 已經成功套用了一條規則並改變了圖形，跳出 rule 迴圈，換下一個 Root 檢查
-                    }
+                    } /*else {
+                        if (verbose) std::cout << "[Debug] Matched shape at Gate " << rootId 
+                                               << ", but isValidSubgraph REJECTED it!\n";
+                    }*/
                 }
             }
             // 如果圖形已變更，強烈建議立刻中斷 candidates 的遍歷，重新回到 do-while 頂部收集最新名單。
@@ -1653,6 +1649,391 @@ std::shared_ptr<PatternNode> TechMapper::findMinimumAreaPattern(const std::vecto
     return nullptr;
 }
 
+// 輔助函式：遞迴生成合法的 Fence (層級分配)
+// remaining_nodes: 剩下還有幾顆閘可以分配
+// remaining_levels: 剩下還有幾層需要分配
+// current_fence: 遞迴過程中暫存的分配狀態
+// result: 收集所有合法分配的容器
+void TechMapper::generateFencesRec(int remaining_nodes, 
+                                   int remaining_levels, 
+                                   std::vector<int>& current_fence, 
+                                   std::vector<std::vector<int>>& result) const {
+    // Base Case: 已經到了最後一層 (Level D)
+    if (remaining_levels == 1) {
+        // 如果是處理單一輸出的邏輯錐，最後一層必定只能有一顆 Root Gate。
+        // 若你的系統支援多重輸出 (MIMO) 替換，可以將此 if 條件移除，直接 push_back(remaining_nodes)。
+        if (remaining_nodes == 1) { 
+            current_fence.push_back(remaining_nodes);
+            result.push_back(current_fence);
+            current_fence.pop_back(); // 回溯 (Backtrack)
+        }
+        return;
+    }
+
+    // Recursive Step: 決定當前這一層要放幾顆閘
+    // 為了保證後面的每一層「至少」都能分到 1 顆閘，這一層最多只能拿走 (總數 - 剩餘層數 + 1)
+    int max_nodes_for_this_level = remaining_nodes - remaining_levels + 1;
+
+    for (int i = 1; i <= max_nodes_for_this_level; ++i) {
+        current_fence.push_back(i); // 將 i 顆閘分配給當前層
+        
+        // 進入下一層遞迴
+        generateFencesRec(remaining_nodes - i, remaining_levels - 1, current_fence, result);
+        
+        current_fence.pop_back(); // 回溯 (Backtrack)，嘗試下一個數字
+    }
+}
+
+// 輔助函式：給定總閘數 k 與 目標深度 D，回傳所有合法的形狀
+std::vector<std::vector<int>> TechMapper::generateValidFences(int k, int D) const {
+    std::vector<std::vector<int>> all_fences;
+    std::vector<int> current_fence;
+
+    // 防呆機制：如果閘的數量比層數還少，根本無法排成 D 層
+    if (k < D) return all_fences;
+
+    // 1. 產生所有數學上合法的分割
+    generateFencesRec(k, D, current_fence, all_fences);
+
+    // 2. 過濾掉違反「最大 Fan-in 限制」的物理不可能形狀
+    std::vector<std::vector<int>> valid_fences;
+    for (const auto& fence : all_fences) {
+        bool isValid = true;
+        
+        // 從最深層 (Root) 往回推算，檢查每一層是否超過了容許的最大閘數
+        // (假設我們的系統允許跨層連線 Bypass，所以我們用最寬鬆的二元樹極限：2^(D-L))
+        int max_allowed_in_this_level = 1; // Level D (Root) 只能有 1 顆
+        
+        // fence 的 index: 0 是 Level 1, size-1 是 Level D
+        for (int i = fence.size() - 1; i >= 0; --i) {
+            if (fence[i] > max_allowed_in_this_level) {
+                isValid = false;
+                break; // 違反物理極限，這個形狀不可能接得起來
+            }
+            // 往上一層推，最多可以容納的閘數是當前層的 2 倍 (因為 2-input)
+            max_allowed_in_this_level *= 2; 
+        }
+
+        if (isValid) {
+            valid_fences.push_back(fence);
+        }
+    }
+
+    return valid_fences;
+}
+
+// 精確合成引擎 (加入 Fence 深度約束)
+bool TechMapper::synthesizeFromTruthTableWithFence(const std::vector<bool>& targetTruthTable, 
+                                                   int N, 
+                                                   const std::map<GateType, int>& allowedConstraints, 
+                                                   const std::vector<int>& fenceShape,
+                                                   TechMapReport& report, 
+                                                   bool verbose) {
+    // 展開積木庫
+    std::vector<GateType> baseGateArray;
+    for (const auto& pair : allowedConstraints) {
+        for (int i = 0; i < pair.second; ++i) baseGateArray.push_back(pair.first);
+    }
+    
+    int M = baseGateArray.size();
+    if (M == 0) return false;
+
+    // 防呆 : 確保 Fence 形狀加總的閘數等於積木總數 M
+    int shapeSum = 0;
+    for (int count : fenceShape) shapeSum += count;
+    if (shapeSum != M) {
+        if (verbose) std::cout << "[Error] Fence shape total gates does not match allowed constraints.\n";
+        return false;
+    }
+
+    size_t numRows = 1ULL << N;
+    if (targetTruthTable.size() != numRows) return false;
+
+    std::sort(baseGateArray.begin(), baseGateArray.end());
+
+    TimeLimitTerminator terminator(5.0); 
+
+    // 預先計算每一顆 Gate 合法的最大輸入來源索引 (Max Source Index)
+    // 概念：位於第 L 層的 Gate，其輸入只能來自 PI (索引 0~N-1) 或位於第 0~(L-1) 層的 Gate。
+    std::vector<int> gate_to_max_source(M);
+    int current_gate_idx = 0;
+    for (size_t lvl = 0; lvl < fenceShape.size(); ++lvl) {
+        int gates_in_level = fenceShape[lvl];
+        for (int i = 0; i < gates_in_level; ++i) {
+            // max_source = N (所有的 PI) + current_gate_idx (前面所有層級累積的 Gate 總數)
+            // 這樣就嚴格禁止了同層互接 (避免 Cyclic) 與同層連線 (強制 Depth)
+            gate_to_max_source[current_gate_idx + i] = N + current_gate_idx;
+        }
+        current_gate_idx += gates_in_level;
+    }
+
+    // 窮舉邏輯閘的所有拓樸排列
+    do {
+        CaDiCaL::Solver solver;
+        solver.connect_terminator(&terminator);
+
+        const std::vector<GateType>& gateArray = baseGateArray;
+
+        int var_counter = 1;
+        std::vector<std::vector<int>> F(N + M, std::vector<int>(numRows));
+        for (int n = 0; n < N + M; ++n)
+            for (size_t r = 0; r < numRows; ++r) F[n][r] = var_counter++;
+
+        std::vector<std::vector<std::vector<int>>> C(M);
+        std::vector<std::vector<std::vector<int>>> P(M);
+
+        for (int g = 0; g < M; ++g) {
+            GateType type = gateArray[g];
+            int num_pins = (type == GateType::NOT || type == GateType::BUF) ? 1 : 2;
+            C[g].resize(num_pins); 
+            P[g].resize(num_pins);
+            
+            for (int p = 0; p < num_pins; ++p) {
+                // 根據 Fence 計算的限制，套用合法的 Source 數量
+                int num_sources = gate_to_max_source[g]; 
+                
+                C[g][p].resize(num_sources);
+                for (int s = 0; s < num_sources; ++s) C[g][p][s] = var_counter++;
+                
+                P[g][p].resize(numRows);
+                for (size_t r = 0; r < numRows; ++r) P[g][p][r] = var_counter++;
+            }
+        }
+
+        solver.resize(var_counter - 1);
+
+        // --- Constraint 1: Initialize Primary Inputs ---
+        for (int i = 0; i < N; ++i) {
+            for (size_t r = 0; r < numRows; ++r) {
+                bool bitValue = (r & (1ULL << i)) != 0;
+                solver.add(bitValue ? F[i][r] : -F[i][r]);
+                solver.add(0);
+            }
+        }
+
+        // --- Constraint 2: Connectivity (Exactly one source per pin) ---
+        for (int g = 0; g < M; ++g) {
+            for (int p = 0; p < C[g].size(); ++p) {
+                for (int s = 0; s < C[g][p].size(); ++s) solver.add(C[g][p][s]);
+                solver.add(0);
+                
+                for (int s1 = 0; s1 < C[g][p].size(); ++s1) {
+                    for (int s2 = s1 + 1; s2 < C[g][p].size(); ++s2) {
+                        solver.add(-C[g][p][s1]); solver.add(-C[g][p][s2]); solver.add(0);
+                    }
+                }
+            }
+            
+            // Commutativity Symmetry Breaking
+            if (C[g].size() == 2) {
+                GateType t = gateArray[g];
+                if (t == GateType::AND || t == GateType::OR || t == GateType::NAND || 
+                    t == GateType::NOR || t == GateType::XOR || t == GateType::XNOR) {
+                    for (int s1 = 0; s1 < C[g][0].size(); ++s1) {
+                        for (int s2 = 0; s2 < s1; ++s2) {
+                            solver.add(-C[g][0][s1]); solver.add(-C[g][1][s2]); solver.add(0);
+                        }
+                    }
+                }
+            }
+        }
+
+        // --- Constraint 3: Signal Propagation ---
+        for (int g = 0; g < M; ++g) {
+            int num_pins = C[g].size();
+            for (size_t r = 0; r < numRows; ++r) {
+                for (int p = 0; p < num_pins; ++p) {
+                    for (int s = 0; s < C[g][p].size(); ++s) {
+                        solver.add(-C[g][p][s]); solver.add(-P[g][p][r]); solver.add(F[s][r]); solver.add(0);
+                        solver.add(-C[g][p][s]); solver.add(P[g][p][r]); solver.add(-F[s][r]); solver.add(0);
+                    }
+                }
+                
+                int out = F[N + g][r];
+                int a = P[g][0][r];
+                int b = (num_pins == 2) ? P[g][1][r] : 0; 
+                addGateSemantics(solver, gateArray[g], a, b, out);
+            }
+        }
+
+        // --- Constraint 4: Target Output ---
+        for (size_t r = 0; r < numRows; ++r) {
+            solver.add(targetTruthTable[r] ? F[N + M - 1][r] : -F[N + M - 1][r]);
+            solver.add(0);
+        }
+
+        // --- Constraint 5: No Dangling Gates (無懸空閘) ---
+        // 確保前面的每一顆 Gate (除了最後輸出的那顆以外) 都必定被後面的層級接走。
+        // 如果有 Gate 沒被接走，代表存在更小面積的等價電路，這不符合 Exact Synthesis 的精髓。
+        for (int s = 0; s < M - 1; ++s) {
+            int source_idx = N + s; // 該 Gate 的實體索引
+            for (int g = s + 1; g < M; ++g) {
+                // 如果後面的 Gate g 在合法的層級範圍內可以吃到 source_idx
+                if (source_idx < gate_to_max_source[g]) {
+                    for (int p = 0; p < C[g].size(); ++p) {
+                        solver.add(C[g][p][source_idx]);
+                    }
+                }
+            }
+            solver.add(0); // 至少有一條連線必須存在
+        }
+
+        // ================= Solve =================
+        int result = solver.solve();
+
+        if (result == 10) { // SAT
+            if (verbose) std::cout << "[Info] Exact synthesis found a valid topology for this Fence!\n";
+            
+            report.status = TechMapStatus::SUCCESS;
+            report.message = "Success: Exact synthesis found a valid topology.";
+            report.synthesizedTopology.clear();
+            
+            for (int g = 0; g < M; ++g) {
+                SynthesizedGate synGate;
+                synGate.type = gateArray[g];
+                for (int p = 0; p < C[g].size(); ++p) {
+                    for (int s = 0; s < C[g][p].size(); ++s) {
+                        if (solver.val(C[g][p][s]) > 0) {
+                            synGate.inputSourceIds.push_back(s);
+                            break; 
+                        }
+                    }
+                }
+                report.synthesizedTopology.push_back(synGate);
+            }
+            return true;
+        } 
+        else if (result == 0) { // TIMEOUT
+            report.status = TechMapStatus::ERROR_NOT_EQUIVALENT;
+            report.message = "Failed: Solver timed out.";
+            return false;
+        }
+
+    } while (std::next_permutation(baseGateArray.begin(), baseGateArray.end()));
+
+    if (verbose) std::cout << "[Failed] Mathematically impossible to synthesize the truth table with given Fence and constraints.\n";
+    report.status = TechMapStatus::ERROR_UNSAT;
+    report.message = "Failed (UNSAT).";
+    return false;
+}
+
+// 輔助函式：尋找絕對最小深度的拓樸
+std::shared_ptr<PatternNode> TechMapper::findMinimumDepthPattern(const std::vector<bool>& truthTable, 
+                                                                int N, 
+                                                                int currentDepth, 
+                                                                int currentArea, 
+                                                                TechMapReport& report, 
+                                                                bool verbose,
+                                                                int maxAreaOverhead) {
+    // 決定最大容許面積 (雙重防護機制)
+    int maxAllowedArea;
+    if (maxAreaOverhead > 0) {
+        // 尊重使用者的設定 (原本面積 + 容許的額外負擔)
+        maxAllowedArea = currentArea + maxAreaOverhead; 
+    } else {
+        // 如果使用者沒設定，使用智慧雙重防護：
+        // 1. 最多變兩倍大
+        // 2. 絕對物理極限 (限制在 12 顆以內，保護 SAT Solver 不當機)
+        maxAllowedArea = std::min(currentArea * 2, 12); 
+    }
+
+    if (verbose) {
+        std::cout << "  [Exact Synthesis] Searching for pattern with Depth < " << currentDepth 
+                  << " (Max Area limit: " << maxAllowedArea << ")...\n";
+    }
+
+    // 定義基礎積木庫
+    std::vector<GateType> baseLibrary = {
+        GateType::NAND, GateType::NOR, GateType::AND, GateType::OR, GateType::NOT, GateType::XOR, GateType::XNOR
+    };
+
+    // 外層迴圈：深度 D 從 1 開始，直到 currentDepth - 1
+    for (int D = 1; D < currentDepth; ++D) {
+        if (verbose) std::cout << "  [Exact Synthesis] Testing Depth = " << D << " levels...\n";
+
+        // 內層迴圈：面積 k 從 D (最少需要 D 顆) 到 maxAllowedArea
+        for (int k = D; k <= maxAllowedArea; ++k) {
+            
+            // 1. 產生所有 k 顆閘、D 層深度的合法 Fence 形狀
+            std::vector<std::vector<int>> fences = generateValidFences(k, D);
+            
+            // 如果這個數量無法產生合法的形狀，直接跳過
+            if (fences.empty()) continue;
+
+            // 2. 產生大小為 k 的所有積木組合
+            std::vector<std::map<GateType, int>> combinations;
+            std::map<GateType, int> currentCombo;
+            generateCombosRec(baseLibrary, k, 0, currentCombo, combinations);
+
+            if (verbose) {
+                std::cout << "    -> Area = " << k << " gates (Fences: " << fences.size() 
+                          << ", Combos: " << combinations.size() << ")\n";
+            }
+
+            // 3. 雙重遍歷：針對每一種形狀，測試每一種積木組合
+            for (size_t f_idx = 0; f_idx < fences.size(); ++f_idx) {
+                const auto& fenceShape = fences[f_idx];
+
+                for (size_t c_idx = 0; c_idx < combinations.size(); ++c_idx) {
+                    const auto& allowedConstraints = combinations[c_idx];
+                    TechMapReport stepReport;
+                    
+                    bool isSat = false;
+
+                    // 呼叫帶有 Fence 限制的 SAT 編碼器
+                    isSat = synthesizeFromTruthTableWithFence(truthTable, 
+                                                              N, 
+                                                              allowedConstraints, 
+                                                              fenceShape, 
+                                                              stepReport, 
+                                                              false); 
+
+                    // 判斷求解結果
+                    if (isSat && stepReport.status == TechMapStatus::SUCCESS) {
+                        if (verbose) {
+                            std::cout << "  [Exact Synthesis] SUCCESS! Found optimal topology with Depth " << D 
+                                      << " (Area: " << k << " gates).\n";
+                        }
+                        
+                        report.status = TechMapStatus::SUCCESS;
+                        report.message = "Minimum depth pattern found.";
+
+                        // 成功轉換為 PatternNode 樹並回傳
+                        return buildPatternFromTopology(N, stepReport.synthesizedTopology);
+                    } 
+                    else if (stepReport.status == TechMapStatus::ERROR_SIMULATION_FAILED || 
+                             stepReport.message.find("Timeout") != std::string::npos) {
+                        
+                        // 遇到 SAT Timeout，代表當前這個深度 (D) 加上這個面積 (k) 已經達計算極限
+                        if (verbose) {
+                            std::cout << "  [Exact Synthesis] Timeout at Depth = " << D << ", Area = " << k 
+                                      << " (Fence " << f_idx+1 << ", Combo " << c_idx+1 << "). Aborting Area scaling for this depth.\n";
+                        }
+                        
+                        // 放棄尋找當前深度 D，直接跳出 k 迴圈，前往挑戰下一個深度 D+1
+                        goto NEXT_DEPTH; 
+                    }
+                } // 結束 Combo 迴圈
+            } // 結束 Fence 迴圈
+        } // 結束 k 迴圈
+
+    NEXT_DEPTH:; // 配合 goto 的跳轉標籤，放在 D 迴圈的最底部
+    } // 結束 D 迴圈
+
+    // 如果迴圈跑完都找不到，代表 currentDepth 已經是數學上的極限
+    if (verbose) {
+        std::cout << "  [Exact Synthesis] Exhausted up to Depth = " << (currentDepth - 1) 
+                  << " (Max Area = " << maxAllowedArea << "). The original pattern is already depth-optimal.\n";
+    }
+    
+    report.status = TechMapStatus::ERROR_UNSAT;
+    report.message = "Original pattern is mathematically optimal in depth (or requires too much area overhead).";
+    
+    return nullptr;
+}
+
+//-----------------------------------------------------------------------------------------------------------------------------
+
 // 將整個 netlist 轉成 {AND, NOT} (AIG: And-Inverter Graph)
 TechMapReport TechMapper::convertToAndNot(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
     return convertToBasis(netlist, {GateType::AND, GateType::NOT}, scope, name, verbose);
@@ -1869,7 +2250,8 @@ TechMapReport TechMapper::optimizePattern(Netlist& netlist,
                                           OptimizationGoal goal,
                                           TargetScope scope, 
                                           const std::string& name, 
-                                          bool verbose) {
+                                          bool verbose,
+                                          int maxAreaOverhead) {
     TechMapReport finalReport;
 
     if (!lhsTarget) {
@@ -1962,10 +2344,9 @@ TechMapReport TechMapper::optimizePattern(Netlist& netlist,
         // 核心呼叫：尋找嚴格小於 bestCostSoFar 的結構
         if (goal == OptimizationGoal::AREA) {
             bestRhs = findMinimumAreaPattern(truthTable, N, bestCostSoFar, optReport, verbose);
-        } /*else {
-            bestRhs = findMinimumDepthPattern(truthTable, N, bestCostSoFar, optReport, verbose);
+        } else {
+            bestRhs = findMinimumDepthPattern(truthTable, N, bestCostSoFar, currentArea, optReport, verbose, maxAreaOverhead);
         }
-        */
 
         if (bestRhs && optReport.status == TechMapStatus::SUCCESS) {
             // SAT 成功找到了突破極限的解！
@@ -1978,7 +2359,6 @@ TechMapReport TechMapper::optimizePattern(Netlist& netlist,
             newRule.allowedCounts = rhsData.first;
             newRule.removedGateCount = lhsData.second;
             newRule.addedGateCount = rhsData.second;
-            rules.push_back(newRule);
             
             rules.push_back(newRule);
             bestRule = newRule;

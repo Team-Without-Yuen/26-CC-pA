@@ -10,70 +10,6 @@
 #include "include/io/VerilogWriter.h"
 
 // =====================================================================
-// 輔助函式：字串與 GateType 的互相轉換
-// =====================================================================
-GateType stringToGateType(std::string s) {
-    std::transform(s.begin(), s.end(), s.begin(), ::toupper);
-    if (s == "AND") return GateType::AND;
-    if (s == "OR") return GateType::OR;
-    if (s == "NAND") return GateType::NAND;
-    if (s == "NOR") return GateType::NOR;
-    if (s == "NOT") return GateType::NOT;
-    if (s == "BUF") return GateType::BUF;
-    if (s == "XOR") return GateType::XOR;
-    if (s == "XNOR") return GateType::XNOR;
-    return GateType::UNKNOWN;
-}
-
-std::string gateTypeToString(GateType type) {
-    switch (type) {
-        case GateType::AND: return "AND";
-        case GateType::OR: return "OR";
-        case GateType::NAND: return "NAND";
-        case GateType::NOR: return "NOR";
-        case GateType::NOT: return "NOT";
-        case GateType::BUF: return "BUF";
-        case GateType::XOR: return "XOR";
-        case GateType::XNOR: return "XNOR";
-        default: return "UNKNOWN";
-    }
-}
-
-// =====================================================================
-// 輔助函式：互動式建立 Constraints Map
-// =====================================================================
-void promptForConstraints(std::map<GateType, int>& constraints, const std::string& mapName) {
-    std::cout << "\n>>> Setting up [" << mapName << "] <<<\n";
-    std::cout << "Please enter Gate Type (e.g., AND, OR) and its Count (e.g., 1, or -1 for unlimited).\n";
-    std::cout << "Type 'DONE' when you are finished with this list.\n";
-    
-    while (true) {
-        std::string gateStr;
-        std::cout << "  Gate Type (or DONE): ";
-        std::cin >> gateStr;
-        
-        std::transform(gateStr.begin(), gateStr.end(), gateStr.begin(), ::toupper);
-        if (gateStr == "DONE") break;
-
-        GateType type = stringToGateType(gateStr);
-        if (type == GateType::UNKNOWN) {
-            std::cout << "  [Warning] Unknown gate type! Please try again.\n";
-            continue;
-        }
-
-        int count;
-        std::cout << "  Count for " << gateStr << ": ";
-        while (!(std::cin >> count)) { // 防呆：避免使用者輸入非數字字元導致無窮迴圈
-            std::cin.clear();
-            std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-            std::cout << "  [Error] Invalid number. Please enter an integer: ";
-        }
-        
-        constraints[type] = count;
-    }
-}
-
-// =====================================================================
 // 主程式 Main
 // =====================================================================
 int main(int argc, char* argv[]) {
@@ -112,74 +48,78 @@ int main(int argc, char* argv[]) {
     std::cout << "  -> Initial Wire Count : " << myCircuit.getNetCount() << "\n\n";
 
     // ==========================================
-    // Step 2: 執行 Technology Mapping (互動測試)
+    // Step 2: 執行 Technology Mapping (Optimize Pattern 測試)
     // ==========================================
-    std::cout << "[Step 2] Interactive Custom Technology Mapping" << std::endl;
-    
-    std::map<GateType, int> targetConstraints;
-    std::map<GateType, int> allowedConstraints;
-
-    // 1. 取得 Constraints
-    promptForConstraints(targetConstraints, "Target Constraints (Gates to Remove)");
-    promptForConstraints(allowedConstraints, "Allowed Constraints (Gates to Generate)");
-
-    // 2. 取得 Target Scope
-    std::cout << "\n>>> Select Target Scope <<<\n";
-    std::cout << "  0: WHOLE_NETLIST\n";
-    std::cout << "  1: NET_FANIN\n";
-    std::cout << "  2: NET_FANOUT\n";
-    std::cout << "  3: GATE_FANIN\n";
-    std::cout << "  4: GATE_FANOUT\n";
-    std::cout << "Enter choice (0-4): ";
-    
-    int scopeInput;
-    while (!(std::cin >> scopeInput) || scopeInput < 0 || scopeInput > 4) {
-        std::cin.clear();
-        std::cin.ignore(std::numeric_limits<std::streamsize>::max(), '\n');
-        std::cout << "  [Error] Invalid choice. Enter 0-4: ";
-    }
-    TargetScope scope = static_cast<TargetScope>(scopeInput);
-
-    // 3. 取得 Target Name (若非 WHOLE_NETLIST)
-    std::string targetName = "";
-    if (scope != TargetScope::WHOLE_NETLIST) {
-        std::cout << "Enter the exact name of the Target Net/Gate: ";
-        std::cin >> targetName;
-    }
-
-    // 4. 取得 Verbose 設定
-    std::cout << "\nEnable verbose logging? (1 for Yes, 0 for No): ";
-    bool verbose;
-    std::cin >> verbose;
-
-    // 5. 呼叫核心引擎！
+    std::cout << "[Step 2] Testing optimizePattern Engine..." << std::endl;
     TechMapper mapper;
-    std::cout << "\n[Info] Firing up the mapping engine...\n";
-    TechMapReport report = mapper.customMapTechnology(myCircuit, targetConstraints, allowedConstraints, scope, targetName, verbose);
 
-    // 6. 印出精美的結算報告
-    std::cout << "\n=========================================\n";
-    std::cout << "          TECH MAP REPORT                \n";
-    std::cout << "=========================================\n";
-    std::cout << "Status  : " << (int)report.status << " (" << report.message << ")\n";
+    // 2.1 建構我們要尋找與優化的目標形狀 (LHS Target)
+    int testChoice = 1;
+    std::cout << "\nSelect Test Target:\n";
+    std::cout << "  1) Area Test  : F = (A & B) | (A & C)\n";
+    std::cout << "  2) Depth Test : F = ((A & B) & C) & D\n";
+    std::cout << "> ";
+    std::cin >> testChoice;
+
+    std::shared_ptr<PatternNode> lhsTarget;
+    if (testChoice == 1) {
+        // 匹配 test_area 模組的圖形
+        lhsTarget = _OR( _AND(A(), B()), _AND(A(), C()) );
+    } else {
+        // 匹配 test_depth 模組的圖形 (注意這是一個深度為 3 的左傾樹)
+        lhsTarget = _AND( _AND( _AND(A(), B()), C()), D() ); 
+    }
+
+    // 2.2 互動式設定優化目標
+    int goalChoice = 1;
+    std::cout << "\nSelect Optimization Goal:\n";
+    std::cout << "  1) AREA (Minimize gate count)\n";
+    std::cout << "  2) DEPTH (Minimize critical path logic levels)\n";
+    std::cout << "> ";
+    std::cin >> goalChoice;
+    OptimizationGoal goal = (goalChoice == 2) ? OptimizationGoal::DEPTH : OptimizationGoal::AREA;
+
+    // 2.3 互動式設定最大容許面積 (僅在 DEPTH 模式下發揮作用)
+    int maxAreaOverhead = 0; // 對 AREA 模式來說不需要 overhead
+    if (goal == OptimizationGoal::DEPTH) {
+        std::cout << "\nEnter Max Area Overhead (e.g., 1 or 2): ";
+        std::cin >> maxAreaOverhead;
+    }
+
+    // 2.4 執行全域自動優化引擎
+    std::string ruleName = "Test_Global_Optimization";
+    bool verbose = true;
     
-    std::cout << "\n[Gates Removed]:\n";
-    if (report.removedCountByType.empty()) std::cout << "  (None)\n";
-    for (const auto& pair : report.removedCountByType) {
-        std::cout << "  - " << gateTypeToString(pair.first) << " : " << pair.second << "\n";
-    }
+    TechMapReport report = mapper.optimizePattern(
+        myCircuit, 
+        lhsTarget, 
+        goal, 
+        TargetScope::WHOLE_NETLIST, 
+        ruleName, 
+        verbose,
+        maxAreaOverhead // 傳入我們剛剛討論新增的面積天花板參數
+    );
 
-    std::cout << "\n[Gates Added (Lookup Table & Exact Synthesis)]:\n";
-    if (report.addedCountByType.empty()) std::cout << "  (None)\n";
-    for (const auto& pair : report.addedCountByType) {
-        std::cout << "  - " << gateTypeToString(pair.first) << " : " << pair.second << "\n";
+    // 2.5 顯示報告結果
+    std::cout << "\n=========================================\n";
+    std::cout << "[Report] Optimization Result\n";
+    std::cout << "=========================================\n";
+    if (report.status == TechMapStatus::SUCCESS) {
+        std::cout << " -> Status: SUCCESS\n";
+        std::cout << " -> Message: " << report.message << "\n";
+        
+        // 統計拔除與新增的閘數量
+        int removedTotal = 0, addedTotal = 0;
+        for (const auto& pair : report.removedCountByType) removedTotal += pair.second;
+        for (const auto& pair : report.addedCountByType) addedTotal += pair.second;
+        
+        std::cout << " -> Gates Removed: " << removedTotal << "\n";
+        std::cout << " -> Gates Added  : " << addedTotal << "\n";
+        std::cout << " -> Net Area Gain: " << (addedTotal - removedTotal) << " gates\n";
+    } else {
+        std::cout << " -> Status: FAILED or NO CHANGE\n";
+        std::cout << " -> Reason: " << report.message << "\n";
     }
-
-    if (!report.synthesizedTopology.empty()) {
-        std::cout << "\n[Notice] Exact Synthesis was triggered and generated " 
-                  << report.synthesizedTopology.size() << " abstract gates.\n";
-    }
-
     std::cout << "=========================================\n\n";
 
     // ==========================================
@@ -194,6 +134,7 @@ int main(int argc, char* argv[]) {
     }
     
     std::cout << "  -> Successfully wrote modified circuit to: " << outputFilePath << "\n";
+    std::cout << "  -> Final Gate Count : " << myCircuit.getGateCount() << "\n";
     std::cout << "\n[Done] EDA flow completed smoothly.\n";
 
     return 0;

@@ -151,19 +151,19 @@ inline NodePtr _XNOR(NodePtr in1, NodePtr in2) { return PatternNode::Gate(GateTy
 // 用來記錄比對過程中的狀態 
 struct MatchContext {
     // 將 netA, netB 改為 Map。
-    // 紀錄 Pattern 中的葉節點 (LEAF_A, LEAF_B, LEAF_C...) 分別對應到物理電路上的哪條 Net ID
-    std::unordered_map<NodeType, int> boundLeaves; 
+    // 紀錄 Pattern 中的輸入接腳 (PI) 分別對應到物理電路上的哪條 Net ID
+    std::unordered_map<int, int> boundLeaves; 
     // 紀錄 Pattern 節點對應到物理的哪個 Gate ID (解決 DAG 共用節點比對)
     std::unordered_map<PatternNode*, int> mappedNodes; 
     // 記錄這個子圖到底包含了哪些實體 Gate ID (用於替換時拔除舊 Gate)
     std::unordered_set<int> matchedGates; 
-    // 檢查某個 NodeType (如 LEAF_A) 是否已經綁定過實體 Net
-    bool isLeafBound(NodeType leafType) const {
-        return boundLeaves.count(leafType) > 0;
+    // 檢查某個 piIndex 是否已經綁定過實體 Net
+    bool isLeafBound(int piIndex) const {
+        return boundLeaves.count(piIndex) > 0;
     }
-    // 取得綁定的實體 Net ID
-    int getBoundNet(NodeType leafType) const {
-        auto it = boundLeaves.find(leafType);
+    // 取得該 piIndex 綁定的實體 Net ID
+    int getBoundNet(int piIndex) const {
+        auto it = boundLeaves.find(piIndex);
         return (it != boundLeaves.end()) ? it->second : -1;
     }
 };
@@ -532,6 +532,36 @@ public:
                                                         TechMapReport& report, 
                                                         bool verbose);
 
+    // 輔助函式：遞迴生成合法的 Fence (層級分配)
+    // remaining_nodes: 剩下還有幾顆閘可以分配
+    // remaining_levels: 剩下還有幾層需要分配
+    // current_fence: 遞迴過程中暫存的分配狀態
+    // result: 收集所有合法分配的容器
+    void generateFencesRec(int remaining_nodes, 
+                           int remaining_levels, 
+                           std::vector<int>& current_fence, 
+                           std::vector<std::vector<int>>& result) const;
+
+    // 輔助函式：給定總閘數 k 與 目標深度 D，回傳所有合法的形狀
+    std::vector<std::vector<int>> generateValidFences(int k, int D) const;
+
+    // 精確合成引擎 (加入 Fence 深度約束)
+    bool synthesizeFromTruthTableWithFence(const std::vector<bool>& targetTruthTable, 
+                                           int N, 
+                                           const std::map<GateType, int>& allowedConstraints, 
+                                           const std::vector<int>& fenceShape, 
+                                           TechMapReport& report, 
+                                           bool verbose);
+
+    // 輔助函式：尋找絕對最小深度的拓樸
+    std::shared_ptr<PatternNode> findMinimumDepthPattern(const std::vector<bool>& truthTable, 
+                                                         int N, 
+                                                         int currentDepth, 
+                                                         int currentArea, 
+                                                         TechMapReport& report, 
+                                                         bool verbose,
+                                                         int maxAreaOverhead);
+
     //----------------------------------------------------------------------------------------------------------------------------------------------------
 
     // 如果不傳入後兩個參數，預設就是執行 WHOLE_NETLIST 的轉換
@@ -588,11 +618,13 @@ public:
     // scope     : 圖形匹配與替換的掃描範圍 (例如 WHOLE_NETLIST 掃描全圖，或 GATE_FANIN 掃描特定錐體)
     // name      : 搭配 scope 使用的目標名稱 (例如指定特定的 Net ID 或 Gate ID)
     // verbose   : 是否印出詳細的推論過程與優化日誌 (true 為開啟)
+    // maxAreaOverhead : 針對深度優化時，容許的額外面積極限 (預設為 0，代表由引擎動態決定)
     // 回傳值    : TechMapReport (包含優化執行的結果狀態、增減的邏輯閘數量以及詳細訊息)
     TechMapReport optimizePattern(Netlist& netlist,
                                   std::shared_ptr<PatternNode> lhsTarget,
                                   OptimizationGoal goal,
                                   TargetScope scope, 
                                   const std::string& name, 
-                                  bool verbose);
+                                  bool verbose,
+                                  int maxAreaOverhead = 0);
 };
