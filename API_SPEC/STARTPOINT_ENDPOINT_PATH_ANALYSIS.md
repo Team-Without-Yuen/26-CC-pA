@@ -134,7 +134,7 @@ int getGateInputNetId(int gateId, const std::string& pinName) const;
 |---|---|---|
 | input-to-output | PI -> PO | 可用現有 path API 組合 |
 | input-to-register | PI -> DFF.D | 已有 `getMaximumLogicDepthFromPiToDffD()` |
-| register-to-register | DFF.Q -> DFF.D | 可用 `PathEndpoint(DffQ)` + `PathEndpoint(DffD)` 組合 |
+| register-to-register | DFF.Q -> DFF.D | `PathQuery` 可用 all-DFF endpoint：`DffQ("")` -> `DffD("")`；單一 pair 用 `PathEndpoint(DffQ, "ff1")` + `PathEndpoint(DffD, "ff2")` |
 | register-to-output | DFF.Q -> PO | 可用 `PathEndpoint(DffQ)` + `PathEndpoint(PrimaryOutput)` 組合 |
 | net-to-net | specific net -> specific net | 已支援 |
 | gate-output-to-net | gate output -> specific net | 可用 `PathEndpoint(GateOutput)` + `PathEndpoint(SpecificNet)` 組合 |

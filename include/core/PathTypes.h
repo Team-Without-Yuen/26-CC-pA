@@ -155,3 +155,42 @@ struct PathQueryResult {
     std::string outputFilePath;             // 實際輸出檔案路徑
     bool completeEnumeration = true;        // true 表示沒有截斷 enumerate 結果
 };
+
+// 表示 register-to-register path wrapper 要執行哪一種查詢。
+// 這一層會自動把 DFF.Q 展開成 startpoints、DFF.D 展開成 endpoints。
+enum class RegisterPathQueryMode {
+    Exists,        // 是否存在任一 DFF.Q 到任一 DFF.D 的組合路徑
+    FindAny,       // 回傳任意一條 DFF.Q 到 DFF.D 的組合路徑
+    EnumerateAll,  // 列出所有 DFF.Q 到 DFF.D 的組合路徑；預設自動寫檔
+    MinDepth,      // 找最短 register-to-register 組合路徑
+    MaxDepth       // 找最長 register-to-register 組合路徑
+};
+
+// 描述 register-to-register path query。
+// startDffNames / endDffNames 為空時，代表使用設計中所有 DFF。
+struct RegisterPathQuery {
+    RegisterPathQueryMode mode = RegisterPathQueryMode::MaxDepth;
+    std::vector<std::string> startDffNames; // 空 = 所有 DFF.Q
+    std::vector<std::string> endDffNames;   // 空 = 所有 DFF.D
+    std::vector<PathNode> requiredNodes;    // 每條符合條件的路徑必須經過的 net/gate
+    std::vector<PathNode> avoidedNodes;     // 每條符合條件的路徑必須避開的 net/gate
+    bool combinationalOnly = true;          // true 時 DFF 是 sequential boundary
+    std::string outputFilePath;             // EnumerateAll 寫檔路徑；空字串時使用預設檔名
+    size_t maxPrintedPaths = 20;            // CLI / report 顯示用；不限制完整結果
+};
+
+// 保存 register-to-register path query 的結果。
+struct RegisterPathReport {
+    bool ok = false;                        // query 是否成功解析並執行
+    std::string message;                    // 給 debug / LLM response 的簡短訊息
+    RegisterPathQueryMode mode = RegisterPathQueryMode::MaxDepth;
+
+    bool exists = false;                    // 是否找到符合條件的 register-to-register path
+    int depth = -1;                         // 代表路徑 depth；沒有路徑時為 -1
+    PathQueryResult pathResult;             // 底層 PathQuery 的完整結果
+
+    std::vector<std::string> startDffNames; // 實際展開的起點 DFF
+    std::vector<std::string> endDffNames;   // 實際展開的終點 DFF
+    std::string startDffName;               // 代表路徑起點 DFF；例如 max depth path 的來源
+    std::string endDffName;                 // 代表路徑終點 DFF；例如 max depth path 的目的
+};

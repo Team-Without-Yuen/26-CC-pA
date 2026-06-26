@@ -449,6 +449,9 @@ public:
     using PathQueryMode = ::PathQueryMode;
     using PathQuery = ::PathQuery;
     using PathQueryResult = ::PathQueryResult;
+    using RegisterPathQueryMode = ::RegisterPathQueryMode;
+    using RegisterPathQuery = ::RegisterPathQuery;
+    using RegisterPathReport = ::RegisterPathReport;
 
     // --- Path Endpoint Resolver Helpers ---
 
@@ -1275,4 +1278,9 @@ public:
     // EveryPathThrough、EveryPathAvoids。
     // 若 mode 尚未支援、端點解析失敗，或 combinationalOnly=false，回傳預設空結果。
     PathQueryResult runPathQuery(const PathQuery& query) const;
+
+    // 執行 register-to-register path query。
+    // 這是 runPathQuery() 的高階 wrapper：自動把所有或指定 DFF.Q 當起點，
+    // 所有或指定 DFF.D 當終點，並沿用 requiredNodes / avoidedNodes 條件。
+    RegisterPathReport runRegisterPathQuery(const RegisterPathQuery& query) const;
 };
