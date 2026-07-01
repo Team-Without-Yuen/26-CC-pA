@@ -81,22 +81,85 @@ void VerilogWriter::writePorts(std::ofstream& file, const Netlist& netlist) cons
 
 // Print the internal net segments (wires) in the netlist
 void VerilogWriter::writeWires(std::ofstream& file, const Netlist& netlist) const {
-    // Collect wire names
+    // 收集一般純量線 (Scalar wires)
     std::vector<std::string> internalWires;
+    
+    // 收集並計算內部匯流排 (Internal buses) 的邊界
+    struct BusBounds {
+        int msb = -1;
+        int lsb = 9999999;
+    };
+    std::unordered_map<std::string, BusBounds> internalBuses;
+
     for (size_t i = 0; i < netlist.getNetCount(); ++i) {
         const Net& net = netlist.getNet(i);
         
-        // If it is not a PI or PO, and not a constant, it is an internal net
-        if (!net.isPI && !net.isPO && !net.isConst) {
-            internalWires.push_back(net.name);
+        // 如果是 PI, PO 或是常數線，不需要在這裡宣告
+        if (net.isPI || net.isPO || net.isConst) {
+            continue;
         }
 
-        // 過濾掉懸空線 (Dangling Net)
-        if (net.driverGateId == -1 && net.loadGateIds.empty()) {
-            continue; 
+        // 活躍狀態檢查 (Liveness Check)
+        bool hasActiveDriver = false;
+        bool hasActiveLoad = false;
+
+        // 檢查 Driver：有接上，且該 Gate 還活著
+        if (net.driverGateId != -1 && netlist.isValidGateId(net.driverGateId)) {
+            if (netlist.getGate(net.driverGateId).type != GateType::UNKNOWN) {
+                hasActiveDriver = true;
+            }
+        }
+
+        // 檢查 Load：至少有一個讀取它的 Gate 還活著
+        for (int loadId : net.loadGateIds) {
+            if (netlist.isValidGateId(loadId) && netlist.getGate(loadId).type != GateType::UNKNOWN) {
+                hasActiveLoad = true;
+                break;
+            }
+        }
+
+        // 死線直接拋棄
+        if (!hasActiveDriver && !hasActiveLoad) {
+            continue;
+        }
+
+        // 檢查是否為 Bus Bit (例如 "n5[2]")
+        size_t leftBracket = net.name.find('[');
+        size_t rightBracket = net.name.find(']');
+        
+        if (leftBracket != std::string::npos && rightBracket != std::string::npos && rightBracket > leftBracket) {
+            std::string baseName = net.name.substr(0, leftBracket);
+            std::string idxStr = net.name.substr(leftBracket + 1, rightBracket - leftBracket - 1);
+            
+            try {
+                // 解析出 Index，並更新該 Bus 的 msb 與 lsb
+                int idx = std::stoi(idxStr);
+                internalBuses[baseName].msb = std::max(internalBuses[baseName].msb, idx);
+                internalBuses[baseName].lsb = std::min(internalBuses[baseName].lsb, idx);
+            } catch (...) {
+                // 萬一括號內不是單純的數字(解析失敗)，退回當作一般線處理
+                internalWires.push_back(net.name);
+            }
+            continue; // Bus Bit 已記錄，跳過下方 scalar wire 收集
+        }
+
+        // 通過所有考驗的純量線
+        internalWires.push_back(net.name);
+    }
+
+    // 1. 先統一輸出 Internal Buses 宣告 (例如: wire [14:2] na;)
+    for (const auto& pair : internalBuses) {
+        const std::string& baseName = pair.first;
+        int msb = pair.second.msb;
+        int lsb = pair.second.lsb;
+        
+        // 防呆確認有抓到合法邊界
+        if (msb >= lsb) {
+            file << "  wire [" << msb << ":" << lsb << "] " << baseName << ";\n";
         }
     }
-    // Print in groups of 8
+
+    // 2. 接著輸出一般純量線 (Print in groups of 8)
     const size_t WiresPerLine = 8;
     for (size_t i = 0; i < internalWires.size(); i += WiresPerLine) {
         file << "  wire ";

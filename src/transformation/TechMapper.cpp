@@ -453,7 +453,7 @@ void TechMapper::applyRule(Netlist& netlist, const MatchContext& ctx, int rootGa
     buildNode(rule.replacementPattern, true);
 }
 
-// 統一的映射執行引擎 (取代原有的 Forward / Backward Pass)
+// 統一的映射執行引擎
 bool TechMapper::executeMappingPass(Netlist& netlist, 
                                     const std::unordered_set<int>* scopeGates, 
                                     const std::vector<TechMapRule>& validRules, 
@@ -543,13 +543,6 @@ TechMapReport TechMapper::mapTechnologyCore(Netlist& netlist,
     // 這裡呼叫的是我們之前合併好的單一 API
     std::vector<TechMapRule> validRules = getValidRules(targetConstraints, allowedConstraints);
 
-    // 強制只取最好的一個 Rule 執行
-    if (validRules.size() > 1) {
-        // 因為已經排序過，index 0 就是對面積縮減最有利的規則
-        // 裁切 Vector，確保本次掃描全電路時，只會套用這一種規則！
-        validRules.erase(validRules.begin() + 1, validRules.end()); 
-    }
-
     // 執行統一的替換引擎
     bool mappingChanged = executeMappingPass(netlist, scopeGates, validRules, report, verbose);
 
@@ -579,7 +572,7 @@ TechMapReport TechMapper::mapTechnologyCore(Netlist& netlist,
         report.status = TechMapStatus::SUCCESS;
         report.message = "Success: Tree-to-Tree technology mapping applied successfully.";
     } else {
-        report.status = TechMapStatus::SUCCESS;
+        report.status = TechMapStatus::ERROR_SIMULATION_FAILED;
         report.message = "Notice: Rules matched constraints, but no matching subgraphs in the netlist required modification.";
     }
 
@@ -1453,111 +1446,6 @@ bool TechMapper::createAndRegisterCustomRule(const std::string& ruleName,
     return false;
 }
 
-// 核心輔助函式：給定「允許使用的基礎閘」，自動把其他所有的組合邏輯閘拆解
-// 根據 TargetScope 解析 Cone，並呼叫底層引擎
-// 給定「允許使用的基礎閘」，自動把其他所有的組合邏輯閘拆解
-TechMapReport TechMapper::convertToBasis(Netlist& netlist, 
-                                         const std::vector<GateType>& allowedTypes, 
-                                         TargetScope scope, 
-                                         const std::string& name, 
-                                         bool verbose) {
-
-    TechMapReport finalReport;
-    finalReport.status = TechMapStatus::SUCCESS;
-    finalReport.message = "Successfully converted circuit to the specified basis.";
-
-    // 建立允許清單 (allowedConstraints: 數量 -1 代表無限制)
-    std::map<GateType, int> allowedConstraints;
-    for (GateType t : allowedTypes) {
-        allowedConstraints[t] = -1;
-    }
-
-    std::vector<GateType> allCombinational = {
-        GateType::AND, GateType::OR, GateType::NAND, GateType::NOR,
-        GateType::NOT, GateType::BUF, GateType::XOR, GateType::XNOR
-    };
-
-    std::unordered_set<GateType> allowedSet(allowedTypes.begin(), allowedTypes.end());
-    std::vector<GateType> targetsToRemove;
-
-    // 找出所有「不合法」的 Gate 類型
-    for (GateType type : allCombinational) {
-        if (allowedSet.find(type) == allowedSet.end()) {
-            targetsToRemove.push_back(type);
-        }
-    }
-
-    // 迴圈依序消滅每一種不合法的 Gate
-    for (GateType targetType : targetsToRemove) {
-        
-        // 強制設為 1，確保引擎進入「拆解 (1-to-N)」模式
-        // 這樣就不會讓引擎在多對多 (M:N) 的邏輯中不知所措
-        std::map<GateType, int> targetConstraints = {{targetType, 1}};
-
-        if (verbose) {
-            std::cout << "\n[Basis Conversion] Eliminating GateType: " << (int)targetType << "...\n";
-        }
-
-        // 使用 switch 搭配基礎的 API (不走 customMapTechnology)
-        TechMapReport stepReport;
-        
-        switch (scope) {
-            case TargetScope::WHOLE_NETLIST:
-                stepReport = mapTechnology(netlist, targetConstraints, allowedConstraints, verbose);
-                break;
-            case TargetScope::NET_FANIN:
-                stepReport = mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getTransitiveFaninCone(name), verbose);
-                break;
-            case TargetScope::NET_FANOUT:
-                stepReport = mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getTransitiveFanoutCone(name), verbose);
-                break;
-            case TargetScope::GATE_FANIN:
-                stepReport = mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getGateTransitiveFaninCone(name), verbose);
-                break;
-            case TargetScope::GATE_FANOUT:
-                stepReport = mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getGateTransitiveFanoutCone(name), verbose);
-                break;
-            default:
-                finalReport.status = TechMapStatus::ERROR_NOT_EQUIVALENT;
-                finalReport.message = "Failed: Invalid TargetScope.";
-                return finalReport;
-        }
-
-        // 檢查該步驟是否失敗
-        // 只有當電路中還殘留該種類的 Gate 時，才回報錯誤 (代表 LUT 真的缺了這條展開規則)
-        if (stepReport.status != TechMapStatus::SUCCESS) {
-            if (netlist.getGateCountByType(targetType) > 0) {
-                finalReport.status = stepReport.status;
-                finalReport.message = "Basis conversion failed at type: " + std::to_string((int)targetType);
-                return finalReport;
-            }
-        }
-
-        // 累加本回合的 Report 統計
-        for (const auto& pair : stepReport.removedCountByType) {
-            finalReport.removedCountByType[pair.first] += pair.second;
-        }
-        for (const auto& pair : stepReport.addedCountByType) {
-            finalReport.addedCountByType[pair.first] += pair.second;
-        }
-        
-        if (verbose && !stepReport.modifiedGateNames.empty()) {
-            finalReport.modifiedGateNames.insert(
-                finalReport.modifiedGateNames.end(),
-                stepReport.modifiedGateNames.begin(),
-                stepReport.modifiedGateNames.end()
-            );
-        }
-    }
-
-    // 更新最終快照
-    for (GateType t : allCombinational) {
-        finalReport.finalGateCount[t] = netlist.getGateCountByType(t);
-    }
-
-    return finalReport;
-}
-
 // 輔助函式：產生所有積木組合 (重複組合)
 void TechMapper::generateCombosRec(const std::vector<GateType>& lib, 
                                    int k, 
@@ -1583,15 +1471,38 @@ std::shared_ptr<PatternNode> TechMapper::findMinimumAreaPattern(const std::vecto
                                                                 int N, 
                                                                 int currentArea, 
                                                                 TechMapReport& report, 
-                                                                bool verbose) {
+                                                                bool verbose,
+                                                                const std::vector<GateType>& allowedTypes,
+                                                                const std::vector<GateType>& bannedTypes) {
     if (verbose) {
         std::cout << "  [Exact Synthesis] Searching for pattern with Area < " << currentArea << "...\n";
     }
 
-    // 定義你允許 SAT 引擎用來發明電路的「基礎積木庫」
-    std::vector<GateType> baseLibrary = {
-        GateType::NAND, GateType::NOR, GateType::AND, GateType::OR, GateType::NOT, GateType::XOR, GateType::XNOR
+    // 動態建立基礎積木庫 (過濾黑白名單)
+    std::vector<GateType> allCombinational = {
+        GateType::AND, GateType::OR, GateType::NAND, GateType::NOR, 
+        GateType::NOT, GateType::XOR, GateType::XNOR
     };
+
+    std::vector<GateType> baseLibrary;
+    std::unordered_set<GateType> allowedSet(allowedTypes.begin(), allowedTypes.end());
+    std::unordered_set<GateType> bannedSet(bannedTypes.begin(), bannedTypes.end());
+
+    for (GateType t : allCombinational) {
+        // 如果有設白名單，且這個閘不在白名單裡 -> 跳過
+        if (!allowedSet.empty() && allowedSet.find(t) == allowedSet.end()) continue; 
+        // 如果這個閘在黑名單裡 -> 跳過
+        if (bannedSet.find(t) != bannedSet.end()) continue; 
+        
+        baseLibrary.push_back(t);
+    }
+
+    // 防呆：如果過濾完發現沒有任何積木可以用，直接宣告失敗
+    if (baseLibrary.empty()) {
+        report.status = TechMapStatus::ERROR_INVALID_CONSTRAINTS;
+        report.message = "Failed: No valid gates available in base library after applying allowed/banned constraints.";
+        return nullptr;
+    }
 
     // 核心邏輯：從 1 顆閘開始，慢慢增加到 currentArea - 1
     for (int k = 1; k < currentArea; ++k) {
@@ -1924,7 +1835,9 @@ std::shared_ptr<PatternNode> TechMapper::findMinimumDepthPattern(const std::vect
                                                                 int currentArea, 
                                                                 TechMapReport& report, 
                                                                 bool verbose,
-                                                                int maxAreaOverhead) {
+                                                                int maxAreaOverhead,
+                                                                const std::vector<GateType>& allowedTypes, 
+                                                                const std::vector<GateType>& bannedTypes) {
     // 決定最大容許面積 (雙重防護機制)
     int maxAllowedArea;
     if (maxAreaOverhead > 0) {
@@ -1933,8 +1846,8 @@ std::shared_ptr<PatternNode> TechMapper::findMinimumDepthPattern(const std::vect
     } else {
         // 如果使用者沒設定，使用智慧雙重防護：
         // 1. 最多變兩倍大
-        // 2. 絕對物理極限 (限制在 12 顆以內，保護 SAT Solver 不當機)
-        maxAllowedArea = std::min(currentArea * 2, 12); 
+        // 2. 絕對物理極限 (限制在 15 顆以內，保護 SAT Solver 不當機)
+        maxAllowedArea = std::min(currentArea * 2, 15); 
     }
 
     if (verbose) {
@@ -1942,10 +1855,31 @@ std::shared_ptr<PatternNode> TechMapper::findMinimumDepthPattern(const std::vect
                   << " (Max Area limit: " << maxAllowedArea << ")...\n";
     }
 
-    // 定義基礎積木庫
-    std::vector<GateType> baseLibrary = {
-        GateType::NAND, GateType::NOR, GateType::AND, GateType::OR, GateType::NOT, GateType::XOR, GateType::XNOR
+    // 動態建立基礎積木庫 (過濾黑白名單)
+    std::vector<GateType> allCombinational = {
+        GateType::AND, GateType::OR, GateType::NAND, GateType::NOR, 
+        GateType::NOT, GateType::XOR, GateType::XNOR
     };
+
+    std::vector<GateType> baseLibrary;
+    std::unordered_set<GateType> allowedSet(allowedTypes.begin(), allowedTypes.end());
+    std::unordered_set<GateType> bannedSet(bannedTypes.begin(), bannedTypes.end());
+
+    for (GateType t : allCombinational) {
+        // 如果有設白名單，且這個閘不在白名單裡 -> 跳過
+        if (!allowedSet.empty() && allowedSet.find(t) == allowedSet.end()) continue; 
+        // 如果這個閘在黑名單裡 -> 跳過
+        if (bannedSet.find(t) != bannedSet.end()) continue; 
+        
+        baseLibrary.push_back(t);
+    }
+
+    // 防呆：如果過濾完發現沒有任何積木可以用，直接宣告失敗
+    if (baseLibrary.empty()) {
+        report.status = TechMapStatus::ERROR_INVALID_CONSTRAINTS;
+        report.message = "Failed: No valid gates available in base library after applying allowed/banned constraints.";
+        return nullptr;
+    }
 
     // 外層迴圈：深度 D 從 1 開始，直到 currentDepth - 1
     for (int D = 1; D < currentDepth; ++D) {
@@ -2033,62 +1967,128 @@ std::shared_ptr<PatternNode> TechMapper::findMinimumDepthPattern(const std::vect
 }
 
 //-----------------------------------------------------------------------------------------------------------------------------
+// 高階 API (並非直接給LLM使用)
 
-// 將整個 netlist 轉成 {AND, NOT} (AIG: And-Inverter Graph)
-TechMapReport TechMapper::convertToAndNot(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
-    return convertToBasis(netlist, {GateType::AND, GateType::NOT}, scope, name, verbose);
-}
+// 全域/區域 邏輯閘轉換引擎 (Technology Mapping / Basis Conversion)
+TechMapReport TechMapper::convertToBasis(Netlist& netlist,  
+                                         TargetScope scope, 
+                                         const std::string& name, 
+                                         const std::vector<GateType>& allowedTypes, 
+                                         const std::vector<GateType>& bannedTypes,
+                                         bool verbose) {
 
-// 將整個 netlist 轉成 {OR, NOT} (OIG: Or-Inverter Graph)
-TechMapReport TechMapper::convertToOrNot(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
-    return convertToBasis(netlist, {GateType::OR, GateType::NOT}, scope, name, verbose);
-}
+    TechMapReport finalReport;
+    finalReport.status = TechMapStatus::SUCCESS;
+    finalReport.message = "Successfully converted circuit to the specified basis.";
 
-// 將整個 netlist 轉成 {NAND} (純 NAND 網路)
-// 說明：NAND 是 Universal Gate (萬用閘)。在早期 TTL 或現代 CMOS 中，NAND 的電晶體堆疊最少，
-// 速度最快，這是一個非常符合物理特性的轉換。
-TechMapReport TechMapper::convertToNand(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
-    return convertToBasis(netlist, {GateType::NAND}, scope, name, verbose);
-}
+    std::vector<GateType> allCombinational = {
+        GateType::AND, GateType::OR, GateType::NAND, GateType::NOR,
+        GateType::NOT, GateType::BUF, GateType::XOR, GateType::XNOR
+    };
 
-// 將整個 netlist 轉成 {NOR} (純 NOR 網路)
-// 說明：NOR 同樣是 Universal Gate，常用於一些特殊的記憶體周邊控制電路。
-TechMapReport TechMapper::convertToNor(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
-    return convertToBasis(netlist, {GateType::NOR}, scope, name, verbose);
-}
+    // 1. 決定要移除的目標集合 (黑名單 + 不在白名單內的所有人)
+    std::unordered_set<GateType> targetsToRemoveSet;
 
-// 將整個 netlist 轉成 XAG (XOR-AND Graph)
-// 說明：由 {XOR, AND, NOT} 組成。XAG 在現代 EDA 非常紅！
-// 在全同態加密 (FHE) 與量子運算中，XOR 通常是 Free (不用成本) 的，
-// 而 AND 需要消耗極大的資源，所以會特別使用 XAG 來做進一步的最佳化。
-TechMapReport TechMapper::convertToXag(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
-    return convertToBasis(netlist, {GateType::XOR, GateType::AND, GateType::NOT}, scope, name, verbose);
-}
+    // 將使用者指定的黑名單加入移除清單
+    for (GateType t : bannedTypes) {
+        targetsToRemoveSet.insert(t);
+    }
 
-// 將整個 netlist 轉成 {XOR, AND} (ANF: Algebraic Normal Form)
-// 說明：又稱 Reed-Muller 展開。這是一種沒有 NOT 閘的代數結構！
-// 引擎非常聰明，遇到 NOT 閘時，會自動使用查表裡的 A XOR 1 來替換，
-TechMapReport TechMapper::convertToAnf(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
-    return convertToBasis(netlist, {GateType::XOR, GateType::AND}, scope, name, verbose);
-}
+    // 如果使用者有指定白名單，則把「不在白名單內」的所有組合邏輯閘都加入移除清單
+    if (!allowedTypes.empty()) {
+        std::unordered_set<GateType> allowedSet(allowedTypes.begin(), allowedTypes.end());
+        for (GateType type : allCombinational) {
+            if (allowedSet.find(type) == allowedSet.end()) {
+                targetsToRemoveSet.insert(type);
+            }
+        }
+    }
 
-// 將整個 netlist 轉成 {XOR, OR}
-// 說明：這是另一種特化的代數基底映射。
-TechMapReport TechMapper::convertToXorOr(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
-    return convertToBasis(netlist, {GateType::XOR, GateType::OR}, scope, name, verbose);
-}
+    // 將 Set 轉回 Vector 以利後續迴圈處理
+    std::vector<GateType> targetsToRemove(targetsToRemoveSet.begin(), targetsToRemoveSet.end());
 
-// 將整個 netlist 轉成 {XNOR, AND}
-// 說明：XNOR 與 XOR 具有對稱性，在某些 Cell Library 中 XNOR 的面積更小。
-// NOT 閘會被自動替換為 A XNOR 0。
-TechMapReport TechMapper::convertToXnorAnd(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
-    return convertToBasis(netlist, {GateType::XNOR, GateType::AND}, scope, name, verbose);
-}
+    // 2. 計算目前環境「允許使用」的剩餘積木庫 (給底層 SAT 引擎的約束)
+    std::map<GateType, int> allowedConstraints;
+    for (GateType type : allCombinational) {
+        // 只要不是即將被消滅的目標，都可以拿來當作替換用的積木 (-1 代表無數量限制)
+        if (targetsToRemoveSet.find(type) == targetsToRemoveSet.end()) {
+            allowedConstraints[type] = -1; 
+        }
+    }
 
-// 將整個 netlist 轉成 {XNOR, OR}
-// 說明：特化的邏輯合成基底。
-TechMapReport TechMapper::convertToXnorOr(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
-    return convertToBasis(netlist, {GateType::XNOR, GateType::OR}, scope, name, verbose);
+    // 如果所有積木都被禁用了 (代表參數設定不合理)
+    if (allowedConstraints.empty()) {
+        finalReport.status = TechMapStatus::ERROR_INVALID_CONSTRAINTS;
+        finalReport.message = "Failed: All combinational gates are banned. No available basis.";
+        return finalReport;
+    }
+
+    // 3. 迴圈依序消滅每一種不合法的 Gate
+    for (GateType targetType : targetsToRemove) {
+        
+        // 強制設為 1，確保引擎進入「拆解 (1-to-N)」模式
+        std::map<GateType, int> targetConstraints = {{targetType, 1}};
+
+        if (verbose) {
+            std::cout << "\n[Basis Conversion] Eliminating GateType: " << (int)targetType << "...\n";
+        }
+
+        TechMapReport stepReport;
+        
+        // 呼叫底層對應 Scope 的遞迴查找與替換引擎
+        switch (scope) {
+            case TargetScope::WHOLE_NETLIST:
+                stepReport = mapTechnology(netlist, targetConstraints, allowedConstraints, verbose);
+                break;
+            case TargetScope::NET_FANIN:
+                stepReport = mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getTransitiveFaninCone(name), verbose);
+                break;
+            case TargetScope::NET_FANOUT:
+                stepReport = mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getTransitiveFanoutCone(name), verbose);
+                break;
+            case TargetScope::GATE_FANIN:
+                stepReport = mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getGateTransitiveFaninCone(name), verbose);
+                break;
+            case TargetScope::GATE_FANOUT:
+                stepReport = mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getGateTransitiveFanoutCone(name), verbose);
+                break;
+            default:
+                finalReport.status = TechMapStatus::ERROR_NOT_EQUIVALENT;
+                finalReport.message = "Failed: Invalid TargetScope.";
+                return finalReport;
+        }
+
+        // 檢查該步驟是否失敗
+        // 只有當電路中還殘留該種類的 Gate 時，才回報錯誤 (代表我們用現有的白名單積木，無法數學等價地展開它)
+        if (stepReport.status != TechMapStatus::SUCCESS || netlist.getGateCountByType(targetType) > 0) {
+            finalReport.status = (stepReport.status != TechMapStatus::SUCCESS) ? stepReport.status : TechMapStatus::ERROR_NOT_EQUIVALENT;
+            finalReport.message = "Basis conversion failed! Remaining gates of type: " + std::to_string((int)targetType);
+            return finalReport;
+        }
+
+        // 累加本回合的 Report 統計
+        for (const auto& pair : stepReport.removedCountByType) {
+            finalReport.removedCountByType[pair.first] += pair.second;
+        }
+        for (const auto& pair : stepReport.addedCountByType) {
+            finalReport.addedCountByType[pair.first] += pair.second;
+        }
+        
+        if (verbose && !stepReport.modifiedGateNames.empty()) {
+            finalReport.modifiedGateNames.insert(
+                finalReport.modifiedGateNames.end(),
+                stepReport.modifiedGateNames.begin(),
+                stepReport.modifiedGateNames.end()
+            );
+        }
+    }
+
+    // 更新最終快照
+    for (GateType t : allCombinational) {
+        finalReport.finalGateCount[t] = netlist.getGateCountByType(t);
+    }
+
+    return finalReport;
 }
 
 // 自訂規則映射引擎 (Interactive Custom Technology Mapping)
@@ -2251,7 +2251,9 @@ TechMapReport TechMapper::optimizePattern(Netlist& netlist,
                                           TargetScope scope, 
                                           const std::string& name, 
                                           bool verbose,
-                                          int maxAreaOverhead) {
+                                          int maxAreaOverhead, 
+                                          const std::vector<GateType>& allowedTypes, 
+                                          const std::vector<GateType>& bannedTypes) {
     TechMapReport finalReport;
 
     if (!lhsTarget) {
@@ -2303,11 +2305,33 @@ TechMapReport TechMapper::optimizePattern(Netlist& netlist,
     bestRule.targetCounts = lhsData.first;
     bestRule.allowedCounts = lhsData.first; // 允許的等於目標，等於沒換
 
+    std::unordered_set<GateType> allowedSet(allowedTypes.begin(), allowedTypes.end());
+    std::unordered_set<GateType> bannedSet(bannedTypes.begin(), bannedTypes.end());
+
     // 檢查快取 / 查找表 (防污染與分級檢查)
     for (const auto& rule : rules) {
         // 條件 1：真值表必須一模一樣 (邏輯等價)
         if (rule.truthTableHash == targetHash) {
             
+            // 檢查這條規則的 replacementPattern 是否使用了違規的 Gate
+            bool isValidGateMix = true;
+            auto rhsGateCounts = countGates(rule.replacementPattern).first; // 取得該規則使用的閘種類與數量
+            
+            for (const auto& pair : rhsGateCounts) {
+                GateType t = pair.first;
+                // 如果有白名單，且這個閘不在白名單內 -> 違規
+                if (!allowedSet.empty() && allowedSet.find(t) == allowedSet.end()) {
+                    isValidGateMix = false; break;
+                }
+                // 如果這個閘在黑名單內 -> 違規
+                if (bannedSet.find(t) != bannedSet.end()) {
+                    isValidGateMix = false; break;
+                }
+            }
+
+            // 如果這條快取規則違反了當前的 Gate 限制，直接跳過不採用
+            if (!isValidGateMix) continue;
+
             // 計算這條規則的實際 Cost
             int ruleCost = (goal == OptimizationGoal::AREA) ? rule.addedGateCount : calculateDepth(rule.replacementPattern);
             
@@ -2343,9 +2367,9 @@ TechMapReport TechMapper::optimizePattern(Netlist& netlist,
 
         // 核心呼叫：尋找嚴格小於 bestCostSoFar 的結構
         if (goal == OptimizationGoal::AREA) {
-            bestRhs = findMinimumAreaPattern(truthTable, N, bestCostSoFar, optReport, verbose);
+            bestRhs = findMinimumAreaPattern(truthTable, N, bestCostSoFar, optReport, verbose, allowedTypes, bannedTypes);
         } else {
-            bestRhs = findMinimumDepthPattern(truthTable, N, bestCostSoFar, currentArea, optReport, verbose, maxAreaOverhead);
+            bestRhs = findMinimumDepthPattern(truthTable, N, bestCostSoFar, currentArea, optReport, verbose, maxAreaOverhead, allowedTypes, bannedTypes);
         }
 
         if (bestRhs && optReport.status == TechMapStatus::SUCCESS) {
