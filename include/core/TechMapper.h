@@ -409,6 +409,7 @@ public:
     // 統一的篩選器：取得所有合法的規則，並自動按照「面積優化程度」排序
     std::vector<TechMapRule> getValidRules(const std::map<GateType, int>& lhsConstraints, 
                                            const std::map<GateType, int>& rhsConstraints,
+                                           const std::vector<RuleSource>& allowedSources,
                                            bool requireAreaReduction = false) const;
 
     // 遞迴比對核心
@@ -437,17 +438,20 @@ public:
                                 const std::map<GateType, int>& targetConstraints, 
                                 const std::map<GateType, int>& allowedConstraints,
                                 const std::unordered_set<int>* scopeGates,
+                                const std::vector<RuleSource>& allowedSources,
                                 bool verbose);
     // 處理整個 Netlist 的 API
     TechMapReport mapTechnology(Netlist& netlist, 
                                 const std::map<GateType, int>& targetConstraints, 
-                                const std::map<GateType, int>& allowedConstraints, // 建議預設為雙向
+                                const std::map<GateType, int>& allowedConstraints, 
+                                const std::vector<RuleSource>& allowedSources,
                                 bool verbose = false);
     // 針對特定 Cone 的 API
     TechMapReport mapTechnologyForCone(Netlist& netlist, 
                                        const std::map<GateType, int>& targetConstraints, 
                                        const std::map<GateType, int>& allowedConstraints, 
                                        const ConeResult& targetCone = ConeResult(), 
+                                       const std::vector<RuleSource>& allowedSources = {},
                                        bool verbose = false);
 
     // 精確規則應用引擎，繞過 mapTechnologyCore 的查表與約束過濾機制
