@@ -9,6 +9,58 @@
 #include <queue>
 #include <unordered_set>
 
+namespace {
+
+std::map<GateType, int> toOrderedMap(const std::unordered_map<GateType, int>& values) {
+    std::map<GateType, int> ordered;
+    for (const auto& item : values) {
+        ordered[item.first] += item.second;
+    }
+    return ordered;
+}
+
+MappingDelta makeMappingDelta(const TechMapReport& techReport) {
+    MappingDelta delta;
+    delta.removedCountByType = toOrderedMap(techReport.removedCountByType);
+    delta.addedCountByType = toOrderedMap(techReport.addedCountByType);
+    delta.finalGateCountByType = toOrderedMap(techReport.finalGateCount);
+    delta.modifiedGateNames = techReport.modifiedGateNames;
+    return delta;
+}
+
+NetlistEditReport finalizeTechMapEditReport(
+    Netlist& netlist,
+    const Netlist& before,
+    const TechMapReport& techReport,
+    const std::string& operationName)
+{
+    NetlistEditReport report = Netlist::buildEditReport(
+        before,
+        netlist,
+        operationName,
+        NetlistEditOperationKind::TechnologyMapping);
+
+    report.mappingDelta = makeMappingDelta(techReport);
+    report.changed = report.changed || !techReport.modifiedGateNames.empty();
+
+    if (techReport.status != TechMapStatus::SUCCESS) {
+        report.success = false;
+        report.message = techReport.message;
+        report.addWarning("Technology mapping reported a non-success status.");
+    } else {
+        report.message = techReport.message;
+    }
+
+    if (!report.success) {
+        netlist.restoreFrom(before);
+        report.rolledBack = true;
+    }
+
+    return report;
+}
+
+}
+
 // 輔助函式：將 NodeType 對應回 Input Vector 的 Index (0, 1, 2...)
 int TechMapper::getLeafIndex(NodeType type) const {
     switch (type) {
@@ -515,6 +567,17 @@ TechMapReport TechMapper::mapTechnology(Netlist& netlist,
     return mapTechnologyCore(netlist, targetConstraints, allowedConstraints, nullptr, verbose);
 }
 
+NetlistEditReport TechMapper::mapTechnologyWithReport(
+    Netlist& netlist,
+    const std::map<GateType, int>& targetConstraints,
+    const std::map<GateType, int>& allowedConstraints,
+    bool verbose)
+{
+    Netlist before = netlist.cloneForRollback();
+    TechMapReport techReport = mapTechnology(netlist, targetConstraints, allowedConstraints, verbose);
+    return finalizeTechMapEditReport(netlist, before, techReport, "mapTechnology");
+}
+
 // 針對特定 Cone (邏輯錐) 的 API 實作 (局部優化 / ECO 常用)
 TechMapReport TechMapper::mapTechnologyForCone(Netlist& netlist, 
                                                const std::map<GateType, int>& targetConstraints, 
@@ -530,6 +593,23 @@ TechMapReport TechMapper::mapTechnologyForCone(Netlist& netlist,
     
     // 呼叫核心引擎，並將 scopeGates 的記憶體位址傳入
     return mapTechnologyCore(netlist, targetConstraints, allowedConstraints, &scopeGates, verbose);
+}
+
+NetlistEditReport TechMapper::mapTechnologyForConeWithReport(
+    Netlist& netlist,
+    const std::map<GateType, int>& targetConstraints,
+    const std::map<GateType, int>& allowedConstraints,
+    const ConeResult& targetCone,
+    bool verbose)
+{
+    Netlist before = netlist.cloneForRollback();
+    TechMapReport techReport = mapTechnologyForCone(
+        netlist,
+        targetConstraints,
+        allowedConstraints,
+        targetCone,
+        verbose);
+    return finalizeTechMapEditReport(netlist, before, techReport, "mapTechnologyForCone");
 }
 
 // 輔助函式：取得指定邏輯閘的輸入腳位數量 (Fan-in)
@@ -1394,9 +1474,21 @@ TechMapReport TechMapper::convertToAndNot(Netlist& netlist, TargetScope scope, c
     return convertToBasis(netlist, {GateType::AND, GateType::NOT}, scope, name, verbose);
 }
 
+NetlistEditReport TechMapper::convertToAndNotWithReport(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
+    Netlist before = netlist.cloneForRollback();
+    TechMapReport techReport = convertToAndNot(netlist, scope, name, verbose);
+    return finalizeTechMapEditReport(netlist, before, techReport, "convertToAndNot");
+}
+
 // 將整個 netlist 轉成 {OR, NOT} (OIG: Or-Inverter Graph)
 TechMapReport TechMapper::convertToOrNot(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
     return convertToBasis(netlist, {GateType::OR, GateType::NOT}, scope, name, verbose);
+}
+
+NetlistEditReport TechMapper::convertToOrNotWithReport(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
+    Netlist before = netlist.cloneForRollback();
+    TechMapReport techReport = convertToOrNot(netlist, scope, name, verbose);
+    return finalizeTechMapEditReport(netlist, before, techReport, "convertToOrNot");
 }
 
 // 將整個 netlist 轉成 {NAND} (純 NAND 網路)
@@ -1406,10 +1498,22 @@ TechMapReport TechMapper::convertToNand(Netlist& netlist, TargetScope scope, con
     return convertToBasis(netlist, {GateType::NAND}, scope, name, verbose);
 }
 
+NetlistEditReport TechMapper::convertToNandWithReport(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
+    Netlist before = netlist.cloneForRollback();
+    TechMapReport techReport = convertToNand(netlist, scope, name, verbose);
+    return finalizeTechMapEditReport(netlist, before, techReport, "convertToNand");
+}
+
 // 將整個 netlist 轉成 {NOR} (純 NOR 網路)
 // 說明：NOR 同樣是 Universal Gate，常用於一些特殊的記憶體周邊控制電路。
 TechMapReport TechMapper::convertToNor(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
     return convertToBasis(netlist, {GateType::NOR}, scope, name, verbose);
+}
+
+NetlistEditReport TechMapper::convertToNorWithReport(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
+    Netlist before = netlist.cloneForRollback();
+    TechMapReport techReport = convertToNor(netlist, scope, name, verbose);
+    return finalizeTechMapEditReport(netlist, before, techReport, "convertToNor");
 }
 
 // 將整個 netlist 轉成 XAG (XOR-AND Graph)
@@ -1420,6 +1524,12 @@ TechMapReport TechMapper::convertToXag(Netlist& netlist, TargetScope scope, cons
     return convertToBasis(netlist, {GateType::XOR, GateType::AND, GateType::NOT}, scope, name, verbose);
 }
 
+NetlistEditReport TechMapper::convertToXagWithReport(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
+    Netlist before = netlist.cloneForRollback();
+    TechMapReport techReport = convertToXag(netlist, scope, name, verbose);
+    return finalizeTechMapEditReport(netlist, before, techReport, "convertToXag");
+}
+
 // 將整個 netlist 轉成 {XOR, AND} (ANF: Algebraic Normal Form)
 // 說明：又稱 Reed-Muller 展開。這是一種沒有 NOT 閘的代數結構！
 // 引擎非常聰明，遇到 NOT 閘時，會自動使用查表裡的 A XOR 1 來替換，
@@ -1427,10 +1537,22 @@ TechMapReport TechMapper::convertToAnf(Netlist& netlist, TargetScope scope, cons
     return convertToBasis(netlist, {GateType::XOR, GateType::AND}, scope, name, verbose);
 }
 
+NetlistEditReport TechMapper::convertToAnfWithReport(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
+    Netlist before = netlist.cloneForRollback();
+    TechMapReport techReport = convertToAnf(netlist, scope, name, verbose);
+    return finalizeTechMapEditReport(netlist, before, techReport, "convertToAnf");
+}
+
 // 將整個 netlist 轉成 {XOR, OR}
 // 說明：這是另一種特化的代數基底映射。
 TechMapReport TechMapper::convertToXorOr(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
     return convertToBasis(netlist, {GateType::XOR, GateType::OR}, scope, name, verbose);
+}
+
+NetlistEditReport TechMapper::convertToXorOrWithReport(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
+    Netlist before = netlist.cloneForRollback();
+    TechMapReport techReport = convertToXorOr(netlist, scope, name, verbose);
+    return finalizeTechMapEditReport(netlist, before, techReport, "convertToXorOr");
 }
 
 // 將整個 netlist 轉成 {XNOR, AND}
@@ -1440,10 +1562,22 @@ TechMapReport TechMapper::convertToXnorAnd(Netlist& netlist, TargetScope scope, 
     return convertToBasis(netlist, {GateType::XNOR, GateType::AND}, scope, name, verbose);
 }
 
+NetlistEditReport TechMapper::convertToXnorAndWithReport(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
+    Netlist before = netlist.cloneForRollback();
+    TechMapReport techReport = convertToXnorAnd(netlist, scope, name, verbose);
+    return finalizeTechMapEditReport(netlist, before, techReport, "convertToXnorAnd");
+}
+
 // 將整個 netlist 轉成 {XNOR, OR}
 // 說明：特化的邏輯合成基底。
 TechMapReport TechMapper::convertToXnorOr(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
     return convertToBasis(netlist, {GateType::XNOR, GateType::OR}, scope, name, verbose);
+}
+
+NetlistEditReport TechMapper::convertToXnorOrWithReport(Netlist& netlist, TargetScope scope, const std::string& name, bool verbose) {
+    Netlist before = netlist.cloneForRollback();
+    TechMapReport techReport = convertToXnorOr(netlist, scope, name, verbose);
+    return finalizeTechMapEditReport(netlist, before, techReport, "convertToXnorOr");
 }
 
 // 給使用者呼叫的萬用任意修改 API (自動推導方向 + 約束驅動 + 智慧 Fallback)
@@ -1594,4 +1728,17 @@ TechMapReport TechMapper::customMapTechnology(Netlist& netlist,
     }
 
     return report;
+}
+
+NetlistEditReport TechMapper::customMapTechnologyWithReport(
+    Netlist& netlist,
+    const std::map<GateType, int>& targetConstraints,
+    const std::map<GateType, int>& allowedConstraints,
+    TargetScope scope,
+    const std::string& name,
+    bool verbose) {
+    Netlist before = netlist.cloneForRollback();
+    TechMapReport techReport = customMapTechnology(
+        netlist, targetConstraints, allowedConstraints, scope, name, verbose);
+    return finalizeTechMapEditReport(netlist, before, techReport, "customMapTechnology");
 }

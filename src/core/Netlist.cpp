@@ -49,7 +49,11 @@ int Netlist::addNet(const std::string& name) {
 
     // Check if the net already exists and not a constant
     if (!isConstant && netNameToId.find(name) != netNameToId.end()) {
-        return netNameToId[name];
+        int existingId = netNameToId[name];
+        if (existingId >= 0 && existingId < (int)nets.size() && nets[existingId].isRemoved) {
+            nets[existingId] = Net(existingId, name);
+        }
+        return existingId;
     }
     
     // Create a new net and assign it a unique ID based on the vector size
@@ -58,6 +62,7 @@ int Netlist::addNet(const std::string& name) {
     if (isConstant) {
         // If it is a constant, mark it
         nets[newId].isConst = true;
+        nets[newId].constVal = (name == "1'b1") ? 1 : 0;
     } else {
         netNameToId[name] = newId;
     }

@@ -9,6 +9,9 @@
 #include "include/core/NetlistQueries.h"
 #include "include/core/PathTypes.h"
 #include "include/core/OptimizationTypes.h"
+#include "include/core/EditFlow.h"
+#include "include/core/OptimizationFlow.h"
+#include "include/core/NetlistEditReport.h"
 #include "TransformationReport.h"
 #include "include/core/SatTime.h"
 
@@ -833,20 +836,25 @@ public:
 
     // 重新命名 Gate。如果舊名字找不到，則回傳 false。
     bool renameGate(const std::string& oldName, const std::string& newName);
+    NetlistEditReport renameGateWithReport(const std::string& oldName, const std::string& newName);
 
     // 重新命名 Net。如果舊名字找不到，則回傳 false。
     bool renameNet(const std::string& oldName, const std::string& newName);
+    NetlistEditReport renameNetWithReport(const std::string& oldName, const std::string& newName);
 
     // 斷開連線：將指定 Gate 的輸入端與指定的 Net 斷開。
     bool disconnectGateInput(const std::string& gateName, const std::string& netName);
+    NetlistEditReport disconnectGateInputWithReport(const std::string& gateName, const std::string& netName);
 
     // 建立連線：將指定 Gate 的輸入端連接到指定的 Net。
     bool connectGateInput(const std::string& gateName, const std::string& netName, int pinIndex = -1);
+    NetlistEditReport connectGateInputWithReport(const std::string& gateName, const std::string& netName, int pinIndex = -1);
 
     // 斷開連線：將指定 Gate 的輸入與輸出斷開
     bool disconnectAllPins(int gateId);
     // 斷開連線 + 設為 UNKNOWN
     bool removeGate(int gateId);
+    NetlistEditReport removeGateWithReport(int gateId);
 
     // 查詢 gate 是否已被標記為 removed（type == UNKNOWN）。
     bool isGateRemoved(int gateId) const;
@@ -860,6 +868,7 @@ public:
 
     // 把所有接到 oldNetId 的 gate 改接到 newNetId，同時更新 loadGateIds。
     bool replaceAllLoadsOfNet(int oldNetId, int newNetId);
+    NetlistEditReport replaceAllLoadsOfNetWithReport(int oldNetId, int newNetId);
 
     // =========================================================================
     // 2.2 Buffer Insertion Transformation API
@@ -871,24 +880,31 @@ public:
     // 對 fanout > maxFanout 的 net 插入 buffer
     // 讓每個 gate 的 fanout ≤ maxFanout，預設 maxFanout = 4
     BufferInsertionReport insertBuffersForFanout(int maxFanout = 4);
+    NetlistEditReport insertBuffersForFanoutWithReport(int maxFanout = 4);
 
     // 針對特定的 Net (支援 Bus) 限制其 Fanout，插入 Cascaded Buffer
     BufferInsertionReport insertBuffersForSpecificNet(const std::string& wireName, int maxFanout = 4);
+    NetlistEditReport insertBuffersForSpecificNetWithReport(const std::string& wireName, int maxFanout = 4);
 
     //  解決 D-FF 的 Clock 與 Reset High-Fanout 問題，自動尋找控制線路並建立 Cascaded Buffer Tree
     BufferInsertionReport insertBuffersForDffControl(int maxFanout, bool processClock, bool processReset);
+    NetlistEditReport insertBuffersForDffControlWithReport(int maxFanout, bool processClock, bool processReset);
 
     // 為每個負載加上獨立 Buffer
     BufferInsertionReport insertBuffersOnEachLoad(const std::string& wireName);
+    NetlistEditReport insertBuffersOnEachLoadWithReport(const std::string& wireName);
 
     // 在訊號的驅動端加上單一 Buffer
     BufferInsertionReport insertBufferAtDriver(const std::string& wireName);
+    NetlistEditReport insertBufferAtDriverWithReport(const std::string& wireName);
 
     // 在特定的 Gate 前面增加 Buffer (只阻斷指定的 wire 到該 Gate 的連線)
     BufferInsertionReport insertBufferBeforeGate(const std::string& wireName, const std::string& targetGateName);
+    NetlistEditReport insertBufferBeforeGateWithReport(const std::string& wireName, const std::string& targetGateName);
 
     // 針對某種類型的 Gate，讓它的輸入或輸出都接上 Buffer
     BufferInsertionReport insertBuffersByGateType(GateType type, bool bufferInputs = true, bool bufferOutputs = true);
+    NetlistEditReport insertBuffersByGateTypeWithReport(GateType type, bool bufferInputs = true, bool bufferOutputs = true);
 
     // =========================================================================
     // 2.3 Validation / Rollback Helpers
@@ -906,6 +922,37 @@ public:
     // 回傳 Netlist 的深拷貝，供 rollback 使用。
     Netlist cloneForRollback() const;
 
+    // 收集修改型 report 共用的設計統計快照。
+    NetlistStats collectNetlistStats() const;
+
+    // 計算 before / after 統計差異，供 NetlistEditReport 使用。
+    static NetlistDiff diffStats(const NetlistStats& before, const NetlistStats& after);
+
+    // 驗證修改後 netlist；目前只做 structure / Problem A constraint。
+    static EditValidationResult validateEditResult(const Netlist& before, const Netlist& after);
+
+    // 建立修改前後的 global critical depth comparison；targetDepth < 0 表示不檢查 target。
+    static DepthChange buildDepthChangeReport(
+        const Netlist& before,
+        const Netlist& after,
+        const std::string& endpointName = "",
+        int targetDepth = -1);
+
+    // 建立修改型操作的統一 report。read-only query 不使用此格式。
+    static NetlistEditReport buildEditReport(
+        const Netlist& before,
+        const Netlist& after,
+        const std::string& operationName,
+        NetlistEditOperationKind kind = NetlistEditOperationKind::Unknown);
+
+    // Mark a report as equivalence-certified by a known safe local rule.
+    // This is lighter than whole-design SAT and should only be used by wrappers
+    // whose implementation has an operation-specific equivalence argument.
+    static void certifyEquivalence(
+        NetlistEditReport& report,
+        EquivalenceCheckMethod method,
+        const std::string& message);
+
     // =========================================================================
     // 2.4 Legacy Cleanup Execution Passes
     //
@@ -917,10 +964,13 @@ public:
     // =========================================================================
  
     int trimDeadLogic();
+    NetlistEditReport trimDeadLogicWithReport();
     int collapseBackToBackInverters();
+    NetlistEditReport collapseBackToBackInvertersWithReport();
     // 合併結構等價的 gate（相同 type + 相同 input net 集合）
     // 回傳合併的 gate 數量
     int mergeEquivalentGates();
+    NetlistEditReport mergeEquivalentGatesWithReport();
 
     // =========================================================================
     // 2.5 Buffer Cleanup Building Blocks
@@ -937,6 +987,7 @@ public:
  
     // bypass 全局所有可移除的 BUF gate，回傳移除數量
     int cleanupAllRemovableBuffers();
+    NetlistEditReport cleanupAllRemovableBuffersWithReport();
  
     // =========================================================================
     // 2.6 Double Inverter Removal Building Blocks
@@ -994,6 +1045,7 @@ public:
  
     // 移除所有 dangling gate，回傳移除數量
     int removeDanglingLogic();
+    NetlistEditReport removeDanglingLogicWithReport();
  
     // =========================================================================
     // 2.10 Structural Hashing Building Blocks
@@ -1010,6 +1062,7 @@ public:
  
     // 合併所有結構等價的 gate 群組，回傳合併數量
     int mergeStructurallyEquivalentGates();
+    NetlistEditReport mergeStructurallyEquivalentGatesWithReport();
 
     // =========================================================================
     // B-5: Unique name generator
@@ -1030,10 +1083,13 @@ public:
 
     // 把 gate 的所有 load 改接到 sourceNet，gate 本身消失
     bool replaceGateWithNet(int gateId, int sourceNetId);
+    NetlistEditReport replaceGateWithNetWithReport(int gateId, int sourceNetId);
     // 把 gate 替換成常數 net
     bool replaceGateWithConstant(int gateId, int constNetId);
+    NetlistEditReport replaceGateWithConstantWithReport(int gateId, int constNetId);
     // 把 gate 改寫成 NOT(sourceNet)
     bool replaceGateWithNotOfNet(int gateId, int sourceNetId);
+    NetlistEditReport replaceGateWithNotOfNetWithReport(int gateId, int sourceNetId);
     // 新增一個 gate 並讓它驅動 outputNet，回傳新 gate ID
     int createGateDrivingNet(GateType type, const std::vector<int>& inputNetIds,
                             int outputNetId, const std::string& nameHint = "");
@@ -1061,13 +1117,16 @@ public:
 
     // 把 targetNet 的 driver 換成 newDriverGate（保留 net 名稱與 PO flag）
     bool replaceDriverOfNet(int targetNetId, int newDriverGateId);
+    NetlistEditReport replaceDriverOfNetWithReport(int targetNetId, int newDriverGateId);
     // 把 gate 的 output 改接到 newOutputNetId
     bool rewireGateOutputToExistingNet(int gateId, int newOutputNetId);
+    NetlistEditReport rewireGateOutputToExistingNetWithReport(int gateId, int newOutputNetId);
     // 保留 PO net，插入新 gate 驅動它
     bool preservePortNetAndReplaceDriver(int poNetId, GateType newGateType,
                                         const std::vector<int>& inputNetIds);
     // 把 targetNet 的功能換成 sourceNet，保留 targetNet 名稱
     bool replaceNetFunctionWithNetKeepingName(int targetNetId, int sourceNetId);
+    NetlistEditReport replaceNetFunctionWithNetKeepingNameWithReport(int targetNetId, int sourceNetId);
 
     // =========================================================================
     // B-3: Net merge / net bypass primitive
@@ -1075,14 +1134,19 @@ public:
 
     // 把 fromNet 完全合併到 toNet
     bool mergeNetIntoNet(int fromNetId, int toNetId);
+    NetlistEditReport mergeNetIntoNetWithReport(int fromNetId, int toNetId);
     // bypass removedNet，讓所有 load 改接到 replacementNet（保留 PO 語意）
     bool bypassNetKeepingPortSemantics(int removedNetId, int replacementNetId);
+    NetlistEditReport bypassNetKeepingPortSemanticsWithReport(int removedNetId, int replacementNetId);
     // 把 oldNet 的所有 load 改接到 newNet
     bool redirectAllLoads(int oldNetId, int newNetId, bool allowDuplicateLoads = false);
+    NetlistEditReport redirectAllLoadsWithReport(int oldNetId, int newNetId, bool allowDuplicateLoads = false);
     // 如果 net 沒有任何 load 且非 PO/PI/const，移除它
     bool removeNetIfUnused(int netId);
+    NetlistEditReport removeNetIfUnusedWithReport(int netId);
     // 掃描所有 net，移除所有未使用的 net
     int removeUnusedNets();
+    NetlistEditReport removeUnusedNetsWithReport();
 
     // =========================================================================
     // B-6: Transaction / rollback primitive
@@ -1096,15 +1160,18 @@ public:
     // =========================================================================
 
     int simplifyAllGatesWithConstants();
+    NetlistEditReport simplifyAllGatesWithConstantsWithReport();
     int simplifyAllSameInputGates();
+    NetlistEditReport simplifyAllSameInputGatesWithReport();
     int runLocalSimplificationFixpoint();
+    NetlistEditReport runLocalSimplificationFixpointWithReport();
 
     // =========================================================================
     // B-8: compactRemovedGatesWithIdMap
     // =========================================================================
 
     struct CompactResult {
-        int removedGateCount;
+        int removedGateCount = 0;
         std::unordered_map<int, int> oldToNewGateId;
         std::unordered_map<int, int> newToOldGateId;
     };
@@ -1129,6 +1196,19 @@ public:
 
     using OptimizationResult = ::OptimizationResult;
     using OptimizationCandidate = ::OptimizationCandidate;
+    using OptPassKind = ::OptPassKind;
+    using OptQueryRequest = ::OptQueryRequest;
+    using OptCandidate = ::OptCandidate;
+    using OptQueryReport = ::OptQueryReport;
+    using OptApplyRequest = ::OptApplyRequest;
+    using EditCommandKind = ::EditCommandKind;
+    using EditApplyRequest = ::EditApplyRequest;
+    using NetlistStats = ::NetlistStats;
+    using NetlistDiff = ::NetlistDiff;
+    using EditValidationResult = ::EditValidationResult;
+    using NetlistEditReport = ::NetlistEditReport;
+    using NetlistEditOperationKind = ::NetlistEditOperationKind;
+    using EquivalenceCheckMethod = ::EquivalenceCheckMethod;
 
     // =========================================================================
     // 3.2 Depth-Driven Candidate Builder
@@ -1161,7 +1241,18 @@ public:
         const OptimizationCandidate& candidate) const;
 
     // =========================================================================
-    // 3.4 Future Optimization Rewrite Pass API
+    // 3.4 High-Level OPT Flow Skeleton
+    //
+    // 第一版：query 只列候選，不修改 netlist；apply 套用整個 pass 並回傳
+    // NetlistEditReport。candidate-specific apply 留給下一版。
+    // =========================================================================
+
+    OptQueryReport runOptQuery(const OptQueryRequest& request) const;
+    NetlistEditReport runOptApply(const OptApplyRequest& request);
+    NetlistEditReport runEditApply(const EditApplyRequest& request);
+
+    // =========================================================================
+    // 3.5 Future Optimization Rewrite Pass API
     //
     // 這一層未來會放真正修改 netlist 的 pass。
     // 所有 pass 都應該搭配 structural / function validation，失敗時 rollback。
@@ -1171,7 +1262,7 @@ public:
     // OptimizationResult cleanupBufferChain(const OptimizationCandidate& candidate);
 
     // =========================================================================
-    // 3.5 Future Optimization Validation / Rollback API
+    // 3.6 Future Optimization Validation / Rollback API
     //
     // 結構驗證、Problem A 限制檢查與 rollback snapshot 目前放在 2.3。
     // 未來若加入 optimization-specific accept / rollback flow，應組合：

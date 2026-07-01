@@ -1,0 +1,7 @@
+Total paths: 1
+
+Path 0
+  depth: 9
+  nets: a -> n_and -> n_or -> n_nand -> n_nor -> n_b1 -> n_b2 -> n_b3 -> n_buf -> y
+  gates: g_and -> g_or -> g_nand -> g_nor -> g_b1 -> g_b2 -> g_b3 -> g_buf -> g_y
+

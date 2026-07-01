@@ -481,12 +481,21 @@ public:
                                 const std::map<GateType, int>& targetConstraints, 
                                 const std::map<GateType, int>& allowedConstraints, // 建議預設為雙向
                                 bool verbose = false);
+    NetlistEditReport mapTechnologyWithReport(Netlist& netlist,
+                                               const std::map<GateType, int>& targetConstraints,
+                                               const std::map<GateType, int>& allowedConstraints,
+                                               bool verbose = false);
     // 針對特定 Cone 的 API
     TechMapReport mapTechnologyForCone(Netlist& netlist, 
                                        const std::map<GateType, int>& targetConstraints, 
                                        const std::map<GateType, int>& allowedConstraints, 
                                        const ConeResult& targetCone = ConeResult(), 
                                        bool verbose = false);
+    NetlistEditReport mapTechnologyForConeWithReport(Netlist& netlist,
+                                                     const std::map<GateType, int>& targetConstraints,
+                                                     const std::map<GateType, int>& allowedConstraints,
+                                                     const ConeResult& targetCone = ConeResult(),
+                                                     bool verbose = false);
 
     // 根據給定的 Gate 組成，計算最大可能的輸入腳位數 (N_max)
     int calculateMaxInputs(const std::map<GateType, int>& gateCounts) const;
@@ -539,28 +548,37 @@ public:
     // 基礎網路轉換 (AIG 相關)
     // 轉為 AIG (And-Inverter Graph)
     TechMapReport convertToAndNot(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);
+    NetlistEditReport convertToAndNotWithReport(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);
     // 轉為 OIG (Or-Inverter Graph)
     TechMapReport convertToOrNot(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);         
+    NetlistEditReport convertToOrNotWithReport(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);
     
     // 萬用閘轉換 (Universal Gates)
     // 轉為純 NAND 網路 (適合 CMOS 實體合成)
     TechMapReport convertToNand(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);
+    NetlistEditReport convertToNandWithReport(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);
     // 轉為純 NOR 網路
     TechMapReport convertToNor(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);          
+    NetlistEditReport convertToNorWithReport(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);
 
     // 密碼學與特定代數結構轉換
     // 轉為 XAG (XOR-AND Graph)
     TechMapReport convertToXag(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);
+    NetlistEditReport convertToXagWithReport(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);
     // 轉為 ANF 網路 (代數正規式: XOR + AND)
     TechMapReport convertToAnf(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false); 
+    NetlistEditReport convertToAnfWithReport(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);
     
     // 特殊邏輯組合
     // 轉為 {XOR, OR}
     TechMapReport convertToXorOr(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);
+    NetlistEditReport convertToXorOrWithReport(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);
     // 轉為 {XNOR, AND}
     TechMapReport convertToXnorAnd(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);
+    NetlistEditReport convertToXnorAndWithReport(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);
     // 轉為 {XNOR, OR}
     TechMapReport convertToXnorOr(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);
+    NetlistEditReport convertToXnorOrWithReport(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);
         
     // 提供給使用者的萬用任意修改 API
     // 預設對整個電路 (WHOLE_NETLIST) 進行操作，此時 name 不需填寫
@@ -570,4 +588,10 @@ public:
                                       TargetScope scope, 
                                       const std::string& name,
                                       bool verbose);
+    NetlistEditReport customMapTechnologyWithReport(Netlist& netlist,
+                                                    const std::map<GateType, int>& targetConstraints,
+                                                    const std::map<GateType, int>& allowedConstraints,
+                                                    TargetScope scope,
+                                                    const std::string& name,
+                                                    bool verbose);
 };
