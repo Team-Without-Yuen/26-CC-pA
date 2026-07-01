@@ -861,6 +861,9 @@ public:
     // 把所有接到 oldNetId 的 gate 改接到 newNetId，同時更新 loadGateIds。
     bool replaceAllLoadsOfNet(int oldNetId, int newNetId);
 
+    // 移除舊的 PO 中的一個 bit (oldNetId)，改為使用 newNetId
+    bool swapPrimaryOutputNet(int oldNetId, int newNetId);
+
     // =========================================================================
     // 2.2 Buffer Insertion Transformation API
     //

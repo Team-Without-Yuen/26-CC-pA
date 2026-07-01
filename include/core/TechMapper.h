@@ -264,12 +264,6 @@ public:
         
         // 用 {NOT, NOR}：(NOT A) NOR (NOT B)
         addBidirectionalRule("AND_to_NOT_NOR", _AND(A(), B()), _NOR(_NOT(A()), _NOT(B())));
-        
-        // 用 {XOR, OR}：(A XOR B) XOR (A OR B)
-        addBidirectionalRule("AND_to_XOR_OR", _AND(A(), B()), _XOR(_XOR(A(), B()), _OR(A(), B())));
-        
-        // 用 {XNOR, OR}：(A XNOR B) XNOR (A OR B)
-        addBidirectionalRule("AND_to_XNOR_OR", _AND(A(), B()), _XNOR(_XNOR(A(), B()), _OR(A(), B())));
 
         // =======================================================
         // OR 閘的替換規則
@@ -294,12 +288,6 @@ public:
         
         // 用 {NOT, NOR}：NOT (A NOR B)
         addBidirectionalRule("OR_to_NOT_NOR", _OR(A(), B()), _NOT(_NOR(A(), B())));
-        
-        // 用 {XOR, AND}：(A XOR B) XOR (A AND B)
-        addBidirectionalRule("OR_to_XOR_AND", _OR(A(), B()), _XOR(_XOR(A(), B()), _AND(A(), B())));
-        
-        // 用 {XNOR, AND}：(A XNOR B) XNOR (A AND B)
-        addBidirectionalRule("OR_to_XNOR_AND", _OR(A(), B()), _XNOR(_XNOR(A(), B()), _AND(A(), B())));
 
         // =======================================================
         // NAND 閘的替換規則
@@ -511,13 +499,6 @@ public:
                                     TechMapReport& finalReport, 
                                     bool verbose);
 
-    // 輔助函式：自動過濾不需要的 Gate，並呼叫轉換引擎
-    TechMapReport convertToBasis(Netlist& netlist, 
-                                 const std::vector<GateType>& allowedTypes, 
-                                 TargetScope scope = TargetScope::WHOLE_NETLIST, 
-                                 const std::string& name = "", 
-                                 bool verbose = false);
-
     // 輔助函式：產生所有積木組合 (重複組合)
     void generateCombosRec(const std::vector<GateType>& lib, 
                            int k, 
@@ -530,7 +511,9 @@ public:
                                                         int N, 
                                                         int currentArea, 
                                                         TechMapReport& report, 
-                                                        bool verbose);
+                                                        bool verbose,
+                                                        const std::vector<GateType>& allowedTypes, 
+                                                        const std::vector<GateType>& bannedTypes);
 
     // 輔助函式：遞迴生成合法的 Fence (層級分配)
     // remaining_nodes: 剩下還有幾顆閘可以分配
@@ -560,41 +543,41 @@ public:
                                                          int currentArea, 
                                                          TechMapReport& report, 
                                                          bool verbose,
-                                                         int maxAreaOverhead);
+                                                         int maxAreaOverhead,
+                                                         const std::vector<GateType>& allowedTypes, 
+                                                         const std::vector<GateType>& bannedTypes);
 
     //----------------------------------------------------------------------------------------------------------------------------------------------------
+    // 高階 API (並非直接給LLM使用)
 
-    // 如果不傳入後兩個參數，預設就是執行 WHOLE_NETLIST 的轉換
-    // 基礎網路轉換 (AIG 相關)
-    // 轉為 AIG (And-Inverter Graph)
-    TechMapReport convertToAndNot(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);
-    // 轉為 OIG (Or-Inverter Graph)
-    TechMapReport convertToOrNot(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);         
-    
-    // 萬用閘轉換 (Universal Gates)
-    // 轉為純 NAND 網路 (適合 CMOS 實體合成)
-    TechMapReport convertToNand(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);
-    // 轉為純 NOR 網路
-    TechMapReport convertToNor(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);          
-
-    // 密碼學與特定代數結構轉換
-    // 轉為 XAG (XOR-AND Graph)
-    TechMapReport convertToXag(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);
-    // 轉為 ANF 網路 (代數正規式: XOR + AND)
-    TechMapReport convertToAnf(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false); 
-    
-    // 特殊邏輯組合
-    // 轉為 {XOR, OR}
-    TechMapReport convertToXorOr(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);
-    // 轉為 {XNOR, AND}
-    TechMapReport convertToXnorAnd(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);
-    // 轉為 {XNOR, OR}
-    TechMapReport convertToXnorOr(Netlist& netlist, TargetScope scope = TargetScope::WHOLE_NETLIST, const std::string& name = "", bool verbose = false);
+    // ============================================================================
+    // 全域/區域 邏輯閘轉換引擎 (Technology Mapping / Basis Conversion)
+    // ============================================================================
+    // 透過指定 allowedTypes (白名單) 與 bannedTypes (黑名單)，可以自由組合出以下經典的 EDA 拓樸結構：
+    //   - AIG (And-Inverter Graph) : allowedTypes = {AND, NOT}
+    //   - OIG (Or-Inverter Graph)  : allowedTypes = {OR, NOT}
+    //   - NAND 網路 (高速萬用閘)   : allowedTypes = {NAND}
+    //   - XAG (XOR-AND Graph)      : allowedTypes = {XOR, AND, NOT} (常用於全同態加密與量子運算)
+    //   - ANF (代數正規式)         : allowedTypes = {XOR, AND} (無 NOT 閘的特化結構)
+    // ============================================================================
+    // netlist      : 要進行操作與替換的實體電路
+    // allowedTypes : 「允許使用」的白名單。若提供此名單，不在名單上的閘都會被強制拆除。若為空，代表無白名單限制。
+    // bannedTypes  : 「禁止使用」的黑名單。若只想單獨消滅某種閘 (例如只拆除 XOR/XNOR)，可留空白名單，只填黑名單。
+    // scope        : 圖形匹配與替換的掃描範圍
+    // name         : 搭配 scope 使用的目標名稱
+    // verbose      : 是否印出詳細的轉換日誌
+    // ============================================================================
+    TechMapReport convertToBasis(Netlist& netlist,  
+                                 TargetScope scope, 
+                                 const std::string& name, 
+                                 const std::vector<GateType>& allowedTypes, 
+                                 const std::vector<GateType>& bannedTypes = {},
+                                 bool verbose = false);
         
     // 自訂規則映射引擎 (Interactive Custom Technology Mapping)
     // 此函式允許使用者透過指定一個替換規則中的「欲拔除的積木 (Target)」與「欲生成的積木 (Allowed)」的數量限制
     // 在電路上進行子圖同構掃描 (Subgraph Matching) 與結構替換，一次只會進行一個規則的替換。
-    // 若內建查找表 (LUT) 中無符合的規則，會自動觸發 SAT 引擎進行等價拓樸的學習，會學習多個規則，但是只會套用一個規則至電路。
+    // 若內建查找表 (LUT) 中無符合的規則，會自動觸發 SAT 引擎進行等價拓樸的學習，會學習多個規則。
     // netlist            : 要進行掃描與結構替換的實體電路網表 (Netlist)
     // targetConstraints  : 替換條件 (LHS) - 使用者想要「拔除/尋找」的 Gate 類型與數量限制 ( -1 為無限制)
     // allowedConstraints : 替換條件 (RHS) - 使用者允許「新增/替換成」的 Gate 類型與數量限制 ( -1 無限制)
@@ -608,7 +591,7 @@ public:
                                       const std::map<GateType, int>& allowedConstraints, 
                                       TargetScope scope, 
                                       const std::string& name,
-                                      bool verbose);
+                                      bool verbose = false);
 
     // 全域電路優化引擎 (Pattern Optimization Engine)
     // 針對給定的目標形狀 (LHS) 進行自動化的「面積」或「深度」化簡。
@@ -619,12 +602,16 @@ public:
     // name      : 搭配 scope 使用的目標名稱 (例如指定特定的 Net ID 或 Gate ID)
     // verbose   : 是否印出詳細的推論過程與優化日誌 (true 為開啟)
     // maxAreaOverhead : 針對深度優化時，容許的額外面積極限 (預設為 0，代表由引擎動態決定)
+    // allowedTypes    : RHS 允許使用的閘類型白名單 (例如 AIG 模式傳入 {AND, NOT})
+    // bannedTypes     : RHS 嚴格禁止使用的閘類型黑名單
     // 回傳值    : TechMapReport (包含優化執行的結果狀態、增減的邏輯閘數量以及詳細訊息)
     TechMapReport optimizePattern(Netlist& netlist,
                                   std::shared_ptr<PatternNode> lhsTarget,
                                   OptimizationGoal goal,
                                   TargetScope scope, 
                                   const std::string& name, 
-                                  bool verbose,
-                                  int maxAreaOverhead = 0);
+                                  bool verbose = false,
+                                  int maxAreaOverhead = 0,
+                                  const std::vector<GateType>& allowedTypes = {},
+                                  const std::vector<GateType>& bannedTypes = {});
 };

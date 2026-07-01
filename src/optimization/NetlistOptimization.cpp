@@ -434,23 +434,37 @@ Netlist Netlist::cloneForRollback() const {
 bool Netlist::replaceAllLoadsOfNet(int oldNetId, int newNetId) {
     if (oldNetId < 0 || oldNetId >= (int)nets.size()) return false;
     if (newNetId < 0 || newNetId >= (int)nets.size()) return false;
-    if (oldNetId == newNetId) return false;
+    if (oldNetId == newNetId) return true; // 已經是同一個，直接成功
 
     Net& oldNet = nets[oldNetId];
     Net& newNet = nets[newNetId];
 
-    if (oldNet.loadGateIds.empty()) return false;
+    if (oldNet.loadGateIds.empty()) return true; // 沒東西要搬，視為成功
 
+    // 1. 把所有 Load Gate 內部的腳位接線換掉，並把 ID 丟給 newNet
     for (int lgid : oldNet.loadGateIds) {
         if (lgid < 0 || lgid >= (int)gates.size()) continue;
+        
         Gate& g = gates[lgid];
-        for (int k = 0; k < (int)g.inputNetIds.size(); k++)
-            if (g.inputNetIds[k] == oldNetId)
+        for (int k = 0; k < (int)g.inputNetIds.size(); k++) {
+            if (g.inputNetIds[k] == oldNetId) {
                 g.inputNetIds[k] = newNetId;
+            }
+        }
+        
+        // 先無腦加進去，等一下一次性清理
         newNet.loadGateIds.push_back(lgid);
     }
 
+    // 2. 清除舊 Net 的負載
     oldNet.loadGateIds.clear();
+
+    // 3. 確保 newNet 的 loadGateIds 裡面沒有重複的 Gate ID
+    // 這樣可以防止同一個 Gate 接了多個相同的 Net 時，產生重複的記錄
+    std::sort(newNet.loadGateIds.begin(), newNet.loadGateIds.end());
+    auto last = std::unique(newNet.loadGateIds.begin(), newNet.loadGateIds.end());
+    newNet.loadGateIds.erase(last, newNet.loadGateIds.end());
+
     return true;
 }
 
@@ -808,14 +822,14 @@ std::vector<int> Netlist::findDanglingGateIds() const {
 
 
 // =========================================================================
-// 2. 懸空邏輯清理 (Dangling Logic Removal) - 大賽安全防護版
+// 2. 懸空邏輯清理 (Dangling Logic Removal)
 // =========================================================================
 int Netlist::removeDanglingLogic() {
     std::unordered_set<int> usefulGates;
     std::unordered_set<int> usefulNets;
     std::queue<int> q;
 
-    // 【雙重保險起點】同時檢查 nets 裡標記為 isPO 的，以及找出最後一級可能驅動 PO 的 Gate
+    // 起點 A：真正的 Primary Outputs
     for (int i = 0; i < (int)nets.size(); i++) {
         if (nets[i].isPO) {
             usefulNets.insert(i);
@@ -823,39 +837,17 @@ int Netlist::removeDanglingLogic() {
         }
     }
 
-    // 如果 usefulNets 竟然是空的（代表 Reader 標記漏掉或被洗掉），
-    // 強制把所有「輸出端網線沒有被任何其他閘當作 input」的活閘輸出線，通通當成 PO 保護起來！
-    if (q.empty()) {
-        std::vector<int> isUsedAsInput((int)nets.size(), 0);
-        for (const auto& g : gates) {
-            if (g.type == GateType::UNKNOWN) continue;
-            for (int inId : g.inputNetIds) {
-                if (inId >= 0) isUsedAsInput[inId] = 1;
-            }
-        }
-        for (int i = 0; i < (int)gates.size(); i++) {
-            if (gates[i].type == GateType::UNKNOWN) continue;
-            int onet = gates[i].outputNetId;
-            if (onet >= 0 && isUsedAsInput[onet] == 0) {
-                // 這個閘的輸出沒有任何人用，它在目前殘存結構中就是事實上的 PO！
-                nets[onet].isPO = true; 
-                usefulNets.insert(onet);
-                q.push(onet);
-            }
-        }
-    }
-
-    // 反向 BFS 擴散標記
-    while (!q.empty()) {
-        int currNetId = q.front();
-        q.pop();
-
-        int dgid = nets[currNetId].driverGateId;
-        if (dgid < 0) continue; 
-
-        if (gates[dgid].type != GateType::UNKNOWN && !usefulGates.count(dgid)) {
-            usefulGates.insert(dgid);
-            for (int inNetId : gates[dgid].inputNetIds) {
+    // 起點 B：循序邏輯元素 (DFFs)
+    // 對於純組合邏輯最佳化而言，DFF 必須被視為「不可刪除的有用節點」
+    // 且驅動 DFF 的訊號線 (D, CLK, RN, SN) 必須被視為 Pseudo-PO 嚴格保護！
+    for (int i = 0; i < (int)gates.size(); i++) {
+        if (!isValidGateId(i)) continue;
+        
+        if (gates[i].type == GateType::DFF) {
+            usefulGates.insert(i); // 保護 DFF 本身不被刪除
+            
+            // 將 DFF 的所有輸入線加入有用清單，並當作 BFS 的起點往上游追溯
+            for (int inNetId : gates[i].inputNetIds) {
                 if (inNetId >= 0 && !usefulNets.count(inNetId)) {
                     usefulNets.insert(inNetId);
                     q.push(inNetId);
@@ -864,34 +856,44 @@ int Netlist::removeDanglingLogic() {
         }
     }
 
-    // 最終刪除階段
-    int removedCount = 0;
-    for (int i = 0; i < (int)gates.size(); i++) {
-        if (gates[i].type == GateType::UNKNOWN) continue;
+    // 防呆：如果連 PO 或 DFF 都沒有，代表電路異常
+    if (q.empty()) {
+        return 0; 
+    }
 
-        int outNetId = gates[i].outputNetId;
+    // 2. 核心演算法：反向 BFS 擴散標記 (Reverse Transitive Fanin Traversal)
+    while (!q.empty()) {
+        int currNetId = q.front();
+        q.pop();
+
+        int driverId = nets[currNetId].driverGateId;
         
-        // 核心強制保護：如果它驅動的 Net 已經被我們確認是 usefulNets (包含所有PO路徑)，
-        // 或者該 Net 標記為 isPO，絕對、無條件跳過，不准設為 UNKNOWN！
-        if (outNetId >= 0 && (nets[outNetId].isPO || usefulNets.count(outNetId))) {
-            // 如果上游被優化拔光了，為了讓它成為合法節點，強制轉成 BUF
-            if (gates[i].type != GateType::BUF && gates[i].inputNetIds.empty()) {
-                gates[i].type = GateType::BUF;
-                // 嘗試接向常數或隨便一個 PI 訊號源，避免 dangling pin 錯誤
-                for (int n = 0; n < (int)nets.size(); n++) {
-                    if (nets[n].isPI || nets[n].isConst) {
-                        gates[i].inputNetIds = { n };
-                        nets[n].loadGateIds.push_back(i);
-                        break;
+        // 如果這條線有 Driver，且該 Driver 是有效的合法閘
+        if (driverId >= 0 && isValidGateId(driverId)) {
+            // 如果這個 Gate 尚未被標記為有用
+            if (!usefulGates.count(driverId)) {
+                usefulGates.insert(driverId);
+                
+                // 將這個 Gate 的所有輸入線加入有用清單，並推入 Queue 繼續往上游走訪
+                for (int inNetId : gates[driverId].inputNetIds) {
+                    if (inNetId >= 0 && !usefulNets.count(inNetId)) {
+                        usefulNets.insert(inNetId);
+                        q.push(inNetId);
                     }
                 }
             }
-            continue; 
         }
+    }
 
-        // 真正沒用且跟輸出毫無關聯的閘，才執行刪除
+    // 3. 最終刪除階段 (Garbage Collection)
+    int removedCount = 0;
+    for (int i = 0; i < (int)gates.size(); i++) {
+        if (!isValidGateId(i)) continue;
+
+        // 如果這個閘不在 usefulGates 裡面，代表它與任何 PO 都沒有關聯
         if (!usefulGates.count(i)) {
-            gates[i].type = GateType::UNKNOWN;
+            // 統一呼叫 API 來刪除，確保 loadGateIds 等關聯指標被乾淨清除
+            removeGate(i);
             removedCount++;
         }
     }
