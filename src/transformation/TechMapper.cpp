@@ -202,6 +202,7 @@ bool TechMapper::isRuleSatisfyingConstraints(const TechMapRule& rule,
 // 統一的篩選器：取得所有合法的規則，並自動按照「面積優化程度」排序
 std::vector<TechMapRule> TechMapper::getValidRules(const std::map<GateType, int>& lhsConstraints, 
                                                    const std::map<GateType, int>& rhsConstraints,
+                                                   const std::vector<RuleSource>& allowedSources,
                                                    bool requireAreaReduction) const {
     
     std::vector<TechMapRule> validRules;
@@ -210,6 +211,12 @@ std::vector<TechMapRule> TechMapper::getValidRules(const std::map<GateType, int>
         // 使用原本封裝好的正確函式，檢查規則是否符合指定的積木種類與數量
         if (isRuleSatisfyingConstraints(rule, lhsConstraints, rhsConstraints)) {
             
+            // 過濾規則來源
+            if (!allowedSources.empty()) {
+                if (std::find(allowedSources.begin(), allowedSources.end(), rule.source) == allowedSources.end()) {
+                    continue; // 該規則的來源不在允許名單內，直接跳過
+                }
+            }
             // 決定是否放行此規則
             // 1. 如果不強制要求面積縮小 (requireAreaReduction == false)，直接放行
             // 2. 如果強制要求面積縮小，則 Delta 必須 < 0
@@ -531,6 +538,7 @@ TechMapReport TechMapper::mapTechnologyCore(Netlist& netlist,
                                             const std::map<GateType, int>& targetConstraints, // 拔除目標限制
                                             const std::map<GateType, int>& allowedConstraints, // 生成目標限制
                                             const std::unordered_set<int>* scopeGates,
+                                            const std::vector<RuleSource>& allowedSources,
                                             bool verbose) {
     TechMapReport report;
     
@@ -541,7 +549,7 @@ TechMapReport TechMapper::mapTechnologyCore(Netlist& netlist,
 
     // 取得所有合法的「樹到樹」雙向規則 (已自動按 Cost 排序)
     // 這裡呼叫的是我們之前合併好的單一 API
-    std::vector<TechMapRule> validRules = getValidRules(targetConstraints, allowedConstraints);
+    std::vector<TechMapRule> validRules = getValidRules(targetConstraints, allowedConstraints, allowedSources);
 
     // 執行統一的替換引擎
     bool mappingChanged = executeMappingPass(netlist, scopeGates, validRules, report, verbose);
@@ -587,9 +595,10 @@ TechMapReport TechMapper::mapTechnologyCore(Netlist& netlist,
 TechMapReport TechMapper::mapTechnology(Netlist& netlist, 
                                         const std::map<GateType, int>& targetConstraints, 
                                         const std::map<GateType, int>& allowedConstraints, 
+                                        const std::vector<RuleSource>& allowedSources,
                                         bool verbose) {
     // 直接將參數與 verbose 往下傳遞 (已移除無用的 MapStrategy)
-    return mapTechnologyCore(netlist, targetConstraints, allowedConstraints, nullptr, verbose);
+    return mapTechnologyCore(netlist, targetConstraints, allowedConstraints, nullptr, allowedSources, verbose);
 }
 
 // 針對特定 Cone (邏輯錐) 的 API 實作 (局部優化 / ECO 常用)
@@ -597,6 +606,7 @@ TechMapReport TechMapper::mapTechnologyForCone(Netlist& netlist,
                                                const std::map<GateType, int>& targetConstraints, 
                                                const std::map<GateType, int>& allowedConstraints, 
                                                const ConeResult& targetCone,
+                                               const std::vector<RuleSource>& allowedSources,
                                                bool verbose) {
                                               
     // 呼叫 Netlist 原本就有的 Function 取得該邏輯錐內的所有 Gate ID 陣列
@@ -606,7 +616,7 @@ TechMapReport TechMapper::mapTechnologyForCone(Netlist& netlist,
     std::unordered_set<int> scopeGates(coneGateVec.begin(), coneGateVec.end());
     
     // 呼叫核心引擎，並將 scopeGates 的記憶體位址傳入
-    return mapTechnologyCore(netlist, targetConstraints, allowedConstraints, &scopeGates, verbose);
+    return mapTechnologyCore(netlist, targetConstraints, allowedConstraints, &scopeGates, allowedSources, verbose);
 }
 
 // 精確規則應用引擎，繞過 mapTechnologyCore 的查表與約束過濾機制
@@ -2023,6 +2033,9 @@ TechMapReport TechMapper::convertToBasis(Netlist& netlist,
         return finalReport;
     }
 
+    // 定義 Basis Conversion 允許的規則來源
+    std::vector<RuleSource> strictSources = { RuleSource::STANDARD_LIBRARY };
+
     // 3. 迴圈依序消滅每一種不合法的 Gate
     for (GateType targetType : targetsToRemove) {
         
@@ -2038,19 +2051,19 @@ TechMapReport TechMapper::convertToBasis(Netlist& netlist,
         // 呼叫底層對應 Scope 的遞迴查找與替換引擎
         switch (scope) {
             case TargetScope::WHOLE_NETLIST:
-                stepReport = mapTechnology(netlist, targetConstraints, allowedConstraints, verbose);
+                stepReport = mapTechnology(netlist, targetConstraints, allowedConstraints, strictSources, verbose);
                 break;
             case TargetScope::NET_FANIN:
-                stepReport = mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getTransitiveFaninCone(name), verbose);
+                stepReport = mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getTransitiveFaninCone(name), strictSources, verbose);
                 break;
             case TargetScope::NET_FANOUT:
-                stepReport = mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getTransitiveFanoutCone(name), verbose);
+                stepReport = mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getTransitiveFanoutCone(name), strictSources, verbose);
                 break;
             case TargetScope::GATE_FANIN:
-                stepReport = mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getGateTransitiveFaninCone(name), verbose);
+                stepReport = mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getGateTransitiveFaninCone(name), strictSources, verbose);
                 break;
             case TargetScope::GATE_FANOUT:
-                stepReport = mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getGateTransitiveFanoutCone(name), verbose);
+                stepReport = mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getGateTransitiveFanoutCone(name), strictSources, verbose);
                 break;
             default:
                 finalReport.status = TechMapStatus::ERROR_NOT_EQUIVALENT;
@@ -2093,7 +2106,7 @@ TechMapReport TechMapper::convertToBasis(Netlist& netlist,
 
 // 自訂規則映射引擎 (Interactive Custom Technology Mapping)
 // 此函式允許使用者透過指定一個替換規則中的「欲拔除的積木 (Target)」與「欲生成的積木 (Allowed)」的數量限制
-// 在電路上進行子圖同構掃描 (Subgraph Matching) 與結構替換，一次只會進行一個規則的替換。
+// 在電路上進行子圖同構掃描 (Subgraph Matching) 與結構替換。
 TechMapReport TechMapper::customMapTechnology(Netlist& netlist, 
                                               const std::map<GateType, int>& targetConstraints, 
                                               const std::map<GateType, int>& allowedConstraints, 
@@ -2124,20 +2137,23 @@ TechMapReport TechMapper::customMapTechnology(Netlist& netlist,
         }
         return errReport;
     }
+
+    // 因為 customMapTechnology 的核心目的就是允許使用甚至發明新規則 (AUTO_LEARNED_SAT)
+    std::vector<RuleSource> allSources = {};
     
     // 建立一個 Lambda 函式來封裝底層 API 呼叫，方便我們在學習新規則後重複執行
     auto runMapping = [&]() -> TechMapReport {
         switch (scope) {
             case TargetScope::WHOLE_NETLIST:
-                return mapTechnology(netlist, targetConstraints, allowedConstraints, verbose);
+                return mapTechnology(netlist, targetConstraints, allowedConstraints, allSources, verbose);
             case TargetScope::NET_FANIN:
-                return mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getTransitiveFaninCone(name), verbose);
+                return mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getTransitiveFaninCone(name), allSources, verbose);
             case TargetScope::NET_FANOUT:
-                return mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getTransitiveFanoutCone(name), verbose);
+                return mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getTransitiveFanoutCone(name), allSources,  verbose);
             case TargetScope::GATE_FANIN:
-                return mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getGateTransitiveFaninCone(name), verbose);
+                return mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getGateTransitiveFaninCone(name), allSources, verbose);
             case TargetScope::GATE_FANOUT:
-                return mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getGateTransitiveFanoutCone(name), verbose);
+                return mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getGateTransitiveFanoutCone(name), allSources,verbose);
             default:
                 TechMapReport errReport;
                 errReport.status = TechMapStatus::ERROR_RULE_NOT_FOUND;
