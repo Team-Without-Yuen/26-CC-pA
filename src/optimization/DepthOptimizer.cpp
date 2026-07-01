@@ -141,7 +141,7 @@ OptimizationResult DepthOptimizer::reduceDepth(Netlist& netlist,
         }
     }
 
-    // 全域死碼消除 (Global Dead Code Elimination)
+    // 步驟 6. 全域死碼消除 (Global Dead Code Elimination)
     // 迴圈收斂後，把掉出邏輯錐、失去連線的孤魂野鬼一次清乾淨
     if (globalModified) {
         int removedZombies = netlist.removeDanglingLogic();
