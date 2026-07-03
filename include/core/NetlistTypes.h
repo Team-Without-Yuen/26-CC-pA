@@ -29,6 +29,7 @@ struct Net {
     bool isPI = false;            // Whether this net is a primary input.
     bool isPO = false;            // Whether this net is a primary output.
     bool isConst = false;         // Whether this net is a constant.
+    bool isRemoved = false;       // Tombstone used by cleanup passes without shifting net IDs.
     int constVal = -1;            // Constant value 0/1; -1 means not a constant.
 
     Net(int _id, const std::string& _name)

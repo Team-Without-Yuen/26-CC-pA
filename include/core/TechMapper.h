@@ -446,6 +446,10 @@ public:
                                 const std::map<GateType, int>& allowedConstraints, 
                                 const std::vector<RuleSource>& allowedSources,
                                 bool verbose = false);
+    NetlistEditReport mapTechnologyWithReport(Netlist& netlist,
+                                               const std::map<GateType, int>& targetConstraints,
+                                               const std::map<GateType, int>& allowedConstraints,
+                                               bool verbose = false);
     // 針對特定 Cone 的 API
     TechMapReport mapTechnologyForCone(Netlist& netlist, 
                                        const std::map<GateType, int>& targetConstraints, 
@@ -453,6 +457,11 @@ public:
                                        const ConeResult& targetCone = ConeResult(), 
                                        const std::vector<RuleSource>& allowedSources = {},
                                        bool verbose = false);
+    NetlistEditReport mapTechnologyForConeWithReport(Netlist& netlist,
+                                                     const std::map<GateType, int>& targetConstraints,
+                                                     const std::map<GateType, int>& allowedConstraints,
+                                                     const ConeResult& targetCone = ConeResult(),
+                                                     bool verbose = false);
 
     // 精確規則應用引擎，繞過 mapTechnologyCore 的查表與約束過濾機制
     TechMapReport applySpecificRule(Netlist& netlist, 
@@ -552,7 +561,7 @@ public:
                                                          const std::vector<GateType>& bannedTypes);
 
     //----------------------------------------------------------------------------------------------------------------------------------------------------
-    // 高階 API (並非直接給LLM使用)
+    // 高階 API
 
     // ============================================================================
     // 全域/區域 邏輯閘轉換引擎 (Technology Mapping / Basis Conversion)
@@ -596,6 +605,14 @@ public:
                                       TargetScope scope, 
                                       const std::string& name,
                                       bool verbose = false);
+
+    NetlistEditReport customMapTechnologyWithReport(Netlist& netlist,
+                                                const std::map<GateType, int>& targetConstraints,
+                                                const std::map<GateType, int>& allowedConstraints,
+                                                TargetScope scope,
+                                                const std::string& name,
+                                                bool verbose);
+
 
     // 全域電路優化引擎 (Pattern Optimization Engine)
     // 針對給定的目標形狀 (LHS) 進行自動化的「面積」或「深度」化簡。

@@ -9,6 +9,58 @@
 #include <queue>
 #include <unordered_set>
 
+namespace {
+
+std::map<GateType, int> toOrderedMap(const std::unordered_map<GateType, int>& values) {
+    std::map<GateType, int> ordered;
+    for (const auto& item : values) {
+        ordered[item.first] += item.second;
+    }
+    return ordered;
+}
+
+MappingDelta makeMappingDelta(const TechMapReport& techReport) {
+    MappingDelta delta;
+    delta.removedCountByType = toOrderedMap(techReport.removedCountByType);
+    delta.addedCountByType = toOrderedMap(techReport.addedCountByType);
+    delta.finalGateCountByType = toOrderedMap(techReport.finalGateCount);
+    delta.modifiedGateNames = techReport.modifiedGateNames;
+    return delta;
+}
+
+NetlistEditReport finalizeTechMapEditReport(
+    Netlist& netlist,
+    const Netlist& before,
+    const TechMapReport& techReport,
+    const std::string& operationName)
+{
+    NetlistEditReport report = Netlist::buildEditReport(
+        before,
+        netlist,
+        operationName,
+        NetlistEditOperationKind::TechnologyMapping);
+
+    report.mappingDelta = makeMappingDelta(techReport);
+    report.changed = report.changed || !techReport.modifiedGateNames.empty();
+
+    if (techReport.status != TechMapStatus::SUCCESS) {
+        report.success = false;
+        report.message = techReport.message;
+        report.addWarning("Technology mapping reported a non-success status.");
+    } else {
+        report.message = techReport.message;
+    }
+
+    if (!report.success) {
+        netlist.restoreFrom(before);
+        report.rolledBack = true;
+    }
+
+    return report;
+}
+
+}
+
 // 輔助函式：走訪 PatternNode ，並計算計算最大輸入數
 int TechMapper::countPrimaryInputs(const std::shared_ptr<PatternNode>& root) const {
     if (!root) return 0;
@@ -601,6 +653,17 @@ TechMapReport TechMapper::mapTechnology(Netlist& netlist,
     return mapTechnologyCore(netlist, targetConstraints, allowedConstraints, nullptr, allowedSources, verbose);
 }
 
+NetlistEditReport TechMapper::mapTechnologyWithReport(
+    Netlist& netlist,
+    const std::map<GateType, int>& targetConstraints,
+    const std::map<GateType, int>& allowedConstraints,
+    bool verbose)
+{
+    Netlist before = netlist.cloneForRollback();
+    TechMapReport techReport = mapTechnology(netlist, targetConstraints, allowedConstraints, verbose);
+    return finalizeTechMapEditReport(netlist, before, techReport, "mapTechnology");
+}
+
 // 針對特定 Cone (邏輯錐) 的 API 實作 (局部優化 / ECO 常用)
 TechMapReport TechMapper::mapTechnologyForCone(Netlist& netlist, 
                                                const std::map<GateType, int>& targetConstraints, 
@@ -723,6 +786,23 @@ TechMapReport TechMapper::applySpecificRule(Netlist& netlist,
     for (const auto& pair : rule.targetCounts)  report.finalGateCount[pair.first] = netlist.getGateCountByType(pair.first);
 
     return report;
+}
+
+NetlistEditReport TechMapper::mapTechnologyForConeWithReport(
+    Netlist& netlist,
+    const std::map<GateType, int>& targetConstraints,
+    const std::map<GateType, int>& allowedConstraints,
+    const ConeResult& targetCone,
+    bool verbose)
+{
+    Netlist before = netlist.cloneForRollback();
+    TechMapReport techReport = mapTechnologyForCone(
+        netlist,
+        targetConstraints,
+        allowedConstraints,
+        targetCone,
+        verbose);
+    return finalizeTechMapEditReport(netlist, before, techReport, "mapTechnologyForCone");
 }
 
 // 輔助函式：取得指定邏輯閘的輸入腳位數量 (Fan-in)
@@ -2257,6 +2337,19 @@ TechMapReport TechMapper::customMapTechnology(Netlist& netlist,
     }
 
     return report;
+}
+
+NetlistEditReport TechMapper::customMapTechnologyWithReport(
+    Netlist& netlist,
+    const std::map<GateType, int>& targetConstraints,
+    const std::map<GateType, int>& allowedConstraints,
+    TargetScope scope,
+    const std::string& name,
+    bool verbose) {
+    Netlist before = netlist.cloneForRollback();
+    TechMapReport techReport = customMapTechnology(
+        netlist, targetConstraints, allowedConstraints, scope, name, verbose);
+    return finalizeTechMapEditReport(netlist, before, techReport, "customMapTechnology");
 }
 
 // 全域電路優化引擎 (Pattern Optimization Engine)

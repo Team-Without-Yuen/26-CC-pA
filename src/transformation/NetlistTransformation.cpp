@@ -72,6 +72,94 @@ int computeKeepSinkCount(int maxFanout, const Net& sourceNet) {
     return std::max(0, maxFanout - 1 - primaryOutputLoad);
 }
 
+NetlistEditReport finalizePrimitiveMutationReport(
+    Netlist& netlist,
+    const Netlist& before,
+    bool operationSucceeded,
+    const std::string& operationName,
+    const std::string& successMessage,
+    const std::string& failureMessage,
+    const std::vector<std::string>& changedGateNames = {},
+    const std::vector<std::string>& changedNetNames = {},
+    const std::vector<int>& changedGateIds = {},
+    const std::vector<int>& changedNetIds = {})
+{
+    NetlistEditReport report = Netlist::buildEditReport(
+        before,
+        netlist,
+        operationName,
+        NetlistEditOperationKind::PrimitiveMutation);
+
+    report.changedGateNames = changedGateNames;
+    report.changedNetNames = changedNetNames;
+    report.changedGateIds = changedGateIds;
+    report.changedNetIds = changedNetIds;
+    report.changed = report.changed || operationSucceeded;
+
+    if (!operationSucceeded) {
+        if (report.changed) {
+            netlist.restoreFrom(before);
+            report.rolledBack = true;
+        }
+        report.success = false;
+        report.message = failureMessage;
+        return report;
+    }
+
+    report.message = report.success ? successMessage
+                                    : "Primitive mutation failed validation and was rolled back.";
+    if (!report.success) {
+        netlist.restoreFrom(before);
+        report.rolledBack = true;
+    }
+
+    return report;
+}
+
+void appendBufferInsertionRecords(NetlistEditReport& report, const BufferInsertionReport& insertion) {
+    for (const BufInsertRecord& record : insertion.records) {
+        report.changedGateIds.push_back(record.bufGateId);
+        report.changedGateNames.push_back(record.bufGateName);
+        report.changedNetIds.push_back(record.outputNetId);
+        report.changedNetNames.push_back(record.outputNetName);
+    }
+}
+
+NetlistEditReport finalizeBufferInsertionReport(
+    Netlist& netlist,
+    const Netlist& before,
+    const BufferInsertionReport& insertion,
+    const std::string& operationName,
+    const std::string& successMessage)
+{
+    NetlistEditReport report = Netlist::buildEditReport(
+        before,
+        netlist,
+        operationName,
+        NetlistEditOperationKind::BufferInsertion);
+
+    report.changed = report.changed || insertion.getTotalInserted() > 0;
+    appendBufferInsertionRecords(report, insertion);
+
+    if (report.success) {
+        Netlist::certifyEquivalence(
+            report,
+            EquivalenceCheckMethod::LocalRewriteRule,
+            "Equivalence certified by inserting BUF gates that preserve each moved load function.");
+    }
+
+    report.message = report.success
+        ? successMessage
+        : operationName + " failed validation and was rolled back.";
+
+    if (!report.success) {
+        netlist.restoreFrom(before);
+        report.rolledBack = true;
+    }
+
+    return report;
+}
+
 } // namespace
 
 // 重新命名 Gate
@@ -101,6 +189,29 @@ bool Netlist::renameGate(const std::string& oldName, const std::string& newName)
     return true;
 }
 
+NetlistEditReport Netlist::renameGateWithReport(const std::string& oldName, const std::string& newName) {
+    Netlist before = cloneForRollback();
+    const int oldGateId = getGateId(oldName);
+    const bool ok = renameGate(oldName, newName);
+    NetlistEditReport report = finalizePrimitiveMutationReport(
+        *this,
+        before,
+        ok,
+        "renameGate",
+        "Gate rename completed.",
+        "Gate rename failed: old gate was missing, new name already existed, or the rename was invalid.",
+        {oldName, newName},
+        {},
+        oldGateId >= 0 ? std::vector<int>{oldGateId} : std::vector<int>{});
+    if (report.success) {
+        certifyEquivalence(
+            report,
+            EquivalenceCheckMethod::StructuralIdentity,
+            "Equivalence certified because renaming a gate preserves graph connectivity and Boolean function.");
+    }
+    return report;
+}
+
 // 重新命名 Net
 bool Netlist::renameNet(const std::string& oldName, const std::string& newName) {
     // 防呆：名字沒變
@@ -126,6 +237,30 @@ bool Netlist::renameNet(const std::string& oldName, const std::string& newName) 
     netNameToId[newName] = netId;
 
     return true;
+}
+
+NetlistEditReport Netlist::renameNetWithReport(const std::string& oldName, const std::string& newName) {
+    Netlist before = cloneForRollback();
+    const int oldNetId = getNetId(oldName);
+    const bool ok = renameNet(oldName, newName);
+    NetlistEditReport report = finalizePrimitiveMutationReport(
+        *this,
+        before,
+        ok,
+        "renameNet",
+        "Net rename completed.",
+        "Net rename failed: old net was missing, new name already existed, or the rename was invalid.",
+        {},
+        {oldName, newName},
+        {},
+        oldNetId >= 0 ? std::vector<int>{oldNetId} : std::vector<int>{});
+    if (report.success) {
+        certifyEquivalence(
+            report,
+            EquivalenceCheckMethod::StructuralIdentity,
+            "Equivalence certified because renaming a net preserves graph connectivity and Boolean function.");
+    }
+    return report;
 }
 
 // 斷開連線
@@ -155,6 +290,24 @@ bool Netlist::disconnectGateInput(const std::string& gateName, const std::string
     }
 
     return true;
+}
+
+NetlistEditReport Netlist::disconnectGateInputWithReport(const std::string& gateName, const std::string& netName) {
+    Netlist before = cloneForRollback();
+    const int gateId = getGateId(gateName);
+    const int netId = getNetId(netName);
+    const bool ok = disconnectGateInput(gateName, netName);
+    return finalizePrimitiveMutationReport(
+        *this,
+        before,
+        ok,
+        "disconnectGateInput",
+        "Gate input disconnect completed.",
+        "Gate input disconnect failed: gate/net was missing or the gate did not use the target net.",
+        gateId >= 0 ? std::vector<std::string>{gateName} : std::vector<std::string>{},
+        netId >= 0 ? std::vector<std::string>{netName} : std::vector<std::string>{},
+        gateId >= 0 ? std::vector<int>{gateId} : std::vector<int>{},
+        netId >= 0 ? std::vector<int>{netId} : std::vector<int>{});
 }
 
 // 建立連線
@@ -204,6 +357,28 @@ bool Netlist::connectGateInput(const std::string& gateName, const std::string& n
     gate.inputNetIds[pinIndex] = netId;
 
     return true;
+}
+
+NetlistEditReport Netlist::connectGateInputWithReport(const std::string& gateName, const std::string& netName, int pinIndex) {
+    Netlist before = cloneForRollback();
+    const int gateId = getGateId(gateName);
+    const int netId = getNetId(netName);
+    const bool ok = connectGateInput(gateName, netName, pinIndex);
+    NetlistEditReport report = finalizePrimitiveMutationReport(
+        *this,
+        before,
+        ok,
+        "connectGateInput",
+        "Gate input connect completed.",
+        "Gate input connect failed: gate/net was missing, pin index was invalid, or the target pin was occupied.",
+        gateId >= 0 ? std::vector<std::string>{gateName} : std::vector<std::string>{},
+        netId >= 0 ? std::vector<std::string>{netName} : std::vector<std::string>{},
+        gateId >= 0 ? std::vector<int>{gateId} : std::vector<int>{},
+        netId >= 0 ? std::vector<int>{netId} : std::vector<int>{});
+    if (pinIndex < -1) {
+        report.addWarning("pinIndex < -1 is invalid for connectGateInput().");
+    }
+    return report;
 }
 
 bool Netlist::disconnectAllPins(int gateId) {
@@ -271,6 +446,23 @@ bool Netlist::swapPrimaryOutputNet(int oldNetId, int newNetId) {
     return false; //  oldNetId 根本不在 PO 列表裡
 }
 
+NetlistEditReport Netlist::removeGateWithReport(int gateId) {
+    Netlist before = cloneForRollback();
+    const std::string gateName =
+        (gateId >= 0 && gateId < (int)gates.size()) ? gates[gateId].instName : "";
+    const bool ok = removeGate(gateId);
+    return finalizePrimitiveMutationReport(
+        *this,
+        before,
+        ok,
+        "removeGate",
+        "Gate removal completed.",
+        "Gate removal failed: gate id was invalid.",
+        !gateName.empty() ? std::vector<std::string>{gateName} : std::vector<std::string>{},
+        {},
+        gateId >= 0 ? std::vector<int>{gateId} : std::vector<int>{});
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  insertBuffersForFanout
 //  對 fanout > maxFanout 的 net 插入 buffer，採用 Cascaded Buffer 結構
@@ -281,8 +473,6 @@ BufferInsertionReport Netlist::insertBuffersForFanout(int maxFanout) {
 
     // 防呆：Fanout 必須至少為 2，否則無法插入 Buffer
     if (maxFanout < 2) return report; 
-
-    int bufCounter = 0;
 
     // 使用動態邊界，讓新生成的 bufNet 也能被迴圈檢查到
     for (int netIdx = 0; netIdx < (int)nets.size(); netIdx++) {
@@ -306,9 +496,8 @@ BufferInsertionReport Netlist::insertBuffersForFanout(int maxFanout) {
             );
 
             // 產生新元件與線路名稱
-            std::string bufName    = "_ins_buf_"    + std::to_string(bufCounter);
-            std::string bufNetName = "_ins_buf_net_" + std::to_string(bufCounter);
-            bufCounter++;
+            std::string bufName    = makeUniqueGateName("_ins_buf");
+            std::string bufNetName = makeUniqueNetName("_ins_buf_net");
 
             int bufGateId = addGate(bufName, GateType::BUF);
             int bufNetId  = addNet(bufNetName);
@@ -352,6 +541,63 @@ BufferInsertionReport Netlist::insertBuffersForFanout(int maxFanout) {
     return report;
 }
 
+NetlistEditReport Netlist::insertBuffersForFanoutWithReport(int maxFanout) {
+    Netlist before = cloneForRollback();
+    GlobalFanoutReport beforeFanout = getGlobalFanoutReport(maxFanout);
+
+    BufferInsertionReport insertion = insertBuffersForFanout(maxFanout);
+
+    GlobalFanoutReport afterFanout = getGlobalFanoutReport(maxFanout);
+    NetlistEditReport report = buildEditReport(
+        before,
+        *this,
+        "insertBuffersForFanout",
+        NetlistEditOperationKind::BufferInsertion);
+
+    report.changed = report.changed || insertion.getTotalInserted() > 0;
+
+    FanoutChange fanoutChange;
+    fanoutChange.beforeMaxFanout = static_cast<int>(beforeFanout.maxFanout);
+    fanoutChange.afterMaxFanout = static_cast<int>(afterFanout.maxFanout);
+    fanoutChange.targetFanout = maxFanout;
+    fanoutChange.improved =
+        beforeFanout.maxFanout > afterFanout.maxFanout;
+    fanoutChange.meetsConstraint = afterFanout.satisfiesLimit;
+    for (const FanoutLoadReport& violation : afterFanout.violatingReports) {
+        fanoutChange.violatingNetNames.push_back(violation.netName);
+    }
+    report.fanoutChange = fanoutChange;
+
+    for (const BufInsertRecord& record : insertion.records) {
+        report.changedGateIds.push_back(record.bufGateId);
+        report.changedGateNames.push_back(record.bufGateName);
+        report.changedNetIds.push_back(record.outputNetId);
+        report.changedNetNames.push_back(record.outputNetName);
+    }
+
+    if (maxFanout < 2) {
+        report.addWarning("maxFanout < 2; insertBuffersForFanout() does not modify the netlist.");
+    }
+
+    if (report.success) {
+        certifyEquivalence(
+            report,
+            EquivalenceCheckMethod::LocalRewriteRule,
+            "Equivalence certified by inserting BUF gates that preserve each moved fanout load function.");
+    }
+
+    report.message = report.success
+        ? "Fanout buffer insertion completed."
+        : "Fanout buffer insertion failed validation and was rolled back.";
+
+    if (!report.success) {
+        restoreFrom(before);
+        report.rolledBack = true;
+    }
+
+    return report;
+}
+
 //  針對特定的 Net 或 Bus，限制最大 Fanout，並採用 Cascaded Buffer (串聯緩衝樹) 結構
 //  回傳值: BufferInsertionReport (包含所有新增 Buffer 的詳細細節)
 BufferInsertionReport Netlist::insertBuffersForSpecificNet(const std::string& wireName, int maxFanout) {
@@ -363,8 +609,6 @@ BufferInsertionReport Netlist::insertBuffersForSpecificNet(const std::string& wi
     // 展開 Bus，取得所有目標 Net ID
     std::vector<int> targetNets = expandNetToBits(wireName);
     if (targetNets.empty()) return report;
-
-    int bufCounter = 0; // 用於命名
 
     // 使用 Queue 來動態追蹤：因為新產生的 Buffer Net 如果也超載，必須再被處理一次！
     std::queue<int> netsToProcess;
@@ -399,9 +643,8 @@ BufferInsertionReport Netlist::insertBuffersForSpecificNet(const std::string& wi
             );
 
             // 建立專屬的新 Buffer 與新線路
-            std::string bufName    = wireName + "_fanout_buf_" + std::to_string(bufCounter);
-            std::string bufNetName = wireName + "_fanout_net_" + std::to_string(bufCounter);
-            bufCounter++;
+            std::string bufName    = makeUniqueGateName("_fanout_buf");
+            std::string bufNetName = makeUniqueNetName("_fanout_net");
 
             int bufGateId = addGate(bufName, GateType::BUF);
             int bufNetId  = addNet(bufNetName);
@@ -445,6 +688,68 @@ BufferInsertionReport Netlist::insertBuffersForSpecificNet(const std::string& wi
             // 這樣如果 overLoads 的數量依然 > maxFanout，下一輪它就會再被切出另一顆 Buffer！
             netsToProcess.push(bufNetId);
         }
+    }
+
+    return report;
+}
+
+NetlistEditReport Netlist::insertBuffersForSpecificNetWithReport(
+    const std::string& wireName,
+    int maxFanout)
+{
+    Netlist before = cloneForRollback();
+    GlobalFanoutReport beforeFanout = getGlobalFanoutReport(maxFanout);
+
+    BufferInsertionReport insertion = insertBuffersForSpecificNet(wireName, maxFanout);
+
+    GlobalFanoutReport afterFanout = getGlobalFanoutReport(maxFanout);
+    NetlistEditReport report = buildEditReport(
+        before,
+        *this,
+        "insertBuffersForSpecificNet",
+        NetlistEditOperationKind::BufferInsertion);
+
+    report.changed = report.changed || insertion.getTotalInserted() > 0;
+
+    FanoutChange fanoutChange;
+    fanoutChange.beforeMaxFanout = static_cast<int>(beforeFanout.maxFanout);
+    fanoutChange.afterMaxFanout = static_cast<int>(afterFanout.maxFanout);
+    fanoutChange.targetFanout = maxFanout;
+    fanoutChange.improved = beforeFanout.maxFanout > afterFanout.maxFanout;
+    fanoutChange.meetsConstraint = afterFanout.satisfiesLimit;
+    for (const FanoutLoadReport& violation : afterFanout.violatingReports) {
+        fanoutChange.violatingNetNames.push_back(violation.netName);
+    }
+    report.fanoutChange = fanoutChange;
+
+    for (const BufInsertRecord& record : insertion.records) {
+        report.changedGateIds.push_back(record.bufGateId);
+        report.changedGateNames.push_back(record.bufGateName);
+        report.changedNetIds.push_back(record.outputNetId);
+        report.changedNetNames.push_back(record.outputNetName);
+    }
+
+    if (maxFanout < 2) {
+        report.addWarning("maxFanout < 2; insertBuffersForSpecificNet() does not modify the netlist.");
+    }
+    if (insertion.getTotalInserted() == 0 && !report.changed) {
+        report.addWarning("No buffer was inserted. The target may be missing or already satisfy the limit.");
+    }
+
+    if (report.success) {
+        certifyEquivalence(
+            report,
+            EquivalenceCheckMethod::LocalRewriteRule,
+            "Equivalence certified by inserting BUF gates that preserve the selected net function.");
+    }
+
+    report.message = report.success
+        ? "Specific-net fanout buffer insertion completed."
+        : "Specific-net fanout buffer insertion failed validation and was rolled back.";
+
+    if (!report.success) {
+        restoreFrom(before);
+        report.rolledBack = true;
     }
 
     return report;
@@ -566,6 +871,24 @@ BufferInsertionReport Netlist::insertBuffersForDffControl(int maxFanout, bool pr
     return report;
 }
 
+NetlistEditReport Netlist::insertBuffersForDffControlWithReport(int maxFanout, bool processClock, bool processReset) {
+    Netlist before = cloneForRollback();
+    BufferInsertionReport insertion = insertBuffersForDffControl(maxFanout, processClock, processReset);
+    NetlistEditReport report = finalizeBufferInsertionReport(
+        *this,
+        before,
+        insertion,
+        "insertBuffersForDffControl",
+        "DFF control buffer insertion completed.");
+    if (maxFanout < 2) {
+        report.addWarning("maxFanout < 2; DFF control buffer insertion does not modify the netlist.");
+    }
+    if (!processClock && !processReset) {
+        report.addWarning("Both processClock and processReset are false; no DFF control nets are selected.");
+    }
+    return report;
+}
+
 //  為每個負載加上獨立 Buffer (走訪 wire 的 fanout list，為每一個連接的 Gate 建立專屬的 Buffer)
 //  回傳值: BufferInsertionReport (包含所有新增 Buffer 的詳細細節)
 BufferInsertionReport Netlist::insertBuffersOnEachLoad(const std::string& wireName) {
@@ -634,6 +957,21 @@ BufferInsertionReport Netlist::insertBuffersOnEachLoad(const std::string& wireNa
     return report;
 }
 
+NetlistEditReport Netlist::insertBuffersOnEachLoadWithReport(const std::string& wireName) {
+    Netlist before = cloneForRollback();
+    BufferInsertionReport insertion = insertBuffersOnEachLoad(wireName);
+    NetlistEditReport report = finalizeBufferInsertionReport(
+        *this,
+        before,
+        insertion,
+        "insertBuffersOnEachLoad",
+        "Per-load buffer insertion completed.");
+    if (insertion.getTotalInserted() == 0) {
+        report.addWarning("No buffers were inserted; the wire may be missing, constant, or have no loads.");
+    }
+    return report;
+}
+
 //  在訊號的驅動端加上單一 Buffer
 //  若為內部線或 PO，在 Driver Gate 與 Net 之間打斷並插入 Buffer。
 //  若為 PI，將原本的 Net 保留給 PI，並將所有 Load 移至 Buffer 後方的新 Net。
@@ -645,13 +983,13 @@ BufferInsertionReport Netlist::insertBufferAtDriver(const std::string& wireName)
     if (targetNets.empty()) return report;
 
     for (int netId : targetNets) {
-        Net& net = nets[netId];
-        if (net.isConst) continue;
+        if (nets[netId].isConst) continue;
 
         // 【情境 A】：這條線有實體的驅動閘 (Driver Gate)，適用於內部線或 PO
-        if (net.driverGateId != -1) {
-            int driverGateId = net.driverGateId;
-            Gate& driverGate = gates[driverGateId];
+        if (nets[netId].driverGateId != -1) {
+            int driverGateId = nets[netId].driverGateId;
+            const std::string driverGateName = gates[driverGateId].instName;
+            const std::string originalNetName = nets[netId].name;
 
             // 建立 Buffer 與 中繼 Net (夾在原 Driver 與 Buffer 之間)
             std::string bufName = wireName + "_drvbuf_" + std::to_string(netId);
@@ -661,7 +999,7 @@ BufferInsertionReport Netlist::insertBufferAtDriver(const std::string& wireName)
             int midNetId = addNet(midNetName);
 
             // 打斷原 Driver：將其輸出從原本的 netId 改接到 midNetId
-            driverGate.outputNetId = midNetId;
+            gates[driverGateId].outputNetId = midNetId;
             nets[midNetId].driverGateId = driverGateId;
             nets[midNetId].loadGateIds.push_back(bufGateId); // 中繼線的 Load 是新 Buffer
 
@@ -671,7 +1009,7 @@ BufferInsertionReport Netlist::insertBufferAtDriver(const std::string& wireName)
             gates[bufGateId].inputPinNames.push_back("A"); 
             
             gates[bufGateId].outputNetId = netId;
-            net.driverGateId = bufGateId; // 原本的線現在改由新 Buffer 驅動
+            nets[netId].driverGateId = bufGateId; // 原本的線現在改由新 Buffer 驅動
 
             // 報告紀錄：情境 A
             // 下游 Gate 依然接在 netId 上，直接從 net.loadGateIds 讀取即可
@@ -681,11 +1019,11 @@ BufferInsertionReport Netlist::insertBufferAtDriver(const std::string& wireName)
             record.inputNetId     = midNetId;
             record.inputNetName   = midNetName;
             record.driverGateId   = driverGateId;
-            record.driverGateName = driverGate.instName;
+            record.driverGateName = driverGateName;
             record.outputNetId    = netId;
-            record.outputNetName  = net.name;
+            record.outputNetName  = originalNetName;
 
-            for (int loadId : net.loadGateIds) {
+            for (int loadId : nets[netId].loadGateIds) {
                 record.drivenGateIds.push_back(loadId);
                 record.drivenGateNames.push_back(gates[loadId].instName);
             }
@@ -702,8 +1040,8 @@ BufferInsertionReport Netlist::insertBufferAtDriver(const std::string& wireName)
             int bufOutNetId = addNet(bufOutNetName);
 
             // 將原始 netId 上面的所有 Loads 移交給新的 bufOutNetId
-            std::vector<int> oldLoads = net.loadGateIds;
-            net.loadGateIds.clear(); // 清空 PI 的負載
+            std::vector<int> oldLoads = nets[netId].loadGateIds;
+            nets[netId].loadGateIds.clear(); // 清空 PI 的負載
 
             nets[bufOutNetId].driverGateId = bufGateId;
             nets[bufOutNetId].loadGateIds = oldLoads;
@@ -712,7 +1050,7 @@ BufferInsertionReport Netlist::insertBufferAtDriver(const std::string& wireName)
             gates[bufGateId].inputNetIds.push_back(netId);
             // 為 BUF 補上 input pin name
             gates[bufGateId].inputPinNames.push_back("A"); 
-            net.loadGateIds.push_back(bufGateId);
+            nets[netId].loadGateIds.push_back(bufGateId);
             
             gates[bufGateId].outputNetId = bufOutNetId;
 
@@ -721,7 +1059,7 @@ BufferInsertionReport Netlist::insertBufferAtDriver(const std::string& wireName)
             record.bufGateId      = bufGateId;
             record.bufGateName    = bufName;
             record.inputNetId     = netId;
-            record.inputNetName   = net.name;
+            record.inputNetName   = nets[netId].name;
             record.driverGateId   = -1;
             record.driverGateName = "PI";
             record.outputNetId    = bufOutNetId;
@@ -750,6 +1088,21 @@ BufferInsertionReport Netlist::insertBufferAtDriver(const std::string& wireName)
     return report;
 }
 
+NetlistEditReport Netlist::insertBufferAtDriverWithReport(const std::string& wireName) {
+    Netlist before = cloneForRollback();
+    BufferInsertionReport insertion = insertBufferAtDriver(wireName);
+    NetlistEditReport report = finalizeBufferInsertionReport(
+        *this,
+        before,
+        insertion,
+        "insertBufferAtDriver",
+        "Driver-side buffer insertion completed.");
+    if (insertion.getTotalInserted() == 0) {
+        report.addWarning("No driver-side buffer was inserted; the wire may be missing or constant.");
+    }
+    return report;
+}
+
 //  在特定的 Gate 前面增加 Buffer (只阻斷指定的 wire 到該 Gate 的連線)
 //  回傳值: BufferInsertionReport (包含新增 Buffer 的詳細紀錄)
 BufferInsertionReport Netlist::insertBufferBeforeGate(const std::string& wireName, const std::string& targetGateName) {
@@ -762,17 +1115,20 @@ BufferInsertionReport Netlist::insertBufferBeforeGate(const std::string& wireNam
     if (targetGateId == -1) return report; // 找不到指定的 Gate
 
     for (int netId : targetNets) {
-        Net& net = nets[netId];
-        if (net.isConst) continue;
+        if (nets[netId].isConst) continue;
+        const std::string inputNetName = nets[netId].name;
+        const int driverGateId = nets[netId].driverGateId;
+        const std::string driverGateName =
+            (driverGateId != -1) ? gates[driverGateId].instName : "PI";
 
         // 步驟 A：檢查並清除目標 Gate 在原本 net 中的負載紀錄
         // 防呆：解決像 AND(n2, n2) 這種同一顆 Gate 佔用兩個負載空位的情況
         int matchCount = 0;
-        for (size_t i = 0; i < net.loadGateIds.size(); ) {
-            if (net.loadGateIds[i] == targetGateId) {
+        for (size_t i = 0; i < nets[netId].loadGateIds.size(); ) {
+            if (nets[netId].loadGateIds[i] == targetGateId) {
                 matchCount++;
                 // 從原本的 net 拔除這個 Gate
-                net.loadGateIds.erase(net.loadGateIds.begin() + i); 
+                nets[netId].loadGateIds.erase(nets[netId].loadGateIds.begin() + i);
             } else {
                 i++;
             }
@@ -793,9 +1149,9 @@ BufferInsertionReport Netlist::insertBufferBeforeGate(const std::string& wireNam
         record.bufGateId      = bufGateId;
         record.bufGateName    = bufName;
         record.inputNetId     = netId;
-        record.inputNetName   = net.name;
-        record.driverGateId   = net.driverGateId;
-        record.driverGateName = (net.driverGateId != -1) ? gates[net.driverGateId].instName : "PI";
+        record.inputNetName   = inputNetName;
+        record.driverGateId   = driverGateId;
+        record.driverGateName = driverGateName;
         record.outputNetId    = bufOutNetId;
         record.outputNetName  = bufOutNetName;
 
@@ -804,7 +1160,7 @@ BufferInsertionReport Netlist::insertBufferBeforeGate(const std::string& wireNam
         // 為 BUF 補上 input pin name，維持與 inputNetIds 的一對一對齊
         gates[bufGateId].inputPinNames.push_back("I"); 
         
-        net.loadGateIds.push_back(bufGateId); // 把 Buffer (只加一次) 放入原本 net 的負載中
+        nets[netId].loadGateIds.push_back(bufGateId); // 把 Buffer (只加一次) 放入原本 net 的負載中
 
         // 步驟 D：雙向連接 Buffer Output
         gates[bufGateId].outputNetId = bufOutNetId;
@@ -830,6 +1186,21 @@ BufferInsertionReport Netlist::insertBufferBeforeGate(const std::string& wireNam
         record.fanoutCount = 1;
 
         report.records.push_back(record);
+    }
+    return report;
+}
+
+NetlistEditReport Netlist::insertBufferBeforeGateWithReport(const std::string& wireName, const std::string& targetGateName) {
+    Netlist before = cloneForRollback();
+    BufferInsertionReport insertion = insertBufferBeforeGate(wireName, targetGateName);
+    NetlistEditReport report = finalizeBufferInsertionReport(
+        *this,
+        before,
+        insertion,
+        "insertBufferBeforeGate",
+        "Target-gate buffer insertion completed.");
+    if (insertion.getTotalInserted() == 0) {
+        report.addWarning("No target-gate buffer was inserted; the wire/gate may be missing or not directly connected.");
     }
     return report;
 }
@@ -947,5 +1318,23 @@ BufferInsertionReport Netlist::insertBuffersByGateType(GateType type, bool buffe
         }
     }
     
+    return report;
+}
+
+NetlistEditReport Netlist::insertBuffersByGateTypeWithReport(GateType type, bool bufferInputs, bool bufferOutputs) {
+    Netlist before = cloneForRollback();
+    BufferInsertionReport insertion = insertBuffersByGateType(type, bufferInputs, bufferOutputs);
+    NetlistEditReport report = finalizeBufferInsertionReport(
+        *this,
+        before,
+        insertion,
+        "insertBuffersByGateType",
+        "Gate-type buffer insertion completed.");
+    if (!bufferInputs && !bufferOutputs) {
+        report.addWarning("Both bufferInputs and bufferOutputs are false; no insertion direction is selected.");
+    }
+    if (insertion.getTotalInserted() == 0) {
+        report.addWarning("No gate-type buffers were inserted; no matching active gates may exist.");
+    }
     return report;
 }
