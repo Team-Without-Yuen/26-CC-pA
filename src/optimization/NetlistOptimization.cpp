@@ -7,6 +7,89 @@
 #include <unordered_set>
 #include <iostream>
 
+namespace {
+
+void eraseOneLoad(std::vector<int>& loads, int gateId) {
+    auto it = std::find(loads.begin(), loads.end(), gateId);
+    if (it != loads.end()) loads.erase(it);
+}
+
+NetlistEditReport finalizeEditReport(
+    Netlist& netlist,
+    const Netlist& before,
+    int changedCount,
+    const std::string& operationName,
+    NetlistEditOperationKind kind,
+    const std::string& successMessage,
+    const std::string& rollbackMessage,
+    EquivalenceCheckMethod equivalenceMethod = EquivalenceCheckMethod::NotChecked,
+    const std::string& equivalenceMessage = "")
+{
+    NetlistEditReport report = Netlist::buildEditReport(before, netlist, operationName, kind);
+    report.changed = report.changed || changedCount > 0;
+    report.depthChange = Netlist::buildDepthChangeReport(before, netlist);
+    report.message = report.success ? successMessage : rollbackMessage;
+
+    if (report.success && equivalenceMethod != EquivalenceCheckMethod::NotChecked) {
+        Netlist::certifyEquivalence(report, equivalenceMethod, equivalenceMessage);
+    }
+
+    if (!report.success) {
+        netlist.restoreFrom(before);
+        report.rolledBack = true;
+    }
+
+    return report;
+}
+
+NetlistEditReport finalizeBooleanPrimitiveReport(
+    Netlist& netlist,
+    const Netlist& before,
+    bool operationSucceeded,
+    const std::string& operationName,
+    const std::string& successMessage,
+    const std::string& failureMessage,
+    const std::vector<std::string>& changedGateNames = {},
+    const std::vector<std::string>& changedNetNames = {},
+    const std::vector<int>& changedGateIds = {},
+    const std::vector<int>& changedNetIds = {})
+{
+    NetlistEditReport report = Netlist::buildEditReport(
+        before,
+        netlist,
+        operationName,
+        NetlistEditOperationKind::PrimitiveMutation);
+
+    report.changed = report.changed || operationSucceeded;
+    report.changedGateNames = changedGateNames;
+    report.changedNetNames = changedNetNames;
+    report.changedGateIds = changedGateIds;
+    report.changedNetIds = changedNetIds;
+
+    if (!operationSucceeded) {
+        if (report.changed) {
+            netlist.restoreFrom(before);
+            report.rolledBack = true;
+        }
+        report.success = false;
+        report.message = failureMessage;
+        return report;
+    }
+
+    report.message = report.success
+        ? successMessage
+        : operationName + " failed validation and was rolled back.";
+
+    if (!report.success) {
+        netlist.restoreFrom(before);
+        report.rolledBack = true;
+    }
+
+    return report;
+}
+
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  trimDeadLogic  【BUG FIX: 補上 DFF 作為 timing endpoint】
 //  移除所有不影響任何 PO 或 DFF input 的 gate 和 net
@@ -91,12 +174,28 @@ int Netlist::trimDeadLogic() {
         }
 
         if (!usefulGates.count(i)) {
-            gates[i].type = GateType::UNKNOWN; // 這才是真正的死邏輯，安全清除
-            deadGateCount++;
+            if (markGateRemoved(i)) {
+                deadGateCount++;
+            }
         }
     }
 
     return deadGateCount;
+}
+
+NetlistEditReport Netlist::trimDeadLogicWithReport() {
+    Netlist before = cloneForRollback();
+    int removed = trimDeadLogic();
+    return finalizeEditReport(
+        *this,
+        before,
+        removed,
+        "trimDeadLogic",
+        NetlistEditOperationKind::Cleanup,
+        "Dead logic trimming completed.",
+        "Dead logic trimming failed validation and was rolled back.",
+        EquivalenceCheckMethod::StructuralIdentity,
+        "Equivalence certified by removing logic that is unreachable from PO and DFF input endpoints.");
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -182,6 +281,21 @@ int Netlist::collapseBackToBackInverters() {
     return collapsed;
 }
 
+NetlistEditReport Netlist::collapseBackToBackInvertersWithReport() {
+    Netlist before = cloneForRollback();
+    int collapsed = collapseBackToBackInverters();
+    return finalizeEditReport(
+        *this,
+        before,
+        collapsed,
+        "collapseBackToBackInverters",
+        NetlistEditOperationKind::Simplification,
+        "Back-to-back inverter collapse completed.",
+        "Back-to-back inverter collapse failed validation and was rolled back.",
+        EquivalenceCheckMethod::LocalRewriteRule,
+        "Equivalence certified by the local Boolean identity NOT(NOT(x)) = x.");
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  mergeEquivalentGates
 //  合併結構等價的 gate（相同 type + 相同 input net 集合）
@@ -259,6 +373,21 @@ int Netlist::mergeEquivalentGates() {
 
     if (merged > 0) trimDeadLogic();
     return merged;
+}
+
+NetlistEditReport Netlist::mergeEquivalentGatesWithReport() {
+    Netlist before = cloneForRollback();
+    int merged = mergeEquivalentGates();
+    return finalizeEditReport(
+        *this,
+        before,
+        merged,
+        "mergeEquivalentGates",
+        NetlistEditOperationKind::Simplification,
+        "Equivalent gate merge completed.",
+        "Equivalent gate merge failed validation and was rolled back.",
+        EquivalenceCheckMethod::StructuralIdentity,
+        "Equivalence certified by merging gates with identical type and input structure.");
 }
 
 // =============================================================================
@@ -380,6 +509,25 @@ bool Netlist::validateStructure() const {
     }
 
     for (int ni = 0; ni < (int)nets.size(); ni++) {
+        if (nets[ni].isRemoved) continue;
+        int driverGateId = nets[ni].driverGateId;
+        if (driverGateId >= 0) {
+            if (driverGateId >= (int)gates.size()) {
+                std::cerr << "[validateStructure] net[" << ni
+                          << "] has invalid driverGateId=" << driverGateId << "\n";
+                ok = false;
+            } else if (gates[driverGateId].type == GateType::UNKNOWN) {
+                std::cerr << "[validateStructure] net[" << ni
+                          << "] is driven by removed gate[" << driverGateId << "]\n";
+                ok = false;
+            } else if (gates[driverGateId].outputNetId != ni) {
+                std::cerr << "[validateStructure] net[" << ni
+                          << "] driverGate[" << driverGateId
+                          << "] does not output to this net\n";
+                ok = false;
+            }
+        }
+
         for (int lgid : nets[ni].loadGateIds) {
             if (lgid < 0 || lgid >= (int)gates.size()) {
                 std::cerr << "[validateStructure] net[" << ni << "] has invalid loadGateId=" << lgid << "\n";
@@ -404,6 +552,7 @@ bool Netlist::validateProblemAConstraints() const {
     bool ok = true;
 
     for (int ni = 0; ni < (int)nets.size(); ni++) {
+        if (nets[ni].isRemoved) continue;
         if (!nets[ni].isPO) continue;
         if (nets[ni].driverGateId < 0 && !nets[ni].isPI && !nets[ni].isConst) {
             std::cerr << "[validateProblemAConstraints] PO net[" << ni
@@ -466,6 +615,52 @@ bool Netlist::replaceAllLoadsOfNet(int oldNetId, int newNetId) {
     newNet.loadGateIds.erase(last, newNet.loadGateIds.end());
 
     return true;
+}
+
+NetlistEditReport Netlist::replaceAllLoadsOfNetWithReport(int oldNetId, int newNetId) {
+    Netlist before = cloneForRollback();
+    const std::string oldNetName =
+        (oldNetId >= 0 && oldNetId < (int)nets.size()) ? nets[oldNetId].name : "";
+    const std::string newNetName =
+        (newNetId >= 0 && newNetId < (int)nets.size()) ? nets[newNetId].name : "";
+
+    const bool ok = replaceAllLoadsOfNet(oldNetId, newNetId);
+    NetlistEditReport report = Netlist::buildEditReport(
+        before,
+        *this,
+        "replaceAllLoadsOfNet",
+        NetlistEditOperationKind::PrimitiveMutation);
+    report.changed = report.changed || ok;
+
+    if (!oldNetName.empty()) {
+        report.changedNetNames.push_back(oldNetName);
+        report.changedNetIds.push_back(oldNetId);
+    }
+    if (!newNetName.empty()) {
+        report.changedNetNames.push_back(newNetName);
+        report.changedNetIds.push_back(newNetId);
+    }
+
+    if (!ok) {
+        if (report.changed) {
+            restoreFrom(before);
+            report.rolledBack = true;
+        }
+        report.success = false;
+        report.message = "Load replacement failed: net id was invalid, source and target were identical, or the source had no loads.";
+        return report;
+    }
+
+    report.message = report.success
+        ? "Load replacement completed."
+        : "Load replacement failed validation and was rolled back.";
+
+    if (!report.success) {
+        restoreFrom(before);
+        report.rolledBack = true;
+    }
+
+    return report;
 }
 
 bool Netlist::bypassBufferGate(int bufGateId) {
@@ -536,6 +731,36 @@ int Netlist::cleanupAllRemovableBuffers() {
 
     if (removed > 0) compactRemovedGates();
     return removed;
+}
+
+NetlistEditReport Netlist::cleanupAllRemovableBuffersWithReport() {
+    Netlist before = cloneForRollback();
+
+    int removed = cleanupAllRemovableBuffers();
+    NetlistEditReport report = buildEditReport(
+        before,
+        *this,
+        "cleanupAllRemovableBuffers",
+        NetlistEditOperationKind::Cleanup);
+
+    report.changed = report.changed || removed > 0;
+    report.depthChange = buildDepthChangeReport(before, *this);
+    if (report.success) {
+        certifyEquivalence(
+            report,
+            EquivalenceCheckMethod::LocalRewriteRule,
+            "Equivalence certified by the local Boolean identity BUF(x) = x.");
+    }
+    report.message = report.success
+        ? "Removable buffer cleanup completed."
+        : "Removable buffer cleanup failed validation and was rolled back.";
+
+    if (!report.success) {
+        restoreFrom(before);
+        report.rolledBack = true;
+    }
+
+    return report;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -901,6 +1126,21 @@ int Netlist::removeDanglingLogic() {
     return removedCount;
 }
 
+NetlistEditReport Netlist::removeDanglingLogicWithReport() {
+    Netlist before = cloneForRollback();
+    int removed = removeDanglingLogic();
+    return finalizeEditReport(
+        *this,
+        before,
+        removed,
+        "removeDanglingLogic",
+        NetlistEditOperationKind::Cleanup,
+        "Dangling logic removal completed.",
+        "Dangling logic removal failed validation and was rolled back.",
+        EquivalenceCheckMethod::StructuralIdentity,
+        "Equivalence certified by removing logic that does not drive any PO or DFF input endpoint.");
+}
+
 // ─────────────────────────────────────────────────────────────────────────────
 //  Section 2.7: Structural hashing
 // ─────────────────────────────────────────────────────────────────────────────
@@ -996,6 +1236,21 @@ int Netlist::mergeStructurallyEquivalentGates() {
     return merged;
 }
 
+NetlistEditReport Netlist::mergeStructurallyEquivalentGatesWithReport() {
+    Netlist before = cloneForRollback();
+    int merged = mergeStructurallyEquivalentGates();
+    return finalizeEditReport(
+        *this,
+        before,
+        merged,
+        "mergeStructurallyEquivalentGates",
+        NetlistEditOperationKind::Simplification,
+        "Structurally equivalent gate merge completed.",
+        "Structurally equivalent gate merge failed validation and was rolled back.",
+        EquivalenceCheckMethod::StructuralIdentity,
+        "Equivalence certified by structural hashing over gate type and input nets.");
+}
+
 // =============================================================================
 //  B-5: Unique name generator（P0）
 //  【說明】產生不會撞名的 gate / net 名稱，避免 repeated pass 後命名衝突。
@@ -1052,9 +1307,63 @@ bool Netlist::replaceGateWithNet(int gateId, int sourceNetId) {
     return true;
 }
 
+NetlistEditReport Netlist::replaceGateWithNetWithReport(int gateId, int sourceNetId) {
+    Netlist before = cloneForRollback();
+    const std::string gateName =
+        (gateId >= 0 && gateId < (int)gates.size()) ? gates[gateId].instName : "";
+    const std::string sourceNetName =
+        (sourceNetId >= 0 && sourceNetId < (int)nets.size()) ? nets[sourceNetId].name : "";
+    const int outputNetId =
+        (gateId >= 0 && gateId < (int)gates.size()) ? gates[gateId].outputNetId : -1;
+    const std::string outputNetName =
+        (outputNetId >= 0 && outputNetId < (int)nets.size()) ? nets[outputNetId].name : "";
+
+    const bool ok = replaceGateWithNet(gateId, sourceNetId);
+    return finalizeBooleanPrimitiveReport(
+        *this,
+        before,
+        ok,
+        "replaceGateWithNet",
+        "Gate replacement with net completed.",
+        "Gate replacement with net failed: gate/source net was invalid, removed, or the output net is PO.",
+        !gateName.empty() ? std::vector<std::string>{gateName} : std::vector<std::string>{},
+        !sourceNetName.empty() || !outputNetName.empty()
+            ? std::vector<std::string>{sourceNetName, outputNetName}
+            : std::vector<std::string>{},
+        gateId >= 0 ? std::vector<int>{gateId} : std::vector<int>{},
+        sourceNetId >= 0 || outputNetId >= 0
+            ? std::vector<int>{sourceNetId, outputNetId}
+            : std::vector<int>{});
+}
+
 // 把 gate 替換成常數 net（直接改接所有 load）
 bool Netlist::replaceGateWithConstant(int gateId, int constNetId) {
     return replaceGateWithNet(gateId, constNetId);
+}
+
+NetlistEditReport Netlist::replaceGateWithConstantWithReport(int gateId, int constNetId) {
+    Netlist before = cloneForRollback();
+    const std::string gateName =
+        (gateId >= 0 && gateId < (int)gates.size()) ? gates[gateId].instName : "";
+    const std::string constNetName =
+        (constNetId >= 0 && constNetId < (int)nets.size()) ? nets[constNetId].name : "";
+
+    const bool ok = replaceGateWithConstant(gateId, constNetId);
+    NetlistEditReport report = finalizeBooleanPrimitiveReport(
+        *this,
+        before,
+        ok,
+        "replaceGateWithConstant",
+        "Gate replacement with constant completed.",
+        "Gate replacement with constant failed: gate/constant net was invalid, removed, or the output net is PO.",
+        !gateName.empty() ? std::vector<std::string>{gateName} : std::vector<std::string>{},
+        !constNetName.empty() ? std::vector<std::string>{constNetName} : std::vector<std::string>{},
+        gateId >= 0 ? std::vector<int>{gateId} : std::vector<int>{},
+        constNetId >= 0 ? std::vector<int>{constNetId} : std::vector<int>{});
+    if (constNetId >= 0 && constNetId < (int)nets.size() && !nets[constNetId].isConst) {
+        report.addWarning("constNetId does not refer to a constant net.");
+    }
+    return report;
 }
 
 // 把 gate 替換成 NOT(sourceNet)（gate 被改寫成 NOT gate）
@@ -1077,6 +1386,35 @@ bool Netlist::replaceGateWithNotOfNet(int gateId, int sourceNetId) {
     return true;
 }
 
+NetlistEditReport Netlist::replaceGateWithNotOfNetWithReport(int gateId, int sourceNetId) {
+    Netlist before = cloneForRollback();
+    const std::string gateName =
+        (gateId >= 0 && gateId < (int)gates.size()) ? gates[gateId].instName : "";
+    const std::string sourceNetName =
+        (sourceNetId >= 0 && sourceNetId < (int)nets.size()) ? nets[sourceNetId].name : "";
+    const int outputNetId =
+        (gateId >= 0 && gateId < (int)gates.size()) ? gates[gateId].outputNetId : -1;
+    const std::string outputNetName =
+        (outputNetId >= 0 && outputNetId < (int)nets.size()) ? nets[outputNetId].name : "";
+
+    const bool ok = replaceGateWithNotOfNet(gateId, sourceNetId);
+    return finalizeBooleanPrimitiveReport(
+        *this,
+        before,
+        ok,
+        "replaceGateWithNotOfNet",
+        "Gate replacement with NOT(source net) completed.",
+        "Gate replacement with NOT(source net) failed: gate/source net was invalid, removed, or the output net is PO.",
+        !gateName.empty() ? std::vector<std::string>{gateName} : std::vector<std::string>{},
+        !sourceNetName.empty() || !outputNetName.empty()
+            ? std::vector<std::string>{sourceNetName, outputNetName}
+            : std::vector<std::string>{},
+        gateId >= 0 ? std::vector<int>{gateId} : std::vector<int>{},
+        sourceNetId >= 0 || outputNetId >= 0
+            ? std::vector<int>{sourceNetId, outputNetId}
+            : std::vector<int>{});
+}
+
 // 新增一個 gate 並讓它驅動指定的 outputNet
 // 回傳新 gate 的 ID；失敗回傳 -1
 int Netlist::createGateDrivingNet(
@@ -1086,8 +1424,17 @@ int Netlist::createGateDrivingNet(
     const std::string& nameHint)
 {
     if (outputNetId < 0 || outputNetId >= (int)nets.size()) return -1;
+    if (nets[outputNetId].isRemoved) return -1;
 
     int gateId = addGateWithUniqueName(nameHint.empty() ? "_cg" : nameHint, type);
+
+    int oldDriver = nets[outputNetId].driverGateId;
+    if (oldDriver >= 0 && oldDriver < (int)gates.size() && oldDriver != gateId) {
+        if (gates[oldDriver].outputNetId == outputNetId) {
+            gates[oldDriver].outputNetId = -1;
+        }
+    }
+
     gates[gateId].outputNetId = outputNetId;
     nets[outputNetId].driverGateId = gateId;
 
@@ -1118,7 +1465,7 @@ bool Netlist::disconnectGateInputPin(int gateId, int pinIndex) {
     int oldNetId = g.inputNetIds[pinIndex];
     if (oldNetId >= 0 && oldNetId < (int)nets.size()) {
         auto& loads = nets[oldNetId].loadGateIds;
-        loads.erase(std::remove(loads.begin(), loads.end(), gateId), loads.end());
+        eraseOneLoad(loads, gateId);
     }
     g.inputNetIds[pinIndex] = -1;
     return true;
@@ -1127,7 +1474,9 @@ bool Netlist::disconnectGateInputPin(int gateId, int pinIndex) {
 // 把指定 gate 的第 pinIndex 個 input pin 接到 netId
 bool Netlist::connectGateInputPin(int gateId, int pinIndex, int netId) {
     if (gateId < 0 || gateId >= (int)gates.size()) return false;
+    if (pinIndex < 0) return false;
     if (netId < 0 || netId >= (int)nets.size()) return false;
+    if (nets[netId].isRemoved) return false;
     Gate& g = gates[gateId];
 
     // 如果 pinIndex 超出現有大小，先擴充
@@ -1138,7 +1487,7 @@ bool Netlist::connectGateInputPin(int gateId, int pinIndex, int netId) {
     int oldNetId = g.inputNetIds[pinIndex];
     if (oldNetId >= 0 && oldNetId < (int)nets.size()) {
         auto& loads = nets[oldNetId].loadGateIds;
-        loads.erase(std::remove(loads.begin(), loads.end(), gateId), loads.end());
+        eraseOneLoad(loads, gateId);
     }
 
     g.inputNetIds[pinIndex] = netId;
@@ -1181,29 +1530,124 @@ bool Netlist::reconnectGateInputPinByName(
 bool Netlist::replaceDriverOfNet(int targetNetId, int newDriverGateId) {
     if (targetNetId < 0 || targetNetId >= (int)nets.size()) return false;
     if (newDriverGateId < 0 || newDriverGateId >= (int)gates.size()) return false;
+    if (nets[targetNetId].isRemoved) return false;
+    if (gates[newDriverGateId].type == GateType::UNKNOWN) return false;
 
     int oldDriver = nets[targetNetId].driverGateId;
     if (oldDriver >= 0 && oldDriver < (int)gates.size())
         gates[oldDriver].outputNetId = -1;
+
+    int oldOutputNet = gates[newDriverGateId].outputNetId;
+    if (oldOutputNet >= 0 && oldOutputNet < (int)nets.size() &&
+        nets[oldOutputNet].driverGateId == newDriverGateId) {
+        nets[oldOutputNet].driverGateId = -1;
+    }
 
     nets[targetNetId].driverGateId = newDriverGateId;
     gates[newDriverGateId].outputNetId = targetNetId;
     return true;
 }
 
+NetlistEditReport Netlist::replaceDriverOfNetWithReport(int targetNetId, int newDriverGateId) {
+    Netlist before = cloneForRollback();
+    const std::string targetNetName =
+        (targetNetId >= 0 && targetNetId < (int)nets.size()) ? nets[targetNetId].name : "";
+    const int oldDriverGateId =
+        (targetNetId >= 0 && targetNetId < (int)nets.size()) ? nets[targetNetId].driverGateId : -1;
+    const std::string oldDriverGateName =
+        (oldDriverGateId >= 0 && oldDriverGateId < (int)gates.size()) ? gates[oldDriverGateId].instName : "";
+    const std::string newDriverGateName =
+        (newDriverGateId >= 0 && newDriverGateId < (int)gates.size()) ? gates[newDriverGateId].instName : "";
+
+    const bool ok = replaceDriverOfNet(targetNetId, newDriverGateId);
+
+    std::vector<std::string> changedGateNames;
+    if (!oldDriverGateName.empty()) changedGateNames.push_back(oldDriverGateName);
+    if (!newDriverGateName.empty()) changedGateNames.push_back(newDriverGateName);
+    std::vector<int> changedGateIds;
+    if (oldDriverGateId >= 0) changedGateIds.push_back(oldDriverGateId);
+    if (newDriverGateId >= 0) changedGateIds.push_back(newDriverGateId);
+
+    return finalizeBooleanPrimitiveReport(
+        *this,
+        before,
+        ok,
+        "replaceDriverOfNet",
+        "Net driver replacement completed.",
+        "Net driver replacement failed: target net or new driver gate was invalid or removed.",
+        changedGateNames,
+        !targetNetName.empty() ? std::vector<std::string>{targetNetName} : std::vector<std::string>{},
+        changedGateIds,
+        targetNetId >= 0 ? std::vector<int>{targetNetId} : std::vector<int>{});
+}
+
 // 把 gate 的 output 改接到 newOutputNetId（舊的 output net 不動，只斷開）
 bool Netlist::rewireGateOutputToExistingNet(int gateId, int newOutputNetId) {
     if (gateId < 0 || gateId >= (int)gates.size()) return false;
     if (newOutputNetId < 0 || newOutputNetId >= (int)nets.size()) return false;
+    if (gates[gateId].type == GateType::UNKNOWN) return false;
+    if (nets[newOutputNetId].isRemoved) return false;
 
     int oldOutNet = gates[gateId].outputNetId;
     if (oldOutNet >= 0 && oldOutNet < (int)nets.size())
         if (nets[oldOutNet].driverGateId == gateId)
             nets[oldOutNet].driverGateId = -1;
 
+    int oldDriver = nets[newOutputNetId].driverGateId;
+    if (oldDriver >= 0 && oldDriver < (int)gates.size() && oldDriver != gateId) {
+        if (gates[oldDriver].outputNetId == newOutputNetId) {
+            gates[oldDriver].outputNetId = -1;
+        }
+    }
+
     gates[gateId].outputNetId = newOutputNetId;
     nets[newOutputNetId].driverGateId = gateId;
     return true;
+}
+
+NetlistEditReport Netlist::rewireGateOutputToExistingNetWithReport(int gateId, int newOutputNetId) {
+    Netlist before = cloneForRollback();
+    const std::string gateName =
+        (gateId >= 0 && gateId < (int)gates.size()) ? gates[gateId].instName : "";
+    const int oldOutputNetId =
+        (gateId >= 0 && gateId < (int)gates.size()) ? gates[gateId].outputNetId : -1;
+    const std::string oldOutputNetName =
+        (oldOutputNetId >= 0 && oldOutputNetId < (int)nets.size()) ? nets[oldOutputNetId].name : "";
+    const std::string newOutputNetName =
+        (newOutputNetId >= 0 && newOutputNetId < (int)nets.size()) ? nets[newOutputNetId].name : "";
+    const int oldTargetDriverGateId =
+        (newOutputNetId >= 0 && newOutputNetId < (int)nets.size()) ? nets[newOutputNetId].driverGateId : -1;
+    const std::string oldTargetDriverGateName =
+        (oldTargetDriverGateId >= 0 && oldTargetDriverGateId < (int)gates.size())
+            ? gates[oldTargetDriverGateId].instName
+            : "";
+
+    const bool ok = rewireGateOutputToExistingNet(gateId, newOutputNetId);
+
+    std::vector<std::string> changedGateNames;
+    if (!gateName.empty()) changedGateNames.push_back(gateName);
+    if (!oldTargetDriverGateName.empty()) changedGateNames.push_back(oldTargetDriverGateName);
+    std::vector<std::string> changedNetNames;
+    if (!oldOutputNetName.empty()) changedNetNames.push_back(oldOutputNetName);
+    if (!newOutputNetName.empty()) changedNetNames.push_back(newOutputNetName);
+    std::vector<int> changedGateIds;
+    if (gateId >= 0) changedGateIds.push_back(gateId);
+    if (oldTargetDriverGateId >= 0) changedGateIds.push_back(oldTargetDriverGateId);
+    std::vector<int> changedNetIds;
+    if (oldOutputNetId >= 0) changedNetIds.push_back(oldOutputNetId);
+    if (newOutputNetId >= 0) changedNetIds.push_back(newOutputNetId);
+
+    return finalizeBooleanPrimitiveReport(
+        *this,
+        before,
+        ok,
+        "rewireGateOutputToExistingNet",
+        "Gate output rewire completed.",
+        "Gate output rewire failed: gate or target net was invalid or removed.",
+        changedGateNames,
+        changedNetNames,
+        changedGateIds,
+        changedNetIds);
 }
 
 // 保留 PO net（不改名、不移除），但插入一個新 gate 來驅動它
@@ -1241,6 +1685,67 @@ bool Netlist::replaceNetFunctionWithNetKeepingName(int targetNetId, int sourceNe
     return preservePortNetAndReplaceDriver(targetNetId, GateType::BUF, { sourceNetId });
 }
 
+NetlistEditReport Netlist::replaceNetFunctionWithNetKeepingNameWithReport(int targetNetId, int sourceNetId) {
+    Netlist before = cloneForRollback();
+    const std::string targetNetName =
+        (targetNetId >= 0 && targetNetId < (int)nets.size()) ? nets[targetNetId].name : "";
+    const std::string sourceNetName =
+        (sourceNetId >= 0 && sourceNetId < (int)nets.size()) ? nets[sourceNetId].name : "";
+    const int oldDriverGateId =
+        (targetNetId >= 0 && targetNetId < (int)nets.size()) ? nets[targetNetId].driverGateId : -1;
+    const std::string oldDriverGateName =
+        (oldDriverGateId >= 0 && oldDriverGateId < (int)gates.size()) ? gates[oldDriverGateId].instName : "";
+
+    const bool ok = replaceNetFunctionWithNetKeepingName(targetNetId, sourceNetId);
+    NetlistEditReport report = Netlist::buildEditReport(
+        before,
+        *this,
+        "replaceNetFunctionWithNetKeepingName",
+        NetlistEditOperationKind::PrimitiveMutation);
+    report.changed = report.changed || (ok && targetNetId != sourceNetId);
+
+    if (!oldDriverGateName.empty()) {
+        report.changedGateNames.push_back(oldDriverGateName);
+        report.changedGateIds.push_back(oldDriverGateId);
+    }
+    const int newDriverGateId =
+        (targetNetId >= 0 && targetNetId < (int)nets.size()) ? nets[targetNetId].driverGateId : -1;
+    if (newDriverGateId >= 0 && newDriverGateId < (int)gates.size() &&
+        newDriverGateId != oldDriverGateId) {
+        report.changedGateNames.push_back(gates[newDriverGateId].instName);
+        report.changedGateIds.push_back(newDriverGateId);
+    }
+    if (!targetNetName.empty()) {
+        report.changedNetNames.push_back(targetNetName);
+        report.changedNetIds.push_back(targetNetId);
+    }
+    if (!sourceNetName.empty()) {
+        report.changedNetNames.push_back(sourceNetName);
+        report.changedNetIds.push_back(sourceNetId);
+    }
+
+    if (!ok) {
+        if (report.changed) {
+            restoreFrom(before);
+            report.rolledBack = true;
+        }
+        report.success = false;
+        report.message = "Net function replacement failed: target/source net was invalid.";
+        return report;
+    }
+
+    report.message = report.success
+        ? "Net function replacement completed while keeping the target net name."
+        : "Net function replacement failed validation and was rolled back.";
+
+    if (!report.success) {
+        restoreFrom(before);
+        report.rolledBack = true;
+    }
+
+    return report;
+}
+
 // =============================================================================
 //  B-3: Net merge / net bypass primitive（P1）
 //  【說明】完整處理 PI / PO / constant / driver / loads 的 net merge。
@@ -1260,6 +1765,7 @@ bool Netlist::mergeNetIntoNet(int fromNetId, int toNetId) {
             for (int pj = 0; pj < (int)primaryOutputs[pi].netIds.size(); pj++)
                 if (primaryOutputs[pi].netIds[pj] == fromNetId)
                     primaryOutputs[pi].netIds[pj] = toNetId;
+        nets[fromNetId].isPO = false;
     }
 
     replaceAllLoadsOfNet(fromNetId, toNetId);
@@ -1274,10 +1780,70 @@ bool Netlist::mergeNetIntoNet(int fromNetId, int toNetId) {
     return true;
 }
 
+NetlistEditReport Netlist::mergeNetIntoNetWithReport(int fromNetId, int toNetId) {
+    Netlist before = cloneForRollback();
+    const std::string fromNetName =
+        (fromNetId >= 0 && fromNetId < (int)nets.size()) ? nets[fromNetId].name : "";
+    const std::string toNetName =
+        (toNetId >= 0 && toNetId < (int)nets.size()) ? nets[toNetId].name : "";
+    const int fromDriverGateId =
+        (fromNetId >= 0 && fromNetId < (int)nets.size()) ? nets[fromNetId].driverGateId : -1;
+    const std::string fromDriverGateName =
+        (fromDriverGateId >= 0 && fromDriverGateId < (int)gates.size())
+            ? gates[fromDriverGateId].instName
+            : "";
+
+    const bool ok = mergeNetIntoNet(fromNetId, toNetId);
+    NetlistEditReport report = finalizeBooleanPrimitiveReport(
+        *this,
+        before,
+        ok,
+        "mergeNetIntoNet",
+        "Net merge completed.",
+        "Net merge failed: source/target net id was invalid.",
+        !fromDriverGateName.empty() ? std::vector<std::string>{fromDriverGateName} : std::vector<std::string>{},
+        !fromNetName.empty() || !toNetName.empty()
+            ? std::vector<std::string>{fromNetName, toNetName}
+            : std::vector<std::string>{},
+        fromDriverGateId >= 0 ? std::vector<int>{fromDriverGateId} : std::vector<int>{},
+        fromNetId >= 0 || toNetId >= 0
+            ? std::vector<int>{fromNetId, toNetId}
+            : std::vector<int>{});
+    if (ok && fromNetId == toNetId) {
+        report.changed = false;
+        report.addWarning("fromNetId and toNetId are identical; merge is a no-op.");
+    }
+    return report;
+}
+
 // bypass removedNet，讓所有接到它的 gate 改接到 replacementNet
 // 同時保留 PO 語意（若 removedNet 是 PO）
 bool Netlist::bypassNetKeepingPortSemantics(int removedNetId, int replacementNetId) {
     return mergeNetIntoNet(removedNetId, replacementNetId);
+}
+
+NetlistEditReport Netlist::bypassNetKeepingPortSemanticsWithReport(int removedNetId, int replacementNetId) {
+    Netlist before = cloneForRollback();
+    const std::string removedNetName =
+        (removedNetId >= 0 && removedNetId < (int)nets.size()) ? nets[removedNetId].name : "";
+    const std::string replacementNetName =
+        (replacementNetId >= 0 && replacementNetId < (int)nets.size()) ? nets[replacementNetId].name : "";
+    const bool ok = bypassNetKeepingPortSemantics(removedNetId, replacementNetId);
+    return finalizeBooleanPrimitiveReport(
+        *this,
+        before,
+        ok,
+        "bypassNetKeepingPortSemantics",
+        "Net bypass completed while preserving port semantics.",
+        "Net bypass failed: removed/replacement net id was invalid.",
+        {},
+        !removedNetName.empty() || !replacementNetName.empty()
+            ? std::vector<std::string>{removedNetName, replacementNetName}
+            : std::vector<std::string>{},
+        {},
+        removedNetId >= 0 || replacementNetId >= 0
+            ? std::vector<int>{removedNetId, replacementNetId}
+            : std::vector<int>{});
 }
 
 // 把 oldNet 的所有 load 改接到 newNet（allowDuplicateLoads 控制是否允許重複）
@@ -1307,10 +1873,47 @@ bool Netlist::redirectAllLoads(int oldNetId, int newNetId, bool allowDuplicateLo
     return true;
 }
 
+NetlistEditReport Netlist::redirectAllLoadsWithReport(int oldNetId, int newNetId, bool allowDuplicateLoads) {
+    Netlist before = cloneForRollback();
+    const std::string oldNetName =
+        (oldNetId >= 0 && oldNetId < (int)nets.size()) ? nets[oldNetId].name : "";
+    const std::string newNetName =
+        (newNetId >= 0 && newNetId < (int)nets.size()) ? nets[newNetId].name : "";
+    const std::vector<int> oldLoadGateIds =
+        (oldNetId >= 0 && oldNetId < (int)nets.size()) ? nets[oldNetId].loadGateIds : std::vector<int>{};
+
+    const bool ok = redirectAllLoads(oldNetId, newNetId, allowDuplicateLoads);
+
+    std::vector<int> changedGateIds;
+    std::vector<std::string> changedGateNames;
+    for (int gateId : oldLoadGateIds) {
+        if (gateId < 0 || gateId >= (int)gates.size()) continue;
+        changedGateIds.push_back(gateId);
+        changedGateNames.push_back(gates[gateId].instName);
+    }
+
+    return finalizeBooleanPrimitiveReport(
+        *this,
+        before,
+        ok,
+        "redirectAllLoads",
+        "Load redirection completed.",
+        "Load redirection failed: old/new net id was invalid or identical.",
+        changedGateNames,
+        !oldNetName.empty() || !newNetName.empty()
+            ? std::vector<std::string>{oldNetName, newNetName}
+            : std::vector<std::string>{},
+        changedGateIds,
+        oldNetId >= 0 || newNetId >= 0
+            ? std::vector<int>{oldNetId, newNetId}
+            : std::vector<int>{});
+}
+
 // 如果 net 沒有任何 load 且不是 PO / PI / const，把它從 netlist 移除
 bool Netlist::removeNetIfUnused(int netId) {
     if (netId < 0 || netId >= (int)nets.size()) return false;
     const Net& n = nets[netId];
+    if (n.isRemoved) return false;
     if (n.isPO || n.isPI || n.isConst) return false;
     if (!n.loadGateIds.empty()) return false;
 
@@ -1322,8 +1925,39 @@ bool Netlist::removeNetIfUnused(int netId) {
     // 用 sentinel 標記（不真的 erase，避免 ID shift）
     nets[netId].driverGateId = -1;
     nets[netId].loadGateIds.clear();
+    nets[netId].isRemoved = true;
     // 不 erase，保留 slot，讓 compact 時處理
     return true;
+}
+
+NetlistEditReport Netlist::removeNetIfUnusedWithReport(int netId) {
+    Netlist before = cloneForRollback();
+    const std::string netName =
+        (netId >= 0 && netId < (int)nets.size()) ? nets[netId].name : "";
+    const int driverGateId =
+        (netId >= 0 && netId < (int)nets.size()) ? nets[netId].driverGateId : -1;
+    const std::string driverGateName =
+        (driverGateId >= 0 && driverGateId < (int)gates.size()) ? gates[driverGateId].instName : "";
+
+    const bool ok = removeNetIfUnused(netId);
+    NetlistEditReport report = finalizeBooleanPrimitiveReport(
+        *this,
+        before,
+        ok,
+        "removeNetIfUnused",
+        "Unused net removal completed.",
+        "Unused net removal failed: net was invalid, PI/PO/const, already removed, or still had loads.",
+        !driverGateName.empty() ? std::vector<std::string>{driverGateName} : std::vector<std::string>{},
+        !netName.empty() ? std::vector<std::string>{netName} : std::vector<std::string>{},
+        driverGateId >= 0 ? std::vector<int>{driverGateId} : std::vector<int>{},
+        netId >= 0 ? std::vector<int>{netId} : std::vector<int>{});
+    if (report.success) {
+        certifyEquivalence(
+            report,
+            EquivalenceCheckMethod::StructuralIdentity,
+            "Equivalence certified by removing one internal net with no loads and no PI/PO/constant role.");
+    }
+    return report;
 }
 
 // 掃描所有 net，移除沒有 load 且非 PO/PI/const 的 net(計算出移除掉的net數量)
@@ -1332,6 +1966,36 @@ int Netlist::removeUnusedNets() {
     for (int i = 0; i < (int)nets.size(); i++)
         if (removeNetIfUnused(i)) removed++;
     return removed;
+}
+
+NetlistEditReport Netlist::removeUnusedNetsWithReport() {
+    Netlist before = cloneForRollback();
+    std::vector<int> candidateNetIds;
+    std::vector<std::string> candidateNetNames;
+    for (int i = 0; i < (int)nets.size(); ++i) {
+        if (nets[i].isRemoved || nets[i].isPO || nets[i].isPI || nets[i].isConst) continue;
+        if (!nets[i].loadGateIds.empty()) continue;
+        candidateNetIds.push_back(i);
+        candidateNetNames.push_back(nets[i].name);
+    }
+
+    const int removed = removeUnusedNets();
+    NetlistEditReport report = finalizeEditReport(
+        *this,
+        before,
+        removed,
+        "removeUnusedNets",
+        NetlistEditOperationKind::Cleanup,
+        "Unused net cleanup completed.",
+        "Unused net cleanup failed validation and was rolled back.",
+        EquivalenceCheckMethod::StructuralIdentity,
+        "Equivalence certified by removing internal nets with no loads and no PI/PO/constant role.");
+    report.changedNetIds = candidateNetIds;
+    report.changedNetNames = candidateNetNames;
+    if (removed == 0) {
+        report.addWarning("No unused internal nets were removed.");
+    }
+    return report;
 }
 
 // =============================================================================
@@ -1361,12 +2025,42 @@ int Netlist::simplifyAllGatesWithConstants() {
     return count;
 }
 
+NetlistEditReport Netlist::simplifyAllGatesWithConstantsWithReport() {
+    Netlist before = cloneForRollback();
+    int simplified = simplifyAllGatesWithConstants();
+    return finalizeEditReport(
+        *this,
+        before,
+        simplified,
+        "simplifyAllGatesWithConstants",
+        NetlistEditOperationKind::Simplification,
+        "Constant simplification completed.",
+        "Constant simplification failed validation and was rolled back.",
+        EquivalenceCheckMethod::LocalRewriteRule,
+        "Equivalence certified by local constant-folding Boolean identities.");
+}
+
 // 對所有 gate 執行一輪 same-input 化簡，回傳化簡的 gate 數
 int Netlist::simplifyAllSameInputGates() {
     int count = 0;
     for (int i = 0; i < (int)gates.size(); i++)
         if (simplifySameInputGate(i)) count++;
     return count;
+}
+
+NetlistEditReport Netlist::simplifyAllSameInputGatesWithReport() {
+    Netlist before = cloneForRollback();
+    int simplified = simplifyAllSameInputGates();
+    return finalizeEditReport(
+        *this,
+        before,
+        simplified,
+        "simplifyAllSameInputGates",
+        NetlistEditOperationKind::Simplification,
+        "Same-input simplification completed.",
+        "Same-input simplification failed validation and was rolled back.",
+        EquivalenceCheckMethod::LocalRewriteRule,
+        "Equivalence certified by same-input Boolean identities such as AND(x,x)=x and XOR(x,x)=0.");
 }
 
 // 反覆執行所有 local simplification，直到 fixpoint（沒有任何改變）
@@ -1386,6 +2080,22 @@ int Netlist::runLocalSimplificationFixpoint() {
         if (round > 0) changed = true;
     }
     return total;
+}
+
+NetlistEditReport Netlist::runLocalSimplificationFixpointWithReport() {
+    Netlist before = cloneForRollback();
+
+    int changedCount = runLocalSimplificationFixpoint();
+    return finalizeEditReport(
+        *this,
+        before,
+        changedCount,
+        "runLocalSimplificationFixpoint",
+        NetlistEditOperationKind::Simplification,
+        "Local simplification fixpoint completed.",
+        "Local simplification fixpoint failed validation and was rolled back.",
+        EquivalenceCheckMethod::LocalRewriteRule,
+        "Equivalence certified by composing local cleanup and simplification rewrite rules.");
 }
 
 // =============================================================================

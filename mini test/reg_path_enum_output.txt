@@ -1,0 +1,7 @@
+Total paths: 1
+
+Path 0
+  depth: 2
+  nets: q1 -> mid -> d2
+  gates: g1 -> g2
+

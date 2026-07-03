@@ -1,4 +1,5 @@
 #include "include/core/Netlist.h"
+#include "include/core/TechMapper.h"
 #include "include/io/VerilogReader.h"
 #include "include/io/VerilogWriter.h"
 
@@ -543,6 +544,284 @@ void testWriterAndSmallMutation(TestReport& report, const Netlist& original) {
     report.check(netlist.connectGateInput("g_y", "n_buf") &&
                  netlist.hasCombinationalPath("a", "y"),
                  "connectGateInput restores path");
+
+    Netlist renameGateNetlist = original.cloneForRollback();
+    const Netlist::NetlistEditReport renameGateReport =
+        renameGateNetlist.renameGateWithReport("g_direct", "g_direct_report");
+    report.check(renameGateReport.success &&
+                 renameGateReport.changed &&
+                 !renameGateReport.rolledBack &&
+                 renameGateReport.operationKind == Netlist::NetlistEditOperationKind::PrimitiveMutation &&
+                 renameGateReport.validation.equivalenceChecked &&
+                 renameGateReport.validation.functionallyEquivalent &&
+                 renameGateReport.validation.equivalenceMethod == Netlist::EquivalenceCheckMethod::StructuralIdentity &&
+                 renameGateNetlist.getGateId("g_direct_report") >= 0,
+                 "renameGateWithReport");
+
+    Netlist renameNetNetlist = original.cloneForRollback();
+    const Netlist::NetlistEditReport renameNetReport =
+        renameNetNetlist.renameNetWithReport("n_buf", "n_buf_report");
+    report.check(renameNetReport.success &&
+                 renameNetReport.changed &&
+                 !renameNetReport.rolledBack &&
+                 renameNetReport.operationKind == Netlist::NetlistEditOperationKind::PrimitiveMutation &&
+                 renameNetReport.validation.equivalenceChecked &&
+                 renameNetReport.validation.functionallyEquivalent &&
+                 renameNetReport.validation.equivalenceMethod == Netlist::EquivalenceCheckMethod::StructuralIdentity &&
+                 renameNetNetlist.getNetId("n_buf_report") >= 0,
+                 "renameNetWithReport");
+
+    Netlist reconnectNetlist = original.cloneForRollback();
+    const Netlist::NetlistEditReport disconnectReport =
+        reconnectNetlist.disconnectGateInputWithReport("g_y", "n_buf");
+    const Netlist::NetlistEditReport connectReport =
+        reconnectNetlist.connectGateInputWithReport("g_y", "n_buf");
+    report.check(disconnectReport.success &&
+                 connectReport.success &&
+                 disconnectReport.operationKind == Netlist::NetlistEditOperationKind::PrimitiveMutation &&
+                 connectReport.operationKind == Netlist::NetlistEditOperationKind::PrimitiveMutation &&
+                 !disconnectReport.validation.equivalenceChecked &&
+                 !connectReport.validation.equivalenceChecked &&
+                 reconnectNetlist.hasCombinationalPath("a", "y"),
+                 "disconnect/connectGateInputWithReport");
+
+    Netlist replaceLoadsNetlist = original.cloneForRollback();
+    const Netlist::NetlistEditReport replaceLoadsReport =
+        replaceLoadsNetlist.replaceAllLoadsOfNetWithReport(
+            replaceLoadsNetlist.getNetId("n_buf"),
+            replaceLoadsNetlist.getNetId("a"));
+    report.check(replaceLoadsReport.success &&
+                 replaceLoadsReport.changed &&
+                 !replaceLoadsReport.rolledBack &&
+                 replaceLoadsReport.operationKind == Netlist::NetlistEditOperationKind::PrimitiveMutation &&
+                 replaceLoadsNetlist.validateAfterMutation(),
+                 "replaceAllLoadsOfNetWithReport");
+
+    Netlist removeGateNetlist = original.cloneForRollback();
+    const int directGateId = removeGateNetlist.getGateId("g_short");
+    const Netlist::NetlistEditReport removeGateReport =
+        removeGateNetlist.removeGateWithReport(directGateId);
+    report.check(removeGateReport.success &&
+                 removeGateReport.changed &&
+                 !removeGateReport.rolledBack &&
+                 removeGateReport.operationKind == Netlist::NetlistEditOperationKind::PrimitiveMutation &&
+                 removeGateNetlist.isGateRemoved(directGateId),
+                 "removeGateWithReport");
+
+    Netlist replaceGateNetlist = original.cloneForRollback();
+    const Netlist::NetlistEditReport replaceGateReport =
+        replaceGateNetlist.replaceGateWithNetWithReport(
+            replaceGateNetlist.getGateId("g_short"),
+            replaceGateNetlist.getNetId("a"));
+    report.check(replaceGateReport.success &&
+                 replaceGateReport.changed &&
+                 !replaceGateReport.rolledBack &&
+                 replaceGateReport.operationKind == Netlist::NetlistEditOperationKind::PrimitiveMutation &&
+                 !replaceGateReport.validation.equivalenceChecked &&
+                 replaceGateNetlist.validateAfterMutation(),
+                 "replaceGateWithNetWithReport");
+
+    Netlist replaceConstNetlist = original.cloneForRollback();
+    const Netlist::NetlistEditReport replaceConstReport =
+        replaceConstNetlist.replaceGateWithConstantWithReport(
+            replaceConstNetlist.getGateId("g_short"),
+            replaceConstNetlist.getConst0NetId());
+    report.check(replaceConstReport.success &&
+                 replaceConstReport.changed &&
+                 !replaceConstReport.rolledBack &&
+                 replaceConstReport.operationKind == Netlist::NetlistEditOperationKind::PrimitiveMutation &&
+                 replaceConstNetlist.validateAfterMutation(),
+                 "replaceGateWithConstantWithReport");
+
+    Netlist replaceNotNetlist = original.cloneForRollback();
+    const Netlist::NetlistEditReport replaceNotReport =
+        replaceNotNetlist.replaceGateWithNotOfNetWithReport(
+            replaceNotNetlist.getGateId("g_short"),
+            replaceNotNetlist.getNetId("a"));
+    report.check(replaceNotReport.success &&
+                 replaceNotReport.changed &&
+                 !replaceNotReport.rolledBack &&
+                 replaceNotReport.operationKind == Netlist::NetlistEditOperationKind::PrimitiveMutation &&
+                 replaceNotNetlist.validateAfterMutation(),
+                 "replaceGateWithNotOfNetWithReport");
+
+    auto makeDriverRewriteNetlist = []() {
+        Netlist n;
+        n.addPrimaryInput("a");
+        n.addPrimaryInput("b");
+        n.addPrimaryOutput("y");
+        const int aNet = n.getNetId("a");
+        const int bNet = n.getNetId("b");
+        const int yNet = n.getNetId("y");
+        const int oldDriver = n.addGate("old_driver", GateType::AND);
+        n.connectGateInput(oldDriver, aNet);
+        n.connectGateInput(oldDriver, bNet);
+        n.connectGateOutput(oldDriver, yNet);
+        const int newDriver = n.addGate("new_driver", GateType::BUF);
+        n.connectGateInput(newDriver, aNet);
+        return n;
+    };
+
+    Netlist replaceDriverNetlist = makeDriverRewriteNetlist();
+    const int replaceDriverTargetNet = replaceDriverNetlist.getNetId("y");
+    const int replacementDriverGate = replaceDriverNetlist.getGateId("new_driver");
+    const Netlist::NetlistEditReport replaceDriverReport =
+        replaceDriverNetlist.replaceDriverOfNetWithReport(
+            replaceDriverTargetNet,
+            replacementDriverGate);
+    report.check(replaceDriverReport.success &&
+                 replaceDriverReport.changed &&
+                 !replaceDriverReport.rolledBack &&
+                 replaceDriverReport.operationKind == Netlist::NetlistEditOperationKind::PrimitiveMutation &&
+                 replaceDriverNetlist.getNetDriverGateId("y") == replacementDriverGate &&
+                 replaceDriverNetlist.getGate(replacementDriverGate).outputNetId == replaceDriverTargetNet &&
+                 replaceDriverNetlist.validateAfterMutation(),
+                 "replaceDriverOfNetWithReport");
+
+    Netlist rewireOutputNetlist = makeDriverRewriteNetlist();
+    const int rewireTargetNet = rewireOutputNetlist.getNetId("y");
+    const int rewireDriverGate = rewireOutputNetlist.getGateId("new_driver");
+    const Netlist::NetlistEditReport rewireOutputReport =
+        rewireOutputNetlist.rewireGateOutputToExistingNetWithReport(
+            rewireDriverGate,
+            rewireTargetNet);
+    report.check(rewireOutputReport.success &&
+                 rewireOutputReport.changed &&
+                 !rewireOutputReport.rolledBack &&
+                 rewireOutputReport.operationKind == Netlist::NetlistEditOperationKind::PrimitiveMutation &&
+                 rewireOutputNetlist.getNetDriverGateId("y") == rewireDriverGate &&
+                 rewireOutputNetlist.getGate(rewireDriverGate).outputNetId == rewireTargetNet &&
+                 rewireOutputNetlist.validateAfterMutation(),
+                 "rewireGateOutputToExistingNetWithReport");
+
+    Netlist replaceNetFunctionNetlist = makeDriverRewriteNetlist();
+    const int poNet = replaceNetFunctionNetlist.getNetId("y");
+    const int sourceNet = replaceNetFunctionNetlist.getNetId("a");
+    const Netlist::NetlistEditReport replaceNetFunctionReport =
+        replaceNetFunctionNetlist.replaceNetFunctionWithNetKeepingNameWithReport(
+            poNet,
+            sourceNet);
+    const int newPoDriver = replaceNetFunctionNetlist.getNetDriverGateId("y");
+    report.check(replaceNetFunctionReport.success &&
+                 replaceNetFunctionReport.changed &&
+                 !replaceNetFunctionReport.rolledBack &&
+                 replaceNetFunctionReport.operationKind == Netlist::NetlistEditOperationKind::PrimitiveMutation &&
+                 replaceNetFunctionNetlist.isPrimaryOutputNet(poNet) &&
+                 newPoDriver >= 0 &&
+                 replaceNetFunctionNetlist.getGate(newPoDriver).type == GateType::BUF &&
+                 replaceNetFunctionNetlist.getGate(newPoDriver).inputNetIds.size() == 1 &&
+                 replaceNetFunctionNetlist.getGate(newPoDriver).inputNetIds[0] == sourceNet &&
+                 replaceNetFunctionNetlist.validateAfterMutation(),
+                 "replaceNetFunctionWithNetKeepingNameWithReport");
+
+    auto makeNetMergeNetlist = []() {
+        Netlist n;
+        n.addPrimaryInput("a");
+        n.addPrimaryInput("b");
+        n.addPrimaryOutput("y");
+        const int aNet = n.getNetId("a");
+        const int bNet = n.getNetId("b");
+        const int yNet = n.getNetId("y");
+        const int fromNet = n.addNet("from_net");
+        const int fromDriver = n.addGate("from_driver", GateType::BUF);
+        n.connectGateInput(fromDriver, aNet);
+        n.connectGateOutput(fromDriver, fromNet);
+        const int loadGate = n.addGate("load_gate", GateType::AND);
+        n.connectGateInput(loadGate, fromNet);
+        n.connectGateInput(loadGate, bNet);
+        n.connectGateOutput(loadGate, yNet);
+        return n;
+    };
+
+    Netlist mergeNetlist = makeNetMergeNetlist();
+    const int mergeFromNet = mergeNetlist.getNetId("from_net");
+    const int mergeToNet = mergeNetlist.getNetId("b");
+    const int mergeLoadGate = mergeNetlist.getGateId("load_gate");
+    const Netlist::NetlistEditReport mergeNetReport =
+        mergeNetlist.mergeNetIntoNetWithReport(mergeFromNet, mergeToNet);
+    report.check(mergeNetReport.success &&
+                 mergeNetReport.changed &&
+                 !mergeNetReport.rolledBack &&
+                 mergeNetReport.operationKind == Netlist::NetlistEditOperationKind::PrimitiveMutation &&
+                 mergeNetlist.getGate(mergeLoadGate).inputNetIds[0] == mergeToNet &&
+                 mergeNetlist.validateAfterMutation(),
+                 "mergeNetIntoNetWithReport");
+
+    Netlist redirectLoadsNetlist = makeNetMergeNetlist();
+    const int redirectOldNet = redirectLoadsNetlist.getNetId("from_net");
+    const int redirectNewNet = redirectLoadsNetlist.getNetId("b");
+    const int redirectLoadGate = redirectLoadsNetlist.getGateId("load_gate");
+    const Netlist::NetlistEditReport redirectLoadsReport =
+        redirectLoadsNetlist.redirectAllLoadsWithReport(redirectOldNet, redirectNewNet);
+    report.check(redirectLoadsReport.success &&
+                 redirectLoadsReport.changed &&
+                 !redirectLoadsReport.rolledBack &&
+                 redirectLoadsReport.operationKind == Netlist::NetlistEditOperationKind::PrimitiveMutation &&
+                 redirectLoadsNetlist.getGate(redirectLoadGate).inputNetIds[0] == redirectNewNet &&
+                 redirectLoadsNetlist.validateAfterMutation(),
+                 "redirectAllLoadsWithReport");
+
+    Netlist bypassNetlist;
+    bypassNetlist.addPrimaryInput("a");
+    bypassNetlist.addPrimaryInput("b");
+    bypassNetlist.addPrimaryOutput("y");
+    const int bypassA = bypassNetlist.getNetId("a");
+    const int bypassB = bypassNetlist.getNetId("b");
+    const int bypassY = bypassNetlist.getNetId("y");
+    const int replacementNet = bypassNetlist.addNet("replacement_net");
+    const int replacementDriver = bypassNetlist.addGate("replacement_driver", GateType::BUF);
+    bypassNetlist.connectGateInput(replacementDriver, bypassA);
+    bypassNetlist.connectGateOutput(replacementDriver, replacementNet);
+    const int originalPoDriver = bypassNetlist.addGate("original_po_driver", GateType::BUF);
+    bypassNetlist.connectGateInput(originalPoDriver, bypassB);
+    bypassNetlist.connectGateOutput(originalPoDriver, bypassY);
+    const Netlist::NetlistEditReport bypassReport =
+        bypassNetlist.bypassNetKeepingPortSemanticsWithReport(bypassY, replacementNet);
+    report.check(bypassReport.success &&
+                 bypassReport.changed &&
+                 !bypassReport.rolledBack &&
+                 bypassReport.operationKind == Netlist::NetlistEditOperationKind::PrimitiveMutation &&
+                 !bypassNetlist.isPrimaryOutputNet(bypassY) &&
+                 bypassNetlist.isPrimaryOutputNet(replacementNet) &&
+                 bypassNetlist.validateAfterMutation(),
+                 "bypassNetKeepingPortSemanticsWithReport");
+
+    Netlist removeUnusedNetlist = makeNetMergeNetlist();
+    const int unusedNet = removeUnusedNetlist.addNet("unused_internal");
+    const Netlist::NetlistEditReport removeUnusedReport =
+        removeUnusedNetlist.removeNetIfUnusedWithReport(unusedNet);
+    report.check(removeUnusedReport.success &&
+                 removeUnusedReport.changed &&
+                 !removeUnusedReport.rolledBack &&
+                 removeUnusedReport.operationKind == Netlist::NetlistEditOperationKind::PrimitiveMutation &&
+                 removeUnusedReport.validation.equivalenceChecked &&
+                 removeUnusedReport.validation.functionallyEquivalent &&
+                 removeUnusedReport.validation.equivalenceMethod == Netlist::EquivalenceCheckMethod::StructuralIdentity &&
+                 removeUnusedNetlist.validateAfterMutation(),
+                 "removeNetIfUnusedWithReport");
+
+    Netlist removeUnusedAllNetlist = makeNetMergeNetlist();
+    const int unusedA = removeUnusedAllNetlist.addNet("unused_a");
+    const int unusedB = removeUnusedAllNetlist.addNet("unused_b");
+    const Netlist::NetlistEditReport removeUnusedAllReport =
+        removeUnusedAllNetlist.removeUnusedNetsWithReport();
+    report.check(removeUnusedAllReport.success &&
+                 removeUnusedAllReport.changed &&
+                 !removeUnusedAllReport.rolledBack &&
+                 removeUnusedAllReport.operationKind == Netlist::NetlistEditOperationKind::Cleanup &&
+                 containsInt(removeUnusedAllReport.changedNetIds, unusedA) &&
+                 containsInt(removeUnusedAllReport.changedNetIds, unusedB) &&
+                 removeUnusedAllNetlist.validateAfterMutation(),
+                 "removeUnusedNetsWithReport");
+
+    Netlist failedRenameNetlist = original.cloneForRollback();
+    const Netlist::NetlistEditReport failedRenameReport =
+        failedRenameNetlist.renameGateWithReport("missing_gate", "still_missing");
+    report.check(!failedRenameReport.success &&
+                 !failedRenameReport.changed &&
+                 !failedRenameReport.rolledBack &&
+                 failedRenameNetlist.getGateCount() == original.getGateCount(),
+                 "failed primitive report preserves netlist");
 }
 
 // 測試 fanout buffer transformation 使用 QA fanout load 定義：
@@ -571,9 +850,26 @@ void testFanoutBufferTransformation(TestReport& report) {
     const int g2 = poNetlist.addGate("g2", GateType::BUF);
     poNetlist.connectGateInput(g2, y);
     poNetlist.connectGateOutput(g2, n2);
+    const Netlist basePoNetlist = poNetlist.cloneForRollback();
 
     report.check(poNetlist.getFanoutLoadReport("y").totalLoadCount == 3,
                  "fanout buffer setup counts primary output load");
+    Netlist poReportNetlist = poNetlist.cloneForRollback();
+    const Netlist::NetlistEditReport poFanoutReport =
+        poReportNetlist.insertBuffersForFanoutWithReport(2);
+    report.check(poFanoutReport.success &&
+                 poFanoutReport.changed &&
+                 !poFanoutReport.rolledBack &&
+                 poFanoutReport.operationKind == Netlist::NetlistEditOperationKind::BufferInsertion &&
+                 poFanoutReport.validation.equivalenceChecked &&
+                 poFanoutReport.validation.functionallyEquivalent &&
+                 poFanoutReport.validation.equivalenceMethod == Netlist::EquivalenceCheckMethod::LocalRewriteRule &&
+                 poFanoutReport.fanoutChange.has_value() &&
+                 poFanoutReport.fanoutChange->targetFanout == 2 &&
+                 poFanoutReport.fanoutChange->meetsConstraint &&
+                 !poFanoutReport.changedGateNames.empty() &&
+                 poReportNetlist.satisfiesFanoutLimit(2),
+                 "insertBuffersForFanoutWithReport");
     poNetlist.insertBuffersForSpecificNet("y", 2);
     report.check(poNetlist.satisfiesFanoutLimit(2),
                  "fanout buffer insertion respects primary output load");
@@ -606,9 +902,415 @@ void testFanoutBufferTransformation(TestReport& report) {
 
     report.check(dffNetlist.getFanoutLoadReport("rst_n").totalLoadCount == 4,
                  "fanout buffer setup counts DFF RN/SN sink pins");
+    Netlist dffReportNetlist = dffNetlist.cloneForRollback();
+    const Netlist::NetlistEditReport dffFanoutReport =
+        dffReportNetlist.insertBuffersForSpecificNetWithReport("rst_n", 2);
+    report.check(dffFanoutReport.success &&
+                 dffFanoutReport.changed &&
+                 !dffFanoutReport.rolledBack &&
+                 dffFanoutReport.operationKind == Netlist::NetlistEditOperationKind::BufferInsertion &&
+                 dffFanoutReport.fanoutChange.has_value() &&
+                 dffFanoutReport.fanoutChange->targetFanout == 2 &&
+                 dffFanoutReport.fanoutChange->meetsConstraint &&
+                 !dffFanoutReport.changedGateNames.empty() &&
+                 dffReportNetlist.satisfiesFanoutLimit(2),
+                 "insertBuffersForSpecificNetWithReport");
+    Netlist dffControlReportNetlist = dffNetlist.cloneForRollback();
+    const Netlist::NetlistEditReport dffControlReport =
+        dffControlReportNetlist.insertBuffersForDffControlWithReport(2, true, true);
+    report.check(dffControlReport.success &&
+                 dffControlReport.changed &&
+                 !dffControlReport.rolledBack &&
+                 dffControlReport.operationKind == Netlist::NetlistEditOperationKind::BufferInsertion &&
+                 !dffControlReport.changedGateNames.empty() &&
+                 dffControlReportNetlist.validateAfterMutation(),
+                 "insertBuffersForDffControlWithReport");
     dffNetlist.insertBuffersForSpecificNet("rst_n", 2);
     report.check(dffNetlist.satisfiesFanoutLimit(2),
                  "fanout buffer insertion respects DFF RN/SN sink pins");
+
+    Netlist eachLoadNetlist = basePoNetlist.cloneForRollback();
+    const Netlist::NetlistEditReport eachLoadReport =
+        eachLoadNetlist.insertBuffersOnEachLoadWithReport("y");
+    report.check(eachLoadReport.success &&
+                 eachLoadReport.changed &&
+                 !eachLoadReport.rolledBack &&
+                 eachLoadReport.operationKind == Netlist::NetlistEditOperationKind::BufferInsertion &&
+                 !eachLoadReport.changedGateNames.empty() &&
+                 eachLoadNetlist.validateAfterMutation(),
+                 "insertBuffersOnEachLoadWithReport");
+
+    Netlist driverBufferNetlist = basePoNetlist.cloneForRollback();
+    const Netlist::NetlistEditReport driverBufferReport =
+        driverBufferNetlist.insertBufferAtDriverWithReport("y");
+    report.check(driverBufferReport.success &&
+                 driverBufferReport.changed &&
+                 !driverBufferReport.rolledBack &&
+                 driverBufferReport.operationKind == Netlist::NetlistEditOperationKind::BufferInsertion &&
+                 !driverBufferReport.changedGateNames.empty() &&
+                 driverBufferNetlist.validateAfterMutation(),
+                 "insertBufferAtDriverWithReport");
+
+    Netlist beforeGateNetlist = basePoNetlist.cloneForRollback();
+    const Netlist::NetlistEditReport beforeGateReport =
+        beforeGateNetlist.insertBufferBeforeGateWithReport("y", "g1");
+    report.check(beforeGateReport.success &&
+                 beforeGateReport.changed &&
+                 !beforeGateReport.rolledBack &&
+                 beforeGateReport.operationKind == Netlist::NetlistEditOperationKind::BufferInsertion &&
+                 !beforeGateReport.changedGateNames.empty() &&
+                 beforeGateNetlist.validateAfterMutation(),
+                 "insertBufferBeforeGateWithReport");
+
+    Netlist gateTypeBufferNetlist = basePoNetlist.cloneForRollback();
+    const Netlist::NetlistEditReport gateTypeBufferReport =
+        gateTypeBufferNetlist.insertBuffersByGateTypeWithReport(GateType::AND, true, false);
+    report.check(gateTypeBufferReport.success &&
+                 gateTypeBufferReport.changed &&
+                 !gateTypeBufferReport.rolledBack &&
+                 gateTypeBufferReport.operationKind == Netlist::NetlistEditOperationKind::BufferInsertion &&
+                 !gateTypeBufferReport.changedGateNames.empty() &&
+                 gateTypeBufferNetlist.validateAfterMutation(),
+                 "insertBuffersByGateTypeWithReport");
+}
+
+void testNetlistEditReportHelpers(TestReport& report, const Netlist& netlist) {
+    const Netlist::NetlistStats beforeStats = netlist.collectNetlistStats();
+    report.check(beforeStats.gateCount == 16 &&
+                 beforeStats.activeGateCount == 16 &&
+                 beforeStats.removedGateCount == 0 &&
+                 beforeStats.netCount == 25 &&
+                 beforeStats.activeNetCount == 25 &&
+                 beforeStats.primaryInputCount == 6 &&
+                 beforeStats.primaryOutputCount == 5 &&
+                 beforeStats.dffCount == 1 &&
+                 beforeStats.combinationalGateCount == 15,
+                 "collectNetlistStats baseline");
+
+    Netlist edited = netlist.cloneForRollback();
+    edited.addGate("report_extra_buf", GateType::BUF);
+    const Netlist::NetlistStats afterStats = edited.collectNetlistStats();
+    const Netlist::NetlistDiff diff = Netlist::diffStats(beforeStats, afterStats);
+    const auto bufDelta = diff.gateTypeCountDelta.find(GateType::BUF);
+
+    report.check(diff.gateCountDelta == 1 &&
+                 diff.activeGateCountDelta == 1 &&
+                 diff.combinationalGateCountDelta == 1 &&
+                 bufDelta != diff.gateTypeCountDelta.end() &&
+                 bufDelta->second == 1,
+                 "diffStats gate delta");
+
+    const Netlist::NetlistEditReport editReport = Netlist::buildEditReport(
+        netlist,
+        edited,
+        "report helper smoke test",
+        Netlist::NetlistEditOperationKind::CustomRewrite);
+
+    report.check(editReport.success &&
+                 editReport.changed &&
+                 !editReport.rolledBack &&
+                 editReport.operationKind == Netlist::NetlistEditOperationKind::CustomRewrite &&
+                 editReport.validation.structureChecked &&
+                 editReport.validation.structureValid &&
+                 editReport.validation.problemAConstraintsChecked &&
+                 editReport.validation.problemAConstraintsValid &&
+                 !editReport.validation.equivalenceChecked,
+                 "buildEditReport validation summary");
+
+    Netlist cleanupNetlist = netlist.cloneForRollback();
+    const Netlist::NetlistEditReport cleanupReport =
+        cleanupNetlist.runLocalSimplificationFixpointWithReport();
+    report.check(cleanupReport.success &&
+                 !cleanupReport.rolledBack &&
+                 cleanupReport.operationKind == Netlist::NetlistEditOperationKind::Simplification &&
+                 cleanupReport.depthChange.has_value() &&
+                 cleanupReport.validation.structureValid &&
+                 cleanupReport.validation.problemAConstraintsValid &&
+                 cleanupReport.validation.equivalenceChecked &&
+                 cleanupReport.validation.functionallyEquivalent &&
+                 cleanupReport.validation.equivalenceMethod == Netlist::EquivalenceCheckMethod::LocalRewriteRule &&
+                 cleanupNetlist.validateAfterMutation(),
+                 "runLocalSimplificationFixpointWithReport");
+
+    Netlist bufferCleanupNetlist = netlist.cloneForRollback();
+    const Netlist::NetlistEditReport bufferCleanupReport =
+        bufferCleanupNetlist.cleanupAllRemovableBuffersWithReport();
+    report.check(bufferCleanupReport.success &&
+                 !bufferCleanupReport.rolledBack &&
+                 bufferCleanupReport.operationKind == Netlist::NetlistEditOperationKind::Cleanup &&
+                 bufferCleanupReport.depthChange.has_value() &&
+                 bufferCleanupReport.validation.structureValid &&
+                 bufferCleanupReport.validation.problemAConstraintsValid &&
+                 bufferCleanupReport.validation.equivalenceChecked &&
+                 bufferCleanupReport.validation.functionallyEquivalent &&
+                 bufferCleanupReport.validation.equivalenceMethod == Netlist::EquivalenceCheckMethod::LocalRewriteRule &&
+                 bufferCleanupNetlist.validateAfterMutation(),
+                 "cleanupAllRemovableBuffersWithReport");
+
+    auto checkEditWrapper = [&](const Netlist::NetlistEditReport& wrapperReport,
+                                const Netlist& editedNetlist,
+                                const std::string& name) {
+        report.check(wrapperReport.success &&
+                     !wrapperReport.rolledBack &&
+                     wrapperReport.validation.structureValid &&
+                     wrapperReport.validation.problemAConstraintsValid &&
+                     editedNetlist.validateAfterMutation(),
+                     name);
+    };
+
+    Netlist trimNetlist = netlist.cloneForRollback();
+    checkEditWrapper(trimNetlist.trimDeadLogicWithReport(), trimNetlist,
+                     "trimDeadLogicWithReport");
+
+    Netlist inverterNetlist = netlist.cloneForRollback();
+    checkEditWrapper(inverterNetlist.collapseBackToBackInvertersWithReport(), inverterNetlist,
+                     "collapseBackToBackInvertersWithReport");
+
+    Netlist mergeEquivalentNetlist = netlist.cloneForRollback();
+    checkEditWrapper(mergeEquivalentNetlist.mergeEquivalentGatesWithReport(), mergeEquivalentNetlist,
+                     "mergeEquivalentGatesWithReport");
+
+    Netlist danglingNetlist = netlist.cloneForRollback();
+    checkEditWrapper(danglingNetlist.removeDanglingLogicWithReport(), danglingNetlist,
+                     "removeDanglingLogicWithReport");
+
+    Netlist structuralNetlist = netlist.cloneForRollback();
+    checkEditWrapper(structuralNetlist.mergeStructurallyEquivalentGatesWithReport(), structuralNetlist,
+                     "mergeStructurallyEquivalentGatesWithReport");
+
+    Netlist constantNetlist = netlist.cloneForRollback();
+    checkEditWrapper(constantNetlist.simplifyAllGatesWithConstantsWithReport(), constantNetlist,
+                     "simplifyAllGatesWithConstantsWithReport");
+
+    Netlist sameInputNetlist = netlist.cloneForRollback();
+    checkEditWrapper(sameInputNetlist.simplifyAllSameInputGatesWithReport(), sameInputNetlist,
+                     "simplifyAllSameInputGatesWithReport");
+
+    TechMapper mapper;
+    Netlist mappingNetlist = netlist.cloneForRollback();
+    const Netlist::NetlistStats mappingBefore = mappingNetlist.collectNetlistStats();
+    const Netlist::NetlistEditReport mappingReport =
+        mapper.customMapTechnologyWithReport(
+            mappingNetlist,
+            {{GateType::AND, -1}},
+            {{GateType::NAND, -1}},
+            TargetScope::WHOLE_NETLIST,
+            "",
+            false);
+    report.check(!mappingReport.success &&
+                 mappingReport.rolledBack &&
+                 mappingReport.operationKind == Netlist::NetlistEditOperationKind::TechnologyMapping &&
+                 mappingReport.mappingDelta.has_value() &&
+                 mappingReport.validation.structureValid &&
+                 mappingReport.validation.problemAConstraintsValid &&
+                 mappingNetlist.collectNetlistStats().gateCount == mappingBefore.gateCount,
+                 "customMapTechnologyWithReport invalid constraints rollback");
+}
+
+void testOptimizationFlow(TestReport& report) {
+    Netlist bufferNetlist;
+    bufferNetlist.addPrimaryInput("a");
+    bufferNetlist.addPrimaryOutput("y");
+    const int bufferA = bufferNetlist.getNetId("a");
+    const int bufferY = bufferNetlist.getNetId("y");
+    const int mid = bufferNetlist.addNet("mid");
+    const int inner = bufferNetlist.addNet("inner");
+    const int b0 = bufferNetlist.addGate("buf0", GateType::BUF);
+    bufferNetlist.connectGateInput(b0, bufferA);
+    bufferNetlist.connectGateOutput(b0, mid);
+    const int b1 = bufferNetlist.addGate("buf1", GateType::BUF);
+    bufferNetlist.connectGateInput(b1, mid);
+    bufferNetlist.connectGateOutput(b1, inner);
+    const int outBuf = bufferNetlist.addGate("out_buf", GateType::BUF);
+    bufferNetlist.connectGateInput(outBuf, inner);
+    bufferNetlist.connectGateOutput(outBuf, bufferY);
+
+    Netlist::OptQueryRequest bufferQuery;
+    bufferQuery.passKind = Netlist::OptPassKind::CleanupBufferChain;
+    const Netlist::OptQueryReport bufferQueryReport = bufferNetlist.runOptQuery(bufferQuery);
+    report.check(bufferQueryReport.ok &&
+                 !bufferQueryReport.candidates.empty() &&
+                 bufferQueryReport.candidates[0].passKind == Netlist::OptPassKind::CleanupBufferChain &&
+                 !bufferQueryReport.candidates[0].gateNames.empty(),
+                 "runOptQuery cleanup_buffer_chain");
+
+    Netlist::OptApplyRequest bufferApply;
+    bufferApply.passKind = Netlist::OptPassKind::CleanupBufferChain;
+    const Netlist::NetlistEditReport bufferApplyReport = bufferNetlist.runOptApply(bufferApply);
+    report.check(bufferApplyReport.success &&
+                 bufferApplyReport.changed &&
+                 !bufferApplyReport.rolledBack &&
+                 bufferApplyReport.operationName == "opt_apply:cleanup_buffer_chain" &&
+                 bufferApplyReport.depthChange.has_value() &&
+                 bufferApplyReport.depthChange->beforeDepth > bufferApplyReport.depthChange->afterDepth &&
+                 bufferApplyReport.depthChange->improved &&
+                 bufferApplyReport.validation.equivalenceChecked &&
+                 bufferApplyReport.validation.functionallyEquivalent &&
+                 bufferApplyReport.validation.equivalenceMethod == Netlist::EquivalenceCheckMethod::LocalRewriteRule &&
+                 bufferNetlist.validateAfterMutation(),
+                 "runOptApply cleanup_buffer_chain");
+
+    Netlist inverterNetlist;
+    inverterNetlist.addPrimaryInput("a");
+    inverterNetlist.addPrimaryOutput("y");
+    const int invA = inverterNetlist.getNetId("a");
+    const int invY = inverterNetlist.getNetId("y");
+    const int n1 = inverterNetlist.addNet("n1");
+    const int n2 = inverterNetlist.addNet("n2");
+    const int g1 = inverterNetlist.addGate("not0", GateType::NOT);
+    inverterNetlist.connectGateInput(g1, invA);
+    inverterNetlist.connectGateOutput(g1, n1);
+    const int g2 = inverterNetlist.addGate("not1", GateType::NOT);
+    inverterNetlist.connectGateInput(g2, n1);
+    inverterNetlist.connectGateOutput(g2, n2);
+    const int g3 = inverterNetlist.addGate("out_buf", GateType::BUF);
+    inverterNetlist.connectGateInput(g3, n2);
+    inverterNetlist.connectGateOutput(g3, invY);
+
+    Netlist::OptQueryRequest inverterQuery;
+    inverterQuery.passKind = Netlist::OptPassKind::CollapseDoubleInverter;
+    const Netlist::OptQueryReport inverterQueryReport = inverterNetlist.runOptQuery(inverterQuery);
+    report.check(inverterQueryReport.ok &&
+                 inverterQueryReport.candidates.size() == 1 &&
+                 inverterQueryReport.candidates[0].gateIds.size() == 2 &&
+                 inverterQueryReport.candidates[0].passKind == Netlist::OptPassKind::CollapseDoubleInverter,
+                 "runOptQuery collapse_double_inverter");
+
+    Netlist::OptApplyRequest inverterApply;
+    inverterApply.passKind = Netlist::OptPassKind::CollapseDoubleInverter;
+    const Netlist::NetlistEditReport inverterApplyReport = inverterNetlist.runOptApply(inverterApply);
+    report.check(inverterApplyReport.success &&
+                 inverterApplyReport.changed &&
+                 !inverterApplyReport.rolledBack &&
+                 inverterApplyReport.operationName == "opt_apply:collapse_double_inverter" &&
+                 inverterApplyReport.depthChange.has_value() &&
+                 inverterApplyReport.depthChange->beforeDepth > inverterApplyReport.depthChange->afterDepth &&
+                 inverterApplyReport.depthChange->improved &&
+                 inverterApplyReport.validation.equivalenceChecked &&
+                 inverterApplyReport.validation.functionallyEquivalent &&
+                 inverterApplyReport.validation.equivalenceMethod == Netlist::EquivalenceCheckMethod::LocalRewriteRule &&
+                 inverterNetlist.validateAfterMutation(),
+                 "runOptApply collapse_double_inverter");
+
+    Netlist simplifyNetlist = inverterNetlist.cloneForRollback();
+    Netlist::OptQueryRequest simplifyQuery;
+    simplifyQuery.passKind = Netlist::OptPassKind::LocalSimplificationFixpoint;
+    const Netlist::OptQueryReport simplifyQueryReport = simplifyNetlist.runOptQuery(simplifyQuery);
+    report.check(simplifyQueryReport.ok &&
+                 simplifyQueryReport.candidates.size() == 1 &&
+                 !simplifyQueryReport.warnings.empty(),
+                 "runOptQuery local_simplification_fixpoint");
+
+    Netlist::OptApplyRequest simplifyApply;
+    simplifyApply.passKind = Netlist::OptPassKind::LocalSimplificationFixpoint;
+    const Netlist::NetlistEditReport simplifyApplyReport = simplifyNetlist.runOptApply(simplifyApply);
+    report.check(simplifyApplyReport.success &&
+                 !simplifyApplyReport.rolledBack &&
+                 simplifyApplyReport.operationName == "opt_apply:local_simplification_fixpoint" &&
+                 simplifyApplyReport.depthChange.has_value() &&
+                 simplifyApplyReport.validation.equivalenceChecked &&
+                 simplifyApplyReport.validation.functionallyEquivalent &&
+                 simplifyApplyReport.validation.equivalenceMethod == Netlist::EquivalenceCheckMethod::LocalRewriteRule &&
+                 simplifyNetlist.validateAfterMutation(),
+                 "runOptApply local_simplification_fixpoint");
+}
+
+void testEditApplyFlow(TestReport& report, const Netlist& original) {
+    Netlist renameNetlist = original.cloneForRollback();
+    Netlist::EditApplyRequest renameRequest;
+    renameRequest.kind = Netlist::EditCommandKind::RenameGate;
+    renameRequest.oldName = "g_direct";
+    renameRequest.newName = "g_direct_edit_apply";
+    const Netlist::NetlistEditReport renameReport = renameNetlist.runEditApply(renameRequest);
+    report.check(renameReport.success &&
+                 renameReport.changed &&
+                 !renameReport.rolledBack &&
+                 renameReport.operationName == "edit_apply:rename_gate" &&
+                 renameReport.validation.equivalenceChecked &&
+                 renameReport.validation.equivalenceMethod == Netlist::EquivalenceCheckMethod::StructuralIdentity &&
+                 renameNetlist.getGateId("g_direct_edit_apply") >= 0,
+                 "runEditApply rename_gate");
+
+    Netlist cleanupNetlist;
+    cleanupNetlist.addPrimaryInput("a");
+    cleanupNetlist.addPrimaryOutput("y");
+    const int a = cleanupNetlist.getNetId("a");
+    const int y = cleanupNetlist.getNetId("y");
+    const int mid = cleanupNetlist.addNet("mid");
+    const int buf0 = cleanupNetlist.addGate("buf0", GateType::BUF);
+    cleanupNetlist.connectGateInput(buf0, a);
+    cleanupNetlist.connectGateOutput(buf0, mid);
+    const int buf1 = cleanupNetlist.addGate("buf1", GateType::BUF);
+    cleanupNetlist.connectGateInput(buf1, mid);
+    cleanupNetlist.connectGateOutput(buf1, y);
+
+    Netlist::EditApplyRequest cleanupRequest;
+    cleanupRequest.kind = Netlist::EditCommandKind::CleanupBuffers;
+    cleanupRequest.validateEquivalence = true;
+    const Netlist::NetlistEditReport cleanupReport = cleanupNetlist.runEditApply(cleanupRequest);
+    report.check(cleanupReport.success &&
+                 cleanupReport.changed &&
+                 !cleanupReport.rolledBack &&
+                 cleanupReport.operationName == "edit_apply:cleanup_buffers" &&
+                 cleanupReport.validation.equivalenceChecked &&
+                 cleanupReport.validation.equivalenceMethod == Netlist::EquivalenceCheckMethod::LocalRewriteRule &&
+                 cleanupNetlist.validateAfterMutation(),
+                 "runEditApply cleanup_buffers");
+
+    Netlist fanoutNetlist;
+    fanoutNetlist.addPrimaryInput("a");
+    fanoutNetlist.addPrimaryOutput("y");
+    const int fanoutA = fanoutNetlist.getNetId("a");
+    const int fanoutY = fanoutNetlist.getNetId("y");
+    const int outBuf = fanoutNetlist.addGate("fanout_out", GateType::BUF);
+    fanoutNetlist.connectGateInput(outBuf, fanoutA);
+    fanoutNetlist.connectGateOutput(outBuf, fanoutY);
+    for (int i = 0; i < 4; ++i) {
+        const int out = fanoutNetlist.addNet("sink_" + std::to_string(i));
+        const int gate = fanoutNetlist.addGate("sink_gate_" + std::to_string(i), GateType::BUF);
+        fanoutNetlist.connectGateInput(gate, fanoutA);
+        fanoutNetlist.connectGateOutput(gate, out);
+    }
+
+    Netlist::EditApplyRequest fanoutRequest;
+    fanoutRequest.kind = Netlist::EditCommandKind::InsertBuffersForSpecificNet;
+    fanoutRequest.netName = "a";
+    fanoutRequest.maxFanout = 2;
+    const Netlist::NetlistEditReport fanoutReport = fanoutNetlist.runEditApply(fanoutRequest);
+    report.check(fanoutReport.success &&
+                 fanoutReport.changed &&
+                 !fanoutReport.rolledBack &&
+                 fanoutReport.operationName == "edit_apply:insert_buffers_for_specific_net" &&
+                 fanoutReport.fanoutChange.has_value() &&
+                 fanoutReport.fanoutChange->targetFanout == 2 &&
+                 fanoutReport.validation.equivalenceChecked &&
+                 fanoutReport.validation.equivalenceMethod == Netlist::EquivalenceCheckMethod::LocalRewriteRule &&
+                 fanoutNetlist.satisfiesFanoutLimit(2),
+                 "runEditApply insert_buffers_for_specific_net");
+
+    Netlist primitiveNetlist = original.cloneForRollback();
+    Netlist::EditApplyRequest primitiveRequest;
+    primitiveRequest.kind = Netlist::EditCommandKind::ReplaceGateWithNet;
+    primitiveRequest.gateName = "g_short";
+    primitiveRequest.netName = "a";
+    const Netlist::NetlistEditReport primitiveReport = primitiveNetlist.runEditApply(primitiveRequest);
+    report.check(primitiveReport.success &&
+                 primitiveReport.changed &&
+                 !primitiveReport.rolledBack &&
+                 primitiveReport.operationName == "edit_apply:replace_gate_with_net" &&
+                 !primitiveReport.validation.equivalenceChecked &&
+                 primitiveNetlist.validateAfterMutation(),
+                 "runEditApply replace_gate_with_net remains unchecked");
+
+    Netlist unsupportedNetlist = original.cloneForRollback();
+    Netlist::EditApplyRequest unsupportedRequest;
+    unsupportedRequest.kind = Netlist::EditCommandKind::Unknown;
+    const Netlist::NetlistEditReport unsupportedReport = unsupportedNetlist.runEditApply(unsupportedRequest);
+    report.check(!unsupportedReport.success &&
+                 !unsupportedReport.changed &&
+                 !unsupportedReport.rolledBack &&
+                 unsupportedReport.operationName == "edit_apply:unknown",
+                 "runEditApply unsupported command");
 }
 
 } // namespace
@@ -636,6 +1338,9 @@ int main(int argc, char* argv[]) {
     testRegisterPathQuery(report);
     testWriterAndSmallMutation(report, netlist);
     testFanoutBufferTransformation(report);
+    testNetlistEditReportHelpers(report, netlist);
+    testOptimizationFlow(report);
+    testEditApplyFlow(report, netlist);
 
     std::cout << "\nSummary: " << report.passed << " passed, "
               << report.failed << " failed.\n";
