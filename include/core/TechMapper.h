@@ -446,9 +446,11 @@ public:
                                 const std::map<GateType, int>& allowedConstraints, 
                                 const std::vector<RuleSource>& allowedSources,
                                 bool verbose = false);
+    
     NetlistEditReport mapTechnologyWithReport(Netlist& netlist,
                                                const std::map<GateType, int>& targetConstraints,
                                                const std::map<GateType, int>& allowedConstraints,
+                                               const std::vector<RuleSource>& allowedSources,
                                                bool verbose = false);
     // 針對特定 Cone 的 API
     TechMapReport mapTechnologyForCone(Netlist& netlist, 
@@ -457,10 +459,12 @@ public:
                                        const ConeResult& targetCone = ConeResult(), 
                                        const std::vector<RuleSource>& allowedSources = {},
                                        bool verbose = false);
+    
     NetlistEditReport mapTechnologyForConeWithReport(Netlist& netlist,
                                                      const std::map<GateType, int>& targetConstraints,
                                                      const std::map<GateType, int>& allowedConstraints,
                                                      const ConeResult& targetCone = ConeResult(),
+                                                     const std::vector<RuleSource>& allowedSources = {},
                                                      bool verbose = false);
 
     // 精確規則應用引擎，繞過 mapTechnologyCore 的查表與約束過濾機制

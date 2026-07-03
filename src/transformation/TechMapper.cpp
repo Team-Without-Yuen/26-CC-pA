@@ -643,7 +643,7 @@ TechMapReport TechMapper::mapTechnologyCore(Netlist& netlist,
     return report;
 }
 
-// 萬用 API 實作 (直接呼叫 Core，scopeGates 給 nullptr 代表掃描全電路)
+// API 實作 (直接呼叫 Core，scopeGates 給 nullptr 代表掃描全電路)
 TechMapReport TechMapper::mapTechnology(Netlist& netlist, 
                                         const std::map<GateType, int>& targetConstraints, 
                                         const std::map<GateType, int>& allowedConstraints, 
@@ -657,10 +657,11 @@ NetlistEditReport TechMapper::mapTechnologyWithReport(
     Netlist& netlist,
     const std::map<GateType, int>& targetConstraints,
     const std::map<GateType, int>& allowedConstraints,
+    const std::vector<RuleSource>& allowedSources,
     bool verbose)
 {
     Netlist before = netlist.cloneForRollback();
-    TechMapReport techReport = mapTechnology(netlist, targetConstraints, allowedConstraints, verbose);
+    TechMapReport techReport = mapTechnology(netlist, targetConstraints, allowedConstraints, allowedSources, verbose);
     return finalizeTechMapEditReport(netlist, before, techReport, "mapTechnology");
 }
 
@@ -680,6 +681,25 @@ TechMapReport TechMapper::mapTechnologyForCone(Netlist& netlist,
     
     // 呼叫核心引擎，並將 scopeGates 的記憶體位址傳入
     return mapTechnologyCore(netlist, targetConstraints, allowedConstraints, &scopeGates, allowedSources, verbose);
+}
+
+NetlistEditReport TechMapper::mapTechnologyForConeWithReport(
+    Netlist& netlist,
+    const std::map<GateType, int>& targetConstraints,
+    const std::map<GateType, int>& allowedConstraints,
+    const ConeResult& targetCone,
+    const std::vector<RuleSource>& allowedSources,
+    bool verbose)
+{
+    Netlist before = netlist.cloneForRollback();
+    TechMapReport techReport = mapTechnologyForCone(
+        netlist,
+        targetConstraints,
+        allowedConstraints,
+        targetCone,
+        allowedSources,
+        verbose);
+    return finalizeTechMapEditReport(netlist, before, techReport, "mapTechnologyForCone");
 }
 
 // 精確規則應用引擎，繞過 mapTechnologyCore 的查表與約束過濾機制
@@ -786,23 +806,6 @@ TechMapReport TechMapper::applySpecificRule(Netlist& netlist,
     for (const auto& pair : rule.targetCounts)  report.finalGateCount[pair.first] = netlist.getGateCountByType(pair.first);
 
     return report;
-}
-
-NetlistEditReport TechMapper::mapTechnologyForConeWithReport(
-    Netlist& netlist,
-    const std::map<GateType, int>& targetConstraints,
-    const std::map<GateType, int>& allowedConstraints,
-    const ConeResult& targetCone,
-    bool verbose)
-{
-    Netlist before = netlist.cloneForRollback();
-    TechMapReport techReport = mapTechnologyForCone(
-        netlist,
-        targetConstraints,
-        allowedConstraints,
-        targetCone,
-        verbose);
-    return finalizeTechMapEditReport(netlist, before, techReport, "mapTechnologyForCone");
 }
 
 // 輔助函式：取得指定邏輯閘的輸入腳位數量 (Fan-in)
