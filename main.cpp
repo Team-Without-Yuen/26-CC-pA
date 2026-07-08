@@ -104,15 +104,104 @@ int main(int argc, char* argv[]) {
             }
         }
     }
+    std::cout << "================================================\n\n";
 
-    if (maxDepth == -1) {
-        std::cout << "  -> [Skip] No valid combinational path found in the circuit.\n\n";
-    } else {
+    // ==========================================
+    // Step 1.5: 將電路轉換為 XAG (XOR-AND Graph) 基礎邏輯
+    // ==========================================
+    std::cout << "[Step 1.5] Converting Netlist to XAG Basis..." << std::endl;
+    TechMapper mapper;
+    
+    // XAG 基礎由 AND, XOR, NOT (與輔助的 BUF) 組成
+    std::vector<GateType> xagBasisTypes = {GateType::AND, GateType::XOR, GateType::NOT, GateType::BUF};
+    
+    // 呼叫轉換 API (假設你的全域列舉值為 TargetScope::GLOBAL，請依據你的標頭檔微調)
+    mapper.convertToBasis(myCircuit, TargetScope::WHOLE_NETLIST, "Global_XAG_Conversion", xagBasisTypes, {}, true);
+
+
+    /*// ==========================================
+    // Step 2: 執行 Global Depth Optimization
+    // ==========================================
+    std::cout << "[Step 2] Running Global Depth Optimization..." << std::endl;
+
+    DepthOptimizerConfig config;
+    config.enableBufferAndNotBypass = true;
+    config.enableTreeBalancing = true;
+    config.enableDeMorganPushing = true;
+    config.enableConeResynthesis = true;
+    config.maxAreaIncreasePerPath = 200; // 保持你原本的 Rollback 設定
+
+    // ★ 限制探索空間，加速 SAT 尋找最淺深度的過程
+    std::vector<GateType> optAllowedTypes = {GateType::AND, GateType::XOR, GateType::NOT}; 
+    std::vector<GateType> optBannedTypes = {}; 
+
+    DepthOptimizer optimizer;
+    bool globalCircuitChanged = true;
+    int globalIteration = 0;
+    const int MAX_GLOBAL_ITERATIONS = 50; 
+
+    // =========================================================
+    // ★ 全域最佳化大迴圈 (Global Sweep Loop) ★
+    // =========================================================
+    while (globalCircuitChanged && globalIteration < MAX_GLOBAL_ITERATIONS) {
+        globalCircuitChanged = false;
+        globalIteration++;
+        std::cout << "\n=================================================\n";
+        std::cout << " [Global Sweep Iteration " << globalIteration << "]\n";
+        std::cout << "=================================================\n";
+
+        int maxDepth = -1;
+        int worstNetId = -1;
+        CombinationalPath worstPath;
+
+        // 檢查 Primary Outputs
+        for (const auto& port : myCircuit.getPrimaryOutputs()) {
+            for (int netId : port.netIds) {
+                std::string netName = myCircuit.getNet(netId).name;
+                CombinationalPath path = myCircuit.findCriticalPathToNet(netName);
+                if (path.exists() && path.depth() > maxDepth) {
+                    maxDepth = path.depth();
+                    worstNetId = netId;
+                    worstPath = path;
+                }
+            }
+        }
+
+        // 檢查 DFF 的 D 腳
+        for (size_t i = 0; i < myCircuit.getGateCount(); ++i) {
+            const Gate& g = myCircuit.getGate(i);
+            if (g.type == GateType::DFF) { 
+                int dPinNetId = -1;
+                if (!g.inputPinNames.empty()) {
+                    for (size_t p = 0; p < g.inputPinNames.size(); ++p) {
+                        if (g.inputPinNames[p] == "D") { dPinNetId = g.inputNetIds[p]; break; }
+                    }
+                } else if (g.inputNetIds.size() > 3) {
+                    dPinNetId = g.inputNetIds[3]; 
+                }
+
+                if (dPinNetId != -1) {
+                    std::string netName = myCircuit.getNet(dPinNetId).name;
+                    CombinationalPath path = myCircuit.findCriticalPathToNet(netName);
+                    if (path.exists() && path.depth() > maxDepth) {
+                        maxDepth = path.depth();
+                        worstNetId = dPinNetId;
+                        worstPath = path;
+                    }
+                }
+            }
+        }
+
+        if (maxDepth <= 0 || worstNetId == -1) {
+            std::cout << "  -> No valid critical path found or depth is already 0. Sweep finished.\n";
+            break;
+        }
+
         std::string targetNetName = myCircuit.getNet(worstNetId).name;
-        std::cout << "  -> Target Endpoint : " << targetNetName << " (Initial Depth: " << maxDepth << ")\n";
+        std::cout << "  -> Found Critical Endpoint : " << targetNetName << " (Depth: " << maxDepth << ")\n";
 
         DepthReport endpointReport;
-        endpointReport.endpointType = DepthEndpointType::PrimaryOutput;
+        endpointReport.endpointType = DepthEndpointType::PrimaryOutput; 
         endpointReport.endpointName = targetNetName;
         endpointReport.endpointNetId = worstNetId;
         endpointReport.depth = maxDepth;
@@ -149,7 +238,7 @@ int main(int argc, char* argv[]) {
         if (optResult.changed) {
             std::cout << " -> [Post-Opt Expression]: " << myCircuit.getSimplifiedBooleanExpression(targetNetName, 10) << "\n\n";
         }
-    }
+    }*/
 
     std::cout << "[Step 3] Writing output Verilog..." << std::endl;
     VerilogWriter writer;
