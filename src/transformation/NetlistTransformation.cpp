@@ -7,6 +7,7 @@
 #include <vector>
 #include <queue>
 #include <unordered_set>
+#include <iostream>
 
 namespace {
 
@@ -461,6 +462,50 @@ NetlistEditReport Netlist::removeGateWithReport(int gateId) {
         !gateName.empty() ? std::vector<std::string>{gateName} : std::vector<std::string>{},
         {},
         gateId >= 0 ? std::vector<int>{gateId} : std::vector<int>{});
+}
+
+// 說明：將 oldNetId 完全短接到 newNetId。
+//       oldNetId 的所有負載 (Load Gates) 都會改接到 newNetId。
+//       如果 oldNetId 是 Primary Output，newNetId 將會繼承其 PO 身份與名稱。
+void Netlist::mergeNets(int oldNetId, int newNetId) {
+    /*std::cout << "\n[Debug Merge] Merging " << getNet(oldNetId).name 
+          << " into " << getNet(newNetId).name 
+          << ". Old net has " << getNet(oldNetId).loadGateIds.size() << " loads.\n";*/
+
+    // 防呆：如果兩條線根本是同一條，什麼都不做
+    if (oldNetId == newNetId || oldNetId == -1 || newNetId == -1) {
+        return;
+    }
+
+    const Net& oldNet = getNet(oldNetId);
+    const Net& newNet = getNet(newNetId);
+
+    bool isOldPO = isPrimaryOutputNet(oldNetId);
+    // (注意：如果你需要嚴格禁止 PI 直連 PO，可以在這裡加上判斷，
+    //  但通常 mergeNets 作為底層 API，只負責執行，策略面由呼叫端決定)
+    
+    // 步驟 1：負載轉移 (Load Reconnection)
+    // 將所有以 oldNetId 作為輸入的 Gate，其輸入腳位改為 newNetId。
+    replaceAllLoadsOfNet(oldNetId, newNetId);
+
+    // 步驟 2：Primary Output 屬性與名稱繼承
+    // 如果即將被拔掉的 (oldNet) 是一根對外的輸出腳位，
+    // 新的線 (newNet) 必須接管這根腳位的名字，並被標記為 PO。
+    if (isOldPO) {
+        std::string oldPoName = oldNet.name;
+        std::string newNetName = newNet.name;
+
+        // 避免名字衝突，先把舊線改名為垃圾名字
+        // 使用系統時間或唯一 ID 避免名稱重複
+        std::string trashName = oldPoName + "_merged_to_" + std::to_string(newNetId);
+        renameNet(oldPoName, trashName);
+        
+        // 讓新線繼承原本 PO 的光榮名稱
+        renameNet(newNetName, oldPoName);
+
+        // 屬性繼承與內部列表更新 (將 PO 列表中的 oldNetId 替換為 newNetId)
+        swapPrimaryOutputNet(oldNetId, newNetId);
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

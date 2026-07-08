@@ -873,6 +873,11 @@ public:
     // 移除舊的 PO 中的一個 bit (oldNetId)，改為使用 newNetId
     bool swapPrimaryOutputNet(int oldNetId, int newNetId);
 
+    // 說明：將 oldNetId 完全短接到 newNetId。
+    //       oldNetId 的所有負載 (Load Gates) 都會改接到 newNetId。
+    //       如果 oldNetId 是 Primary Output，newNetId 將會繼承其 PO 身份與名稱。
+    void mergeNets(int oldNetId, int newNetId);
+
     // =========================================================================
     // 2.2 Buffer Insertion Transformation API
     //
