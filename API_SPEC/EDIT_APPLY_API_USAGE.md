@@ -1,10 +1,10 @@
 # Edit Apply API 使用說明
 
 這份文件只負責說明 `EditApplyRequest` / `runEditApply()` 怎麼使用。  
-`NetlistEditReport` 的欄位設計與目前完成狀態請看：
+內部 API 設計、`NetlistEditReport` 欄位與 low-level primitive 邊界請看：
 
 ```text
-API_SPEC/NETLIST_EDIT_REPORT_STATUS.md
+API_SPEC/EDIT_APPLY_API.md
 ```
 
 ---
@@ -26,8 +26,9 @@ request.kind + optional fields -> runEditApply() -> NetlistEditReport
 2. 設定 request.kind
 3. 視 command 設定 gateName / netName / oldName / newName / maxFanout 等欄位
 4. 視需求設定 request.validateEquivalence / request.rollbackOnFailure
-5. 呼叫 netlist.runEditApply(request)
-6. 從 report.success / report.changed / report.validation / report.diff / report.*Change 讀結果
+5. runEditApply() 先做 request validation
+6. validation 通過後才執行對應 edit command
+7. 從 report.success / report.changed / report.validation / report.diff / report.*Change 讀結果
 ```
 
 注意：
@@ -35,7 +36,8 @@ request.kind + optional fields -> runEditApply() -> NetlistEditReport
 ```text
 EditApply API 只處理會修改 netlist 的 command。
 純查詢問題應使用 BasicQuery / DirectConnectivityQuery / ConeQuery / PathQuery / DepthQuery / FunctionQuery。
-runEditApply() 內部會 dispatch 到既有 WithReport() wrapper，回傳統一 NetlistEditReport。
+runEditApply() 會回傳統一 NetlistEditReport。
+缺少必要參數、物件不存在或 fanout limit 不合法時，會直接回傳 failed NetlistEditReport，不修改 netlist。
 ```
 
 基本範例：
@@ -60,10 +62,6 @@ if (report.success) {
 |---|---|---|---|
 | `RenameGate` | rename gate | `oldName`, `newName` | `success`, `validation.equivalenceMethod` |
 | `RenameNet` | rename wire/net | `oldName`, `newName` | `success`, `validation.equivalenceMethod` |
-| `DisconnectGateInput` | 斷開 gate input | `gateName`, `netName` | `success`, `validation` |
-| `ConnectGateInput` | 連接 gate input | `gateName`, `netName`, optional `pinIndex` | `success`, `validation` |
-| `RemoveGate` | 移除單一 gate | `gateId` 或 `gateName` | `success`, `changedGateNames` |
-| `ReplaceAllLoadsOfNet` | 把 old net 的 loads 改接到 new net | `oldNetId`, `newNetId` | `success`, `changedGateNames` |
 | `CleanupBuffers` | 移除可 bypass 的 BUF | 無 | `diff`, `depthChange`, `validation.equivalenceMethod` |
 | `CollapseDoubleInverter` | collapse NOT -> NOT | 無 | `diff`, `depthChange`, `validation.equivalenceMethod` |
 | `LocalSimplificationFixpoint` | 執行 local simplification 到 fixpoint | 無 | `diff`, `depthChange`, `validation.equivalenceMethod` |
@@ -81,15 +79,6 @@ if (report.success) {
 | `InsertBufferAtDriver` | driver side 插 BUF | `netName` | `changedGateNames`, `changedNetNames` |
 | `InsertBufferBeforeGate` | 指定 gate 前插 BUF | `netName`, `targetGateName` | `changedGateNames`, `changedNetNames` |
 | `InsertBuffersByGateType` | 依 gate type 插 BUF | `gateType`, `bufferInputs`, `bufferOutputs` | `changedGateNames`, `diff` |
-| `ReplaceGateWithNet` | 用 net 取代 gate output | `gateId`/`gateName`, `sourceNetId`/`netName` | `success`, `validation.equivalenceChecked` |
-| `ReplaceGateWithConstant` | 用 constant net 取代 gate | `gateId`/`gateName`, `sourceNetId` | `success`, `validation.equivalenceChecked` |
-| `ReplaceGateWithNotOfNet` | 用 NOT(source net) 取代 gate | `gateId`/`gateName`, `sourceNetId`/`netName` | `success`, `validation.equivalenceChecked` |
-| `ReplaceDriverOfNet` | 換 target net driver | `targetNetId`, `newDriverGateId` | `success`, `validation` |
-| `RewireGateOutputToExistingNet` | gate output 改接既有 net | `gateId`/`gateName`, `newOutputNetId` | `success`, `validation` |
-| `ReplaceNetFunctionKeepingName` | 保留 net 名稱但替換 function | `targetNetId`, `sourceNetId` | `success`, `validation` |
-| `MergeNetIntoNet` | merge net | `oldNetId`, `newNetId` | `success`, `changedNetNames` |
-| `BypassNetKeepingPortSemantics` | bypass net 並保留 port 語意 | `netId`, `replacementNetId` | `success`, `validation` |
-| `RedirectAllLoads` | 改接所有 loads | `oldNetId`, `newNetId`, optional `allowDuplicateLoads` | `success`, `changedGateNames` |
 | `RemoveNetIfUnused` | 移除單一 unused net | `netId` 或 `netName` | `success`, `validation.equivalenceMethod` |
 
 ---
@@ -104,25 +93,15 @@ if (report.success) {
 | `oldName` | `std::string` | `""` | rename 類 command 的舊名稱 |
 | `newName` | `std::string` | `""` | rename 類 command 的新名稱 |
 | `targetGateName` | `std::string` | `""` | `InsertBufferBeforeGate` 使用 |
-| `gateId` | `int` | `-1` | gate ID 型 command 使用；若同時有 `gateName`，優先用 ID |
-| `netId` | `int` | `-1` | net ID 型 command 使用；若同時有 `netName`，優先用 ID |
-| `oldNetId` | `int` | `-1` | old/from net ID |
-| `newNetId` | `int` | `-1` | new/to net ID |
-| `sourceNetId` | `int` | `-1` | source net ID |
-| `targetNetId` | `int` | `-1` | target net ID |
-| `replacementNetId` | `int` | `-1` | replacement net ID |
-| `newDriverGateId` | `int` | `-1` | new driver gate ID |
-| `newOutputNetId` | `int` | `-1` | new output net ID |
+| `netId` | `int` | `-1` | `RemoveNetIfUnused` 可用；若同時有 `netName`，優先用 ID |
 | `maxFanout` | `int` | `-1` | fanout buffer insertion 使用；未設定時使用 4 |
-| `pinIndex` | `int` | `-1` | 指定 gate input pin；`-1` 表示自動選擇 |
 | `gateType` | `GateType` | `UNKNOWN` | `InsertBuffersByGateType` 使用 |
 | `processClock` | `bool` | `false` | `InsertBuffersForDffControl` 是否處理 clock |
 | `processReset` | `bool` | `false` | `InsertBuffersForDffControl` 是否處理 reset |
 | `bufferInputs` | `bool` | `true` | `InsertBuffersByGateType` 是否 buffer inputs |
 | `bufferOutputs` | `bool` | `true` | `InsertBuffersByGateType` 是否 buffer outputs |
-| `allowDuplicateLoads` | `bool` | `false` | `RedirectAllLoads` 是否允許 duplicate loads |
 | `validateEquivalence` | `bool` | `false` | 要求等價性資訊；若 command 沒 certificate，report 會加 warning |
-| `rollbackOnFailure` | `bool` | `true` | 保留欄位；目前 WithReport wrapper validation 失敗會 rollback |
+| `rollbackOnFailure` | `bool` | `true` | 保留欄位；目前 edit validation 失敗會 rollback |
 
 ---
 
@@ -160,13 +139,59 @@ if (report.success) {
 |---|---|
 | `depthChange` | cleanup / simplification 類 wrapper |
 | `fanoutChange` | fanout buffer insertion 類 command |
-| `mappingDelta` | technology mapping 類 wrapper；目前不由 `runEditApply()` dispatch |
+| `mappingDelta` | 保留給 technology mapping 類結果；目前 `runEditApply()` 不使用 |
 | `changedGateIds`, `changedGateNames` | 新增、移除、修改的 gates |
 | `changedNetIds`, `changedNetNames` | 新增、移除、修改的 nets |
 
 ---
 
-## 5. RenameNet
+## 5. Request Validation
+
+`runEditApply()` 會先檢查 request 是否足夠明確。若 validation 失敗，不會執行修改，也不會改變 netlist。
+
+失敗 report 的共通語意：
+
+```text
+success = false
+changed = false
+rolledBack = false
+operationName = edit_apply:<command_name>
+message = 具體錯誤原因
+validation.messages 會包含同一個錯誤訊息
+```
+
+目前已檢查：
+
+| 類型 | 檢查內容 |
+|---|---|
+| rename | `oldName` / `newName` 不可空、舊物件需存在、新名稱不可衝突 |
+| name-based command | `gateName` / `netName` 不可空，且物件需存在 |
+| id-based command | ID 必須在有效範圍內，且 gate/net 不可已 removed |
+| fanout command | `maxFanout` 若有設定，必須 >= 2；未設定時使用預設 4 |
+| DFF control buffer | `processClock` / `processReset` 至少一個為 true |
+| by-gate-type buffer | `gateType != UNKNOWN`，且至少選擇 input/output 其中一種 |
+
+範例：
+
+```cpp
+Netlist::EditApplyRequest request;
+request.kind = Netlist::EditCommandKind::InsertBuffersForFanout;
+request.maxFanout = 1;
+
+Netlist::NetlistEditReport report = netlist.runEditApply(request);
+```
+
+預期：
+
+```text
+report.success = false
+report.changed = false
+report.message = "Invalid maxFanout: must be at least 2."
+```
+
+---
+
+## 6. RenameNet
 
 用途：
 
@@ -196,7 +221,7 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 
 ---
 
-## 6. InsertBuffersForSpecificNet
+## 7. InsertBuffersForSpecificNet
 
 用途：
 
@@ -228,7 +253,7 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 
 ---
 
-## 7. InsertBuffersOnEachLoad
+## 8. InsertBuffersOnEachLoad
 
 用途：
 
@@ -257,7 +282,7 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 
 ---
 
-## 8. CleanupBuffers
+## 9. CleanupBuffers
 
 用途：
 
@@ -286,7 +311,7 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 
 ---
 
-## 9. CollapseDoubleInverter
+## 10. CollapseDoubleInverter
 
 用途：
 
@@ -315,7 +340,7 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 
 ---
 
-## 10. RemoveDanglingLogic
+## 11. RemoveDanglingLogic
 
 用途：
 
@@ -343,7 +368,7 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 
 ---
 
-## 11. SimplifyConstants
+## 12. SimplifyConstants
 
 用途：
 
@@ -368,44 +393,6 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 | 是否有化簡 | `report.changed` |
 | gate type 變化 | `report.diff.gateTypeCountDelta` |
 | 等價性理由 | `report.validation.equivalenceMethod`，應為 `LocalRewriteRule` |
-
----
-
-## 12. ReplaceGateWithNet
-
-用途：
-
-```text
-低階 primitive，把 gate 的 loads 改接到指定 source net。
-```
-
-寫法：
-
-```cpp
-Netlist::EditApplyRequest request;
-request.kind = Netlist::EditCommandKind::ReplaceGateWithNet;
-request.gateName = "g_const";
-request.netName = "a";
-
-Netlist::NetlistEditReport report = netlist.runEditApply(request);
-```
-
-注意：
-
-```text
-這類 primitive mutation 可能改變功能。
-目前只做 structure / Problem A validation，不自動宣稱 functional equivalence。
-```
-
-讀取：
-
-| 想知道 | 讀取欄位 |
-|---|---|
-| 是否修改成功 | `report.success` |
-| 是否 rollback | `report.rolledBack` |
-| 是否有等價性證明 | `report.validation.equivalenceChecked`，通常為 `false` |
-
----
 
 ## 13. Prompt 對應表
 
@@ -443,6 +430,7 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 | What is the global critical path? | DepthAnalysis |
 | Check functional equivalence between internal signals n1287 and n2404. | FunctionQuery |
 | Verify current design equivalent to original loaded netlist. | Future whole-design equivalence API |
+| Replace a gate driver, reconnect a gate input, or arbitrarily merge two nets. | 不屬於 public EditApply；需由內部 verified pass 或 expert API 處理 |
 
 ---
 
@@ -450,7 +438,7 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 
 | equivalenceMethod | 意思 | 常見 command |
 |---|---|---|
-| `NotChecked` | 目前沒有等價性證明 | low-level primitive rewrite |
+| `NotChecked` | 目前沒有等價性證明 | 不應出現在成功的 public `runEditApply()` edit |
 | `StructuralIdentity` | 名稱改變、unused/dangling/dead logic removal、structural merge | `RenameNet`, `RemoveDanglingLogic`, `TrimDeadLogic` |
 | `LocalRewriteRule` | 可由局部 Boolean identity 證明 | `CleanupBuffers`, `CollapseDoubleInverter`, `SimplifyConstants`, buffer insertion |
 | `WholeDesignSat` | 保留給未來 whole-design SAT equivalence | 尚未接入 |
@@ -465,12 +453,15 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 runEditApply rename_gate
 runEditApply cleanup_buffers
 runEditApply insert_buffers_for_specific_net
-runEditApply replace_gate_with_net remains unchecked
+runEditApply validateEquivalence has certificate for public edit
+runEditApply missing required rename argument
+runEditApply missing fanout net
+runEditApply invalid fanout limit
 runEditApply unsupported command
 ```
 
 目前驗證結果：
 
 ```text
-Summary: 111 passed, 0 failed.
+Summary: 115 passed, 0 failed.
 ```
