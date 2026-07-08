@@ -2,6 +2,11 @@
 
 namespace {
 
+struct EditRequestValidation {
+    bool ok = true;
+    std::string message;
+};
+
 std::string editCommandKindName(EditCommandKind kind) {
     switch (kind) {
         case EditCommandKind::RenameGate: return "rename_gate";
@@ -57,6 +62,248 @@ int fanoutLimitOrDefault(int maxFanout) {
     return maxFanout > 0 ? maxFanout : 4;
 }
 
+bool isActiveGateId(const Netlist& netlist, int gateId) {
+    return netlist.isValidGateId(gateId) && !netlist.isGateRemoved(gateId);
+}
+
+bool isActiveNetId(const Netlist& netlist, int netId) {
+    return netlist.isValidNetId(netId) && !netlist.getNet(netId).isRemoved;
+}
+
+EditRequestValidation okValidation() {
+    return {};
+}
+
+EditRequestValidation failedValidation(const std::string& message) {
+    EditRequestValidation result;
+    result.ok = false;
+    result.message = message;
+    return result;
+}
+
+bool isInternalLowLevelPrimitive(EditCommandKind kind) {
+    switch (kind) {
+        case EditCommandKind::DisconnectGateInput:
+        case EditCommandKind::ConnectGateInput:
+        case EditCommandKind::RemoveGate:
+        case EditCommandKind::ReplaceAllLoadsOfNet:
+        case EditCommandKind::ReplaceGateWithNet:
+        case EditCommandKind::ReplaceGateWithConstant:
+        case EditCommandKind::ReplaceGateWithNotOfNet:
+        case EditCommandKind::ReplaceDriverOfNet:
+        case EditCommandKind::RewireGateOutputToExistingNet:
+        case EditCommandKind::ReplaceNetFunctionKeepingName:
+        case EditCommandKind::MergeNetIntoNet:
+        case EditCommandKind::BypassNetKeepingPortSemantics:
+        case EditCommandKind::RedirectAllLoads:
+            return true;
+        default:
+            return false;
+    }
+}
+
+EditRequestValidation requireGateName(const Netlist& netlist, const std::string& gateName, const std::string& fieldName) {
+    if (gateName.empty()) {
+        return failedValidation("Missing required argument: " + fieldName + ".");
+    }
+    const int gateId = netlist.getGateId(gateName);
+    if (!isActiveGateId(netlist, gateId)) {
+        return failedValidation("Gate not found or already removed: " + gateName + ".");
+    }
+    return okValidation();
+}
+
+EditRequestValidation requireNetName(const Netlist& netlist, const std::string& netName, const std::string& fieldName) {
+    if (netName.empty()) {
+        return failedValidation("Missing required argument: " + fieldName + ".");
+    }
+    const int netId = netlist.getNetId(netName);
+    if (!isActiveNetId(netlist, netId)) {
+        return failedValidation("Net not found or already removed: " + netName + ".");
+    }
+    return okValidation();
+}
+
+EditRequestValidation requireGateId(const Netlist& netlist, int gateId, const std::string& fieldName) {
+    if (!isActiveGateId(netlist, gateId)) {
+        return failedValidation("Invalid or removed gate id for " + fieldName + ": " + std::to_string(gateId) + ".");
+    }
+    return okValidation();
+}
+
+EditRequestValidation requireNetId(const Netlist& netlist, int netId, const std::string& fieldName) {
+    if (!isActiveNetId(netlist, netId)) {
+        return failedValidation("Invalid or removed net id for " + fieldName + ": " + std::to_string(netId) + ".");
+    }
+    return okValidation();
+}
+
+EditRequestValidation requireResolvedGate(const Netlist& netlist, int gateId, const std::string& gateName, const std::string& fieldName) {
+    if (gateId < 0 && gateName.empty()) {
+        return failedValidation("Missing required argument: " + fieldName + " gateId or gateName.");
+    }
+    return requireGateId(netlist, resolveGateId(netlist, gateId, gateName), fieldName);
+}
+
+EditRequestValidation requireResolvedNet(const Netlist& netlist, int netId, const std::string& netName, const std::string& fieldName) {
+    if (netId < 0 && netName.empty()) {
+        return failedValidation("Missing required argument: " + fieldName + " netId or netName.");
+    }
+    return requireNetId(netlist, resolveNetId(netlist, netId, netName), fieldName);
+}
+
+EditRequestValidation requireFanoutLimit(int maxFanout, bool allowDefault) {
+    if (maxFanout < 0 && allowDefault) {
+        return okValidation();
+    }
+    if (maxFanout < 2) {
+        return failedValidation("Invalid maxFanout: must be at least 2.");
+    }
+    return okValidation();
+}
+
+EditRequestValidation validateEditApplyRequest(const Netlist& netlist, const EditApplyRequest& request) {
+    if (isInternalLowLevelPrimitive(request.kind)) {
+        return failedValidation(
+            "Command is an internal low-level primitive and is not exposed through EditApply because functional equivalence is not guaranteed.");
+    }
+
+    switch (request.kind) {
+        case EditCommandKind::RenameGate:
+            if (request.oldName.empty()) return failedValidation("Missing required argument: oldName.");
+            if (request.newName.empty()) return failedValidation("Missing required argument: newName.");
+            if (!isActiveGateId(netlist, netlist.getGateId(request.oldName))) {
+                return failedValidation("Gate not found or already removed: " + request.oldName + ".");
+            }
+            if (request.oldName != request.newName && netlist.getGateId(request.newName) >= 0) {
+                return failedValidation("Gate rename target already exists: " + request.newName + ".");
+            }
+            return okValidation();
+
+        case EditCommandKind::RenameNet:
+            if (request.oldName.empty()) return failedValidation("Missing required argument: oldName.");
+            if (request.newName.empty()) return failedValidation("Missing required argument: newName.");
+            if (!isActiveNetId(netlist, netlist.getNetId(request.oldName))) {
+                return failedValidation("Net not found or already removed: " + request.oldName + ".");
+            }
+            if (request.oldName != request.newName && netlist.getNetId(request.newName) >= 0) {
+                return failedValidation("Net rename target already exists: " + request.newName + ".");
+            }
+            return okValidation();
+
+        case EditCommandKind::DisconnectGateInput:
+        case EditCommandKind::ConnectGateInput: {
+            EditRequestValidation gateCheck = requireGateName(netlist, request.gateName, "gateName");
+            if (!gateCheck.ok) return gateCheck;
+            EditRequestValidation netCheck = requireNetName(netlist, request.netName, "netName");
+            if (!netCheck.ok) return netCheck;
+            if (request.pinIndex < -1) return failedValidation("Invalid pinIndex: must be -1 or non-negative.");
+            return okValidation();
+        }
+
+        case EditCommandKind::RemoveGate:
+            return requireResolvedGate(netlist, request.gateId, request.gateName, "target");
+
+        case EditCommandKind::ReplaceAllLoadsOfNet:
+            if (request.oldNetId == request.newNetId) return failedValidation("oldNetId and newNetId must be different.");
+            if (EditRequestValidation check = requireNetId(netlist, request.oldNetId, "oldNetId"); !check.ok) return check;
+            return requireNetId(netlist, request.newNetId, "newNetId");
+
+        case EditCommandKind::CleanupBuffers:
+        case EditCommandKind::CollapseDoubleInverter:
+        case EditCommandKind::LocalSimplificationFixpoint:
+        case EditCommandKind::TrimDeadLogic:
+        case EditCommandKind::RemoveDanglingLogic:
+        case EditCommandKind::RemoveUnusedNets:
+        case EditCommandKind::MergeEquivalentGates:
+        case EditCommandKind::MergeStructurallyEquivalentGates:
+        case EditCommandKind::SimplifyConstants:
+        case EditCommandKind::SimplifySameInput:
+            return okValidation();
+
+        case EditCommandKind::InsertBuffersForFanout:
+            return requireFanoutLimit(request.maxFanout, true);
+
+        case EditCommandKind::InsertBuffersForSpecificNet: {
+            EditRequestValidation netCheck = requireNetName(netlist, request.netName, "netName");
+            if (!netCheck.ok) return netCheck;
+            return requireFanoutLimit(request.maxFanout, true);
+        }
+
+        case EditCommandKind::InsertBuffersForDffControl:
+            if (!request.processClock && !request.processReset) {
+                return failedValidation("At least one of processClock or processReset must be true.");
+            }
+            return requireFanoutLimit(request.maxFanout, true);
+
+        case EditCommandKind::InsertBuffersOnEachLoad:
+        case EditCommandKind::InsertBufferAtDriver:
+            return requireNetName(netlist, request.netName, "netName");
+
+        case EditCommandKind::InsertBufferBeforeGate: {
+            EditRequestValidation netCheck = requireNetName(netlist, request.netName, "netName");
+            if (!netCheck.ok) return netCheck;
+            return requireGateName(netlist, request.targetGateName, "targetGateName");
+        }
+
+        case EditCommandKind::InsertBuffersByGateType:
+            if (request.gateType == GateType::UNKNOWN) {
+                return failedValidation("Missing required argument: gateType.");
+            }
+            if (!request.bufferInputs && !request.bufferOutputs) {
+                return failedValidation("At least one of bufferInputs or bufferOutputs must be true.");
+            }
+            return okValidation();
+
+        case EditCommandKind::ReplaceGateWithNet:
+        case EditCommandKind::ReplaceGateWithNotOfNet: {
+            EditRequestValidation gateCheck = requireResolvedGate(netlist, request.gateId, request.gateName, "target");
+            if (!gateCheck.ok) return gateCheck;
+            return requireResolvedNet(netlist, request.sourceNetId, request.netName, "source");
+        }
+
+        case EditCommandKind::ReplaceGateWithConstant:
+            if (EditRequestValidation gateCheck = requireResolvedGate(netlist, request.gateId, request.gateName, "target"); !gateCheck.ok) return gateCheck;
+            if (!isActiveNetId(netlist, request.sourceNetId) || !netlist.getNet(request.sourceNetId).isConst) {
+                return failedValidation("sourceNetId must reference an existing constant net.");
+            }
+            return okValidation();
+
+        case EditCommandKind::ReplaceDriverOfNet:
+            if (EditRequestValidation netCheck = requireNetId(netlist, request.targetNetId, "targetNetId"); !netCheck.ok) return netCheck;
+            return requireGateId(netlist, request.newDriverGateId, "newDriverGateId");
+
+        case EditCommandKind::RewireGateOutputToExistingNet:
+            if (EditRequestValidation gateCheck = requireResolvedGate(netlist, request.gateId, request.gateName, "target"); !gateCheck.ok) return gateCheck;
+            return requireNetId(netlist, request.newOutputNetId, "newOutputNetId");
+
+        case EditCommandKind::ReplaceNetFunctionKeepingName:
+            if (EditRequestValidation targetCheck = requireNetId(netlist, request.targetNetId, "targetNetId"); !targetCheck.ok) return targetCheck;
+            return requireNetId(netlist, request.sourceNetId, "sourceNetId");
+
+        case EditCommandKind::MergeNetIntoNet:
+            if (request.oldNetId == request.newNetId) return failedValidation("oldNetId and newNetId must be different.");
+            if (EditRequestValidation oldCheck = requireNetId(netlist, request.oldNetId, "oldNetId"); !oldCheck.ok) return oldCheck;
+            return requireNetId(netlist, request.newNetId, "newNetId");
+
+        case EditCommandKind::BypassNetKeepingPortSemantics:
+            if (request.netId == request.replacementNetId) return failedValidation("netId and replacementNetId must be different.");
+            if (EditRequestValidation removedCheck = requireNetId(netlist, request.netId, "netId"); !removedCheck.ok) return removedCheck;
+            return requireNetId(netlist, request.replacementNetId, "replacementNetId");
+
+        case EditCommandKind::RedirectAllLoads:
+            if (request.oldNetId == request.newNetId) return failedValidation("oldNetId and newNetId must be different.");
+            if (EditRequestValidation oldCheck = requireNetId(netlist, request.oldNetId, "oldNetId"); !oldCheck.ok) return oldCheck;
+            return requireNetId(netlist, request.newNetId, "newNetId");
+
+        case EditCommandKind::RemoveNetIfUnused:
+            return requireResolvedNet(netlist, request.netId, request.netName, "target");
+
+        default:
+            return failedValidation("Unsupported edit command kind.");
+    }
+}
+
 NetlistEditReport makeFailedEditApplyReport(
     const Netlist& netlist,
     EditCommandKind kind,
@@ -73,6 +320,7 @@ NetlistEditReport makeFailedEditApplyReport(
     report.success = false;
     report.changed = false;
     report.rolledBack = false;
+    report.validation.messages.push_back(message);
     return report;
 }
 
@@ -91,6 +339,10 @@ void finalizeEditApplyReport(NetlistEditReport& report, const EditApplyRequest& 
 
 NetlistEditReport Netlist::runEditApply(const EditApplyRequest& request) {
     NetlistEditReport report;
+    EditRequestValidation requestValidation = validateEditApplyRequest(*this, request);
+    if (!requestValidation.ok) {
+        return makeFailedEditApplyReport(*this, request.kind, requestValidation.message);
+    }
 
     switch (request.kind) {
         case EditCommandKind::RenameGate:

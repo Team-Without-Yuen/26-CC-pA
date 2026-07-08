@@ -1066,7 +1066,7 @@ int Netlist::removeDanglingLogic() {
     // 對於純組合邏輯最佳化而言，DFF 必須被視為「不可刪除的有用節點」
     // 且驅動 DFF 的訊號線 (D, CLK, RN, SN) 必須被視為 Pseudo-PO 嚴格保護！
     for (int i = 0; i < (int)gates.size(); i++) {
-        if (!isValidGateId(i)) continue;
+        if (!isValidGateId(i) || isGateRemoved(i)) continue;
         
         if (gates[i].type == GateType::DFF) {
             usefulGates.insert(i); // 保護 DFF 本身不被刪除
@@ -1094,7 +1094,7 @@ int Netlist::removeDanglingLogic() {
         int driverId = nets[currNetId].driverGateId;
         
         // 如果這條線有 Driver，且該 Driver 是有效的合法閘
-        if (driverId >= 0 && isValidGateId(driverId)) {
+        if (driverId >= 0 && isValidGateId(driverId) && !isGateRemoved(driverId)) {
             // 如果這個 Gate 尚未被標記為有用
             if (!usefulGates.count(driverId)) {
                 usefulGates.insert(driverId);
@@ -1113,13 +1113,14 @@ int Netlist::removeDanglingLogic() {
     // 3. 最終刪除階段 (Garbage Collection)
     int removedCount = 0;
     for (int i = 0; i < (int)gates.size(); i++) {
-        if (!isValidGateId(i)) continue;
+        if (!isValidGateId(i) || isGateRemoved(i)) continue;
 
         // 如果這個閘不在 usefulGates 裡面，代表它與任何 PO 都沒有關聯
         if (!usefulGates.count(i)) {
             // 統一呼叫 API 來刪除，確保 loadGateIds 等關聯指標被乾淨清除
-            removeGate(i);
-            removedCount++;
+            if (markGateRemoved(i)) {
+                removedCount++;
+            }
         }
     }
 

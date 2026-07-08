@@ -452,7 +452,8 @@ DepthAnalysis 不回答 arbitrary path constraints，例如 through/avoid。
 文件：
 
 ```text
-API_SPEC/DEPTH_ANALYSIS.md
+API_SPEC/DEPTH_QUERY_USAGE.md
+API_SPEC/DEPTH_QUERY_API.md
 ```
 
 ---

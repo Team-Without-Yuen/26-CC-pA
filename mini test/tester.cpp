@@ -20,10 +20,10 @@ struct TestReport {
     void check(bool condition, const std::string& name) {
         if (condition) {
             ++passed;
-            std::cout << "[PASS] " << name << "\n";
+            std::cout << "[PASS] " << name << "\n" << std::flush;
         } else {
             ++failed;
-            std::cout << "[FAIL] " << name << "\n";
+            std::cout << "[FAIL] " << name << "\n" << std::flush;
         }
     }
 };
@@ -1294,13 +1294,67 @@ void testEditApplyFlow(TestReport& report, const Netlist& original) {
     primitiveRequest.gateName = "g_short";
     primitiveRequest.netName = "a";
     const Netlist::NetlistEditReport primitiveReport = primitiveNetlist.runEditApply(primitiveRequest);
-    report.check(primitiveReport.success &&
-                 primitiveReport.changed &&
+    report.check(!primitiveReport.success &&
+                 !primitiveReport.changed &&
                  !primitiveReport.rolledBack &&
                  primitiveReport.operationName == "edit_apply:replace_gate_with_net" &&
-                 !primitiveReport.validation.equivalenceChecked &&
+                 primitiveReport.message == "Command is an internal low-level primitive and is not exposed through EditApply because functional equivalence is not guaranteed." &&
                  primitiveNetlist.validateAfterMutation(),
-                 "runEditApply replace_gate_with_net remains unchecked");
+                 "runEditApply blocks unchecked low-level primitive");
+
+    Netlist uncheckedEquivNetlist = original.cloneForRollback();
+    Netlist::EditApplyRequest uncheckedEquivRequest;
+    uncheckedEquivRequest.kind = Netlist::EditCommandKind::RenameNet;
+    uncheckedEquivRequest.oldName = "n_buf";
+    uncheckedEquivRequest.newName = "n_buf_checked";
+    uncheckedEquivRequest.validateEquivalence = true;
+    const Netlist::NetlistEditReport uncheckedEquivReport =
+        uncheckedEquivNetlist.runEditApply(uncheckedEquivRequest);
+    report.check(uncheckedEquivReport.success &&
+                 uncheckedEquivReport.validation.equivalenceChecked &&
+                 uncheckedEquivReport.warnings.empty(),
+                 "runEditApply validateEquivalence has certificate for public edit");
+
+    Netlist missingRenameNetlist = original.cloneForRollback();
+    Netlist::EditApplyRequest missingRenameRequest;
+    missingRenameRequest.kind = Netlist::EditCommandKind::RenameNet;
+    missingRenameRequest.oldName = "n_buf";
+    const Netlist::NetlistEditReport missingRenameReport =
+        missingRenameNetlist.runEditApply(missingRenameRequest);
+    report.check(!missingRenameReport.success &&
+                 !missingRenameReport.changed &&
+                 !missingRenameReport.rolledBack &&
+                 missingRenameReport.operationName == "edit_apply:rename_net" &&
+                 missingRenameReport.message == "Missing required argument: newName." &&
+                 missingRenameNetlist.getNetId("n_buf") >= 0,
+                 "runEditApply missing required rename argument");
+
+    Netlist missingFanoutNetlist = original.cloneForRollback();
+    Netlist::EditApplyRequest missingFanoutRequest;
+    missingFanoutRequest.kind = Netlist::EditCommandKind::InsertBuffersForSpecificNet;
+    missingFanoutRequest.netName = "missing_net";
+    missingFanoutRequest.maxFanout = 4;
+    const Netlist::NetlistEditReport missingFanoutReport =
+        missingFanoutNetlist.runEditApply(missingFanoutRequest);
+    report.check(!missingFanoutReport.success &&
+                 !missingFanoutReport.changed &&
+                 !missingFanoutReport.rolledBack &&
+                 missingFanoutReport.operationName == "edit_apply:insert_buffers_for_specific_net" &&
+                 missingFanoutReport.message == "Net not found or already removed: missing_net.",
+                 "runEditApply missing fanout net");
+
+    Netlist invalidFanoutNetlist = original.cloneForRollback();
+    Netlist::EditApplyRequest invalidFanoutRequest;
+    invalidFanoutRequest.kind = Netlist::EditCommandKind::InsertBuffersForFanout;
+    invalidFanoutRequest.maxFanout = 1;
+    const Netlist::NetlistEditReport invalidFanoutReport =
+        invalidFanoutNetlist.runEditApply(invalidFanoutRequest);
+    report.check(!invalidFanoutReport.success &&
+                 !invalidFanoutReport.changed &&
+                 !invalidFanoutReport.rolledBack &&
+                 invalidFanoutReport.operationName == "edit_apply:insert_buffers_for_fanout" &&
+                 invalidFanoutReport.message == "Invalid maxFanout: must be at least 2.",
+                 "runEditApply invalid fanout limit");
 
     Netlist unsupportedNetlist = original.cloneForRollback();
     Netlist::EditApplyRequest unsupportedRequest;
