@@ -1,6 +1,6 @@
 #include "include/core/Netlist.h"
 #include "include/core/TechMapper.h"
-#include "include/lib/cadical.hpp"
+#include "include/lib/cadical/cadical.hpp"
 #include <string>
 #include <iostream>
 #include <functional>

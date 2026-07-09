@@ -1,17 +1,8 @@
-# 編譯指令(windows)(UCRT64) 
-g++ -std=c++20 -I. -Ilib main.cpp src/core/*.cpp src/io/*.cpp src/analysis/*.cpp src/optimization/*.cpp src/transformation/*.cpp -L./include/lib/win/ucrt64 -lcadical -o NetlistTool
+# 編譯指令
+make
 
-# 編譯指令(windows)(mingw64) 
-g++ -std=c++20 -I. -Ilib main.cpp src/core/*.cpp src/io/*.cpp src/analysis/*.cpp src/optimization/*.cpp src/transformation/*.cpp -L./include/lib/win/mingw64 -lcadical -o NetlistTool
+# 清除舊的執行檔：
+make clean
 
-# 編譯指令(linux) 
-g++ -std=c++20 -I. -Ilib main.cpp src/core/*.cpp src/io/*.cpp src/analysis/*.cpp src/optimization/*.cpp src/transformation/*.cpp -L./include/lib/linux -lcadical -o NetlistTool
-
-# 在 Windows下執行指令：
-./NetlistTool.exe test01.v
-
-# 在 Linux 下執行指令：
-./NetlistTool.exe test01.v
-
-# (輸出與輸入一樣就能做到修改)
+# 執行指令：
 ./NetlistTool.exe test01.v output.v
