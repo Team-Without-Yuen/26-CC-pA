@@ -1,4 +1,4 @@
-#include "include/lib/cadical.hpp"
+#include "include/lib/cadical/cadical.hpp"
 #include <chrono>
 #include <string>
 #include <vector>

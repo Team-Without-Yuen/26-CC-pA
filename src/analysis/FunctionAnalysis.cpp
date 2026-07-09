@@ -1,5 +1,5 @@
 #include "include/core/Netlist.h"
-#include "include/lib/cadical.hpp"
+#include "include/lib/cadical/cadical.hpp"
 #include <algorithm>
 #include <unordered_set>
 #include <functional>
