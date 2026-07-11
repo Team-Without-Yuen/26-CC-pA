@@ -873,6 +873,11 @@ public:
     // 移除舊的 PO 中的一個 bit (oldNetId)，改為使用 newNetId
     bool swapPrimaryOutputNet(int oldNetId, int newNetId);
 
+    // 說明：將 oldNetId 完全短接到 newNetId。
+    //       oldNetId 的所有負載 (Load Gates) 都會改接到 newNetId。
+    //       如果 oldNetId 是 Primary Output，newNetId 將會繼承其 PO 身份與名稱。
+    void mergeNets(int oldNetId, int newNetId);
+
     // =========================================================================
     // 2.2 Buffer Insertion Transformation API
     //
@@ -1180,6 +1185,34 @@ public:
     };
     CompactResult compactRemovedGatesWithIdMap();
 
+    // =========================================================================
+    // Boolean Expression Extraction API
+    //
+    // Symbolic traversal：從指定 net 往回展開 fanin cone，
+    // 產生人類可讀的 Boolean expression 字串。
+    //
+    // 共通規則：
+    // 1. PI net / constant net / DFF.Q 視為 leaf，直接用 net name。
+    // 2. DFF 是 sequential boundary，不穿越。
+    // 3. fanout sharing（同一條 net 被多個地方用到）會被 memo 正確處理，
+    //    不會重複展開，但字串中會重複出現同一個 net name。
+    // 4. expression 格式：AND(a, b)、OR(a, NOT(b))、NAND(x, y) 等。
+    // =========================================================================
+
+    // 回傳指定 net 的完整 Boolean expression（對大電路可能很長）
+    std::string getBooleanExpression(const std::string& netName) const;
+
+    // 用 net ID 版本
+    std::string getBooleanExpressionOfNet(int netId) const;
+
+    // 限制展開深度：超過 maxDepth 的節點直接用 net name 替代
+    // 適合大電路的部分展開
+    std::string getSimplifiedBooleanExpression(
+        const std::string& netName, int maxDepth = 10) const;
+
+    // 回傳 netName fanin cone 中所有 PI net 的名稱（排序去重）
+    // 用於回答「n12 depends on which primary inputs」
+    std::vector<std::string> getPrimaryInputsOfNet(const std::string& netName) const;
 
 
     // =========================================================================

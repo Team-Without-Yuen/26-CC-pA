@@ -1,6 +1,6 @@
 #include "include/core/Netlist.h"
 #include "include/core/TechMapper.h"
-#include "include/lib/cadical.hpp"
+#include "include/lib/cadical/cadical.hpp"
 #include <string>
 #include <iostream>
 #include <functional>
@@ -8,6 +8,9 @@
 #include <vector>
 #include <queue>
 #include <unordered_set>
+
+// 定義常數
+constexpr int MAX_AREA = 16;
 
 namespace {
 
@@ -399,7 +402,7 @@ bool TechMapper::matchRootGate(Netlist& netlist, int physGateId, const TechMapRu
 }
 
 // 驗證與替換邏輯
-bool TechMapper::isValidSubgraph(Netlist& netlist, const MatchContext& ctx, int rootGateId) {
+bool TechMapper::isValidSubgraph(Netlist& netlist, const MatchContext& ctx, int rootGateId, bool allowLogicDuplication) {
     // 遍歷子圖中的每一個 Gate
     for (int gateId : ctx.matchedGates) {
         if (gateId == rootGateId) continue; // Root Gate 的輸出本來就是要接給別人的，合法。
@@ -407,10 +410,16 @@ bool TechMapper::isValidSubgraph(Netlist& netlist, const MatchContext& ctx, int 
         const Gate& g = netlist.getGate(gateId);
         if (g.outputNetId == -1) continue;
 
+        // 如果允許複製電路 (Logic Duplication)
+        // 我們一律放行，不檢查中介閘的外部依賴，因為我們稍後會保留它們！
+        if (allowLogicDuplication) {
+            continue; 
+        }
+
         const Net& outNet = netlist.getNet(g.outputNetId);
         if (outNet.isPO) return false; // 不能把連到 Primary Output 的中介閘吃掉！
 
-        // 【最精華的 Fan-out 檢查】
+        // 【最精華的 Fan-out 檢查】(僅在不允許 Duplication 時嚴格執行)
         // 中介閘的所有 Load (吃它訊號的人)，必須統統包含在這次匹配的子圖內！
         for (int loadGateId : outNet.loadGateIds) {
             if (ctx.matchedGates.find(loadGateId) == ctx.matchedGates.end()) {
@@ -422,85 +431,150 @@ bool TechMapper::isValidSubgraph(Netlist& netlist, const MatchContext& ctx, int 
 }
 
 // 統一的替換執行引擎
-void TechMapper::applyRule(Netlist& netlist, const MatchContext& ctx, int rootGateId, const TechMapRule& rule) {
+void TechMapper::applyRule(Netlist& netlist, 
+                           const MatchContext& ctx, 
+                           int rootGateId, 
+                           const TechMapRule& rule, 
+                           TechMapReport& report, 
+                           bool allowLogicDuplication) { 
+
+    /*std::cout << "\n[Debug Apply] Applying rule " << rule.name << " to Root Gate " << rootGateId << "\n";
+    std::cout << "  -> RHS Root Node Type: " << (int)rule.replacementPattern->nodeType << "\n";*/
+
     const Gate& rootGate = netlist.getGate(rootGateId);
     int origOutNetId = rootGate.outputNetId;
     std::string baseInstName = rootGate.instName + "_opt";
 
-    // 將舊的子圖 (LHS) 從電路中拔除
+    // 計算 Logic Duplication 的「連鎖保留」集合
+    std::unordered_set<int> preservedGates;
+    
+    if (allowLogicDuplication) {
+        bool changed;
+        do {
+            changed = false;
+            for (int gateId : ctx.matchedGates) {
+                if (gateId == rootGateId) continue; // Root Gate 永遠會被新電路取代，所以絕對不保留
+                if (preservedGates.count(gateId)) continue; // 已經標記保留了，跳過
+                
+                const Gate& g = netlist.getGate(gateId);
+                if (g.outputNetId == -1) continue;
+                
+                const Net& outNet = netlist.getNet(g.outputNetId);
+                bool isNeeded = false;
+                
+                if (outNet.isPO) {
+                    isNeeded = true;
+                } else {
+                    for (int loadId : outNet.loadGateIds) {
+                        // 判斷是否被外部需要：
+                        // 條件 A: Load 不在這次匹配的子圖內 (真正的外部依賴)
+                        // 條件 B: Load 雖然在子圖內，但它已經被判定為「需要保留」 (連鎖依賴)
+                        if (ctx.matchedGates.find(loadId) == ctx.matchedGates.end() || 
+                            preservedGates.count(loadId)) {
+                            
+                            // 確保那個 Load 還是活著的，沒有在先前的替換中被移除
+                            if (!netlist.isGateRemoved(loadId)) { 
+                                isNeeded = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+                
+                if (isNeeded) {
+                    preservedGates.insert(gateId);
+                    changed = true; // 有新的 Gate 被保留，必須再掃描一次看是否影響更前級的 Gate
+                }
+            }
+        } while (changed);
+    }
+
+    // 執行惰性刪除 (Lazy Deletion) 與統計
     std::vector<int> internalNetsToRemove;
 
     for (int gateId : ctx.matchedGates) {
+        if (preservedGates.count(gateId)) {
+            // Logic Duplication 發生！保留這個 Gate 供外部 / 下游使用，不標記刪除
+            continue;
+        }
+
+        // 安全拔除
         const Gate& g = netlist.getGate(gateId);
         
+        // 只有真的被拔掉的，才計入 report 的 removedCount (修正了原本外層迴圈誤判的問題)
+        report.removedCountByType[g.type]++;
+
         // 抓出這顆 Gate 的輸出線。如果是內部線，記下來準備刪除。
         if (g.outputNetId != -1 && g.outputNetId != origOutNetId) {
             internalNetsToRemove.push_back(g.outputNetId);
         }
         
-        // 拔除 Gate
+        // 拔除 Gate (你的底層實作應該會將它的 isRemoved 設為 true)
         netlist.removeGate(gateId); 
     }
 
-    // 準備遞迴引擎，用來生成新的子圖 (RHS)
+    // 準備遞迴引擎，生成新的子圖 (RHS)
     // Memoization 表：解決 RHS 中也有 DAG (共用節點) 的問題
     std::unordered_map<PatternNode*, int> visited;
 
     std::function<int(std::shared_ptr<PatternNode>, bool)> buildNode = 
         [&](std::shared_ptr<PatternNode> node, bool isRoot) -> int {
         
-        // 如果節點已經生成過，直接回傳之前產生的實體 Net ID (維持 DAG 結構)
-        if (visited.count(node.get())) {
-            return visited[node.get()];
-        }
+        if (visited.count(node.get())) return visited[node.get()];
 
         int outNetId = -1;
 
-        // 情況 A：遇到葉節點 (LEAF_A, LEAF_B, LEAF_C...)
         if (node->nodeType == NodeType::PI) {
-            // 這裡必須傳入 piIndex 去查表！
             outNetId = ctx.getBoundNet(node->piIndex);
         }
-        // 情況 B：遇到常數節點
         else if (node->nodeType == NodeType::CONST_1 || node->nodeType == NodeType::CONST_0) {
             std::string constName = (node->nodeType == NodeType::CONST_1) ? "1'b1" : "1'b0";
             outNetId = netlist.getNetId(constName);
-            
             if (outNetId == -1) {
                 outNetId = netlist.addNet(constName);
                 int constVal = (node->nodeType == NodeType::CONST_1) ? 1 : 0;
                 netlist.setNetConst(outNetId, true, constVal);  
             }
         } 
-        // 情況 C：遇到內部邏輯閘
         else if (node->nodeType == NodeType::GATE) {
-            // C-1. 先遞迴產生所有的 Input 子樹
             std::vector<int> childNetIds;
             for (auto& child : node->inputs) {
                 childNetIds.push_back(buildNode(child, false));
             }
 
-            // C-2. 在 Netlist 中實體化這個新的 Gate
             std::string newInstName = baseInstName + "_" + std::to_string(visited.size());
             int newGateId = netlist.addGate(newInstName, node->gateType);
 
-            // C-3. 將前面取得的 Input Nets 接上
             for (int cNetId : childNetIds) {
                 netlist.connectGateInput(newGateId, cNetId);
             }
 
-            // C-4. 處理 Output Net
             if (isRoot) {
-                // 如果這是新子圖的 Root，它必須負責驅動原本舊 Root 的輸出線
                 if (origOutNetId != -1) {
                     netlist.connectGateOutput(newGateId, origOutNetId);
                     outNetId = origOutNetId;
                 }
             } else {
-                // 如果是新子圖的內部閘，產生一條新的內部連線
                 std::string newNetName = "net_" + newInstName;
                 outNetId = netlist.addNet(newNetName);
                 netlist.connectGateOutput(newGateId, outNetId);
+            }
+        }
+
+        // 處理 Cone-to-Wire 或 Cone-to-Const Bypass
+        // 如果這個節點是整個子圖的 Root，但它卻不是邏輯閘 (而是 PI 或 CONST)
+        // 代表原本的整個邏輯錐被退化成了一根現有的線。
+        if (isRoot && node->nodeType != NodeType::GATE) {
+            // 如果這是一個單一線/常數的替換 (0-gate replacement)
+            // 且它確實有要接管的原本輸出線
+            if (origOutNetId != -1 && outNetId != origOutNetId) {
+                
+                /*std::cout << "[Debug] Executing Cone-to-Wire Bypass! Merging Net " 
+                          << origOutNetId << " into " << outNetId << "\n";*/
+
+                // 呼叫我們剛剛寫好的通用函數！
+                netlist.mergeNets(origOutNetId, outNetId);
+                
             }
         }
 
@@ -517,7 +591,8 @@ bool TechMapper::executeMappingPass(Netlist& netlist,
                                     const std::unordered_set<int>* scopeGates, 
                                     const std::vector<TechMapRule>& validRules, 
                                     TechMapReport& report, 
-                                    bool verbose) {
+                                    bool verbose,
+                                    bool allowLogicDuplication) {
     if (validRules.empty()) return false;
     bool actualChangesMade = false;
     bool isChanged;
@@ -555,17 +630,19 @@ bool TechMapper::executeMappingPass(Netlist& netlist,
                 // 形狀比對 (尋找 LHS)
                 if (matchRootGate(netlist, rootId, rule, ctx)) {
                     // 合法性驗證 (檢查 Fanout)
-                    if (isValidSubgraph(netlist, ctx, rootId)) {
+                    if (isValidSubgraph(netlist, ctx, rootId, allowLogicDuplication)) {
                         
-                        // 紀錄 Report
-                        for (int matchedGateId : ctx.matchedGates) {
-                            const Gate& g = netlist.getGate(matchedGateId);
-                            report.removedCountByType[g.type]++;
-                            if (verbose) report.modifiedGateNames.push_back(g.instName);
+                        // 由於 Duplication 可能導致有些 Gate 被保留，
+                        // 將 report 傳入 applyRule，在真正拔除時才 +1，數字才會精準！
+                        if (verbose) {
+                            for (int matchedGateId : ctx.matchedGates) {
+                                const Gate& g = netlist.getGate(matchedGateId);
+                                report.modifiedGateNames.push_back(g.instName);
+                            }
                         }
                         
-                        // 執行圖形替換 (套用 RHS)
-                        applyRule(netlist, ctx, rootId, rule); 
+                        // 執行圖形替換 (套用 RHS)，把 report 與 allowLogicDuplication 都傳進去
+                        applyRule(netlist, ctx, rootId, rule, report, allowLogicDuplication); 
                         
                         isChanged = true;
                         actualChangesMade = true;
@@ -574,7 +651,9 @@ bool TechMapper::executeMappingPass(Netlist& netlist,
                         if (verbose) std::cout << "[Debug] Matched shape at Gate " << rootId 
                                                << ", but isValidSubgraph REJECTED it!\n";
                     }*/
-                }
+                } /*else {
+                    if (verbose) std::cout << "[Debug] matchRootGate failed for " << netlist.getGate(rootId).instName << "\n";
+                }*/
             }
             // 如果圖形已變更，強烈建議立刻中斷 candidates 的遍歷，重新回到 do-while 頂部收集最新名單。
             // 這樣可以避免剛長出來的新結構被舊的、髒掉的 candidate 索引干擾。
@@ -706,14 +785,22 @@ NetlistEditReport TechMapper::mapTechnologyForConeWithReport(
 // 直接將唯一指定的一條規則 (Rule) 餵給最底層的執行引擎 executeMappingPass
 TechMapReport TechMapper::applySpecificRule(Netlist& netlist, 
                                             const TechMapRule& rule, 
-                                            TargetScope scope, 
-                                            const std::string& name, 
+                                            const std::unordered_set<int>& targetCone, 
                                             bool verbose) {
     TechMapReport report;
     
     if (verbose) {
         std::cout << "[Info] Direct Application Mode: Bypassing LUT search.\n";
         std::cout << "[Info] Rule locked: [" << rule.name << "] (Hash: " << rule.truthTableHash << ")\n";
+        std::cout << "[Info] Scope limited to provided target cone (" << targetCone.size() << " gates).\n";
+    }
+
+    // 防呆檢查
+    if (targetCone.empty()) {
+        report.status = TechMapStatus::ERROR_INVALID_CONSTRAINTS;
+        report.message = "Failed: The provided target cone is empty.";
+        if (verbose) std::cout << "[Error] " << report.message << "\n";
+        return report;
     }
 
     // 預先紀錄初始快照 (為了結算新增數量的數學反推法)
@@ -721,58 +808,11 @@ TechMapReport TechMapper::applySpecificRule(Netlist& netlist,
     for (const auto& pair : rule.allowedCounts) initialCounts[pair.first] = netlist.getGateCountByType(pair.first);
     for (const auto& pair : rule.targetCounts)  initialCounts[pair.first] = netlist.getGateCountByType(pair.first);
 
-    // 處理 Scope 解析 (將 TargetScope 轉為 unordered_set)
-    std::unordered_set<int> scopeGatesSet;
-    std::unordered_set<int>* scopePtr = nullptr;
-    
-    if (scope != TargetScope::WHOLE_NETLIST) {
-        bool scopeResolved = false;
-        std::vector<int> gateIds;
-        
-        switch (scope) {
-            case TargetScope::NET_FANIN:
-                gateIds = netlist.getConeGateIds(netlist.getTransitiveFaninCone(name));
-                scopeResolved = true;
-                break;
-            case TargetScope::NET_FANOUT:
-                gateIds = netlist.getConeGateIds(netlist.getTransitiveFanoutCone(name));
-                scopeResolved = true;
-                break;
-            case TargetScope::GATE_FANIN:
-                gateIds = netlist.getConeGateIds(netlist.getGateTransitiveFaninCone(name));
-                scopeResolved = true;
-                break;
-            case TargetScope::GATE_FANOUT:
-                gateIds = netlist.getConeGateIds(netlist.getGateTransitiveFanoutCone(name));
-                scopeResolved = true;
-                break;
-            default:
-                break;
-        }
-
-        // 將取得的 vector 一次性倒入 unordered_set 中
-        if (scopeResolved) {
-            scopeGatesSet.insert(gateIds.begin(), gateIds.end());
-        }
-
-        // 防呆：如果找不到目標 Name 或算出來的錐體是空的，提早報錯退出
-        if (!scopeResolved || scopeGatesSet.empty()) {
-            report.status = TechMapStatus::ERROR_SIMULATION_FAILED;
-            report.message = "Failed: Could not resolve scope target '" + name + "' or the cone is empty.";
-            if (verbose) std::cout << "[Error] " << report.message << "\n";
-            return report;
-        }
-        
-        // 解析成功，將指標指向我們算出來的集合
-        scopePtr = &scopeGatesSet;
-        if (verbose) std::cout << "[Info] Scope limited to " << scopeGatesSet.size() << " gates for target '" << name << "'.\n";
-    }
-
     // 把唯一的黃金規則包裝成 Vector
     std::vector<TechMapRule> lockedRuleList = { rule };
 
     // 直接呼叫最底層的「執行引擎」！完美繞過查表機制！
-    bool mappingChanged = executeMappingPass(netlist, scopePtr, lockedRuleList, report, verbose);
+    bool mappingChanged = executeMappingPass(netlist, &targetCone, lockedRuleList, report, verbose, true);
 
     // 統一結算新增數量
     for (const auto& pair : rule.allowedCounts) {
@@ -797,7 +837,7 @@ TechMapReport TechMapper::applySpecificRule(Netlist& netlist,
         report.status = TechMapStatus::SUCCESS;
         report.message = "Success: Optimal technology mapping rule applied successfully.";
     } else {
-        report.status = TechMapStatus::SUCCESS;
+        report.status = TechMapStatus::ERROR_SIMULATION_FAILED;
         report.message = "Notice: Optimal rule identified, but no matching subgraphs in the netlist required modification.";
     }
 
@@ -901,7 +941,8 @@ bool TechMapper::synthesizeFromTruthTable(const std::vector<bool>& targetTruthTa
                                          int N, 
                                          const std::map<GateType, int>& allowedConstraints, 
                                          TechMapReport& report, 
-                                         bool verbose) {
+                                         bool verbose,
+                                         int maxDepthConstraint) {
     // Flatten the gate list
     std::vector<GateType> baseGateArray;
     for (const auto& pair : allowedConstraints) {
@@ -910,6 +951,13 @@ bool TechMapper::synthesizeFromTruthTable(const std::vector<bool>& targetTruthTa
     
     int M = baseGateArray.size();
     if (M == 0) return false;
+
+    // 防呆：如果有指定深度約束，且深度 < 1，是不可能排出任何邏輯閘的
+    if (maxDepthConstraint != -1 && maxDepthConstraint < 1) {
+        report.status = TechMapStatus::ERROR_INVALID_CONSTRAINTS;
+        report.message = "Failed: maxDepthConstraint must be >= 1 for any gate logic.";
+        return false;
+    }
 
     size_t numRows = 1ULL << N;
     if (targetTruthTable.size() != numRows) return false;
@@ -951,6 +999,20 @@ bool TechMapper::synthesizeFromTruthTable(const std::vector<bool>& targetTruthTa
                 
                 P[g][p].resize(numRows);
                 for (size_t r = 0; r < numRows; ++r) P[g][p][r] = var_counter++;
+            }
+        }
+
+        // --- 配置深度變數 L[g][d] (Unary Encoding) ---
+        // L[g][d] 代表 "邏輯閘 g 的層數是否 <= d"
+        std::vector<std::vector<int>> L;
+        if (maxDepthConstraint != -1) {
+            int D = maxDepthConstraint;
+            L.assign(M, std::vector<int>(D, 0));
+            for (int g = 0; g < M; ++g) {
+                // d 從 1 開始，因為邏輯閘深度至少為 1；d 到 D-1 結束，因為深度 <= D 必然為 True (被我們的約束保證)
+                for (int d = 1; d < D; ++d) {
+                    L[g][d] = var_counter++;
+                }
             }
         }
 
@@ -1032,6 +1094,47 @@ bool TechMapper::synthesizeFromTruthTable(const std::vector<bool>& targetTruthTa
                 }
             }
             solver.add(0); // 至少有一個連接變數必須為 True
+        }
+
+        // --- Constraint 6: Max Depth Constraint (DCAR) ---
+        if (maxDepthConstraint != -1) {
+            int D = maxDepthConstraint;
+            
+            // 6.1 Domain Clauses: L[g][d] => L[g][d+1] 
+            // (如果深度 <= d，那麼深度必然 <= d+1)
+            for (int g = 0; g < M; ++g) {
+                for (int d = 1; d < D - 1; ++d) {
+                    solver.add(-L[g][d]);
+                    solver.add(L[g][d+1]);
+                    solver.add(0);
+                }
+            }
+            
+            // 6.2 Topological Constraints: 確保子節點的層數大於父節點
+            for (int g = 0; g < M; ++g) {
+                for (int p = 0; p < C[g].size(); ++p) {
+                    // 我們只需限制「來源是內部邏輯閘」的接線。PI (s < N) 的深度永遠為 0，不受影響。
+                    for (int s = N; s < N + g; ++s) { 
+                        int s_gate = s - N; // 將全域訊號 index 轉為邏輯閘 index
+                        
+                        for (int d = 1; d <= D; ++d) {
+                            // 若 g 接到了 s_gate：g 的深度要 <= d，前提是 s_gate 的深度必須 <= d-1
+                            // CNF: !Connected(g, s) v !L[g][d] v L[s_gate][d-1]
+                            solver.add(-C[g][p][s]);
+                            
+                            if (d < D) {
+                                solver.add(-L[g][d]); // d = D 時 L[g][D] 為 True，被省略
+                            }
+                            
+                            if (d - 1 > 0) {
+                                solver.add(L[s_gate][d-1]); // d = 1 時 L[s_gate][0] 為 False，被省略
+                            }
+                            
+                            solver.add(0);
+                        }
+                    }
+                }
+            }
         }
 
         // ================= Solve =================
@@ -1565,10 +1668,14 @@ std::shared_ptr<PatternNode> TechMapper::findMinimumAreaPattern(const std::vecto
                                                                 int currentArea, 
                                                                 TechMapReport& report, 
                                                                 bool verbose,
+                                                                int maxDepthConstraint,
                                                                 const std::vector<GateType>& allowedTypes,
                                                                 const std::vector<GateType>& bannedTypes) {
     if (verbose) {
         std::cout << "  [Exact Synthesis] Searching for pattern with Area < " << currentArea << "...\n";
+        if (maxDepthConstraint != -1) {
+            std::cout << "  [Exact Synthesis] SAT Engine Constrained to Max Depth <= " << maxDepthConstraint << ".\n";
+        }
     }
 
     // 動態建立基礎積木庫 (過濾黑白名單)
@@ -1613,7 +1720,8 @@ std::shared_ptr<PatternNode> TechMapper::findMinimumAreaPattern(const std::vecto
             const auto& allowedConstraints = combinations[i];
             TechMapReport stepReport;
             
-            bool isSat = synthesizeFromTruthTable(truthTable, N, allowedConstraints, stepReport, false); // 內部設為 false 避免洗頻
+            // SAT 引擎必須保證，如果回傳 isSat == true，則算出來的拓樸深度絕對不會超過 maxDepthConstraint。
+            bool isSat = synthesizeFromTruthTable(truthTable, N, allowedConstraints, stepReport, false, maxDepthConstraint);
 
             // 判斷求解結果
             if (isSat && stepReport.status == TechMapStatus::SUCCESS) {
@@ -1939,8 +2047,8 @@ std::shared_ptr<PatternNode> TechMapper::findMinimumDepthPattern(const std::vect
     } else {
         // 如果使用者沒設定，使用智慧雙重防護：
         // 1. 最多變兩倍大
-        // 2. 絕對物理極限 (限制在 15 顆以內，保護 SAT Solver 不當機)
-        maxAllowedArea = std::min(currentArea * 2, 15); 
+        // 2. 絕對物理極限 (限制在 MAX_AREA 顆以內，保護 SAT Solver 不當機)
+        maxAllowedArea = std::min(currentArea * 2, MAX_AREA); 
     }
 
     if (verbose) {
@@ -2360,35 +2468,39 @@ NetlistEditReport TechMapper::customMapTechnologyWithReport(
 TechMapReport TechMapper::optimizePattern(Netlist& netlist,
                                           std::shared_ptr<PatternNode> lhsTarget,
                                           OptimizationGoal goal,
-                                          TargetScope scope, 
-                                          const std::string& name, 
+                                          const std::unordered_set<int>& targetCone, 
                                           bool verbose,
                                           int maxAreaOverhead, 
+                                          int maxDepthConstraint,                    
                                           const std::vector<GateType>& allowedTypes, 
                                           const std::vector<GateType>& bannedTypes) {
     TechMapReport finalReport;
 
-    if (!lhsTarget) {
+    if (!lhsTarget || targetCone.empty()) {
         finalReport.status = TechMapStatus::ERROR_INVALID_CONSTRAINTS;
-        finalReport.message = "Failed: lhsTarget is null.";
+        finalReport.message = "Failed: lhsTarget is null or targetCone is empty.";
         return finalReport;
     }
 
     if (verbose) {
         std::cout << "=================================================\n";
-        std::cout << "[Optimize Engine] Target: " << name << "\n";
         std::cout << "[Optimize Engine] Goal: " << (goal == OptimizationGoal::AREA ? "AREA" : "DEPTH") << " Reduction\n";
+        if (maxDepthConstraint != -1) {
+            std::cout << "[Optimize Engine] Constraint: Max Depth <= " << maxDepthConstraint << "\n";
+        }
     }
 
     // 分析目標 LHS，萃取真值表與當前成本
     int N = countPrimaryInputs(lhsTarget); 
+
     TechMapReport simReport;
     std::vector<bool> truthTable = simulatePattern(lhsTarget, N, simReport, false);
 
     if (simReport.status != TechMapStatus::SUCCESS || truthTable.empty()) {
         finalReport.status = TechMapStatus::ERROR_SIMULATION_FAILED;
-        finalReport.message = "Failed to extract truth table from the provided LHS pattern.";
-        if (verbose) std::cout << "[Error] " << finalReport.message << "\n";
+        // 將真正的錯誤原因印出來
+        finalReport.message = "Simulation aborted: " + simReport.message; 
+        if (verbose) std::cout << "[Error] " << finalReport.message << " (N = " << N << ")\n";
         return finalReport;
     }
 
@@ -2444,8 +2556,15 @@ TechMapReport TechMapper::optimizePattern(Netlist& netlist,
             // 如果這條快取規則違反了當前的 Gate 限制，直接跳過不採用
             if (!isValidGateMix) continue;
 
+            // 檢查深度約束 (DCAR 防護機制)
+            int ruleDepth = calculateDepth(rule.replacementPattern);
+            if (maxDepthConstraint != -1 && ruleDepth > maxDepthConstraint) {
+                if (verbose) std::cout << "[Info] Skipping rule " << rule.name << " due to depth constraint violation (" << ruleDepth << " > " << maxDepthConstraint << ").\n";
+                continue;
+            }
+
             // 計算這條規則的實際 Cost
-            int ruleCost = (goal == OptimizationGoal::AREA) ? rule.addedGateCount : calculateDepth(rule.replacementPattern);
+            int ruleCost = (goal == OptimizationGoal::AREA) ? rule.addedGateCount : ruleDepth;
             
             // 條件 2a：這條規則已經是經過認證的「絕對最佳解」
             if ((goal == OptimizationGoal::AREA && rule.source == RuleSource::OPTIMIZED_AREA) ||
@@ -2479,7 +2598,7 @@ TechMapReport TechMapper::optimizePattern(Netlist& netlist,
 
         // 核心呼叫：尋找嚴格小於 bestCostSoFar 的結構
         if (goal == OptimizationGoal::AREA) {
-            bestRhs = findMinimumAreaPattern(truthTable, N, bestCostSoFar, optReport, verbose, allowedTypes, bannedTypes);
+            bestRhs = findMinimumAreaPattern(truthTable, N, bestCostSoFar, optReport, verbose, maxDepthConstraint, allowedTypes, bannedTypes);
         } else {
             bestRhs = findMinimumDepthPattern(truthTable, N, bestCostSoFar, currentArea, optReport, verbose, maxAreaOverhead, allowedTypes, bannedTypes);
         }
@@ -2531,7 +2650,6 @@ TechMapReport TechMapper::optimizePattern(Netlist& netlist,
 
     return applySpecificRule(netlist, 
                              bestRule, 
-                             scope, 
-                             name, 
+                             targetCone, 
                              verbose);
 }

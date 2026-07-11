@@ -1,5 +1,5 @@
 #include "include/core/Netlist.h"
-
+#include <iostream>
 #include <algorithm>
 #include <queue>
 #include <vector>

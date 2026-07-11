@@ -6,25 +6,6 @@
 #include <vector>
 #include <algorithm>
 
-// 用來放入 Priority Queue 進行霍夫曼排序
-struct SignalNode {
-    int netId;
-    int depth; // 到達時間 (Arrival Time)
-
-    // 因為 priority_queue 預設是 Max-Heap (由大到小)
-    // 我們需要 Min-Heap (深度最淺的優先出列)，所以這裡重載 operator>
-    bool operator>(const SignalNode& other) const {
-        return depth > other.depth;
-    }
-};
-
-// 在萃取多輸入的超級邏輯閘時，記錄「邊界在哪」以及「哪些舊的閘需要刪除」
-struct AssociativeChain {
-    std::vector<int> leafNetIds; // 收集到的超級閘輸入線 (邊界)
-    std::vector<int> internalGateIds; // 被吸進來的舊邏輯閘，稍後重構完要把它們刪掉
-    bool isXorParityInverted = false; // 記錄 XOR 家族是否發生了極性反轉
-};
-
 // 定義常數
 constexpr int MAX_K = 8;
 constexpr int MAX_CUTS_PER_NODE = 8; // 每個節點最多保留 8 個最好的 Cut，避免組合爆炸
@@ -108,11 +89,11 @@ struct DepthOptimizerConfig {
     // 若大於 0，則作為單一 Critical Path 最佳化時的目標深度限制
     int targetDepthPerPath = -1;
 
-    // 策略開關 (Strategy Toggles)
+    /*// 策略開關 (Strategy Toggles)
     bool enableBufferAndNotBypass = true; // 啟用冗餘 BUF/NOT 消除
     bool enableTreeBalancing = true;      // 啟用代數樹平衡 (Algebraic Tree Balancing)
     bool enableDeMorganPushing = true;    // 啟用德摩根推擠 (DeMorgan Pushing)
-    bool enableConeResynthesis = true;    // 啟用 K-feasible Cut + Exact Synthesis
+    bool enableConeResynthesis = true;    // 啟用 K-feasible Cut + Exact Synthesis*/
 };
 
 // =========================================================================
@@ -133,62 +114,48 @@ public:
     // 高階入口 API (High-Level APIs)
     // -------------------------------------------------------------------------
 
+    
+
+    // -------------------------------------------------------------------------
+    // 底層 API (Low-Level APIs)
+    // -------------------------------------------------------------------------
+
     // 針對單一 Candidate 進行深度縮減
-    OptimizationResult reduceDepth(Netlist& netlist, 
+    /*OptimizationResult reduceDepth(Netlist& netlist, 
                                    const OptimizationCandidate& candidate,
                                    const DepthOptimizerConfig& config,
                                    const std::vector<GateType>& allowedTypes,
                                    const std::vector<GateType>& bannedTypes,
-                                   bool verbose = false);
+                                   bool verbose = false);*/
+
+    // K-feasible Cut 精確合成 (One-Shot Pass)
+    bool runExactDepthPass(Netlist& netlist, 
+                           TechMapper& mapper, 
+                           OptimizationCandidate& candidate, 
+                           const std::vector<GateType>& allowedTypes, 
+                           const std::vector<GateType>& bannedTypes, bool verbose); 
+                           
+    bool runExactAreaPass(Netlist& netlist, 
+                          TechMapper& mapper, 
+                          OptimizationCandidate& candidate, 
+                          int strictDepthLimit, 
+                          const std::vector<GateType>& allowedTypes, 
+                          const std::vector<GateType>& bannedTypes, 
+                          bool verbose);
 
 private:
     DepthOptimizerConfig config; // 用來儲存引擎的設定值
 
-    // 流程1
-    // 針對特定的 Fanin Cone 執行 Buffer 與 連續 NOT 的消除
-    // 回傳值：是否有對電路進行任何修改
-    bool applyBufferAndNotBypass(Netlist& netlist, const OptimizationCandidate& candidate);
-
-    // 流程2
-    // 拓樸感知的平凡邏輯消除 (Basis-Aware Trivial Logic Reduction)
-    bool applyTrivialReduction(Netlist& netlist, 
-                                           const OptimizationCandidate& candidate,
-                                           const std::vector<GateType>& allowedTypes,
-                                           const std::vector<GateType>& bannedTypes);
-
-    // 流程3
-    // Tree Balancing 主程式
-    bool applyTreeBalancing(Netlist& netlist, 
-                            const OptimizationCandidate& candidate, 
-                            const std::vector<GateType>& allowedTypes,
-                            const std::vector<GateType>& bannedTypes);
-
-    // 流程4
-    // DeMorgan Pushing 主程式
-    bool applyDeMorganPushing(Netlist& netlist, 
-                              const OptimizationCandidate& candidate, 
-                              const std::vector<GateType>& allowedTypes, 
-                              const std::vector<GateType>& bannedTypes);
-
-    // 根據霍夫曼演算法重新建構平衡樹
-    // 回傳值：重構後這棵新樹的「根節點 (Root Net ID)」
-    int buildBalancedTree(Netlist& netlist, const std::vector<int>& leafNetIds, GateType targetType);
-
-    // 萃取多輸入的超級邏輯閘 (Super Gate)
-    AssociativeChain extractAssociativeChain(Netlist& netlist, 
-                                             int startGateId, 
-                                             GateType targetType, 
-                                             const std::unordered_set<int>& coneGateSet);
+    // 輔助函式：給定 Root 與 Cut 邊界，從 Netlist 走訪並建立 PatternNode (AST)，同時收集 TargetCone
+    std::shared_ptr<PatternNode> extractLhsFromCut(Netlist& netlist, 
+                                                   int rootGateId, 
+                                                   const KCut& cut, 
+                                                   std::unordered_set<int>& outTargetCone,
+                                                   int& outActualN);
 
     // 在乾淨的 Cone 裡面找出最佳的 K-feasible Cut
     KCut extractBestKFeasibleCut(Netlist& netlist, const OptimizationCandidate& candidate, OptimizationGoal goal);
-
-    // 計算 Cut 的 MFFC 體積 (支援 Goal 參數的動態評分)
-    int calculateCutMffcVolume(Netlist& netlist, 
-                               const KCut& cut, 
-                               int rootGateId, 
-                               OptimizationGoal goal);
-
+    
     // 輔助函式：AREA 模式下的 Cut 評分機制
     CutScore evaluateAreaCut(Netlist& netlist, const KCut& cut, int rootGateId);
 

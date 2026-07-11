@@ -421,17 +421,23 @@ public:
     bool matchRootGate(Netlist& netlist, int physGateId, const TechMapRule& rule, MatchContext& ctx);
     
     // 驗證子圖合法性 (內部節點 Fan-out 檢查)
-    bool isValidSubgraph(Netlist& netlist, const MatchContext& ctx, int rootGateId);
+    bool isValidSubgraph(Netlist& netlist, const MatchContext& ctx, int rootGateId, bool allowLogicDuplication = false);
     
     // 針對一個rule的替換執行引擎
-    void applyRule(Netlist& netlist, const MatchContext& ctx, int rootGateId, const TechMapRule& rule);
+    void applyRule(Netlist& netlist, 
+                   const MatchContext& ctx, 
+                   int rootGateId, 
+                   const TechMapRule& rule, 
+                   TechMapReport& report, 
+                   bool allowLogicDuplication = false);
 
     // 統一的映射執行引擎
     bool executeMappingPass(Netlist& netlist, 
                             const std::unordered_set<int>* scopeGates, 
                             const std::vector<TechMapRule>& validRules, 
                             TechMapReport& report, 
-                            bool verbose);
+                            bool verbose,
+                            bool allowLogicDuplication = false);
 
     // 底層的實作引擎
     TechMapReport mapTechnologyCore(Netlist& netlist, 
@@ -470,8 +476,7 @@ public:
     // 精確規則應用引擎，繞過 mapTechnologyCore 的查表與約束過濾機制
     TechMapReport applySpecificRule(Netlist& netlist, 
                                     const TechMapRule& rule, 
-                                    TargetScope scope, 
-                                    const std::string& name, 
+                                    const std::unordered_set<int>& targetCone, 
                                     bool verbose);
 
     // 根據給定的 Gate 組成，計算最大可能的輸入腳位數 (N_max)
@@ -486,7 +491,8 @@ public:
                                   int N, 
                                   const std::map<GateType, int>& allowedConstraints, 
                                   TechMapReport& report, 
-                                  bool verbose);
+                                  bool verbose,
+                                  int maxDepthConstraint = -1);
 
     // 將 SAT 算出來的抽象拓樸轉換為樹 (Replacement Pattern)
     std::shared_ptr<PatternNode> buildPatternFromTopology(int N, const std::vector<SynthesizedGate>& topology);
@@ -529,7 +535,8 @@ public:
                                                         int currentArea, 
                                                         TechMapReport& report, 
                                                         bool verbose,
-                                                        const std::vector<GateType>& allowedTypes, 
+                                                        int maxDepthConstraint, 
+                                                        const std::vector<GateType>& allowedTypes,
                                                         const std::vector<GateType>& bannedTypes);
 
     // 輔助函式：遞迴生成合法的 Fence (層級分配)
@@ -620,23 +627,23 @@ public:
 
     // 全域電路優化引擎 (Pattern Optimization Engine)
     // 針對給定的目標形狀 (LHS) 進行自動化的「面積」或「深度」化簡。
-    // netlist   : 要進行操作與替換的實體電路網表 (Netlist)
-    // lhsTarget : 欲進行化簡的目標局部電路形狀 (Abstract Syntax Tree, PatternNode 結構)
-    // goal      : 優化的目標方向。支援 OptimizationGoal::AREA (最小化閘數) 或 OptimizationGoal::DEPTH (層數)
-    // scope     : 圖形匹配與替換的掃描範圍 (例如 WHOLE_NETLIST 掃描全圖，或 GATE_FANIN 掃描特定錐體)
-    // name      : 搭配 scope 使用的目標名稱 (例如指定特定的 Net ID 或 Gate ID)
-    // verbose   : 是否印出詳細的推論過程與優化日誌 (true 為開啟)
-    // maxAreaOverhead : 針對深度優化時，容許的額外面積極限 (預設為 0，代表由引擎動態決定)
-    // allowedTypes    : RHS 允許使用的閘類型白名單 (例如 AIG 模式傳入 {AND, NOT})
-    // bannedTypes     : RHS 嚴格禁止使用的閘類型黑名單
-    // 回傳值    : TechMapReport (包含優化執行的結果狀態、增減的邏輯閘數量以及詳細訊息)
+    // netlist            : 要進行操作與替換的實體電路網表 (Netlist)
+    // lhsTarget          : 欲進行化簡的目標局部電路形狀 (Abstract Syntax Tree, PatternNode 結構)
+    // goal               : 優化的目標方向。支援 OptimizationGoal::AREA (最小化閘數) 或 OptimizationGoal::DEPTH (層數)
+    // targetCone         : 圖形匹配與替換的掃描錐體範圍 (Gate ID 集合)
+    // verbose            : 是否印出詳細的推論過程與優化日誌 (true 為開啟)
+    // maxAreaOverhead    : 針對深度優化時，容許的額外面積極限 (預設為 0，代表由引擎動態決定)
+    // maxDepthConstraint : 深度優化的最大層數限制 (預設 -1，代表不設限)
+    // allowedTypes       : RHS 允許使用的閘類型白名單 (例如 AIG 模式傳入 {AND, NOT})
+    // bannedTypes        : RHS 嚴格禁止使用的閘類型黑名單
+    // 回傳值              : TechMapReport (包含優化執行的結果狀態、增減的邏輯閘數量以及詳細訊息)
     TechMapReport optimizePattern(Netlist& netlist,
                                   std::shared_ptr<PatternNode> lhsTarget,
                                   OptimizationGoal goal,
-                                  TargetScope scope, 
-                                  const std::string& name, 
+                                  const std::unordered_set<int>& targetCone,
                                   bool verbose = false,
                                   int maxAreaOverhead = 0,
+                                  int maxDepthConstraint= -1,
                                   const std::vector<GateType>& allowedTypes = {},
                                   const std::vector<GateType>& bannedTypes = {});
 };
