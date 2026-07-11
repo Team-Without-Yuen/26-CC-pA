@@ -400,6 +400,14 @@ API_SPEC/STARTPOINT_ENDPOINT_PATH_QUERY_USAGE.md
 DepthReportSet runDepthQuery(const DepthQuery& query) const;
 ```
 
+基本使用流程：
+
+```text
+DepthQuery.type + optional netName / threshold / includeCriticalPath
+  -> runDepthQuery()
+  -> DepthReportSet
+```
+
 也保留一組 dedicated helper：
 
 ```cpp
@@ -418,6 +426,46 @@ runDepthQuery(...)
 getMaximumLogicDepthFromPiToDffD()
 ```
 
+`DepthQueryType` 總表：
+
+| Query type | 問題類型 | 需要設定 | 主要讀取欄位 |
+|---|---|---|---|
+| `SpecificNet` | 單一 net/output 的最大 depth | `netName` | `reports[0]`, `worst.depth`, `worst.criticalPath` |
+| `PrimaryOutputs` | 所有 primary output depth | 無 | `reports`, `worst`, `count` |
+| `DffD` | 所有 DFF D-pin depth | 無 | `reports`, `worst` |
+| `GlobalCriticalPath` | 全設計最深 timing endpoint | 無 | `worst`, `worst.criticalPath` |
+| `EndpointsExceedingDepth` | 找 depth 大於 threshold 的 endpoints | `threshold` | `reports`, `count`, `worst` |
+
+`DepthQuery` 輸入欄位：
+
+| 欄位 | 用途 |
+|---|---|
+| `type` | 決定執行哪一種 depth query |
+| `netName` | `SpecificNet` 使用，指定要分析的 net/output |
+| `threshold` | `EndpointsExceedingDepth` 使用，指定 depth 門檻 |
+| `includeCriticalPath` | 是否回傳完整 critical path；只問數量時可設為 `false` |
+
+`DepthReportSet` 回傳欄位：
+
+| 欄位 | 意思 |
+|---|---|
+| `ok` | query 是否成功 |
+| `message` | debug / LLM response 用的簡短訊息 |
+| `reports` | 一個或多個 endpoint 的 depth report |
+| `worst` | `reports` 中 depth 最大的 endpoint |
+| `threshold` | query 使用的 depth 門檻 |
+| `count` | `reports.size()`，常用於回答「幾個 endpoint 超標」 |
+
+`DepthReport` 主要欄位：
+
+| 欄位 | 意思 |
+|---|---|
+| `endpointType` | `SpecificNet` / `PrimaryOutput` / `DffD` |
+| `endpointName` | endpoint 名稱，例如 output net 或 DFF.D |
+| `endpointNetId` | 實際被分析的 net ID |
+| `depth` | 到該 endpoint 的最大 combinational depth |
+| `criticalPath` | 到該 endpoint 的一條 critical path |
+
 典型問題：
 
 ```text
@@ -427,6 +475,18 @@ Which outputs have depth greater than 4?
 What is the maximum logic depth from any primary input to any DFF D-pin?
 Find endpoints exceeding target depth 4.
 ```
+
+Prompt 對應：
+
+| Prompt 語意 | 建議 API | 主要讀取 |
+|---|---|---|
+| 單一 output/net 的最大 logic depth | `DepthQuery::SpecificNet` | `worst.depth` |
+| 單一 output/net 的 critical path | `DepthQuery::SpecificNet` + `includeCriticalPath = true` | `worst.criticalPath` |
+| 所有 primary outputs 的 depth | `DepthQuery::PrimaryOutputs` | `reports`, `worst` |
+| 有幾個 outputs depth 大於 N | `DepthQuery::EndpointsExceedingDepth` 後篩 `PrimaryOutput`，或 `getPrimaryOutputsWithDepthGreaterThan(N)` | `count` 或 filtered count |
+| 所有 DFF D-pin depth | `DepthQuery::DffD` | `reports`, `worst` |
+| 全設計 global critical path | `DepthQuery::GlobalCriticalPath` | `worst`, `worst.criticalPath` |
+| 找出 depth 超過 target 的 timing endpoints | `DepthQuery::EndpointsExceedingDepth` | `reports`, `count`, `worst` |
 
 應使用 `DepthAnalysis` 的情況：
 
@@ -448,6 +508,29 @@ DepthAnalysis 不回答 arbitrary path constraints，例如 through/avoid。
 ```
 
 `DepthQuery` 只包 depth/timing，不包 FunctionQuery 或 PathQuery 的責任。
+
+與 PathQuery 的差異：
+
+| API | 語意 |
+|---|---|
+| `PathQuery::MaxDepth` | 指定 startpoints 到 endpoints 之間的最長 path |
+| `DepthQuery` | timing startpoints 到 timing endpoints 的 arrival depth / critical path |
+
+例如：
+
+```text
+What is the max depth from input n2 to output n12?
+```
+
+應使用 `PathQuery::MaxDepth`。
+
+但：
+
+```text
+How many outputs have a logic depth greater than 4?
+```
+
+應使用 `DepthQuery::EndpointsExceedingDepth` 或 `getPrimaryOutputsWithDepthGreaterThan(4)`。
 
 文件：
 
