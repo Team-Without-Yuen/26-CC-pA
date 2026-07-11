@@ -1,0 +1,115 @@
+{"kind":"deck","id":"pr/64gfok","name":"Deck"}
+{"kind":"layout","layoutId":"552da4e4-e1f4-4405-a7a1-069899c32372","name":"Master","type":"master"}
+{"kind":"layout","layoutId":"a68f31eb-8bda-4aef-9501-76fd0bb98794","name":"Title Slide","type":"title"}
+{"kind":"slide","id":"sl/facr3y","slide":1,"title":"Problem A","textShapes":6}
+{"kind":"textbox","id":"sh/i9s36hcr","slide":1,"text":"Problem A","textPreview":"Problem A","textChars":9,"textLines":1,"bbox":[42,42,300,40]}
+{"kind":"textbox","id":"sh/p0bi9s36","slide":1,"text":"LLM-facing API\n完善進度","textPreview":"LLM-facing API | 完善進度","textChars":19,"textLines":2,"bbox":[42,150,720,190]}
+{"kind":"textbox","id":"sh/0fepkzup","slide":1,"text":"重點從功能堆疊轉向可被 LLM 穩定呼叫、可驗證、可回報的高階 API。","textPreview":"重點從功能堆疊轉向可被 LLM 穩定呼叫、可驗證、可回報的高階 API。","textChars":36,"textLines":1,"bbox":[46,382,850,76]}
+{"kind":"shape","id":"sh/bi9s36hc","slide":1,"bbox":[914,88,284,500]}
+{"kind":"textbox","id":"sh/ixczed8v","slide":1,"text":"Current focus","textPreview":"Current focus","textChars":13,"textLines":1,"bbox":[946,126,220,32]}
+{"kind":"textbox","id":"sh/tovahoza","slide":1,"text":"Query\nEditApply\nDepthQuery\nReport format","textPreview":"Query | EditApply | DepthQuery | Report format","textChars":40,"textLines":4,"bbox":[946,196,220,230]}
+{"kind":"shape","id":"sh/032lszqt","slide":1,"bbox":[946,456,210,2]}
+{"kind":"textbox","id":"sh/b6xkf6dc","slide":1,"text":"2026.07","textPreview":"2026.07","textChars":7,"textLines":1,"bbox":[946,486,200,34]}
+{"kind":"notes","id":"nt/facr3y","slide":1,"text":""}
+{"kind":"slide","id":"sl/6ffknc","slide":2,"title":"LLM API Progress","textShapes":11}
+{"kind":"textbox","id":"sh/ixczed8v","slide":2,"text":"LLM API Progress","textPreview":"LLM API Progress","textChars":16,"textLines":1,"bbox":[42,38,360,28]}
+{"kind":"textbox","id":"sh/tovahoza","slide":2,"text":"API 完善的核心目標是讓 LLM 不直接碰底層 graph","textPreview":"API 完善的核心目標是讓 LLM 不直接碰底層 graph","textChars":30,"textLines":1,"bbox":[42,78,930,72]}
+{"kind":"shape","id":"sh/032lszqt","slide":2,"bbox":[42,160,1196,2]}
+{"kind":"textbox","id":"sh/bulwval8","slide":2,"text":"•","textPreview":"•","textChars":1,"textLines":1,"bbox":[74,226,24,34]}
+{"kind":"textbox","id":"sh/i9s36hcr","slide":2,"text":"把自然語言 prompt 導向少量高階 API，而不是任意呼叫 C++ helper。","textPreview":"把自然語言 prompt 導向少量高階 API，而不是任意呼叫 C++ helper。","textChars":43,"textLines":1,"bbox":[108,225,866,54]}
+{"kind":"textbox","id":"sh/p0bi9s36","slide":2,"text":"•","textPreview":"•","textChars":1,"textLines":1,"bbox":[74,300,24,34]}
+{"kind":"textbox","id":"sh/0fepkzup","slide":2,"text":"每個高階 API 都有明確 request、report、validation 與使用邊界。","textPreview":"每個高階 API 都有明確 request、report、validation 與使用邊界。","textChars":46,"textLines":1,"bbox":[108,299,866,54]}
+{"kind":"textbox","id":"sh/byhgn29g","slide":2,"text":"•","textPreview":"•","textChars":1,"textLines":1,"bbox":[74,374,24,34]}
+{"kind":"textbox","id":"sh/idonyd0z","slide":2,"text":"低階 rewiring primitive 保留給內部 verified pass，避免破壞 functionality。","textPreview":"低階 rewiring primitive 保留給內部 verified pass，避免破壞 functionality。","textChars":61,"textLines":1,"bbox":[108,373,866,54]}
+{"kind":"shape","id":"sh/c7u54zid","slide":2,"bbox":[930,225,250,250]}
+{"kind":"textbox","id":"sh/1orytsvu","slide":2,"text":"Design rule","textPreview":"Design rule","textChars":11,"textLines":1,"bbox":[958,252,190,28]}
+{"kind":"textbox","id":"sh/u18jqh0f","slide":2,"text":"LLM 呼叫\n高階 API\n不是底層 mutation","textPreview":"LLM 呼叫 | 高階 API | 不是底層 mutation","textChars":27,"textLines":3,"bbox":[958,315,190,118]}
+{"kind":"textbox","id":"sh/jm1cfa9w","slide":2,"text":"Problem A / API 完善進度 / 2","textPreview":"Problem A / API 完善進度 / 2","textChars":24,"textLines":1,"bbox":[1010,666,228,24]}
+{"kind":"notes","id":"nt/6ffknc","slide":2,"text":""}
+{"kind":"slide","id":"sl/h13hoa","slide":3,"title":"LLM API Progress","textShapes":9}
+{"kind":"textbox","id":"sh/qpg3ex0n","slide":3,"text":"LLM API Progress","textPreview":"LLM API Progress","textChars":16,"textLines":1,"bbox":[42,38,360,28]}
+{"kind":"textbox","id":"sh/xczed8v6","slide":3,"text":"目前已形成三層高階 API 架構","textPreview":"目前已形成三層高階 API 架構","textChars":16,"textLines":1,"bbox":[42,78,930,72]}
+{"kind":"shape","id":"sh/8v6psfil","slide":3,"bbox":[42,160,1196,2]}
+{"kind":"shape","id":"sh/fyxobm58","slide":3,"bbox":[42,214,334,340]}
+{"kind":"textbox","id":"sh/qd4vmtwr","slide":3,"text":"Query APIs","textPreview":"Query APIs","textChars":10,"textLines":1,"bbox":[70,242,270,38]}
+{"kind":"shape","id":"sh/x4nap4r6","slide":3,"bbox":[70,294,240,2]}
+{"kind":"textbox","id":"sh/8jqh0fep","slide":3,"text":"BasicQuery\nDirectConnectivityQuery\nConeQuery\nPathQuery\nDepthQuery\nFunctionQuery","textPreview":"BasicQuery | DirectConnectivityQuery | ConeQuery | PathQuery | DepthQuery | FunctionQuery","textChars":79,"textLines":6,"bbox":[70,326,270,180]}
+{"kind":"shape","id":"sh/fmlkjm1c","slide":3,"bbox":[452,214,334,340]}
+{"kind":"textbox","id":"sh/q1orytsv","slide":3,"text":"EditApply","textPreview":"EditApply","textChars":9,"textLines":1,"bbox":[480,242,270,38]}
+{"kind":"shape","id":"sh/4nap4r65","slide":3,"bbox":[480,294,240,2]}
+{"kind":"textbox","id":"sh/t83itgfm","slide":3,"text":"Rename\nBuffer insertion\nDead / dangling cleanup\nConstant propagation\nDouble inverter collapse","textPreview":"Rename | Buffer insertion | Dead / dangling cleanup | Constant propagation | Double inverter collapse","textChars":93,"textLines":5,"bbox":[480,326,270,180]}
+{"kind":"shape","id":"sh/mhk3q5o7","slide":3,"bbox":[862,214,334,340]}
+{"kind":"textbox","id":"sh/b2hwfyxo","slide":3,"text":"Report / Validation","textPreview":"Report / Validation","textChars":19,"textLines":1,"bbox":[890,242,270,38]}
+{"kind":"shape","id":"sh/4byhgn29","slide":3,"bbox":[890,294,240,2]}
+{"kind":"textbox","id":"sh/twra5gbq","slide":3,"text":"NetlistEditReport\nBefore / after diff\nChanged objects\nEquivalence certificate\nRollback status","textPreview":"NetlistEditReport | Before / after diff | Changed objects | Equivalence certificate | Rollback status","textChars":93,"textLines":5,"bbox":[890,326,270,180]}
+{"kind":"textbox","id":"sh/m58z25kb","slide":3,"text":"Problem A / API 完善進度 / 3","textPreview":"Problem A / API 完善進度 / 3","textChars":24,"textLines":1,"bbox":[1010,666,228,24]}
+{"kind":"notes","id":"nt/h13hoa","slide":3,"text":""}
+{"kind":"slide","id":"sl/oniaz3","slide":4,"title":"LLM API Progress","textShapes":17}
+{"kind":"textbox","id":"sh/ih4byhgn","slide":4,"text":"LLM API Progress","textPreview":"LLM API Progress","textChars":16,"textLines":1,"bbox":[42,38,360,28]}
+{"kind":"textbox","id":"sh/p8nqxs72","slide":4,"text":"EditApply 已收斂成 safe edit / cleanup 入口","textPreview":"EditApply 已收斂成 safe edit / cleanup 入口","textChars":37,"textLines":1,"bbox":[42,78,930,72]}
+{"kind":"shape","id":"sh/0nuxc3yl","slide":4,"bbox":[42,160,1196,2]}
+{"kind":"shape","id":"sh/7ed8bat4","slide":4,"bbox":[42,214,558,336]}
+{"kind":"textbox","id":"sh/itgfmlkj","slide":4,"text":"已可對外使用","textPreview":"已可對外使用","textChars":6,"textLines":1,"bbox":[72,242,420,32]}
+{"kind":"textbox","id":"sh/pkzupwb2","slide":4,"text":"•","textPreview":"•","textChars":1,"textLines":1,"bbox":[82,307,24,34]}
+{"kind":"textbox","id":"sh/0z61032l","slide":4,"text":"rename gate / net","textPreview":"rename gate / net","textChars":17,"textLines":1,"bbox":[116,306,426,34]}
+{"kind":"textbox","id":"sh/7qpg3ex0","slide":4,"text":"•","textPreview":"•","textChars":1,"textLines":1,"bbox":[82,351,24,34]}
+{"kind":"textbox","id":"sh/i5sneloj","slide":4,"text":"fanout buffer insertion","textPreview":"fanout buffer insertion","textChars":23,"textLines":1,"bbox":[116,350,426,34]}
+{"kind":"textbox","id":"sh/0nuxc3yl","slide":4,"text":"•","textPreview":"•","textChars":1,"textLines":1,"bbox":[82,395,24,34]}
+{"kind":"textbox","id":"sh/p8nqxs72","slide":4,"text":"dangling / dead / unused cleanup","textPreview":"dangling / dead / unused cleanup","textChars":32,"textLines":1,"bbox":[116,394,426,34]}
+{"kind":"textbox","id":"sh/ih4byhgn","slide":4,"text":"•","textPreview":"•","textChars":1,"textLines":1,"bbox":[82,439,24,34]}
+{"kind":"textbox","id":"sh/72x4nap4","slide":4,"text":"constant propagation 與 same-input simplification","textPreview":"constant propagation 與 same-input simplification","textChars":48,"textLines":1,"bbox":[116,438,426,34]}
+{"kind":"textbox","id":"sh/0z61032l","slide":4,"text":"•","textPreview":"•","textChars":1,"textLines":1,"bbox":[82,483,24,34]}
+{"kind":"textbox","id":"sh/pkzupwb2","slide":4,"text":"back-to-back inverter collapse 與 structural merge","textPreview":"back-to-back inverter collapse 與 structural merge","textChars":49,"textLines":1,"bbox":[116,482,426,34]}
+{"kind":"shape","id":"sh/itgfmlkj","slide":4,"bbox":[680,214,520,336]}
+{"kind":"textbox","id":"sh/7ed8bat4","slide":4,"text":"安全邊界","textPreview":"安全邊界","textChars":4,"textLines":1,"bbox":[714,242,380,34]}
+{"kind":"textbox","id":"sh/0bi9s36h","slide":4,"text":"public EditApply 不暴露 reconnect input、replace driver、merge arbitrary nets 等低階 primitive。","textPreview":"public EditApply 不暴露 reconnect input、replace driver、merge arbitrary nets 等低階 primitive。","textChars":87,"textLines":1,"bbox":[714,315,410,104]}
+{"kind":"shape","id":"sh/pwb2hwfy","slide":4,"bbox":[714,458,200,2]}
+{"kind":"textbox","id":"sh/94fu18jq","slide":4,"text":"原則：只有可驗證等價的修改才開給 LLM。","textPreview":"原則：只有可驗證等價的修改才開給 LLM。","textChars":21,"textLines":1,"bbox":[714,486,410,42]}
+{"kind":"textbox","id":"sh/kjm1cfa9","slide":4,"text":"Problem A / API 完善進度 / 4","textPreview":"Problem A / API 完善進度 / 4","textChars":24,"textLines":1,"bbox":[1010,666,228,24]}
+{"kind":"notes","id":"nt/oniaz3","slide":4,"text":""}
+{"kind":"slide","id":"sl/5nx8bg","slide":5,"title":"LLM API Progress","textShapes":18}
+{"kind":"textbox","id":"sh/m1cfa9w3","slide":5,"text":"LLM API Progress","textPreview":"LLM API Progress","textChars":16,"textLines":1,"bbox":[42,38,360,28]}
+{"kind":"textbox","id":"sh/tsvu9kni","slide":5,"text":"查詢與 safe edit 已大致覆蓋","textPreview":"查詢與 safe edit 已大致覆蓋","textChars":19,"textLines":1,"bbox":[42,78,930,72]}
+{"kind":"shape","id":"sh/47y1kre1","slide":5,"bbox":[42,160,1196,2]}
+{"kind":"textbox","id":"sh/bat47y1k","slide":5,"text":"類型","textPreview":"類型","textChars":2,"textLines":1,"bbox":[72,214,220,32]}
+{"kind":"textbox","id":"sh/mp0bi9s3","slide":5,"text":"目前 API","textPreview":"目前 API","textChars":6,"textLines":1,"bbox":[365,214,360,32]}
+{"kind":"textbox","id":"sh/tgfmlkjm","slide":5,"text":"狀態","textPreview":"狀態","textChars":2,"textLines":1,"bbox":[820,214,320,32]}
+{"kind":"shape","id":"sh/4vmtwra5","slide":5,"bbox":[72,256,1080,2]}
+{"kind":"textbox","id":"sh/b2hwfyxo","slide":5,"text":"查詢型 prompt","textPreview":"查詢型 prompt","textChars":10,"textLines":1,"bbox":[72,282,240,36]}
+{"kind":"textbox","id":"sh/mhk3q5o7","slide":5,"text":"Basic / Connectivity / Cone / Path / Depth / Function","textPreview":"Basic / Connectivity / Cone / Path / Depth / Function","textChars":53,"textLines":1,"bbox":[365,282,380,36]}
+{"kind":"textbox","id":"sh/0z61032l","slide":5,"text":"已覆蓋多數 testcase","textPreview":"已覆蓋多數 testcase","textChars":14,"textLines":1,"bbox":[820,282,330,36]}
+{"kind":"textbox","id":"sh/pkzupwb2","slide":5,"text":"Safe edit prompt","textPreview":"Safe edit prompt","textChars":16,"textLines":1,"bbox":[72,364,240,36]}
+{"kind":"textbox","id":"sh/itgfmlkj","slide":5,"text":"EditApply + NetlistEditReport","textPreview":"EditApply + NetlistEditReport","textChars":29,"textLines":1,"bbox":[365,364,380,36]}
+{"kind":"textbox","id":"sh/7ed8bat4","slide":5,"text":"可回報修改數量、diff、validation","textPreview":"可回報修改數量、diff、validation","textChars":23,"textLines":1,"bbox":[820,364,330,36]}
+{"kind":"textbox","id":"sh/0nuxc3yl","slide":5,"text":"Depth threshold","textPreview":"Depth threshold","textChars":15,"textLines":1,"bbox":[72,446,240,36]}
+{"kind":"textbox","id":"sh/p8nqxs72","slide":5,"text":"DepthQuery","textPreview":"DepthQuery","textChars":10,"textLines":1,"bbox":[365,446,380,36]}
+{"kind":"textbox","id":"sh/ih4byhgn","slide":5,"text":"可回答 output depth > N 等問題","textPreview":"可回答 output depth > N 等問題","textChars":24,"textLines":1,"bbox":[820,446,330,36]}
+{"kind":"shape","id":"sh/72x4nap4","slide":5,"bbox":[58,514,1110,64]}
+{"kind":"textbox","id":"sh/wjudg7ad","slide":5,"text":"仍待補強","textPreview":"仍待補強","textChars":4,"textLines":1,"bbox":[72,528,240,36]}
+{"kind":"textbox","id":"sh/p4r65wju","slide":5,"text":"TechnologyApply / equivalence / optimization","textPreview":"TechnologyApply / equivalence / optimization","textChars":44,"textLines":1,"bbox":[365,528,380,36]}
+{"kind":"textbox","id":"sh/9gr2p8nq","slide":5,"text":"下一階段重點","textPreview":"下一階段重點","textChars":6,"textLines":1,"bbox":[820,528,330,36]}
+{"kind":"textbox","id":"sh/gvy90je9","slide":5,"text":"Problem A / API 完善進度 / 5","textPreview":"Problem A / API 完善進度 / 5","textChars":24,"textLines":1,"bbox":[1010,666,228,24]}
+{"kind":"notes","id":"nt/5nx8bg","slide":5,"text":""}
+{"kind":"slide","id":"sl/yzqxn9","slide":6,"title":"LLM API Progress","textShapes":16}
+{"kind":"textbox","id":"sh/r65wjudg","slide":6,"text":"LLM API Progress","textPreview":"LLM API Progress","textChars":16,"textLines":1,"bbox":[42,38,360,28]}
+{"kind":"textbox","id":"sh/gr2p8nqx","slide":6,"text":"下一步：mapping 到 optimization","textPreview":"下一步：mapping 到 optimization","textChars":26,"textLines":1,"bbox":[42,78,930,72]}
+{"kind":"shape","id":"sh/9cvixcze","slide":6,"bbox":[42,160,1196,2]}
+{"kind":"shape","id":"sh/yxobm58z","slide":6,"bbox":[72,242,236,246]}
+{"kind":"textbox","id":"sh/nih4byhg","slide":6,"text":"1","textPreview":"1","textChars":1,"textLines":1,"bbox":[96,264,48,48]}
+{"kind":"textbox","id":"sh/g3ex0nux","slide":6,"text":"TechApply","textPreview":"TechApply","textChars":9,"textLines":1,"bbox":[96,334,188,34]}
+{"kind":"textbox","id":"sh/5o7qpg3e","slide":6,"text":"whole design / cone\\n轉成目標 basis","textPreview":"whole design / cone\\n轉成目標 basis","textChars":31,"textLines":1,"bbox":[96,394,184,78]}
+{"kind":"shape","id":"sh/y1kre1w7","slide":6,"bbox":[360,242,236,246]}
+{"kind":"textbox","id":"sh/rmhk3q5o","slide":6,"text":"2","textPreview":"2","textChars":1,"textLines":1,"bbox":[384,264,48,48]}
+{"kind":"textbox","id":"sh/fa9w3m94","slide":6,"text":"Basis check","textPreview":"Basis check","textChars":11,"textLines":1,"bbox":[384,334,188,34]}
+{"kind":"textbox","id":"sh/qpg3ex0n","slide":6,"text":"確認 NAND/NOT、NOR/NOT\\n等 hard requirement","textPreview":"確認 NAND/NOT、NOR/NOT\\n等 hard requirement","textChars":39,"textLines":1,"bbox":[384,394,184,78]}
+{"kind":"shape","id":"sh/xczed8v6","slide":6,"bbox":[648,242,236,246]}
+{"kind":"textbox","id":"sh/8v6psfil","slide":6,"text":"3","textPreview":"3","textChars":1,"textLines":1,"bbox":[672,264,48,48]}
+{"kind":"textbox","id":"sh/fyxobm58","slide":6,"text":"Equivalence","textPreview":"Equivalence","textChars":11,"textLines":1,"bbox":[672,334,188,34]}
+{"kind":"textbox","id":"sh/qd4vmtwr","slide":6,"text":"補 original/current 或\\nbefore/after equivalence","textPreview":"補 original/current 或\\nbefore/after equivalence","textChars":46,"textLines":1,"bbox":[672,394,184,78]}
+{"kind":"shape","id":"sh/x4nap4r6","slide":6,"bbox":[936,242,236,246]}
+{"kind":"textbox","id":"sh/8jqh0fep","slide":6,"text":"4","textPreview":"4","textChars":1,"textLines":1,"bbox":[960,264,48,48]}
+{"kind":"textbox","id":"sh/fmlkjm1c","slide":6,"text":"Depth opt","textPreview":"Depth opt","textChars":9,"textLines":1,"bbox":[960,334,188,34]}
+{"kind":"textbox","id":"sh/q1orytsv","slide":6,"text":"在 target basis 中做\\nconservative restructuring","textPreview":"在 target basis 中做\\nconservative restructuring","textChars":45,"textLines":1,"bbox":[960,394,184,78]}
+{"kind":"textbox","id":"sh/y1kre1w7","slide":6,"text":"目標是讓 optimization prompt 也能走同一套 request、validation、report 流程。","textPreview":"目標是讓 optimization prompt 也能走同一套 request、validation、report 流程。","textChars":61,"textLines":1,"bbox":[78,562,900,40]}
+{"kind":"textbox","id":"sh/rmhk3q5o","slide":6,"text":"Problem A / API 完善進度 / 6","textPreview":"Problem A / API 完善進度 / 6","textChars":24,"textLines":1,"bbox":[1010,666,228,24]}
+{"kind":"notes","id":"nt/yzqxn9","slide":6,"text":""}
