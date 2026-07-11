@@ -1,10 +1,34 @@
 #pragma once
 
 #include "include/core/Netlist.h"
-#include "include/core/OptimizationTypes.h"
+#include "include/core/MockturtleConverter.h"
 #include "include/core/TechMapper.h" 
 #include <vector>
 #include <algorithm>
+#include <mockturtle/networks/aig.hpp>
+#include <mockturtle/networks/xag.hpp>
+#include <mockturtle/views/depth_view.hpp>
+#include <mockturtle/views/fanout_view.hpp>
+#include <mockturtle/views/mapping_view.hpp>  
+#include <mockturtle/networks/klut.hpp>              
+#include <mockturtle/algorithms/node_resynthesis.hpp> 
+#include <mockturtle/networks/mig.hpp>
+#include <mockturtle/algorithms/node_resynthesis/shannon.hpp> 
+#include <mockturtle/algorithms/mig_algebraic_rewriting.hpp>
+#include <mockturtle/algorithms/cleanup.hpp>
+#include <mockturtle/algorithms/balancing.hpp>
+#include <mockturtle/algorithms/balancing/sop_balancing.hpp>
+#include <mockturtle/algorithms/balancing/esop_balancing.hpp>
+#include <mockturtle/algorithms/cut_rewriting.hpp>
+#include <mockturtle/algorithms/resubstitution.hpp>
+#include <mockturtle/algorithms/aig_resub.hpp>
+#include <mockturtle/algorithms/xag_resub.hpp>
+#include <mockturtle/algorithms/lut_mapping.hpp>       
+#include <mockturtle/algorithms/collapse_mapped.hpp> 
+#include <mockturtle/algorithms/node_resynthesis/xag_npn.hpp>
+#include <mockturtle/algorithms/mig_resub.hpp>
+#include <mockturtle/algorithms/node_resynthesis/mig_npn.hpp>
+#include <mockturtle/algorithms/refactoring.hpp>
 
 // 定義常數
 constexpr int MAX_K = 8;
@@ -114,22 +138,20 @@ public:
     // 高階入口 API (High-Level APIs)
     // -------------------------------------------------------------------------
 
-    
+    // Critical Path 最佳化主控流程
+    OptimizationResult executeCriticalPathOptimization(Netlist& netlist, 
+                                                       TechMapper& techMapper,
+                                                       const std::vector<GateType>& allowedTypes,
+                                                       const ConeReport& targetConeReport,
+                                                       const std::vector<GateType>& bannedTypes = {},
+                                                       bool verbose = false);
 
     // -------------------------------------------------------------------------
     // 底層 API (Low-Level APIs)
     // -------------------------------------------------------------------------
 
-    // 針對單一 Candidate 進行深度縮減
-    /*OptimizationResult reduceDepth(Netlist& netlist, 
-                                   const OptimizationCandidate& candidate,
-                                   const DepthOptimizerConfig& config,
-                                   const std::vector<GateType>& allowedTypes,
-                                   const std::vector<GateType>& bannedTypes,
-                                   bool verbose = false);*/
-
     // K-feasible Cut 精確合成 (One-Shot Pass)
-    bool runExactDepthPass(Netlist& netlist, 
+    /*bool runExactDepthPass(Netlist& netlist, 
                            TechMapper& mapper, 
                            OptimizationCandidate& candidate, 
                            const std::vector<GateType>& allowedTypes, 
@@ -141,7 +163,7 @@ public:
                           int strictDepthLimit, 
                           const std::vector<GateType>& allowedTypes, 
                           const std::vector<GateType>& bannedTypes, 
-                          bool verbose);
+                          bool verbose);*/
 
 private:
     DepthOptimizerConfig config; // 用來儲存引擎的設定值

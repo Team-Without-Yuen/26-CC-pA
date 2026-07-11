@@ -1,16 +1,12 @@
 #include <iostream>
 #include <string>
-#include <mockturtle/networks/xag.hpp>
-#include <mockturtle/views/depth_view.hpp>
-#include <mockturtle/algorithms/cut_rewriting.hpp>
-#include <mockturtle/algorithms/node_resynthesis/xag_npn.hpp>
-#include <mockturtle/algorithms/cleanup.hpp>
 
 // 引入你的自定義標頭檔
 #include "include/core/Netlist.h"
 #include "include/io/VerilogReader.h"
 #include "include/io/VerilogWriter.h"
 #include "include/core/MockturtleConverter.h"
+#include "include/core/DepthOptimizer.h"
 
 int main(int argc, char* argv[]) {
     std::string inputFilePath;
@@ -47,45 +43,43 @@ int main(int argc, char* argv[]) {
     std::cout << "  -> Initial Wire Count : " << myCircuit.getNetCount() << "\n\n";
 
     // ---------------------------------------------------------
-    // [Step 2] 使用 Mockturtle 進行 XAG 轉換與 Critical Path 優化
+    // [Step 2] 使用 Mockturtle 進行 Critical Path 優化
     // ---------------------------------------------------------
-    std::cout << "[Step 2] Running Mockturtle Optimization (XAG)..." << std::endl;
+    std::cout << "[Step 2] Executing Critical Path Optimization..." << std::endl;
 
-    // 2.1 將 Netlist 轉換為 XAG
-    std::cout << "  -> Converting Netlist to XAG..." << std::endl;
-    mockturtle::xag_network xag = NetlistToXag(myCircuit);
+    // 準備核心引擎
+    TechMapper techMapper;
+    DepthOptimizer depthOptimizer;
 
-    // 2.2 使用 depth_view 測量優化前的深度 (Critical Path)
-    mockturtle::depth_view depth_xag_before{xag};
-    std::cout << "  [Stats Before] Gates: " << xag.num_gates() 
-              << ", Depth (Levels): " << depth_xag_before.depth() << "\n";
+    // 準備測試參數
+    // 1. 建立一個空的 ConeReport (ok 和 exists 預設為 false，代表全域優化)
+    ConeReport emptyConeReport; 
 
-    // 2.3 執行 Depth-oriented Rewriting (縮減 Critical Path)
-    std::cout << "  -> Optimizing XAG for depth..." << std::endl;
-    mockturtle::xag_npn_resynthesis<mockturtle::xag_network> resyn;
-    mockturtle::cut_rewriting_params ps;
-    ps.cut_enumeration_ps.cut_size = 4; // LUT size 參數，可依比賽需求調整 (通常 4~6)
-    
-    mockturtle::cut_rewriting(xag, resyn, ps);
+    // 2. 設定我們想要的目標邏輯閘組合 (這裡以測試全域 AIG 為例)
+    std::vector<GateType> allowedTypes = {GateType::AND, GateType::NOT, GateType::XOR};
+    std::vector<GateType> bannedTypes = {}; 
 
-    // 清理 rewriting 產生但未使用的孤兒節點 (Dangling nodes)
-    xag = mockturtle::cleanup_dangling(xag);
+    // 執行優化，並開啟 verbose 模式觀察我們剛才寫的流程日誌
+    bool verbose = true;
+    OptimizationResult optResult = depthOptimizer.executeCriticalPathOptimization(
+        myCircuit, 
+        techMapper, 
+        allowedTypes, 
+        emptyConeReport, 
+        bannedTypes, 
+        verbose
+    );
 
-    // 2.4 測量優化後的深度
-    mockturtle::depth_view depth_xag_after{xag};
-    std::cout << "  [Stats After]  Gates: " << xag.num_gates() 
-              << ", Depth (Levels): " << depth_xag_after.depth() << "\n";
-
-    // 2.5 將優化後的 XAG 轉回全新的 Netlist
-    std::cout << "  -> Converting optimized XAG back to Netlist..." << std::endl;
-    Netlist optimizedCircuit = XagToNetlist(xag, myCircuit);
-
-    // 覆蓋原本的電路
-    myCircuit = optimizedCircuit;
-
-    std::cout << "  -> Conversion Successful.\n";
-    std::cout << "  -> Optimized Gate Count : " << myCircuit.getGateCount() << "\n";
-    std::cout << "  -> Optimized Wire Count : " << myCircuit.getNetCount() << "\n\n";
+    // 檢查與回報優化結果
+    if (optResult.status == OptimizationStatus::SUCCESS) {
+        std::cout << "  -> Optimization Completed Successfully!\n";
+        std::cout << "  -> Depth Status     : " << optResult.oldDepth << " -> " << optResult.newDepth 
+                  << (optResult.depthImproved ? " (Improved!)" : " (No change)") << "\n";
+        std::cout << "  -> Final Gate Count : " << optResult.newGateCount << " (Delta: " << optResult.areaDelta << ")\n\n";
+    } else {
+        std::cerr << "  -> Optimization Failed or Aborted: " << optResult.message << "\n\n";
+        // 如果專案有實作 Rollback 機制，可以在這裡觸發
+    }
 
     // ---------------------------------------------------------
     // [Step 3] 輸出寫回 Verilog 檔案
