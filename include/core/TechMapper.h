@@ -83,8 +83,8 @@ struct TechMapRule {
           source(ruleSource),
           truthTableHash(std::move(hash)),
           targetPattern(lhs_target), 
-          replacementPattern(rhs_replacement), 
           removedGateCount(0), 
+          replacementPattern(rhs_replacement), 
           addedGateCount(0) {
         
         // 走訪並分析左邊 (Target) 的特徵

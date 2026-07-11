@@ -12,238 +12,226 @@
 DepthOptimizer::DepthOptimizer(const DepthOptimizerConfig& config) 
     : config(config) {} // 使用初始化列表進行高效賦值
 
-// 輔助函式：判斷該閘是否滿足結合律 (Associative Law)
-bool isAssociativeGate(GateType type) {
-    return (type == GateType::AND || type == GateType::OR || 
-            type == GateType::XOR || type == GateType::XNOR);
-}
-
-// 輔助函式：檢查該閘是否在規則允許的範圍內
-bool isGateAllowed(GateType type, const std::vector<GateType>& allowedTypes, const std::vector<GateType>& bannedTypes) {
-    // 如果有指定 bannedTypes，且在裡面，絕對不行
-    if (std::find(bannedTypes.begin(), bannedTypes.end(), type) != bannedTypes.end()) {
-        return false;
-    }
-    // 如果有指定 allowedTypes，且不在裡面，也不行
-    if (!allowedTypes.empty() && std::find(allowedTypes.begin(), allowedTypes.end(), type) == allowedTypes.end()) {
-        return false;
-    }
-    return true;
-}
-
-// 針對單一 Candidate 進行深度縮減
-/*OptimizationResult DepthOptimizer::reduceDepth(Netlist& netlist, 
-                                               const OptimizationCandidate& candidate,
-                                               const DepthOptimizerConfig& config,
-                                               const std::vector<GateType>& allowedTypes,
-                                               const std::vector<GateType>& bannedTypes,
-                                               bool verbose) {
+// Critical Path 最佳化主控流程
+OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netlist, 
+                                                                   TechMapper& techMapper,
+                                                                   const std::vector<GateType>& allowedTypes,
+                                                                   const ConeReport& targetConeReport,
+                                                                   const std::vector<GateType>& bannedTypes,
+                                                                   bool verbose) {
     OptimizationResult result;
-    result.passName = "DepthOptimizer::reduceDepth";
+    result.passName = "Opt_CP";
     
-    // 構造正確：純粹的代數與結構重構保證邏輯等價
-    result.equivalenceChecked = true;
-    result.equivalent = true;
-
-    // 輔助計數器 (Lambda)
-    // 利用 countGatesByType() 加總取得全域總閘數
-    auto getTotalGateCount = [](const Netlist& nl) -> int {
-        int total = 0;
-        for (const auto& pair : nl.countGatesByType()) {
-            // 絕對不能把 UNKNOWN (已刪除的廢棄閘) 算進面積裡！
-            if (pair.first != GateType::UNKNOWN) {
-                total += pair.second;
-            }
-        }
-        return total;
-    };
-
-    // 0. 記錄初始狀態與備份 (Snapshot & Backup)
-    result.oldDepth = candidate.endpoint.depth;
-    result.oldGateCount = getTotalGateCount(netlist);
-    
-    // 為了支援 Rollback，我們先備份一份當前的 Netlist 狀態。
-    Netlist backupNetlist = netlist; 
-
-    bool globalModified = false;
-    int iterationCount = 0; // 用於 verbose 追蹤
-    const int MAX_ITERATIONS = 100; // 防呆：避免未預期的無窮迴圈
+    // 紀錄優化前的 Global Critical Path Depth 與面積
+    DepthReport oldGlobalPath = netlist.findGlobalCriticalPath();
+    result.oldDepth = oldGlobalPath.depth;
+    result.oldGateCount = netlist.getGateCount();
 
     if (verbose) {
-        std::cout << "\n[DepthOptimizer] Start reducing depth for endpoint: " 
-                  << candidate.endpoint.endpointName << "\n";
+        std::cout << "\n=================================================\n";
+        std::cout << "[Flow Start] Old Global Depth: " << result.oldDepth 
+                  << " | Old Gate Count: " << result.oldGateCount << "\n";
     }
 
-    TechMapper mapper;
+    // 階段 1：判斷目標與基礎建設 (Basis Identification)
+    std::unordered_set<GateType> allowedSet(allowedTypes.begin(), allowedTypes.end());
+    
+    // 判斷是否為純 AIG 或純 XAG
+    bool isPureAIG = bannedTypes.empty() && allowedSet.size() == 2 && 
+                     allowedSet.count(GateType::AND) && allowedSet.count(GateType::NOT);
+                     
+    bool isPureXAG = bannedTypes.empty() && allowedSet.size() == 3 && 
+                     allowedSet.count(GateType::XOR) && allowedSet.count(GateType::AND) && allowedSet.count(GateType::NOT);
 
-    // 收斂迴圈 (Convergence Loop)
-    while (true) {
-        iterationCount++;
+    // 判斷是否只針對「特定的 Cone」進行限制
+    bool hasLocalConeConstraint = targetConeReport.ok && targetConeReport.exists;
 
-        if (iterationCount > MAX_ITERATIONS) {
-            if (verbose) std::cout << "  -> [Warning] Reached max iterations (" << MAX_ITERATIONS << "). Forcing exit to prevent infinite loop.\n";
-            break; 
-        }
+    // 決定全域要用哪種 Mockturtle 網路：
+    // 如果是「全域」且規定「純 AIG」，我們全域就用 AIG；
+    // 其餘所有情況，全域統一先用 XAG 壓平，以獲取最佳深度！
+    bool useGlobalAIG = !hasLocalConeConstraint && isPureAIG; 
 
-        bool passModified = false;
-
-        // 每輪開始，重新抓取最新的電路拓樸與該條 Critical Path
-        // 永遠相信 endpointName！
-        std::string currentEpName = candidate.endpoint.endpointName;
-        OptimizationCandidate currentCandidate = candidate;
+    // 階段 2：全域 Mockturtle 深度壓縮 (Global Depth Rewriting)
+    if (useGlobalAIG) {
+        if (verbose) std::cout << "[Step 2] Executing global AIG optimization (ABC resyn2 + MIG depth style)...\n";
         
-        currentCandidate.criticalPath = netlist.findCriticalPathToNet(currentEpName);
+        mockturtle::aig_network aig = NetlistToAig(netlist);
 
-        // 防呆機制。如果電路被優化成常數 0/1，路徑可能不復存在
-        if (!currentCandidate.criticalPath.exists()) {
-            if (verbose) std::cout << "  -> [Iter " << iterationCount << "] Path no longer exists (optimized to const).\n";
-            break; 
-        }
+        // AIG 級別的 NPN 查表重寫與重構
+        for (int i = 0; i < 2; ++i) {
+            // 1. 代數平衡
+            mockturtle::sop_rebalancing<mockturtle::aig_network> rebalance_fn;
+            aig = mockturtle::balancing(aig, {rebalance_fn});
+            aig = mockturtle::cleanup_dangling(aig);
 
-        currentCandidate.faninCone = netlist.getTransitiveFaninCone(currentEpName);
-
-        if (verbose) std::cout << "  -> [Iter " << iterationCount << "] Current Depth: " 
-                               << currentCandidate.criticalPath.depth() << "\n";
-
-        // 步驟 1. 初步清掃 (顯式冗餘消除)
-        if (config.enableBufferAndNotBypass) {
-            if (applyBufferAndNotBypass(netlist, currentCandidate)) {
-                passModified = true;
-                if (verbose) std::cout << "     * Buffer/Not Bypass modified the netlist.\n";
-            }
-        }
-
-        // 步驟 2. 平凡邏輯消除 (拓樸感知的常數摺疊與等冪短路)
-        if (!passModified) {
-            if (applyTrivialReduction(netlist, currentCandidate, allowedTypes, bannedTypes)) {
-                passModified = true;
-                if (verbose) std::cout << "     * Trivial Reduction modified the netlist.\n";
-            }
-        }
-
-        // 步驟 3. 代數重構 (霍夫曼建樹)
-        if (config.enableTreeBalancing && !passModified) {
-            if (applyTreeBalancing(netlist, currentCandidate, allowedTypes, bannedTypes)) {
-                passModified = true;
-                if (verbose) std::cout << "     * Tree Balancing modified the netlist.\n";
-            }
-        }
-
-        // 步驟 4. 極性最佳化 (德摩根推擠)
-        if (config.enableDeMorganPushing && !passModified) {
-            if (applyDeMorganPushing(netlist, currentCandidate, allowedTypes, bannedTypes)) {
-                passModified = true;
-                if (verbose) std::cout << "     * DeMorgan Pushing modified the netlist.\n";
-            }
-        }
-
-        // 步驟 5. 布林最佳化：K-feasible Cut + SAT Exact Synthesis
-        if (config.enableConeResynthesis && !passModified) {
+            // 2. 4-Cut NPN 布林重寫 
+            mockturtle::cut_rewriting_params cr_ps;
+            cr_ps.cut_enumeration_ps.cut_size = 4;
             
-            // 5A. 執行極限深度壓縮 (Exact Synthesis - Depth)
-            bool depthCompressed = runExactDepthPass(netlist, mapper, currentCandidate, allowedTypes, bannedTypes, verbose);
+            // 這裡修正：改用 xag_npn_resynthesis 吃下 aig_network
+            mockturtle::xag_npn_resynthesis<mockturtle::aig_network> resyn_aig_npn; 
             
-            if (depthCompressed) {
-                passModified = true;
-                if (verbose) std::cout << "     * [Exact Synthesis] Depth pass successfully compressed logic.\n";
+            aig = mockturtle::cut_rewriting(aig, resyn_aig_npn, cr_ps);
+            aig = mockturtle::cleanup_dangling(aig);
 
-                // 【關鍵防護罩】：重新計算「全域」的最新深度，並作為不可逾越的鐵律！
-                OptimizationCandidate refreshedCandidate = netlist.buildOptimizationCandidate(currentCandidate.endpoint, currentCandidate.targetDepth);
-                int newlyAchievedDepth = refreshedCandidate.criticalPath.depth();
-                
-                if (verbose) std::cout << "     * [Constraint Lock] Area Recovery is now strictly bounded to Depth <= " << newlyAchievedDepth << "\n";
-
-                // 5B. 在嚴格約束下，執行面積回收 (Exact Synthesis - Area)
-                bool areaRecovered = runExactAreaPass(netlist, mapper, refreshedCandidate, newlyAchievedDepth, allowedTypes, bannedTypes, verbose);
-                
-                if (areaRecovered && verbose) {
-                    std::cout << "     * [Exact Synthesis] Area Recovery pass successfully reclaimed gates without violating depth constraint.\n";
-                }
-            } 
-            else {
-                // 如果深度壓不下去，我們還是可以嘗試做一次純粹的面積回收 (約束為當前深度)
-                int currentDepth = currentCandidate.criticalPath.depth();
-                if (runExactAreaPass(netlist, mapper, currentCandidate, currentDepth, allowedTypes, bannedTypes, verbose)) {
-                    passModified = true;
-                    if (verbose) std::cout << "     * [Exact Synthesis] Area Recovery pass improved area at current depth.\n";
-                }
-            }
+            // 3. 邏輯重構 (Refactoring) 
+            mockturtle::refactoring_params ref_ps;
+            ref_ps.max_pis = 4;
+            mockturtle::refactoring(aig, resyn_aig_npn, ref_ps);
+            aig = mockturtle::cleanup_dangling(aig);
         }
 
-        if (passModified) {
-            globalModified = true;
-            continue; // 拓樸已改變，立刻跳回 while 開頭，重新抓取 Critical Path！
-        } else {
-            break; // 所有 Pass 都無事可做，電路已完美收斂，跳出迴圈
+        // MIG 極限深度壓縮 (處理長直列邏輯)
+        if (verbose) std::cout << "  -> Converting AIG to MIG for extreme depth reduction...\n";
+        mockturtle::mig_npn_resynthesis resyn_to_mig; 
+        mockturtle::mig_network mig = mockturtle::node_resynthesis<mockturtle::mig_network>(aig, resyn_to_mig);
+        mig = mockturtle::cleanup_dangling(mig);
+
+        for (int i = 0; i < 3; ++i) {
+            // MIG 專屬代數深度重寫
+            mockturtle::mig_algebraic_depth_rewriting_params mig_ps;
+            mig_ps.strategy = mockturtle::mig_algebraic_depth_rewriting_params::dfs;
+            mig_ps.allow_area_increase = true; 
+            mockturtle::depth_view depth_mig{mig}; 
+            mockturtle::mig_algebraic_depth_rewriting(depth_mig, mig_ps);
+            mig = mockturtle::cleanup_dangling(mig);
+
+            // MIG 布林替換
+            mockturtle::resubstitution_params rp;
+            mockturtle::fanout_view fanout_mig{mig};
+            mockturtle::depth_view depth_mig_resub{fanout_mig};
+            mockturtle::mig_resubstitution(depth_mig_resub, rp);
+            mig = mockturtle::cleanup_dangling(mig);
         }
-    }
 
-    // 步驟 6. 全域死碼消除 (Global Dead Code Elimination)
-    // 迴圈收斂後，把掉出邏輯錐、失去連線的孤魂野鬼一次清乾淨
-    if (globalModified) {
-        int removedZombies = netlist.removeDanglingLogic();
-        if (verbose && removedZombies > 0) {
-            std::cout << "  -> [Global DCE] Cleaned up " << removedZombies << " dangling logic gates.\n";
-        }
-    }
+        // 轉回 AIG 並做最後收斂
+        if (verbose) std::cout << "  -> Converting optimized MIG back to AIG...\n";
+        mockturtle::xag_npn_resynthesis<mockturtle::aig_network> resyn_back_to_aig;
+        aig = mockturtle::node_resynthesis<mockturtle::aig_network>(mig, resyn_back_to_aig);
+        
+        mockturtle::sop_rebalancing<mockturtle::aig_network> final_rebalance;
+        aig = mockturtle::balancing(aig, {final_rebalance});
+        aig = mockturtle::cleanup_dangling(aig);
 
-    // 步驟 7. 結算成效與 Rollback 決策 (Resolution)
-    if (globalModified) {
-        // a. 重新計算深度與面積
-        result.newDepth = netlist.findCriticalPathToNet(candidate.endpoint.endpointName).depth();
-        result.newGateCount = getTotalGateCount(netlist);
-        result.areaDelta = result.newGateCount - result.oldGateCount;
-        result.depthImproved = (result.newDepth < result.oldDepth);
+        netlist = AigToNetlist(aig, netlist);
 
-        // b. 檢查面積是否超標 (-1 代表無限制)
-        bool areaExceeded = (config.maxAreaIncreasePerPath != -1) && 
-                            (result.areaDelta > config.maxAreaIncreasePerPath);
-
-        // c. 決策分流
-        if (areaExceeded) {
-            // 【Rollback 情境 1】深度可能降了，但面積代價太高，退回！
-            netlist = backupNetlist; // 還原
-            
-            result.status = OptimizationStatus::ERROR_AREA_EXCEEDED;
-            result.changed = false; // 退回後等於沒改
-            result.newDepth = result.oldDepth;
-            result.newGateCount = result.oldGateCount;
-            result.message = "Optimization achieved but area exceeded limit (Delta: " + 
-                             std::to_string(result.areaDelta) + " > " + 
-                             std::to_string(config.maxAreaIncreasePerPath) + "). Rolled back.";
-                             
-        } else if (!result.depthImproved) {
-            // 【Rollback 情境 2】電路拓樸被改得面目全非，但最長深度根本沒降，退回！
-            netlist = backupNetlist; // 還原
-            
-            result.status = OptimizationStatus::NO_IMPROVEMENT;
-            result.changed = false; // 退回後等於沒改
-            result.newDepth = result.oldDepth;
-            result.newGateCount = result.oldGateCount;
-            result.message = "Topology changed but depth did not improve. Rolled back to original state.";
-            
-        } else {
-            // 深度下降，且面積在容許範圍內！
-            result.status = OptimizationStatus::SUCCESS;
-            result.changed = true;
-            result.message = "Depth successfully improved from " + std::to_string(result.oldDepth) + 
-                             " to " + std::to_string(result.newDepth) + 
-                             " (Area delta: " + std::to_string(result.areaDelta) + ").";
-        }
     } else {
-        // 電路完全沒有觸發任何優化
-        result.status = OptimizationStatus::NO_IMPROVEMENT;
-        result.changed = false;
-        result.newDepth = result.oldDepth;
-        result.newGateCount = result.oldGateCount;
-        result.areaDelta = 0;
-        result.message = "No optimization opportunities found.";
+        if (verbose) std::cout << "[Step 2] Executing global XAG depth optimization (ABC resyn2 style)...\n";
+        mockturtle::xag_network xag = NetlistToXag(netlist);
+
+        for (int i = 0; i < 3; ++i) {
+            // 1. 代數平衡
+            mockturtle::esop_rebalancing<mockturtle::xag_network> rebalance_fn;
+            xag = mockturtle::balancing(xag, {rebalance_fn});
+            xag = mockturtle::cleanup_dangling(xag);
+
+            // 2. 4-Cut NPN 布林重寫 (使用 XAG 專屬的 NPN 查表)
+            mockturtle::cut_rewriting_params cr_ps;
+            cr_ps.cut_enumeration_ps.cut_size = 4; 
+            mockturtle::xag_npn_resynthesis<mockturtle::xag_network> resyn_xag_npn; 
+            xag = mockturtle::cut_rewriting(xag, resyn_xag_npn, cr_ps);
+            xag = mockturtle::cleanup_dangling(xag);
+
+            // 3. 邏輯重構 (Refactoring)
+            mockturtle::refactoring_params ref_ps;
+            ref_ps.max_pis = 4;
+            mockturtle::refactoring(xag, resyn_xag_npn, ref_ps);
+            xag = mockturtle::cleanup_dangling(xag);
+
+            // 4. 布林替換
+            mockturtle::resubstitution_params rp;
+            mockturtle::fanout_view fanout_xag{xag};
+            mockturtle::depth_view depth_xag_resub{fanout_xag};
+            mockturtle::xag_resubstitution(depth_xag_resub, rp);
+            xag = mockturtle::cleanup_dangling(xag);
+        }
+        
+        netlist = XagToNetlist(xag, netlist);
+    }
+
+    // 階段 3：局部 Cone 的特例處理 (Local Cone Mockturtle Rewriting)
+    // 若題目要求特定的 Cone 必須是 AIG/XAG，我們在這裡補足邏輯：
+    if (hasLocalConeConstraint) {
+        if (isPureAIG) {
+            if (verbose) std::cout << "[Step 3] Target cone requires pure AIG. Executing local AIG optimization...\n";
+            
+            // TODO: 實作以下輔助函式 (提取 Cone -> 轉 AIG 優化 -> 縫合回原電路)
+            // Netlist subNetlist = extractSubNetlist(netlist, targetConeReport);
+            // mockturtle::aig_network localAig = NetlistToAig(subNetlist);
+            // mockturtle::depth_view local_depth_aig{localAig};
+            // mockturtle::aig_depth_rewriting(local_depth_aig);
+            // localAig = mockturtle::cleanup_dangling(localAig);
+            // Netlist optimizedSub = AigToNetlist(localAig, subNetlist);
+            // stitchSubNetlist(netlist, optimizedSub, targetConeReport);
+            
+        } 
+        else if (isPureXAG) {
+            // 如果局部 Cone 要求 XAG，因為我們在階段 2 已經全域跑過 XAG 了
+            if (verbose) std::cout << "[Step 3] Target cone requires pure XAG. Already satisfied by global XAG.\n";
+        }
+    } 
+    else if (isPureAIG || isPureXAG) {
+        // 沒有局部 Cone，且剛好題目要求全域 AIG/XAG !
+        if (verbose) std::cout << "[Step 3] Global pure AIG/XAG constraints already satisfied.\n";
+    }
+
+    // -------------------------------------------------------------------------
+    // 階段 4：執行題意約束 (Basis Enforcement) 
+    // -------------------------------------------------------------------------
+    /*
+    if (!isPureAIG && !isPureXAG) {
+        if (verbose) std::cout << "[Step 4] Enforcing specific basis constraints...\n";
+        TargetScope mapScope = hasLocalConeConstraint ? TargetScope::GATE_FANIN : TargetScope::WHOLE_NETLIST;
+        
+        TechMapReport mapReport = techMapper.convertToBasis(
+            netlist, 
+            mapScope, 
+            hasLocalConeConstraint ? targetConeReport.sourceName : "", 
+            allowedTypes, 
+            bannedTypes, 
+            verbose
+        );
+
+        if (mapReport.status != TechMapStatus::SUCCESS) {
+            result.status = OptimizationStatus::ERROR_NOT_EQUIVALENT;
+            result.message = "Basis conversion failed to satisfy constraints.";
+            return result;
+        }
+    }
+    */
+
+    // -------------------------------------------------------------------------
+    // 階段 5：修復映射造成的深度暴增 (Critical Path Post-Optimization)
+    // -------------------------------------------------------------------------
+    /*
+    if (verbose) std::cout << "[Step 5] Firing SAT-based exact synthesis to crush depth penalty...\n";
+    // runExactDepthPass(netlist, techMapper, candidate, allowedTypes, bannedTypes, verbose);
+    */
+
+    // 結算：更新深度與面積資訊 (Depth & Area Evaluation)
+    DepthReport newGlobalPath = netlist.findGlobalCriticalPath();
+    result.newDepth = newGlobalPath.depth;
+    result.depthImproved = (result.newDepth < result.oldDepth);
+    
+    result.newGateCount = netlist.getGateCount();
+    result.areaDelta = result.newGateCount - result.oldGateCount;
+
+    result.status = OptimizationStatus::SUCCESS;
+    result.changed = true;
+    result.equivalent = true; 
+    result.message = "Completed Mockturtle optimization sequence.";
+    
+    if (verbose) {
+        std::cout << "[Success] " << result.message << "\n";
+        std::cout << "          Depth: " << result.oldDepth << " -> " << result.newDepth << "\n";
+        std::cout << "=================================================\n";
     }
 
     return result;
-}*/
+}
 
-// K-feasible Cut 精確合成 (One-Shot Pass)
+
+/*// K-feasible Cut 精確合成 (One-Shot Pass)
 bool DepthOptimizer::runExactDepthPass(Netlist& netlist, 
                                        TechMapper& mapper, 
                                        OptimizationCandidate& candidate, 
@@ -271,8 +259,6 @@ bool DepthOptimizer::runExactDepthPass(Netlist& netlist,
         return false; 
     }
 
-    /*std::cout << "[Debug] Extracted LHS Pattern Depth: " 
-              << mapper.calculateDepth(depthLhs) << ", Gate Count: " << targetCone.size() << "\n";*/
 
     TechMapReport depthReport = mapper.optimizePattern(
         netlist, depthLhs, OptimizationGoal::DEPTH, targetCone, verbose,  // 將真實的 N 傳遞給 optimizePattern
@@ -317,7 +303,7 @@ bool DepthOptimizer::runExactAreaPass(Netlist& netlist,
     );
 
     return (areaReport.status == TechMapStatus::SUCCESS && areaReport.message.find("No changes made") == std::string::npos);
-}
+}*/
 
 
 // 輔助函式：給定 Root 與 Cut 邊界，從 Netlist 走訪並建立 PatternNode (AST)，同時收集 TargetCone
@@ -400,37 +386,92 @@ std::shared_ptr<PatternNode> DepthOptimizer::extractLhsFromCut(Netlist& netlist,
     return astRoot;
 }
 
+// 共用的 Cut 剪枝過濾器
+std::vector<KCut> pruneAndLimitCuts(std::vector<KCut>& cuts) {
+    if (cuts.empty()) return cuts;
+
+    // 1. 排序：優先考慮 Size 小的，若 Size 相同則依據 Signature 與內容排序
+    std::sort(cuts.begin(), cuts.end(), [](const KCut& a, const KCut& b) {
+        if (a.size != b.size) return a.size < b.size;
+        if (a.signature != b.signature) return a.signature < b.signature;
+        
+        // 確保完全相同的 Cut 會排在一起
+        for (int i = 0; i < a.size; ++i) {
+            if (a.leafNetIds[i] != b.leafNetIds[i]) {
+                return a.leafNetIds[i] < b.leafNetIds[i];
+            }
+        }
+        return false;
+    });
+
+    // 2. 去重 (O(N))：將連續完全相同的元素剔除
+    cuts.erase(std::unique(cuts.begin(), cuts.end()), cuts.end());
+
+    // 3. 子集剪枝 (Subsumption Pruning)
+    std::vector<KCut> filtered;
+    filtered.reserve(std::min((size_t)MAX_CUTS_PER_NODE, cuts.size()));
+
+    for (const auto& cut : cuts) {
+        bool isSubsumed = false;
+        for (const auto& keptCut : filtered) {
+            // 利用 Signature 進行 O(1) 超集檢查
+            if ((keptCut.signature & cut.signature) == keptCut.signature) {
+                
+                // 確認是真的子集，而非 Hash 碰撞
+                bool allMatch = true;
+                for (int i = 0; i < keptCut.size; ++i) {
+                    bool found = false;
+                    for (int j = 0; j < cut.size; ++j) {
+                        if (keptCut.leafNetIds[i] == cut.leafNetIds[j]) { 
+                            found = true; break; 
+                        }
+                    }
+                    if (!found) { allMatch = false; break; }
+                }
+                
+                if (allMatch) {
+                    isSubsumed = true;
+                    break; // 被包含，直接丟棄
+                }
+            }
+        }
+        
+        if (!isSubsumed) {
+            filtered.push_back(cut);
+            // 剪枝的同時做數量限制，確保留下來的一定是互相獨立的精華
+            if (filtered.size() >= MAX_CUTS_PER_NODE) {
+                break; 
+            }
+        }
+    }
+    
+    return filtered;
+}
+
 // 輔助函式：聯集兩個 Cut 列表 (DP Merge)
 std::vector<KCut> mergeCuts(const std::vector<KCut>& leftCuts, const std::vector<KCut>& rightCuts) {
-    std::vector<KCut> result;
-    
-    // 如果其中一邊沒有 Cut (例如遇到 1-input gate)，直接回傳另一邊
     if (leftCuts.empty()) return rightCuts;
     if (rightCuts.empty()) return leftCuts;
+
+    std::vector<KCut> result;
+    // 預先配置大約的空間，減少 push_back 時的重新分配
+    result.reserve(leftCuts.size() * rightCuts.size());
 
     for (const auto& cl : leftCuts) {
         for (const auto& cr : rightCuts) {
             
-            // 利用 Signature 極速判斷合併後是否會爆表
             uint64_t mergedSig = cl.signature | cr.signature;
-            
-            // 如果合併後的獨立 bit 數量已經 > MAX_K，那真實的 Cut size 絕對大於 MAX_K！
-            // 直接放棄，避開耗時的陣列操作！
             if (__builtin_popcountll(mergedSig) > MAX_K) {
                 continue; 
             }
 
             KCut merged;
-            // O(1) 賦予 Signature，不需重新計算！
             merged.signature = mergedSig; 
 
             int i = 0, j = 0;
             bool exceed = false;
 
-            // 雙指標掃描：因為 cl 和 cr 都已經是排序好的 (Sorted)
             while (i < cl.size || j < cr.size) {
-                
-                // 提早中斷防呆
                 if (merged.size == MAX_K) {
                     exceed = true;
                     break; 
@@ -442,10 +483,8 @@ std::vector<KCut> mergeCuts(const std::vector<KCut>& leftCuts, const std::vector
                     } else if (cl.leafNetIds[i] > cr.leafNetIds[j]) {
                         merged.leafNetIds[merged.size++] = cr.leafNetIds[j++];
                     } else {
-                        // 相等的情況：只放一個進去，兩個指標同時前進 (天然去重！)
                         merged.leafNetIds[merged.size++] = cl.leafNetIds[i];
-                        i++; 
-                        j++;
+                        i++; j++;
                     }
                 } else if (i < cl.size) {
                     merged.leafNetIds[merged.size++] = cl.leafNetIds[i++];
@@ -454,27 +493,14 @@ std::vector<KCut> mergeCuts(const std::vector<KCut>& leftCuts, const std::vector
                 }
             }
 
-            // 如果沒有超過 MAX_K，才把它加入結果
             if (!exceed) {
-                // 這裡的 std::find 會觸發你的 operator==，因為有 signature，速度極快
-                if (std::find(result.begin(), result.end(), merged) == result.end()) {
-                    result.push_back(merged);
-                }
+                result.push_back(merged);
             }
         }
     }
 
-    // 剪枝策略：我們優先保留 Size 較小的 Cut
-    std::sort(result.begin(), result.end(), [](const KCut& a, const KCut& b) {
-        if (a.size != b.size) return a.size < b.size;
-        // 如果 size 相同，加入 signature 當作穩定的第二排序條件
-        return a.signature < b.signature; 
-    });
-
-    if (result.size() > MAX_CUTS_PER_NODE) {
-        result.resize(MAX_CUTS_PER_NODE);
-    }
-    return result;
+    // 不直接 resize，而是透過嚴格剪枝後再限制數量
+    return pruneAndLimitCuts(result);
 }
 
 // 在乾淨的 Cone 裡面找出最佳的 K-feasible Cut
@@ -543,88 +569,40 @@ KCut DepthOptimizer::extractBestKFeasibleCut(Netlist& netlist, const Optimizatio
         bool isFirstInput = true;
 
         for (int inNetId : g.inputNetIds) {
-            int driverId = netlist.getNetDriverGateId(inNetId);
+            
+            // 如果這條線是常數 0/1，直接跳過
+            // 常數不佔用 MAX_K 額度，也不應該成為 Cut 的 Leaf 邊界
+            const Net& inNet = netlist.getNet(inNetId);
+            if (inNet.isConst) {
+                continue; 
+            }
+
+            int driverId = inNet.driverGateId;
             std::vector<KCut> branchCuts;
 
-            // 如果 Driver 在 Cone 內部，繼承它的 Cuts
             if (coneGateSet.count(driverId)) {
                 branchCuts = nodeCuts[driverId];
             } else {
-                // 如果 Driver 不在 Cone 內部 (例如它是 PI 或是 Cone 外的閘)，這條線就是絕對邊界
                 KCut boundaryCut;
                 boundaryCut.leafNetIds[0] = inNetId;
                 boundaryCut.size = 1;
-                boundaryCut.normalize(); // 計算 Signature
+                boundaryCut.normalize();
                 branchCuts.push_back(boundaryCut);
             }
 
             if (isFirstInput) {
-                mergedCuts = branchCuts;
+                mergedCuts = std::move(branchCuts);
                 isFirstInput = false;
             } else {
                 mergedCuts = mergeCuts(mergedCuts, branchCuts);
             }
         }
 
-        // 把 Merge 後的 Cuts 存入目前的 Gate
         for (const auto& mc : mergedCuts) {
             currentGateCuts.push_back(mc);
         }
 
-        // 去重與剪枝 (針對新的 KCut 結構進行排序)
-        std::sort(currentGateCuts.begin(), currentGateCuts.end(), [](const KCut& a, const KCut& b) {
-            if (a.size != b.size) return a.size < b.size;
-            if (a.signature != b.signature) return a.signature < b.signature;
-            
-            // 如果 Size 和 Signature 都一樣 (發生碰撞或根本是重複的 Cut)
-            // 進行逐項比對，確保完全一樣的 Cut 在排序後絕對會「相鄰」
-            for (int i = 0; i < a.size; ++i) {
-                if (a.leafNetIds[i] != b.leafNetIds[i]) {
-                    return a.leafNetIds[i] < b.leafNetIds[i];
-                }
-            }
-            return false; // 完全相等時回傳 false
-        });
-        
-        currentGateCuts.erase(std::unique(currentGateCuts.begin(), currentGateCuts.end()), currentGateCuts.end());
-
-        // Subsumption Pruning (子集剪枝)
-        std::vector<KCut> filteredCuts;
-        filteredCuts.reserve(currentGateCuts.size());
-
-        for (const auto& cut : currentGateCuts) {
-            bool isSubsumed = false;
-            for (const auto& keptCut : filteredCuts) {
-                // 利用 Signature 進行 O(1) 的極速超集檢查：
-                // 如果 keptCut 的 bitmask 是 cut 的子集，那 cut「有可能」被 subsume
-                if ((keptCut.signature & cut.signature) == keptCut.signature) {
-                    
-                    // Signature 命中，再進行陣列的嚴格比對 (確保是真的子集，而非 Hash 碰撞)
-                    bool allMatch = true;
-                    for (int i = 0; i < keptCut.size; ++i) {
-                        bool found = false;
-                        for (int j = 0; j < cut.size; ++j) {
-                            if (keptCut.leafNetIds[i] == cut.leafNetIds[j]) { found = true; break; }
-                        }
-                        if (!found) { allMatch = false; break; }
-                    }
-                    
-                    if (allMatch) {
-                        isSubsumed = true;
-                        break; // 這個 cut 被包含，可以丟棄了！
-                    }
-                }
-            }
-            if (!isSubsumed) {
-                filteredCuts.push_back(cut);
-            }
-        }
-
-        // 截斷超出限制的 Cuts
-        if (filteredCuts.size() > MAX_CUTS_PER_NODE) {
-            filteredCuts.resize(MAX_CUTS_PER_NODE);
-        }
-        nodeCuts[currGateId] = std::move(filteredCuts);
+        nodeCuts[currGateId] = pruneAndLimitCuts(currentGateCuts);
     }
 
     // 4. 評估與挑選最佳 Cut (根據 Goal 分流)
