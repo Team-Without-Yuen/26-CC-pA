@@ -1,0 +1,15 @@
+#RESPONSE 1
+This is the beginning of a new testcase. The case name is test21.
+#END 1
+#RESPONSE 2
+Design loaded from testcase/test21/test21.v.
+#END 2
+#RESPONSE 3
+Gate count by type — AND: 0, OR: 8, NOT: 43, NAND: 227, NOR: 57, XOR: 1, XNOR: 7, BUF: 0, DFF: 55; Total: 398
+#END 3
+#RESPONSE 4
+Inserted 50 buffer gates to cap fanout at 4 loads per gate (19 gate outputs originally exceeded the limit, up to a max of 22 loads on n88); rewired via balanced buffer trees so every gate-driven net now drives at most 4 loads (primary-input nets n0/n1 are excluded since they are not gate outputs); functional equivalence verified against the original design with 200 random simulation trials, 0 mismatches.
+#END 4
+#RESPONSE 5
+Design written to output file test21_out.v.
+#END 5

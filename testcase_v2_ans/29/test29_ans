@@ -1,0 +1,21 @@
+#RESPONSE 1
+Total gates = 2566 : AND=0, OR=51, NOT=265, NAND=1641, NOR=311, XOR=17, XNOR=5, BUF=0, DFF=276
+#END 1
+#RESPONSE 2
+Reconstructed using only AND/NOT (DFFs kept as sequential elements, unchanged): AND=2069, NOT=2786, total combinational gates=4855, DFF=276
+#END 2
+#RESPONSE 3
+Pruning found 0 unused/dead gates immediately after AND/NOT reconstruction; total remains 4855 (AND=2069, NOT=2786)
+#END 3
+#RESPONSE 4
+Collapsed 612 back-to-back inverter pairs into direct wire connections, which in turn made 295 further gates dead (removed by re-pruning); total gates now 3948 (AND=2069, NOT=1879)
+#END 4
+#RESPONSE 5
+Merged 51 functionally equivalent gate pairs (duplicate AND gates with the same input pair / duplicate NOT gates with the same input); total gates now 3897 (AND=2066, NOT=1831)
+#END 5
+#RESPONSE 6
+Critical path depth was 316 logic levels before restructuring; rebalanced 160 associative AND-chains using a depth-aware (min-heap/Huffman-style) merge, reducing the critical path depth to 287 logic levels while keeping the netlist AND/NOT-only (AND=2066, NOT=1831, total=3897) and preserving full functional equivalence, confirmed by 100 random-vector simulation trials with 0 mismatches
+#END 6
+#RESPONSE 7
+Wrote the final AND/NOT-only netlist (3897 combinational gates + 276 DFFs, critical path depth 287) to test29_out.v
+#END 7
