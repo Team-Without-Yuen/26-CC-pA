@@ -1,0 +1,15 @@
+#RESPONSE 1
+已成功載入設計檔案 testcase/test22/test22.v，頂層模組為 top，共 23 個 primary input 訊號位元、41 個 primary output 訊號位元、1747 個組合邏輯閘與 202 個 DFF，總計 1949 個元件實例。
+#END 1
+
+#RESPONSE 2
+閘數統計（依類型）：AND=0, OR=121, NOT=213, NAND=1056, NOR=322, XOR=11, XNOR=24, BUF=0, DFF=202（組合邏輯閘總計 1747，加上 DFF 共 1949 個元件）。
+#END 2
+
+#RESPONSE 3
+已透過 AND/OR/XOR/NOT 邏輯重新平衡（structural balancing，以 Yosys+ABC 進行技術無關邏輯優化並以單位延遲目標重新映射）對設計進行重構，關鍵路徑深度由原始的 41 級邏輯層降低至 27 級（約下降 34%），並以 5000 組隨機向量對所有 DFF 輸入(D)與 primary output 進行黃金/重構雙版本邏輯模擬比對，結果完全一致（0 個不匹配），確認功能完全等價；重構後設計改用 AND=861, OR=614, NOT=122, XOR=65 共 1662 個組合邏輯閘，DFF 數量與名稱維持不變（202 個）。
+#END 3
+
+#RESPONSE 4
+已將目前設計寫出至輸出檔案 test22_out.v。
+#END 4
