@@ -2,10 +2,12 @@
 
 #include <algorithm>
 #include <functional>
+#include <iterator>
 #include <queue>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 // 將 cone path 回傳的 net ID 序列轉成 net name 序列。
@@ -179,7 +181,7 @@ std::vector<int> Netlist::getConeGateIds(const ConeResult& cone) const {
             }
 
             const int fromDriverId = nets[fromNetId].driverGateId;
-            if (isValidGateId(fromDriverId)) {
+            if (isValidGateId(fromDriverId) && !isGateRemoved(fromDriverId)) {
                 const Gate& gate = gates[fromDriverId];
                 if (gate.type != GateType::DFF &&
                     std::find(gate.inputNetIds.begin(), gate.inputNetIds.end(), toNetId) !=
@@ -190,7 +192,7 @@ std::vector<int> Netlist::getConeGateIds(const ConeResult& cone) const {
             }
 
             const int toDriverId = nets[toNetId].driverGateId;
-            if (isValidGateId(toDriverId)) {
+            if (isValidGateId(toDriverId) && !isGateRemoved(toDriverId)) {
                 const Gate& gate = gates[toDriverId];
                 if (gate.type != GateType::DFF &&
                     std::find(gate.inputNetIds.begin(), gate.inputNetIds.end(), fromNetId) !=
@@ -323,6 +325,112 @@ Netlist::ConeReport Netlist::runConeQuery(const ConeQuery& query) const {
         report.cone = getGateTransitiveFanoutCone(query.gateName);
         report.message = "Gate transitive fanout cone";
         break;
+
+    case ConeQueryType::LargestOutputCone: {
+        const std::vector<int> outputNetIds = getPrimaryOutputNetIds();
+        report.checkedOutputCount = outputNetIds.size();
+        if (outputNetIds.empty()) {
+            report.message = "No primary outputs available";
+            return report;
+        }
+
+        bool found = false;
+        size_t bestGateCount = 0;
+        size_t bestNetCount = 0;
+        ConeResult bestCone;
+        int bestNetId = -1;
+
+        for (int netId : outputNetIds) {
+            if (!isValidNetId(netId)) {
+                continue;
+            }
+
+            ConeResult cone = getTransitiveFaninCone(nets[netId].name);
+            const size_t gateCount = getConeGateCount(cone);
+            const size_t netCount = getConeNetCount(cone);
+            if (!found ||
+                gateCount > bestGateCount ||
+                (gateCount == bestGateCount && netCount > bestNetCount)) {
+                found = true;
+                bestGateCount = gateCount;
+                bestNetCount = netCount;
+                bestCone = cone;
+                bestNetId = netId;
+            }
+        }
+
+        if (!found || bestNetId < 0) {
+            report.message = "No valid primary output cones available";
+            return report;
+        }
+
+        report.sourceName = nets[bestNetId].name;
+        report.sourceId = bestNetId;
+        report.cone = bestCone;
+        report.message = "Largest primary output fanin cone";
+        break;
+    }
+
+    case ConeQueryType::SharedFaninGates: {
+        if (query.netName.empty() || query.secondNetName.empty()) {
+            report.message = "SharedFaninGates requires netName and secondNetName";
+            return report;
+        }
+        const std::vector<int> firstRootIds = expandNetToBits(query.netName);
+        if (firstRootIds.empty()) {
+            report.message = "Net not found: " + query.netName;
+            return report;
+        }
+        const std::vector<int> secondRootIds = expandNetToBits(query.secondNetName);
+        if (secondRootIds.empty()) {
+            report.message = "Net not found: " + query.secondNetName;
+            return report;
+        }
+
+        report.sourceName = query.netName;
+        report.sourceId = getNetId(query.netName);
+        if (!isValidNetId(report.sourceId)) {
+            report.sourceId = firstRootIds.front();
+        }
+        report.secondSourceName = query.secondNetName;
+        report.secondSourceId = getNetId(query.secondNetName);
+        if (!isValidNetId(report.secondSourceId)) {
+            report.secondSourceId = secondRootIds.front();
+        }
+
+        const std::vector<int> firstGateIds =
+            getConeGateIds(getTransitiveFaninCone(query.netName));
+        const std::vector<int> secondGateIds =
+            getConeGateIds(getTransitiveFaninCone(query.secondNetName));
+        std::vector<int> sharedGateIds;
+        std::set_intersection(
+            firstGateIds.begin(), firstGateIds.end(),
+            secondGateIds.begin(), secondGateIds.end(),
+            std::back_inserter(sharedGateIds));
+
+        report.ok = true;
+        report.exists = !sharedGateIds.empty();
+        report.gateCount = sharedGateIds.size();
+        report.rootNetIds = {report.sourceId, report.secondSourceId};
+        report.rootNetNames = {report.sourceName, report.secondSourceName};
+        report.message = report.exists
+            ? "Shared fanin cone gates"
+            : "No gates are shared between the two fanin cones";
+
+        for (int gateId : sharedGateIds) {
+            if (!isValidGateId(gateId) || isGateRemoved(gateId)) {
+                continue;
+            }
+            ++report.gateTypeCounts[gates[gateId].type];
+            if (query.includeNames) {
+                report.gateNames.push_back(gates[gateId].instName);
+            }
+        }
+        if (query.includeIds) {
+            report.gateIds = std::move(sharedGateIds);
+        }
+        return report;
+    }
     }
 
     if (report.cone.rootNetIds.empty()) {
@@ -334,11 +442,17 @@ Netlist::ConeReport Netlist::runConeQuery(const ConeQuery& query) const {
     report.exists = true;
     report.netCount = getConeNetCount(report.cone);
     report.gateCount = getConeGateCount(report.cone);
+    const std::vector<int> coneGateIds = getConeGateIds(report.cone);
+    for (int gateId : coneGateIds) {
+        if (isValidGateId(gateId) && !isGateRemoved(gateId)) {
+            ++report.gateTypeCounts[gates[gateId].type];
+        }
+    }
 
     if (query.includeIds) {
         report.rootNetIds = report.cone.rootNetIds;
         report.netIds = getConeNetIds(report.cone);
-        report.gateIds = getConeGateIds(report.cone);
+        report.gateIds = coneGateIds;
     }
 
     if (query.includeNames) {

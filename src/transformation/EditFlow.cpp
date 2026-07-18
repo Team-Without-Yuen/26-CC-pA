@@ -1,4 +1,5 @@
 #include "include/core/Netlist.h"
+#include "include/core/TechMapper.h"
 
 namespace {
 
@@ -18,6 +19,7 @@ std::string editCommandKindName(EditCommandKind kind) {
         case EditCommandKind::CleanupBuffers: return "cleanup_buffers";
         case EditCommandKind::CollapseDoubleInverter: return "collapse_double_inverter";
         case EditCommandKind::LocalSimplificationFixpoint: return "local_simplification_fixpoint";
+        case EditCommandKind::SafeCleanupFixpoint: return "safe_cleanup_fixpoint";
         case EditCommandKind::TrimDeadLogic: return "trim_dead_logic";
         case EditCommandKind::RemoveDanglingLogic: return "remove_dangling_logic";
         case EditCommandKind::RemoveUnusedNets: return "remove_unused_nets";
@@ -32,6 +34,8 @@ std::string editCommandKindName(EditCommandKind kind) {
         case EditCommandKind::InsertBufferAtDriver: return "insert_buffer_at_driver";
         case EditCommandKind::InsertBufferBeforeGate: return "insert_buffer_before_gate";
         case EditCommandKind::InsertBuffersByGateType: return "insert_buffers_by_gate_type";
+        case EditCommandKind::ConvertToBasis: return "convert_basis";
+        case EditCommandKind::ReplaceGateType: return "replace_type";
         case EditCommandKind::ReplaceGateWithNet: return "replace_gate_with_net";
         case EditCommandKind::ReplaceGateWithConstant: return "replace_gate_with_constant";
         case EditCommandKind::ReplaceGateWithNotOfNet: return "replace_gate_with_not_of_net";
@@ -44,6 +48,11 @@ std::string editCommandKindName(EditCommandKind kind) {
         case EditCommandKind::RemoveNetIfUnused: return "remove_net_if_unused";
         default: return "unknown";
     }
+}
+
+bool isTechnologyMappingCommand(EditCommandKind kind) {
+    return kind == EditCommandKind::ConvertToBasis ||
+           kind == EditCommandKind::ReplaceGateType;
 }
 
 int resolveGateId(const Netlist& netlist, int gateId, const std::string& gateName) {
@@ -162,6 +171,53 @@ EditRequestValidation requireFanoutLimit(int maxFanout, bool allowDefault) {
     return okValidation();
 }
 
+bool isKnownCombinationalGateType(GateType type) {
+    switch (type) {
+        case GateType::AND:
+        case GateType::OR:
+        case GateType::NAND:
+        case GateType::NOR:
+        case GateType::NOT:
+        case GateType::BUF:
+        case GateType::XOR:
+        case GateType::XNOR:
+            return true;
+        default:
+            return false;
+    }
+}
+
+EditRequestValidation requireValidGateTypeList(
+    const std::vector<GateType>& types,
+    const std::string& fieldName,
+    bool allowEmpty)
+{
+    if (types.empty()) {
+        return allowEmpty ? okValidation() : failedValidation("Missing required argument: " + fieldName + ".");
+    }
+    for (GateType type : types) {
+        if (!isKnownCombinationalGateType(type)) {
+            return failedValidation("Invalid gate type in " + fieldName + ".");
+        }
+    }
+    return okValidation();
+}
+
+EditRequestValidation requireScopeTarget(const Netlist& netlist, TargetScope scope, const std::string& scopeName) {
+    switch (scope) {
+        case TargetScope::WHOLE_NETLIST:
+            return okValidation();
+        case TargetScope::NET_FANIN:
+        case TargetScope::NET_FANOUT:
+            return requireNetName(netlist, scopeName, "scopeName");
+        case TargetScope::GATE_FANIN:
+        case TargetScope::GATE_FANOUT:
+            return requireGateName(netlist, scopeName, "scopeName");
+        default:
+            return failedValidation("Invalid technology mapping scope.");
+    }
+}
+
 EditRequestValidation validateEditApplyRequest(const Netlist& netlist, const EditApplyRequest& request) {
     if (isInternalLowLevelPrimitive(request.kind)) {
         return failedValidation(
@@ -169,6 +225,7 @@ EditRequestValidation validateEditApplyRequest(const Netlist& netlist, const Edi
     }
 
     switch (request.kind) {
+        // Public rename commands.
         case EditCommandKind::RenameGate:
             if (request.oldName.empty()) return failedValidation("Missing required argument: oldName.");
             if (request.newName.empty()) return failedValidation("Missing required argument: newName.");
@@ -191,6 +248,7 @@ EditRequestValidation validateEditApplyRequest(const Netlist& netlist, const Edi
             }
             return okValidation();
 
+        // Internal-only graph rewiring primitives. These are blocked before dispatch.
         case EditCommandKind::DisconnectGateInput:
         case EditCommandKind::ConnectGateInput: {
             EditRequestValidation gateCheck = requireGateName(netlist, request.gateName, "gateName");
@@ -209,18 +267,38 @@ EditRequestValidation validateEditApplyRequest(const Netlist& netlist, const Edi
             if (EditRequestValidation check = requireNetId(netlist, request.oldNetId, "oldNetId"); !check.ok) return check;
             return requireNetId(netlist, request.newNetId, "newNetId");
 
+        // Public cleanup and local simplification commands.
         case EditCommandKind::CleanupBuffers:
         case EditCommandKind::CollapseDoubleInverter:
         case EditCommandKind::LocalSimplificationFixpoint:
+        case EditCommandKind::SafeCleanupFixpoint:
         case EditCommandKind::TrimDeadLogic:
         case EditCommandKind::RemoveDanglingLogic:
         case EditCommandKind::RemoveUnusedNets:
-        case EditCommandKind::MergeEquivalentGates:
         case EditCommandKind::MergeStructurallyEquivalentGates:
-        case EditCommandKind::SimplifyConstants:
         case EditCommandKind::SimplifySameInput:
             return okValidation();
 
+        case EditCommandKind::MergeEquivalentGates:
+            return failedValidation(
+                "MergeEquivalentGates is a legacy internal structural-merge alias. "
+                "Use MergeStructurallyEquivalentGates; SAT-based functional merge "
+                "is not implemented yet.");
+
+        case EditCommandKind::SimplifyConstants:
+            if (request.gateType != GateType::UNKNOWN &&
+                !isKnownCombinationalGateType(request.gateType)) {
+                return failedValidation("gateType must be a supported combinational gate type or UNKNOWN.");
+            }
+            if (request.constValue < -1 || request.constValue > 1) {
+                return failedValidation("constValue must be -1, 0, or 1.");
+            }
+            if (request.inputCount != -1 && request.inputCount < 1) {
+                return failedValidation("inputCount must be -1 or a positive integer.");
+            }
+            return okValidation();
+
+        // Public buffer insertion commands.
         case EditCommandKind::InsertBuffersForFanout:
             return requireFanoutLimit(request.maxFanout, true);
 
@@ -255,6 +333,27 @@ EditRequestValidation validateEditApplyRequest(const Netlist& netlist, const Edi
             }
             return okValidation();
 
+        // Public technology mapping commands.
+        case EditCommandKind::ConvertToBasis: {
+            EditRequestValidation scopeCheck = requireScopeTarget(netlist, request.scope, request.scopeName);
+            if (!scopeCheck.ok) return scopeCheck;
+            if (request.allowedTypes.empty() && request.bannedTypes.empty()) {
+                return failedValidation("ConvertToBasis requires allowedTypes or bannedTypes.");
+            }
+            if (EditRequestValidation allowedCheck = requireValidGateTypeList(request.allowedTypes, "allowedTypes", true); !allowedCheck.ok) return allowedCheck;
+            return requireValidGateTypeList(request.bannedTypes, "bannedTypes", true);
+        }
+
+        case EditCommandKind::ReplaceGateType: {
+            EditRequestValidation scopeCheck = requireScopeTarget(netlist, request.scope, request.scopeName);
+            if (!scopeCheck.ok) return scopeCheck;
+            if (!isKnownCombinationalGateType(request.targetGateType)) {
+                return failedValidation("ReplaceGateType requires targetGateType.");
+            }
+            return requireValidGateTypeList(request.allowedTypes, "allowedTypes", false);
+        }
+
+        // Internal-only Boolean/driver/net replacement primitives.
         case EditCommandKind::ReplaceGateWithNet:
         case EditCommandKind::ReplaceGateWithNotOfNet: {
             EditRequestValidation gateCheck = requireResolvedGate(netlist, request.gateId, request.gateName, "target");
@@ -310,7 +409,9 @@ NetlistEditReport makeFailedEditApplyReport(
     const std::string& message)
 {
     NetlistEditReport report;
-    report.operationKind = NetlistEditOperationKind::PrimitiveMutation;
+    report.operationKind = isTechnologyMappingCommand(kind)
+        ? NetlistEditOperationKind::TechnologyMapping
+        : NetlistEditOperationKind::PrimitiveMutation;
     report.operationName = "edit_apply:" + editCommandKindName(kind);
     report.message = message;
     report.beforeStats = netlist.collectNetlistStats();
@@ -345,6 +446,7 @@ NetlistEditReport Netlist::runEditApply(const EditApplyRequest& request) {
     }
 
     switch (request.kind) {
+        // Rename commands preserve structure and only update names.
         case EditCommandKind::RenameGate:
             report = renameGateWithReport(request.oldName, request.newName);
             break;
@@ -364,6 +466,7 @@ NetlistEditReport Netlist::runEditApply(const EditApplyRequest& request) {
             report = replaceAllLoadsOfNetWithReport(request.oldNetId, request.newNetId);
             break;
 
+        // Cleanup and local simplification commands.
         case EditCommandKind::CleanupBuffers:
             report = cleanupAllRemovableBuffersWithReport();
             break;
@@ -372,6 +475,9 @@ NetlistEditReport Netlist::runEditApply(const EditApplyRequest& request) {
             break;
         case EditCommandKind::LocalSimplificationFixpoint:
             report = runLocalSimplificationFixpointWithReport();
+            break;
+        case EditCommandKind::SafeCleanupFixpoint:
+            report = runSafeCleanupFixpointWithReport();
             break;
         case EditCommandKind::TrimDeadLogic:
             report = trimDeadLogicWithReport();
@@ -389,12 +495,16 @@ NetlistEditReport Netlist::runEditApply(const EditApplyRequest& request) {
             report = mergeStructurallyEquivalentGatesWithReport();
             break;
         case EditCommandKind::SimplifyConstants:
-            report = simplifyAllGatesWithConstantsWithReport();
+            report = simplifyGatesWithConstantsWithReport(
+                request.gateType,
+                request.constValue,
+                request.inputCount);
             break;
         case EditCommandKind::SimplifySameInput:
             report = simplifyAllSameInputGatesWithReport();
             break;
 
+        // Buffer insertion commands.
         case EditCommandKind::InsertBuffersForFanout:
             report = insertBuffersForFanoutWithReport(fanoutLimitOrDefault(request.maxFanout));
             break;
@@ -423,6 +533,31 @@ NetlistEditReport Netlist::runEditApply(const EditApplyRequest& request) {
                 request.bufferOutputs);
             break;
 
+        // Technology mapping commands.
+        case EditCommandKind::ConvertToBasis: {
+            TechMapper mapper;
+            report = mapper.convertToBasisWithReport(
+                *this,
+                request.scope,
+                request.scopeName,
+                request.allowedTypes,
+                request.bannedTypes,
+                request.verbose);
+            break;
+        }
+        case EditCommandKind::ReplaceGateType: {
+            TechMapper mapper;
+            report = mapper.replaceGateTypeWithReport(
+                *this,
+                request.targetGateType,
+                request.allowedTypes,
+                request.scope,
+                request.scopeName,
+                request.verbose);
+            break;
+        }
+
+        // Internal-only primitives should be rejected during validation.
         case EditCommandKind::ReplaceGateWithNet:
             report = replaceGateWithNetWithReport(
                 resolveGateId(*this, request.gateId, request.gateName),

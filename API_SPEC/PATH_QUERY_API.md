@@ -1,6 +1,16 @@
-# Startpoint-to-Endpoint Path Analysis 整理
+# Path Query API 整理
 
-這份文件整理「從某類起點走到某類終點」的 path analysis 類型，並記錄目前已完成的統一 `PathQuery` API 使用方式。
+這份文件整理 `PathQuery` 的設計、endpoint model、責任邊界與內部實作。
+
+使用方式與 prompt 範例請看：
+
+```text
+API_SPEC/PATH_QUERY_USAGE.md
+```
+
+---
+
+這份文件整理 endpoints 之間的 path、reachability、mandatory node 與 separator/cut，並記錄統一 `PathQuery` API。原本公開的 `GraphQuery` 與 `RegisterPathQuery` 語意已收斂到本 API；底層 dominator 與 legacy wrapper 仍保留。
 
 ## 1. 核心抽象
 
@@ -176,6 +186,8 @@ Clock / reset / enable path 通常不完全等同 data path，但在 netlist exp
 | MaxDepth | 最長 logic depth | 已支援 start/end net；PI->DFF.D 已有 wrapper |
 | EveryPathThrough | 所有 path 是否都經過指定節點 | 已支援 |
 | EveryPathAvoids | 所有 path 是否都避開指定節點 | 已支援 |
+| FindMandatoryNodes | 找出所有 directed paths 共同經過的 internal nets | 已支援；底層使用 dominator |
+| IsSeparator | 指定 internal net 是否切斷 endpoints 間 connectivity | 已支援；無 endpoints 時採 PI-to-PO cut 語意 |
 | CountPaths | path 數量 | 可由 enumerate size 得到，但大型電路不安全 |
 
 ## 7. Filter / Constraint 類型
@@ -314,7 +326,8 @@ enum class PathQueryMode {
     MinDepth,
     MaxDepth,
     EveryPathThrough,
-    EveryPathAvoids
+    EveryPathAvoids,
+    DirectPiPoConnections
 };
 
 struct PathQuery {
@@ -327,10 +340,18 @@ struct PathQuery {
 };
 
 struct PathQueryResult {
+    bool ok = false;
+    bool unsupported = false;
+    std::string message;
     bool exists = false;
     int depth = -1;
     Netlist::CombinationalPath path;
     std::vector<Netlist::CombinationalPath> paths;
+    size_t pathCount = 0;
+    std::vector<std::string> unresolvedStartpoints;
+    std::vector<std::string> unresolvedEndpoints;
+    std::vector<std::string> unresolvedRequiredNodes;
+    std::vector<std::string> unresolvedAvoidedNodes;
 };
 ```
 
@@ -345,7 +366,7 @@ PathQueryResult runPathQuery(const PathQuery& query) const;
 詳細使用方式已獨立整理在：
 
 ```text
-API_SPEC/STARTPOINT_ENDPOINT_PATH_QUERY_USAGE.md
+API_SPEC/PATH_QUERY_USAGE.md
 ```
 
 該文件包含：
@@ -419,9 +440,13 @@ PathQueryMode::MinDepth
 PathQueryMode::MaxDepth
 PathQueryMode::EveryPathThrough
 PathQueryMode::EveryPathAvoids
+PathQueryMode::FindMandatoryNodes
+PathQueryMode::IsSeparator
+PathQueryMode::DirectPiPoConnections
 requiredNodes
 avoidedNodes
 combinationalOnly=true
+invalid endpoint / required / avoided node validation
 ```
 
 目前尚未支援：
@@ -436,7 +461,7 @@ combinationalOnly=false
 實作檔案：src/analysis/PathAnalysis.cpp
 型別檔案：include/core/PathTypes.h
 tester：mini test/tester.cpp
-目前 regression：Summary: 45 passed, 0 failed.
+Path API 與 tools integration regression 均已通過。
 ```
 
 後續可補 convenience wrapper：

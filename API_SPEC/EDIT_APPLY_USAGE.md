@@ -1,4 +1,4 @@
-# Edit Apply API 使用說明
+# Edit Apply 使用說明
 
 這份文件只負責說明 `EditApplyRequest` / `runEditApply()` 怎麼使用。  
 內部 API 設計、`NetlistEditReport` 欄位與 low-level primitive 邊界請看：
@@ -56,7 +56,19 @@ if (report.success) {
 
 ---
 
-## 2. EditCommandKind 總表
+## 2. Public Command 分類
+
+外部 LLM / CLI 只應使用這些 public command。低階 rewiring / arbitrary merge / driver replacement 不在這份 usage 文件中開放。
+
+| 類別 | Command kind | 常見問題 |
+|---|---|---|
+| Rename | `RenameGate`, `RenameNet` | 改 gate / net 名稱且保持功能不變 |
+| Cleanup / Simplification | `CleanupBuffers`, `CollapseDoubleInverter`, `LocalSimplificationFixpoint`, `SafeCleanupFixpoint`, `TrimDeadLogic`, `RemoveDanglingLogic`, `RemoveUnusedNets`, `MergeStructurallyEquivalentGates`, `SimplifyConstants`, `SimplifySameInput` | 移除結構冗餘、dangling、dead logic、unused nets、constant propagation、local simplification |
+| Buffer Insertion | `InsertBuffersForFanout`, `InsertBuffersForSpecificNet`, `InsertBuffersForDffControl`, `InsertBuffersOnEachLoad`, `InsertBufferAtDriver`, `InsertBufferBeforeGate`, `InsertBuffersByGateType` | 降 fanout、指定 signal/gate 插 BUF |
+| Technology Mapping | `ConvertToBasis`, `ReplaceGateType` | basis conversion、XOR/XNOR/OR 等 gate type replacement |
+| Safe Single-Net Cleanup | `RemoveNetIfUnused` | 移除已確認 unused 的 net |
+
+### 2.1 Public Command 總表
 
 | Command kind | 問題類型 | 需要設定 | 主要讀取欄位 |
 |---|---|---|---|
@@ -65,12 +77,12 @@ if (report.success) {
 | `CleanupBuffers` | 移除可 bypass 的 BUF | 無 | `diff`, `depthChange`, `validation.equivalenceMethod` |
 | `CollapseDoubleInverter` | collapse NOT -> NOT | 無 | `diff`, `depthChange`, `validation.equivalenceMethod` |
 | `LocalSimplificationFixpoint` | 執行 local simplification 到 fixpoint | 無 | `diff`, `depthChange`, `validation.equivalenceMethod` |
+| `SafeCleanupFixpoint` | 執行安全 cleanup / simplification 到 fixpoint | 無 | `diff`, `depthChange`, `validation.equivalenceMethod`, `warnings` |
 | `TrimDeadLogic` | 移除 dead logic | 無 | `diff`, `validation.equivalenceMethod` |
 | `RemoveDanglingLogic` | 移除 dangling gates | 無 | `diff`, `validation.equivalenceMethod` |
 | `RemoveUnusedNets` | 移除 unused internal nets | 無 | `changedNetNames`, `diff` |
-| `MergeEquivalentGates` | 合併結構等價 gates | 無 | `diff`, `validation.equivalenceMethod` |
 | `MergeStructurallyEquivalentGates` | structural hashing merge | 無 | `diff`, `validation.equivalenceMethod` |
-| `SimplifyConstants` | constant propagation | 無 | `diff`, `validation.equivalenceMethod` |
+| `SimplifyConstants` | typed constant propagation | 可選 `gateType`, `constValue`, `inputCount` | `constantSimplification`, `diff`, `validation.equivalenceMethod` |
 | `SimplifySameInput` | same-input simplification | 無 | `diff`, `validation.equivalenceMethod` |
 | `InsertBuffersForFanout` | 全設計 fanout buffer insertion | `maxFanout` | `fanoutChange`, `changedGateNames` |
 | `InsertBuffersForSpecificNet` | 指定 net fanout buffer insertion | `netName`, `maxFanout` | `fanoutChange`, `changedGateNames` |
@@ -79,6 +91,8 @@ if (report.success) {
 | `InsertBufferAtDriver` | driver side 插 BUF | `netName` | `changedGateNames`, `changedNetNames` |
 | `InsertBufferBeforeGate` | 指定 gate 前插 BUF | `netName`, `targetGateName` | `changedGateNames`, `changedNetNames` |
 | `InsertBuffersByGateType` | 依 gate type 插 BUF | `gateType`, `bufferInputs`, `bufferOutputs` | `changedGateNames`, `diff` |
+| `ConvertToBasis` | 全設計或指定 cone 轉成指定 gate basis | `scope`, `scopeName`, `allowedTypes` 或 `bannedTypes` | `mappingDelta`, `diff`, `validation.equivalenceMethod` |
+| `ReplaceGateType` | 全設計或指定 cone 中替換某種 gate type | `scope`, `scopeName`, `targetGateType`, `allowedTypes` | `mappingDelta`, `diff`, `validation.equivalenceMethod` |
 | `RemoveNetIfUnused` | 移除單一 unused net | `netId` 或 `netName` | `success`, `validation.equivalenceMethod` |
 
 ---
@@ -93,13 +107,21 @@ if (report.success) {
 | `oldName` | `std::string` | `""` | rename 類 command 的舊名稱 |
 | `newName` | `std::string` | `""` | rename 類 command 的新名稱 |
 | `targetGateName` | `std::string` | `""` | `InsertBufferBeforeGate` 使用 |
+| `scope` | `TargetScope` | `WHOLE_NETLIST` | technology mapping 的作用範圍 |
+| `scopeName` | `std::string` | `""` | scope 不是 whole 時指定 net/gate 名稱 |
 | `netId` | `int` | `-1` | `RemoveNetIfUnused` 可用；若同時有 `netName`，優先用 ID |
 | `maxFanout` | `int` | `-1` | fanout buffer insertion 使用；未設定時使用 4 |
-| `gateType` | `GateType` | `UNKNOWN` | `InsertBuffersByGateType` 使用 |
+| `constValue` | `int` | `-1` | `SimplifyConstants`：`-1` 不限、`0/1` 指定 constant input |
+| `inputCount` | `int` | `-1` | `SimplifyConstants`：`-1` 不限、正整數指定 gate fanin 數 |
+| `gateType` | `GateType` | `UNKNOWN` | gate-type buffer 或 `SimplifyConstants` 使用；後者 `UNKNOWN` 表示不限 |
+| `targetGateType` | `GateType` | `UNKNOWN` | `ReplaceGateType` 要移除/替換的 gate 類型 |
+| `allowedTypes` | `std::vector<GateType>` | `{}` | `ConvertToBasis` / `ReplaceGateType` 允許生成的 gate basis |
+| `bannedTypes` | `std::vector<GateType>` | `{}` | `ConvertToBasis` 額外禁止的 gate 類型 |
 | `processClock` | `bool` | `false` | `InsertBuffersForDffControl` 是否處理 clock |
 | `processReset` | `bool` | `false` | `InsertBuffersForDffControl` 是否處理 reset |
 | `bufferInputs` | `bool` | `true` | `InsertBuffersByGateType` 是否 buffer inputs |
 | `bufferOutputs` | `bool` | `true` | `InsertBuffersByGateType` 是否 buffer outputs |
+| `verbose` | `bool` | `false` | technology mapping debug log |
 | `validateEquivalence` | `bool` | `false` | 要求等價性資訊；若 command 沒 certificate，report 會加 warning |
 | `rollbackOnFailure` | `bool` | `true` | 保留欄位；目前 edit validation 失敗會 rollback |
 
@@ -128,7 +150,10 @@ if (report.success) {
 | `afterStats` | edit 後統計 |
 | `diff` | gate/net/type count 差異 |
 | `validation.structureValid` | graph 結構是否合法 |
-| `validation.problemAConstraintsValid` | Problem A 約束是否合法 |
+| `validation.problemAConstraintsBaselineValid` | edit 前是否已滿足全部 Problem A structural constraints |
+| `validation.problemAConstraintsValid` | edit 後是否絕對滿足全部 Problem A structural constraints |
+| `validation.problemAConstraintsRegressed` | edit 是否新增 baseline 原本沒有的違規；為 true 時 edit 失敗並 rollback |
+| `validation.newProblemAConstraintViolations` | 此次 edit 新增的違規清單 |
 | `validation.equivalenceChecked` | 是否有等價性證明 |
 | `validation.functionallyEquivalent` | 若有檢查，是否等價 |
 | `validation.equivalenceMethod` | `NotChecked` / `StructuralIdentity` / `LocalRewriteRule` / `WholeDesignSat` |
@@ -139,7 +164,8 @@ if (report.success) {
 |---|---|
 | `depthChange` | cleanup / simplification 類 wrapper |
 | `fanoutChange` | fanout buffer insertion 類 command |
-| `mappingDelta` | 保留給 technology mapping 類結果；目前 `runEditApply()` 不使用 |
+| `mappingDelta` | technology mapping 類結果，包含 removed / added / final gate count |
+| `constantSimplification` | constant propagation 的 filter、candidate、simplified、skipped 與 target gate eliminated count |
 | `changedGateIds`, `changedGateNames` | 新增、移除、修改的 gates |
 | `changedNetIds`, `changedNetNames` | 新增、移除、修改的 nets |
 
@@ -170,6 +196,8 @@ validation.messages 會包含同一個錯誤訊息
 | fanout command | `maxFanout` 若有設定，必須 >= 2；未設定時使用預設 4 |
 | DFF control buffer | `processClock` / `processReset` 至少一個為 true |
 | by-gate-type buffer | `gateType != UNKNOWN`，且至少選擇 input/output 其中一種 |
+| constant simplification | `gateType` 必須為 combinational type 或 `UNKNOWN`；`constValue` 只能是 `-1/0/1`；`inputCount` 只能是 `-1` 或正整數 |
+| technology mapping | scope target 存在、gate type 合法、`allowedTypes` / `bannedTypes` 足夠明確 |
 
 範例：
 
@@ -340,7 +368,48 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 
 ---
 
-## 11. RemoveDanglingLogic
+## 11. SafeCleanupFixpoint
+
+用途：
+
+```text
+對整個 netlist 反覆執行安全 cleanup，直到沒有更多可套用的改變。
+適合題目用語較廣的 prompt，例如 trim/prune unused logic、remove redundant gates、remove floating nodes。
+```
+
+目前會組合：
+
+```text
+LocalSimplificationFixpoint
+MergeStructurallyEquivalentGates
+TrimDeadLogic
+RemoveDanglingLogic
+RemoveUnusedNets
+```
+
+寫法：
+
+```cpp
+Netlist::EditApplyRequest request;
+request.kind = Netlist::EditCommandKind::SafeCleanupFixpoint;
+request.validateEquivalence = true;
+
+Netlist::NetlistEditReport report = netlist.runEditApply(request);
+```
+
+讀取：
+
+| 想知道 | 讀取欄位 |
+|---|---|
+| 是否有任何 cleanup | `report.changed` |
+| gate / net count 變化 | `report.diff.activeGateCountDelta`, `report.diff.activeNetCountDelta` |
+| depth 是否改善 | `report.depthChange` |
+| 若已經沒有可清理項目 | `report.warnings` |
+| 等價性理由 | `report.validation.equivalenceMethod`，應為 `LocalRewriteRule` |
+
+---
+
+## 12. RemoveDanglingLogic
 
 用途：
 
@@ -368,7 +437,7 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 
 ---
 
-## 12. SimplifyConstants
+## 13. SimplifyConstants
 
 用途：
 
@@ -381,6 +450,9 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 ```cpp
 Netlist::EditApplyRequest request;
 request.kind = Netlist::EditCommandKind::SimplifyConstants;
+request.gateType = GateType::NAND;
+request.constValue = 1;
+request.inputCount = 2;
 request.validateEquivalence = true;
 
 Netlist::NetlistEditReport report = netlist.runEditApply(request);
@@ -391,10 +463,113 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 | 想知道 | 讀取欄位 |
 |---|---|
 | 是否有化簡 | `report.changed` |
+| 符合篩選的 gates | `report.constantSimplification->candidateGateNames` |
+| 實際 rewrite 數 | `report.constantSimplification->simplifiedCount` |
+| 指定 gate type 消失數 | `report.constantSimplification->eliminatedTargetGateCount` |
+| 無法 rewrite 數與名稱 | `skippedCount`, `skippedGateNames` |
 | gate type 變化 | `report.diff.gateTypeCountDelta` |
 | 等價性理由 | `report.validation.equivalenceMethod`，應為 `LocalRewriteRule` |
 
-## 13. Prompt 對應表
+`simplifiedCount` 不一定等於 gate eliminated count。例如 `NAND(a,b,1)` 會移除 constant input、保留 NAND gate，因此 simplified 為 1，但 eliminated NAND 為 0。
+
+---
+
+## 14. Technology Mapping
+
+### 14.1 ConvertToBasis
+
+用途：
+
+```text
+將 whole netlist 或指定 fanin/fanout cone 轉成指定 gate basis，例如 AND/NOT、NOR/NOT、NAND/NOT。
+```
+
+寫法：
+
+```cpp
+Netlist::EditApplyRequest request;
+request.kind = Netlist::EditCommandKind::ConvertToBasis;
+request.scope = TargetScope::WHOLE_NETLIST;
+request.allowedTypes = {GateType::AND, GateType::NOT};
+request.validateEquivalence = true;
+
+Netlist::NetlistEditReport report = netlist.runEditApply(request);
+```
+
+指定 cone 的寫法：
+
+```cpp
+Netlist::EditApplyRequest request;
+request.kind = Netlist::EditCommandKind::ConvertToBasis;
+request.scope = TargetScope::NET_FANIN;
+request.scopeName = "n10";
+request.allowedTypes = {GateType::NOR, GateType::NOT};
+request.validateEquivalence = true;
+
+Netlist::NetlistEditReport report = netlist.runEditApply(request);
+```
+
+讀取：
+
+| 想知道 | 讀取欄位 |
+|---|---|
+| 是否有轉換 | `report.changed` |
+| 移除了哪些 gate | `report.mappingDelta->removedCountByType` |
+| 新增了哪些 gate | `report.mappingDelta->addedCountByType` |
+| 轉換後各 gate 數量 | `report.mappingDelta->finalGateCountByType` |
+| 等價性理由 | `report.validation.equivalenceMethod`，應為 `LocalRewriteRule` |
+
+### 14.2 ReplaceGateType
+
+用途：
+
+```text
+將 whole netlist 或指定 cone 中的某一種 gate type 替換成指定 basis。
+例如 XOR -> NAND、XNOR -> NOR、OR -> NAND/NOT。
+```
+
+寫法：
+
+```cpp
+Netlist::EditApplyRequest request;
+request.kind = Netlist::EditCommandKind::ReplaceGateType;
+request.scope = TargetScope::WHOLE_NETLIST;
+request.targetGateType = GateType::XOR;
+request.allowedTypes = {GateType::NAND};
+request.validateEquivalence = true;
+
+Netlist::NetlistEditReport report = netlist.runEditApply(request);
+```
+
+指定 cone 的寫法：
+
+```cpp
+Netlist::EditApplyRequest request;
+request.kind = Netlist::EditCommandKind::ReplaceGateType;
+request.scope = TargetScope::NET_FANIN;
+request.scopeName = "n11[0]";
+request.targetGateType = GateType::OR;
+request.allowedTypes = {GateType::NAND, GateType::NOT};
+request.validateEquivalence = true;
+
+Netlist::NetlistEditReport report = netlist.runEditApply(request);
+```
+
+讀取：
+
+| 想知道 | 讀取欄位 |
+|---|---|
+| 是否有替換 | `report.changed` |
+| 被替換的 gate 數量 | `report.mappingDelta->removedCountByType[targetGateType]` |
+| 新增 gate 數量 | `report.mappingDelta->addedCountByType` |
+| 指定 gate type 最後剩多少 | `report.mappingDelta->finalGateCountByType[targetGateType]` |
+| 等價性理由 | `report.validation.equivalenceMethod`，應為 `LocalRewriteRule` |
+
+`ReplaceGateType` 若在指定 scope 內找不到目標 gate type，會回傳 `success = true`、`changed = false`，並在 `mappingDelta.finalGateCountByType` 保留 target / allowed gate 的目前數量。
+
+---
+
+## 15. Prompt 對應表
 
 | Prompt | 建議 EditCommandKind | 需要設定 | 主要讀取 |
 |---|---|---|---|
@@ -404,17 +579,25 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 | Insert buffers wherever needed so that no signal drives more than 16 loads. | `InsertBuffersForFanout` | `maxFanout = 16` | `fanoutChange`, `changedGateNames` |
 | Insert a BUF gate on signal n2 so that each load is driven through a dedicated buffer. | `InsertBuffersOnEachLoad` | `netName = "n2"` | `changedGateNames`, `diff` |
 | Find all back-to-back inverter pairs and collapse them into a wire. | `CollapseDoubleInverter` | 無 | `changed`, `diff`, `validation.equivalenceMethod` |
-| Check if there are dangling gates. Remove them if found. | `RemoveDanglingLogic` | 無 | `changed`, `diff.activeGateCountDelta` |
-| Prune the netlist of unused gates. | `TrimDeadLogic` 或 `RemoveDanglingLogic` | 無 | `changed`, `diff` |
-| Sweep out dangling gates. | `RemoveDanglingLogic` | 無 | `changed`, `diff` |
-| Simplify reported NAND gates by propagating constant inputs. | `SimplifyConstants` | 無 | `diff`, `validation.equivalenceMethod` |
-| Simplify OR gates with constant 1 input. | `SimplifyConstants` | 無 | `diff`, `validation.equivalenceMethod` |
+| Check if there are dangling gates. Remove them if found. | `SafeCleanupFixpoint` 或 `RemoveDanglingLogic` | 無 | `changed`, `diff.activeGateCountDelta` |
+| Trim unused wires and gates. | `SafeCleanupFixpoint` | 無 | `changed`, `diff`, `warnings` |
+| Prune the netlist of unused gates. | `SafeCleanupFixpoint` | 無 | `changed`, `diff` |
+| Sweep out dangling gates. | `RemoveDanglingLogic` 或 `SafeCleanupFixpoint` | 無 | `changed`, `diff` |
+| Remove floating nodes that do not affect outputs. | `SafeCleanupFixpoint` | 無 | `changed`, `diff` |
+| Are there any redundant gates? Remove them if found. | `SafeCleanupFixpoint` | 無 | `changed`, `diff`, `validation.equivalenceMethod` |
+| Simplify reported NAND gates by propagating constant inputs. | `SimplifyConstants` | `gateType = NAND`, `constValue = -1` | `constantSimplification`, `diff` |
+| Simplify OR gates with constant 1 input. | `SimplifyConstants` | `gateType = OR`, `constValue = 1` | `eliminatedTargetGateCount`, `validation.equivalenceMethod` |
+| Replace all 2-input NAND gates tied to 1 with inverters. | `SimplifyConstants` | `gateType = NAND`, `constValue = 1`, `inputCount = 2` | `simplifiedGateNames`, `eliminatedTargetGateCount` |
 | Try to merge structural duplicates. | `MergeStructurallyEquivalentGates` | 無 | `changed`, `diff` |
 | Remove unused internal nets. | `RemoveUnusedNets` | 無 | `changedNetNames`, `diff` |
+| Reconstruct the netlist using only AND and NOT gates. | `ConvertToBasis` | `scope = WHOLE_NETLIST`, `allowedTypes = {AND, NOT}` | `mappingDelta`, `validation.equivalenceMethod` |
+| Ensure the cone of n10 maintains only NOR and NOT gates. | `ConvertToBasis` | `scope = NET_FANIN`, `scopeName = "n10"`, `allowedTypes = {NOR, NOT}` | `mappingDelta`, `diff` |
+| Replace each XOR gate using NAND gates. | `ReplaceGateType` | `targetGateType = XOR`, `allowedTypes = {NAND}` | `mappingDelta.removedCountByType`, `mappingDelta.addedCountByType` |
+| Replace OR gates in the cone of n11[0] using NAND and NOT gates. | `ReplaceGateType` | `scope = NET_FANIN`, `scopeName = "n11[0]"`, `targetGateType = OR`, `allowedTypes = {NAND, NOT}` | `mappingDelta`, `validation` |
 
 ---
 
-## 14. 何時不要用 EditApply
+## 16. 何時不要用 EditApply
 
 如果問題只是查詢，不要使用 `runEditApply()`。
 
@@ -429,23 +612,23 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 | Compute maximum logic depth from input n13 to output n25[0]. | PathQuery / DepthAnalysis |
 | What is the global critical path? | DepthAnalysis |
 | Check functional equivalence between internal signals n1287 and n2404. | FunctionQuery |
-| Verify current design equivalent to original loaded netlist. | Future whole-design equivalence API |
+| Verify current design equivalent to original loaded netlist. | `checkWholeDesignEquivalence()` / tools `equiv_query original` |
 | Replace a gate driver, reconnect a gate input, or arbitrarily merge two nets. | 不屬於 public EditApply；需由內部 verified pass 或 expert API 處理 |
 
 ---
 
-## 15. 等價性欄位解讀
+## 17. 等價性欄位解讀
 
 | equivalenceMethod | 意思 | 常見 command |
 |---|---|---|
 | `NotChecked` | 目前沒有等價性證明 | 不應出現在成功的 public `runEditApply()` edit |
 | `StructuralIdentity` | 名稱改變、unused/dangling/dead logic removal、structural merge | `RenameNet`, `RemoveDanglingLogic`, `TrimDeadLogic` |
-| `LocalRewriteRule` | 可由局部 Boolean identity 證明 | `CleanupBuffers`, `CollapseDoubleInverter`, `SimplifyConstants`, buffer insertion |
-| `WholeDesignSat` | 保留給未來 whole-design SAT equivalence | 尚未接入 |
+| `LocalRewriteRule` | 可由局部 Boolean identity 或安全 cleanup 組合證明 | `CleanupBuffers`, `CollapseDoubleInverter`, `SafeCleanupFixpoint`, `SimplifyConstants`, buffer insertion, `ConvertToBasis`, `ReplaceGateType` |
+| `WholeDesignSat` | current 與 original/previous-edit 的 whole-design SAT equivalence | tools `equiv_query` |
 
 ---
 
-## 16. 測試狀態
+## 18. 測試狀態
 
 目前 `mini test/tester.cpp` 已涵蓋：
 
@@ -457,6 +640,9 @@ runEditApply validateEquivalence has certificate for public edit
 runEditApply missing required rename argument
 runEditApply missing fanout net
 runEditApply invalid fanout limit
+runEditApply convert_basis whole allowed AND NOT
+runEditApply convert_basis net_fanin n10 allowed NOR NOT
+runEditApply replace_type XOR using NAND
 runEditApply unsupported command
 ```
 

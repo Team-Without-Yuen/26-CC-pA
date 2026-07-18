@@ -26,7 +26,7 @@ const Port* findPortByName(const std::vector<Port>& inputs,
 
 // 將 gate ID 陣列轉成 gate instance name 陣列；無效 ID 會被略過。
 std::vector<std::string> gateIdsToNames(const Netlist& netlist,
-                                        const std::vector<int>& gateIds) {
+                                         const std::vector<int>& gateIds) {
     std::vector<std::string> names;
     names.reserve(gateIds.size());
     for (int gateId : gateIds) {
@@ -35,6 +35,36 @@ std::vector<std::string> gateIdsToNames(const Netlist& netlist,
         }
     }
     return names;
+}
+
+// Active-object helpers keep public reports independent from tombstone slots.
+bool isActiveGate(const Netlist& netlist, int gateId) {
+    return netlist.isValidGateId(gateId) &&
+           netlist.getGate(gateId).type != GateType::UNKNOWN;
+}
+
+bool isActiveNet(const Netlist& netlist, int netId) {
+    return netlist.isValidNetId(netId) && !netlist.getNet(netId).isRemoved;
+}
+
+size_t getActiveGateCount(const Netlist& netlist) {
+    size_t count = 0;
+    for (size_t i = 0; i < netlist.getGateCount(); ++i) {
+        if (isActiveGate(netlist, static_cast<int>(i))) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+size_t getActiveNetCount(const Netlist& netlist) {
+    size_t count = 0;
+    for (size_t i = 0; i < netlist.getNetCount(); ++i) {
+        if (isActiveNet(netlist, static_cast<int>(i))) {
+            ++count;
+        }
+    }
+    return count;
 }
 
 } // namespace
@@ -76,22 +106,26 @@ bool Netlist::isConstantNet(int netId) const {
     return isValidNetId(netId) && nets[netId].isConst;
 }
 
-// 依照 gates vector 順序列出所有 gate instance names。
+// 依照 gates vector 順序列出所有未移除的 gate instance names。
 std::vector<std::string> Netlist::getAllGateNames() const {
     std::vector<std::string> names;
     names.reserve(gates.size());
     for (const Gate& gate : gates) {
-        names.push_back(gate.instName);
+        if (gate.type != GateType::UNKNOWN) {
+            names.push_back(gate.instName);
+        }
     }
     return names;
 }
 
-// 依照 nets vector 順序列出所有 net names。
+// 依照 nets vector 順序列出所有未移除的 net names。
 std::vector<std::string> Netlist::getAllNetNames() const {
     std::vector<std::string> names;
     names.reserve(nets.size());
     for (const Net& net : nets) {
-        names.push_back(net.name);
+        if (!net.isRemoved) {
+            names.push_back(net.name);
+        }
     }
     return names;
 }
@@ -163,7 +197,7 @@ std::vector<std::string> Netlist::getPortBitNames(const std::string& portName) c
 
     names.reserve(port->netIds.size());
     for (int netId : port->netIds) {
-        if (isValidNetId(netId)) {
+        if (isActiveNet(*this, netId)) {
             names.push_back(nets[netId].name);
         }
     }
@@ -174,10 +208,10 @@ std::vector<std::string> Netlist::getPortBitNames(const std::string& portName) c
 std::vector<std::string> Netlist::getUndrivenNetNames() const {
     std::vector<std::string> names;
     for (const Net& net : nets) {
-        if (net.isPI || net.isConst) {
+        if (net.isRemoved || net.isPI || net.isConst) {
             continue;
         }
-        if (!isValidGateId(net.driverGateId)) {
+        if (!isActiveGate(*this, net.driverGateId)) {
             names.push_back(net.name);
         }
     }
@@ -188,10 +222,17 @@ std::vector<std::string> Netlist::getUndrivenNetNames() const {
 std::vector<std::string> Netlist::getNoLoadNetNames() const {
     std::vector<std::string> names;
     for (const Net& net : nets) {
-        if (net.isPO || net.isConst) {
+        if (net.isRemoved || net.isPO || net.isConst) {
             continue;
         }
-        if (net.loadGateIds.empty()) {
+        bool hasActiveLoad = false;
+        for (int loadGateId : net.loadGateIds) {
+            if (isActiveGate(*this, loadGateId)) {
+                hasActiveLoad = true;
+                break;
+            }
+        }
+        if (!hasActiveLoad) {
             names.push_back(net.name);
         }
     }
@@ -215,9 +256,12 @@ std::vector<std::string> Netlist::getFloatingNetNames() const {
 std::vector<std::string> Netlist::getUnconnectedGateNames() const {
     std::vector<std::string> names;
     for (const Gate& gate : gates) {
-        bool hasUnconnectedPin = !isValidNetId(gate.outputNetId);
+        if (gate.type == GateType::UNKNOWN) {
+            continue;
+        }
+        bool hasUnconnectedPin = !isActiveNet(*this, gate.outputNetId);
         for (int inputNetId : gate.inputNetIds) {
-            if (!isValidNetId(inputNetId)) {
+            if (!isActiveNet(*this, inputNetId)) {
                 hasUnconnectedPin = true;
                 break;
             }
@@ -244,7 +288,9 @@ std::map<GateType, int> Netlist::countGatesByType() const {
 
     for (size_t i = 0; i < getGateCount(); ++i) {
         const Gate& gate = getGate(static_cast<int>(i));
-        ++counts[gate.type];
+        if (gate.type != GateType::UNKNOWN) {
+            ++counts[gate.type];
+        }
     }
     return counts;
 }
@@ -252,6 +298,9 @@ std::map<GateType, int> Netlist::countGatesByType() const {
 // 回傳指定 gate type 的所有 gate ID，供「list all XOR gates」等 prompt 使用
 std::vector<int> Netlist::getGatesByType(GateType type) const {
     std::vector<int> result;
+    if (type == GateType::UNKNOWN) {
+        return result;
+    }
     for (size_t i = 0; i < getGateCount(); ++i) {
         const Gate& gate = getGate(static_cast<int>(i));
         if (gate.type == type) {
@@ -268,15 +317,21 @@ size_t Netlist::getGateCountByType(GateType type) const {
 }
 
 // 找出 input 接到常數 0/1 的 gates；可選擇限定 gate type 與常數值
-std::vector<int> Netlist::findGatesWithConstInput(GateType type, int constValue) const {
+std::vector<int> Netlist::findGatesWithConstInput(
+    GateType type,
+    int constValue,
+    int inputCount) const {
     std::vector<int> result;
-    const std::string wantedConst =
-        (constValue == 0) ? "1'b0" :
-        (constValue == 1) ? "1'b1" : "";
 
     for (size_t i = 0; i < getGateCount(); ++i) {
         const Gate& gate = getGate(static_cast<int>(i));
+        if (gate.type == GateType::UNKNOWN) {
+            continue;
+        }
         if (type != GateType::UNKNOWN && gate.type != type) {
+            continue;
+        }
+        if (inputCount >= 0 && static_cast<int>(gate.inputNetIds.size()) != inputCount) {
             continue;
         }
 
@@ -287,7 +342,7 @@ std::vector<int> Netlist::findGatesWithConstInput(GateType type, int constValue)
             if (!net.isConst) {
                 continue;
             }
-            if (wantedConst.empty() || net.name == wantedConst) {
+            if (constValue < 0 || net.constVal == constValue) {
                 matched = true;
                 break;
             }
@@ -300,9 +355,12 @@ std::vector<int> Netlist::findGatesWithConstInput(GateType type, int constValue)
 }
 
 // 找出 input 接到常數 0/1 的 gate names；可選擇限定 gate type 與常數值。
-std::vector<std::string> Netlist::getGateNamesWithConstInput(GateType type, int constValue) const {
+std::vector<std::string> Netlist::getGateNamesWithConstInput(
+    GateType type,
+    int constValue,
+    int inputCount) const {
     std::vector<std::string> result;
-    std::vector<int> gateIds = findGatesWithConstInput(type, constValue);
+    std::vector<int> gateIds = findGatesWithConstInput(type, constValue, inputCount);
 
     result.reserve(gateIds.size());
     for (int id : gateIds) {
@@ -315,8 +373,11 @@ std::vector<std::string> Netlist::getGateNamesWithConstInput(GateType type, int 
 }
 
 // 計算 input 接到常數 0/1 的 gate 數量；可選擇限定 gate type 與常數值。
-size_t Netlist::countGatesWithConstInput(GateType type, int constValue) const {
-    return findGatesWithConstInput(type, constValue).size();
+size_t Netlist::countGatesWithConstInput(
+    GateType type,
+    int constValue,
+    int inputCount) const {
+    return findGatesWithConstInput(type, constValue, inputCount).size();
 }
 
 // 執行統一 BasicQuery；這層只負責 dispatch 到既有 Basic helper，不做 cone/path/depth。
@@ -327,8 +388,8 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
     case BasicQueryType::Summary:
         report.ok = true;
         report.message = "Basic design summary";
-        report.gateCount = getGateCount();
-        report.netCount = getNetCount();
+        report.gateCount = getActiveGateCount(*this);
+        report.netCount = getActiveNetCount(*this);
         report.logicalWireCount = getLogicalWireCount();
         report.primaryInputCount = getPrimaryInputs().size();
         report.primaryOutputCount = getPrimaryOutputs().size();
@@ -345,13 +406,15 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
     case BasicQueryType::ListGates:
         report.ok = true;
         report.message = "List all gates";
-        report.gateCount = getGateCount();
+        report.gateCount = getActiveGateCount(*this);
         if (query.includeNames) {
             report.gateNames = getAllGateNames();
         }
         if (query.includeIds) {
             for (size_t i = 0; i < getGateCount(); ++i) {
-                report.gateIds.push_back(static_cast<int>(i));
+                if (isActiveGate(*this, static_cast<int>(i))) {
+                    report.gateIds.push_back(static_cast<int>(i));
+                }
             }
         }
         return report;
@@ -359,13 +422,15 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
     case BasicQueryType::ListNets:
         report.ok = true;
         report.message = "List all nets";
-        report.netCount = getNetCount();
+        report.netCount = getActiveNetCount(*this);
         if (query.includeNames) {
             report.netNames = getAllNetNames();
         }
         if (query.includeIds) {
             for (size_t i = 0; i < getNetCount(); ++i) {
-                report.netIds.push_back(static_cast<int>(i));
+                if (isActiveNet(*this, static_cast<int>(i))) {
+                    report.netIds.push_back(static_cast<int>(i));
+                }
             }
         }
         return report;
@@ -376,6 +441,16 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
         report.primaryInputCount = getPrimaryInputs().size();
         if (query.includeNames) {
             report.portNames = getPrimaryInputNames();
+            for (const Port& port : primaryInputs) {
+                PortSummary summary;
+                summary.name = port.name;
+                summary.width = static_cast<int>(port.netIds.size());
+                summary.msb = port.msb;
+                summary.lsb = port.lsb;
+                summary.isBus = port.isBus();
+                summary.isInput = true;
+                report.ports.push_back(summary);
+            }
         }
         return report;
 
@@ -385,6 +460,16 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
         report.primaryOutputCount = getPrimaryOutputs().size();
         if (query.includeNames) {
             report.portNames = getPrimaryOutputNames();
+            for (const Port& port : primaryOutputs) {
+                PortSummary summary;
+                summary.name = port.name;
+                summary.width = static_cast<int>(port.netIds.size());
+                summary.msb = port.msb;
+                summary.lsb = port.lsb;
+                summary.isBus = port.isBus();
+                summary.isOutput = true;
+                report.ports.push_back(summary);
+            }
         }
         return report;
 
@@ -416,7 +501,7 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
 
     case BasicQueryType::GateInfo: {
         const int gateId = getGateId(query.name);
-        if (!isValidGateId(gateId)) {
+        if (!isActiveGate(*this, gateId)) {
             report.message = "Gate not found: " + query.name;
             return report;
         }
@@ -441,7 +526,7 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
 
     case BasicQueryType::NetInfo: {
         const int netId = getNetId(query.name);
-        if (!isValidNetId(netId)) {
+        if (!isActiveNet(*this, netId)) {
             report.message = "Net not found: " + query.name;
             return report;
         }
@@ -500,7 +585,7 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
         report.message = "Count gates by type";
         if (query.gateType == GateType::UNKNOWN) {
             report.gateTypeCounts = countGatesByType();
-            report.gateCount = getGateCount();
+            report.gateCount = getActiveGateCount(*this);
         } else {
             const int count = static_cast<int>(getGateCountByType(query.gateType));
             report.gateTypeCounts[query.gateType] = count;
@@ -531,12 +616,21 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
         report.ok = true;
         report.message = "List gates with constant input";
         if (query.includeIds) {
-            report.gateIds = findGatesWithConstInput(query.gateType, query.constValue);
+            report.gateIds = findGatesWithConstInput(
+                query.gateType,
+                query.constValue,
+                query.inputCount);
         }
         if (query.includeNames) {
-            report.gateNames = getGateNamesWithConstInput(query.gateType, query.constValue);
+            report.gateNames = getGateNamesWithConstInput(
+                query.gateType,
+                query.constValue,
+                query.inputCount);
         }
-        report.gateCount = countGatesWithConstInput(query.gateType, query.constValue);
+        report.gateCount = countGatesWithConstInput(
+            query.gateType,
+            query.constValue,
+            query.inputCount);
         if (query.gateType != GateType::UNKNOWN) {
             report.typeName = gateTypeToString(query.gateType);
         }

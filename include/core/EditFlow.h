@@ -1,8 +1,18 @@
 #pragma once
 
 #include <string>
+#include <vector>
 
 #include "include/core/NetlistTypes.h"
+
+// Defines where a transformation/edit command is allowed to scan and rewrite.
+enum class TargetScope {
+    WHOLE_NETLIST,
+    NET_FANIN,
+    NET_FANOUT,
+    GATE_FANIN,
+    GATE_FANOUT
+};
 
 enum class EditCommandKind {
     Unknown,
@@ -17,10 +27,11 @@ enum class EditCommandKind {
     CleanupBuffers,
     CollapseDoubleInverter,
     LocalSimplificationFixpoint,
+    SafeCleanupFixpoint,
     TrimDeadLogic,
     RemoveDanglingLogic,
     RemoveUnusedNets,
-    MergeEquivalentGates,
+    MergeEquivalentGates, // Legacy/internal structural merge alias；不可作為 functional merge 對外公開
     MergeStructurallyEquivalentGates,
     SimplifyConstants,
     SimplifySameInput,
@@ -32,6 +43,9 @@ enum class EditCommandKind {
     InsertBufferAtDriver,
     InsertBufferBeforeGate,
     InsertBuffersByGateType,
+
+    ConvertToBasis,
+    ReplaceGateType,
 
     ReplaceGateWithNet,
     ReplaceGateWithConstant,
@@ -53,6 +67,7 @@ struct EditApplyRequest {
     std::string oldName;
     std::string newName;
     std::string targetGateName;
+    std::string scopeName;
 
     int gateId = -1;
     int netId = -1;
@@ -65,13 +80,21 @@ struct EditApplyRequest {
     int newOutputNetId = -1;
     int maxFanout = -1;
     int pinIndex = -1;
+    int constValue = -1;
+    int inputCount = -1;
 
     GateType gateType = GateType::UNKNOWN;
+    GateType targetGateType = GateType::UNKNOWN;
+    TargetScope scope = TargetScope::WHOLE_NETLIST;
+    std::vector<GateType> allowedTypes;
+    std::vector<GateType> bannedTypes;
+
     bool processClock = false;
     bool processReset = false;
     bool bufferInputs = true;
     bool bufferOutputs = true;
     bool allowDuplicateLoads = false;
+    bool verbose = false;
 
     bool validateEquivalence = false;
     bool rollbackOnFailure = true;

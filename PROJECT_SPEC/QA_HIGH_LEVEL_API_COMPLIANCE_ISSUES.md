@@ -80,8 +80,8 @@
 - 新增 `satisfiesFanoutLimit(int maxFanoutLimit)`。
 - 新增 `DirectConnectivityQueryType::FanoutLoadReport`。
 - 新增 `DirectConnectivityQueryType::GlobalFanoutReport`。
-- 新增 CLI command：`conn_query fanout_load <net>` / `conn_query fanout_report <net>`。
-- 新增 CLI command：`conn_query global_fanout [limit]` / `conn_query pi_fanout [limit]` / `conn_query fanout_violations <limit>`。
+- 當時新增 CLI command：`conn_query ...`；目前公開入口已整併為 `structure_query fanout_load <net>` / `structure_query fanout_report <net>`。
+- 目前公開入口為：`structure_query global_fanout [limit]` / `structure_query pi_fanout [limit]` / `structure_query fanout_violations <limit>`；舊 `conn_query` 只保留相容性。
 - tester 已覆蓋：
   - primitive gate input load
   - DFF `.D` load
