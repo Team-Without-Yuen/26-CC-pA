@@ -11,12 +11,12 @@ API_SPEC/CONE_QUERY_API.md
 
 ## 1. 基本概念
 
-`ConeQuery` 用來回答「從某個 net 或 gate 出發，跨多層往 fanin / fanout 方向能到哪些 nets/gates」。
+`ConeQuery` 用來回答「從某個 net 或 gate 出發，跨多層往 fanin / fanout 方向能到哪些 nets/gates」，也能掃描所有 output 找出 fanin cone 最大者。
 
 基本形式：
 
 ```text
-query.type + netName/gateName -> runConeQuery() -> ConeReport
+query.type + optional netName/gateName -> runConeQuery() -> ConeReport
 ```
 
 使用流程：
@@ -49,6 +49,8 @@ DFF 是 sequential boundary，ConeQuery 不穿越 DFF。
 | `NetTransitiveFanout` | 從 net 往前找能被它影響的 cone | `netName` | `netNames`, `gateNames`, `netCount`, `gateCount` |
 | `GateTransitiveFanin` | 從 gate output 往回找 fanin cone | `gateName` | `netNames`, `gateNames`, `netCount`, `gateCount` |
 | `GateTransitiveFanout` | 從 gate output 往前找 fanout cone | `gateName` | `netNames`, `gateNames`, `netCount`, `gateCount` |
+| `LargestOutputCone` | 找 fanin cone gateCount 最大的 primary output | 無 | `sourceName`, `gateCount`, `gateNames`, `checkedOutputCount` |
+| `SharedFaninGates` | 找兩個 net fanin cones 的共有 gates | `netName`, `secondNetName` | `gateNames`, `gateCount`, `gateTypeCounts` |
 
 ---
 
@@ -58,6 +60,7 @@ DFF 是 sequential boundary，ConeQuery 不穿越 DFF。
 |---|---|---|---|
 | `type` | `ConeQueryType` | `NetTransitiveFanin` | 決定 cone 來源與方向 |
 | `netName` | `std::string` | `""` | net 類 query 使用 |
+| `secondNetName` | `std::string` | `""` | `SharedFaninGates` 的第二個 net |
 | `gateName` | `std::string` | `""` | gate 類 query 使用 |
 | `includeIds` | `bool` | `true` | 是否填 `rootNetIds`, `netIds`, `gateIds` |
 | `includeNames` | `bool` | `true` | 是否填 `rootNetNames`, `netNames`, `gateNames` |
@@ -75,9 +78,12 @@ DFF 是 sequential boundary，ConeQuery 不穿越 DFF。
 | `type` | query type |
 | `sourceName` | 使用者指定的來源名稱 |
 | `sourceId` | 來源 net ID 或 gate ID |
+| `secondSourceName` / `secondSourceId` | shared fanin query 的第二個來源 |
 | `cone` | 原始 `ConeResult` |
 | `netCount` | cone 內有效 net 數量 |
 | `gateCount` | cone 內有效 combinational gate 數量 |
+| `gateTypeCounts` | cone 或 shared gate 集合內各 gate type 數量 |
+| `checkedOutputCount` | `LargestOutputCone` 掃描的 primary output bit 數量 |
 | `rootNetIds` | cone root net IDs |
 | `rootNetNames` | cone root net names |
 | `netIds` | cone 內 net IDs |
@@ -223,7 +229,57 @@ Netlist::ConeReport report = netlist.runConeQuery(query);
 
 ---
 
-## 10. Prompt 對應表
+## 10. LargestOutputCone
+
+用途：
+
+```text
+掃描所有 primary output bit，找出 fanin cone gateCount 最大的 output。
+```
+
+寫法：
+
+```cpp
+Netlist::ConeQuery query;
+query.type = Netlist::ConeQueryType::LargestOutputCone;
+
+Netlist::ConeReport report = netlist.runConeQuery(query);
+```
+
+讀取：
+
+| 想知道 | 讀取欄位 |
+|---|---|
+| 哪個 output cone 最大 | `report.sourceName` |
+| 最大 cone 有幾個 gate | `report.gateCount` |
+| 最大 cone 內有哪些 gates | `report.gateNames` |
+| 總共掃了多少個 PO bit | `report.checkedOutputCount` |
+
+注意：
+
+```text
+LargestOutputCone 是用 fanin cone 的 combinational gateCount 判斷大小。
+如果題目問 deepest fanin logic cone，應使用 DepthQuery::DeepestOutputCone。
+```
+
+### 10.1 SharedFaninGates
+
+用途：直接取得兩個 fanin cones 的 gate intersection，不需要呼叫端自行比對兩份 gate list。
+
+```cpp
+Netlist::ConeQuery query;
+query.type = Netlist::ConeQueryType::SharedFaninGates;
+query.netName = "n16";
+query.secondNetName = "n17";
+
+Netlist::ConeReport report = netlist.runConeQuery(query);
+```
+
+`report.ok=true` 且 `report.gateCount=0` 表示兩個合法 cones 沒有共有 gate；名稱不存在才是 query error。
+
+---
+
+## 11. Prompt 對應表
 
 | Prompt | 建議 Query type | 需要設定 | 主要讀取 |
 |---|---|---|---|
@@ -234,10 +290,13 @@ Netlist::ConeReport report = netlist.runConeQuery(query);
 | Find the fanin cone of gate g1. | `GateTransitiveFanin` | `gateName = "g1"` | `gateNames`, `netNames` |
 | Find the fanout cone of gate g1. | `GateTransitiveFanout` | `gateName = "g1"` | `gateNames`, `netNames` |
 | What is the longest path inside the fanin cone of y? | `NetTransitiveFanin` | `netName = "y"`, `includeLocalPaths = true` | `longestDepth`, `longestPathNetNames` |
+| Which output has the largest fanin cone? | `LargestOutputCone` | 無 | `sourceName`, `gateCount` |
+| Report all gates shared between the fanin cones of n16 and n17. | `SharedFaninGates` | `netName = "n16"`, `secondNetName = "n17"` | `gateNames`, `gateCount` |
+| Report the number of each gate type in the cone of n8. | `NetTransitiveFanin` | `netName = "n8"` | `gateTypeCounts` |
 
 ---
 
-## 11. 何時不要用 ConeQuery
+## 12. 何時不要用 ConeQuery
 
 | 問題 | 應改用 |
 |---|---|
@@ -247,10 +306,11 @@ Netlist::ConeReport report = netlist.runConeQuery(query);
 | Is there a path from a to y? | PathQuery |
 | Find shortest path from a to y avoiding g3. | PathQuery |
 | What is the maximum depth to output y? | DepthAnalysis |
+| Which output bit has the deepest fanin logic cone? | DepthQuery::DeepestOutputCone |
 
 ---
 
-## 12. 低階 Helper 對照
+## 13. 低階 Helper 對照
 
 | Query type | 底層 helper |
 |---|---|
@@ -258,17 +318,18 @@ Netlist::ConeReport report = netlist.runConeQuery(query);
 | `NetTransitiveFanout` | `getTransitiveFanoutCone()` |
 | `GateTransitiveFanin` | `getGateTransitiveFaninCone()` |
 | `GateTransitiveFanout` | `getGateTransitiveFanoutCone()` |
+| `LargestOutputCone` | `getPrimaryOutputNetIds()` + `getTransitiveFaninCone()` + `getConeGateCount()` |
 | result net names/count | `getConeNetNames()`, `getConeNetCount()` |
 | result gate names/count | `getConeGateNames()`, `getConeGateCount()` |
 | local longest/shortest path | `findLongestPathInCone()`, `findShortestPathInCone()` |
 
 ---
 
-## 13. 目前實作與測試狀態
+## 14. 目前實作與測試狀態
 
 ```text
 實作檔案：src/analysis/ConeAnalysis.cpp
 型別檔案：include/core/NetlistQueries.h
-tester：mini test/tester.cpp
-目前 regression：Summary: 45 passed, 0 failed.
+tester：mini test/tester.cpp, mini test/test6/test6.cpp
+目前 test6：Summary: 4 passed, 0 failed.
 ```

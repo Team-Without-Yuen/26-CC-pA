@@ -182,6 +182,9 @@ size_t Netlist::getLogicalWireCount() const {
     std::unordered_set<std::string> uniqueWireNames;
     
     for (const auto& net : nets) {
+        if (net.isRemoved) {
+            continue;
+        }
         std::string baseName = net.name;
         
         // 尋找陣列/匯流排後綴的起始位置，例如 "data[3]" 找到 '['

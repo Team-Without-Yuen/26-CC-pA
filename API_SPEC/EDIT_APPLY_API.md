@@ -1,11 +1,11 @@
-# Edit Apply API
+# Edit Apply API 整理
 
 這份文件是內部用的 Edit Apply 詳細規格，整理 `NetlistEditReport`、`WithReport()` wrapper、`runEditApply()`、以及不對外暴露的低階 edit primitive。
 
 外部使用手冊請看：
 
 ```text
-API_SPEC/EDIT_APPLY_API_USAGE.md
+API_SPEC/EDIT_APPLY_USAGE.md
 ```
 
 ---
@@ -28,7 +28,16 @@ Internal layer:
     -> NetlistEditReport
 ```
 
-public `runEditApply()` 只暴露能由 wrapper 解釋 functional equivalence 的安全修改，例如 rename、cleanup、buffer insertion、constant simplification。低階 rewiring / replacement primitive 保留給內部 pass 使用，不直接給 prompt routing 呼叫。
+public `runEditApply()` 只暴露能由 wrapper 證明 functional equivalence 的安全修改，例如 rename、cleanup、buffer insertion、constant simplification、functional duplicate merge、technology mapping / basis conversion。低階 rewiring / replacement primitive 保留給內部 pass 使用，不直接給 prompt routing 呼叫。
+
+整理原則：
+
+```text
+1. Public command 只放 prompt 可能直接要求、且 wrapper 能說明等價性的操作。
+2. 低階 graph rewiring 即使有 WithReport，也不直接暴露給 LLM / CLI。
+3. Technology mapping 會修改 netlist，因此歸入 edit_apply，而不是 query。
+4. Optimization apply 之後可重用 NetlistEditReport，但不混入目前的 low-level primitive。
+```
 
 ---
 
@@ -60,6 +69,8 @@ EditValidationResult validation;
 std::optional<DepthChange> depthChange;
 std::optional<FanoutChange> fanoutChange;
 std::optional<MappingDelta> mappingDelta;
+std::optional<ConstantSimplificationSummary> constantSimplification;
+std::optional<FunctionalMergeSummary> functionalMerge;
 
 std::vector<int> changedGateIds;
 std::vector<int> changedNetIds;
@@ -79,7 +90,9 @@ enum class EquivalenceCheckMethod {
 };
 ```
 
-目前 `validateEditResult()` 只檢查 structure / Problem A constraints，本身不做 whole-design equivalence。只有知道自身 rewrite rule 的 wrapper 才會呼叫 `certifyEquivalence()` 補上 certificate。
+目前 `validateEditResult()` 檢查 structure 與 Problem A constraints，但本身不做 whole-design equivalence。Problem A constraint 採 baseline-aware 語意：`problemAConstraintsValid` 表示 after design 絕對合法，`problemAConstraintsRegressed` 表示 edit 是否新增 baseline 原本沒有的違規；只有新增違規才使 edit validation 失敗。已知自身 rewrite rule 的 wrapper 會另呼叫 `certifyEquivalence()` 補上 certificate。
+
+`functionalMerge` 會保留 scope/filter、search status/completeness、candidate/class/pair/SAT 統計、whole-design verification 狀態，以及每筆 representative/removed gate/net record。這使 follow-up 能直接回答實際合併數量與保留/移除對象，不必重新分析 after design。
 
 ---
 
@@ -175,6 +188,10 @@ DFF control buffer:
 
 by-gate-type buffer:
   gateType != UNKNOWN，且至少選擇 input/output 其中一種
+
+functional merge:
+  scope target 必須存在、gateType 必須為 combinational 或 UNKNOWN、
+  simulationPatternCount 必須在 1..4096、timeLimitSeconds 必須為正數
 ```
 
 ---
@@ -183,28 +200,40 @@ by-gate-type buffer:
 
 `runEditApply()` 目前對外支援：
 
-```cpp
-RenameGate
-RenameNet
-CleanupBuffers
-CollapseDoubleInverter
-LocalSimplificationFixpoint
-TrimDeadLogic
-RemoveDanglingLogic
-RemoveUnusedNets
-MergeEquivalentGates
-MergeStructurallyEquivalentGates
-SimplifyConstants
-SimplifySameInput
-InsertBuffersForFanout
-InsertBuffersForSpecificNet
-InsertBuffersForDffControl
-InsertBuffersOnEachLoad
-InsertBufferAtDriver
-InsertBufferBeforeGate
-InsertBuffersByGateType
-RemoveNetIfUnused
+```text
+Rename:
+  RenameGate
+  RenameNet
+
+Cleanup / Simplification:
+  CleanupBuffers
+  CollapseDoubleInverter
+  LocalSimplificationFixpoint
+  SafeCleanupFixpoint
+  TrimDeadLogic
+  RemoveDanglingLogic
+  RemoveUnusedNets
+  MergeStructurallyEquivalentGates
+  MergeFunctionallyEquivalentGates
+  SimplifyConstants
+  SimplifySameInput
+  RemoveNetIfUnused
+
+Buffer insertion:
+  InsertBuffersForFanout
+  InsertBuffersForSpecificNet
+  InsertBuffersForDffControl
+  InsertBuffersOnEachLoad
+  InsertBufferAtDriver
+  InsertBufferBeforeGate
+  InsertBuffersByGateType
+
+Technology mapping:
+  ConvertToBasis
+  ReplaceGateType
 ```
+
+`EditCommandKind::MergeEquivalentGates` 與 `mergeEquivalentGates*()` 只為內部舊程式相容性保留；實作仍是 structural identity merge，不是 SAT-based functional equivalence。它不得出現在 public CLI/tool schema。對外 structural merge 使用 `MergeStructurallyEquivalentGates`；跨結構、SAT-proven functional merge 使用 `MergeFunctionallyEquivalentGates`。
 
 equivalence certificate 原則：
 
@@ -214,10 +243,26 @@ StructuralIdentity:
 
 LocalRewriteRule:
   buffer insertion、buffer cleanup、double inverter collapse、
-  constant propagation、same-input simplification、local simplification fixpoint
+  constant propagation、same-input simplification、local/safe cleanup fixpoint、
+  technology mapping / basis conversion
+
+WholeDesignSat:
+  MergeFunctionallyEquivalentGates；先以 FunctionSearch 建立 SAT 等價類，
+  cycle-safe rewiring 後再比較全部 PO 與 DFF.D endpoints
 ```
 
 成功的 public `runEditApply()` 不應回傳 `NotChecked`。若使用者要求 equivalence，但該 command 沒有 certificate，report 應給 warning 或失敗，不應宣稱等價。
+
+dispatch 對應：
+
+```text
+Rename*                    -> rename*WithReport()
+Cleanup / Simplification   -> cleanup / simplification WithReport wrappers, including SafeCleanupFixpoint
+Functional duplicate merge -> FunctionSearch class-only SAT -> cycle-safe merge -> whole-design SAT
+Buffer insertion           -> insertBuffer*WithReport()
+Technology mapping         -> TechMapper::*WithReport()
+Internal primitive         -> validation 階段直接擋下
+```
 
 ---
 
@@ -282,24 +327,55 @@ message = "Command is an internal low-level primitive and is not exposed through
 
 ## 7. Technology Mapping 關係
 
-Technology mapping wrapper 目前也會回傳 `NetlistEditReport`：
+Technology mapping 已收斂為 `runEditApply()` 的 public 子功能，而不是獨立平行的 `TechnologyApply` 入口。原因是它會直接修改 netlist，語意上屬於 edit / transformation 類 command；對 LLM 來說可以維持「查詢走 query、修改走 edit_apply」的單一入口。
 
 ```cpp
-mapTechnologyWithReport()
-mapTechnologyForConeWithReport()
-convertToAndNotWithReport()
-convertToOrNotWithReport()
-convertToNandWithReport()
-convertToNorWithReport()
-convertToXagWithReport()
-convertToAnfWithReport()
-convertToXorOrWithReport()
-convertToXnorAndWithReport()
-convertToXnorOrWithReport()
-customMapTechnologyWithReport()
+EditCommandKind::ConvertToBasis
+EditCommandKind::ReplaceGateType
 ```
 
-但這些目前不由 `runEditApply()` dispatch。後續應新增獨立的 public TechnologyApply API，避免 EditApply 同時承擔 safe edit、technology mapping、optimization 三種語意。
+public request 欄位：
+
+```cpp
+TargetScope scope;
+std::string scopeName;
+std::vector<GateType> allowedTypes;
+std::vector<GateType> bannedTypes;
+GateType targetGateType;
+bool verbose;
+```
+
+dispatch：
+
+```text
+ConvertToBasis
+  -> TechMapper::convertToBasisWithReport()
+  -> allowedTypes / bannedTypes 決定最終 basis
+
+ReplaceGateType
+  -> TechMapper::replaceGateTypeWithReport()
+  -> targetGateType = 要移除的 gate
+  -> allowedTypes = RHS 允許生成的 gate basis
+  -> 若 scope 內沒有 targetGateType，回 success/no change
+```
+
+report：
+
+```text
+operationKind = TechnologyMapping
+operationName = edit_apply:convert_basis 或 edit_apply:replace_type
+mappingDelta.removedCountByType
+mappingDelta.addedCountByType
+mappingDelta.finalGateCountByType
+validation.equivalenceMethod = LocalRewriteRule
+```
+
+目前 `convertToBasis()` 已修正兩個容易誤判的情況：
+
+```text
+1. target gate type 在 scope 內本來就不存在時會跳過，不再因 no-op mapping 誤報失敗。
+2. cone scope 轉換後只檢查該 scope 內是否還有違規 gate，不會被 cone 外同類 gate 影響。
+```
 
 ---
 
@@ -314,6 +390,11 @@ report 化與 validation 過程中已修正：
 4. insertBufferAtDriver / insertBufferBeforeGate 避免 vector reallocation 後繼續使用失效 reference。
 5. mergeNetIntoNet() 轉移 PO 語意後取消舊 net 的 isPO。
 6. removeDanglingLogic() 忽略 removed gates，避免 cleanup fixpoint 卡住。
+7. constant propagation 支援 gate type、constant value 與 input count 篩選，不再只能全域執行。
+8. constant folding 會檢查所有 inputs，且直接驅動 PO 時以 BUF/NOT 保留原 PO net。
+9. constant candidate matching 使用 `Net.constVal`，不依賴 constant net 名稱。
+10. CollapseDoubleInverter 不再隱含呼叫 buffer cleanup，避免後續 edit 拆除已建立的 fanout tree。
+11. InsertBuffersForSpecificNet 的 fanout report 改為 selected net + generated buffer tree scope，不再被全域其他 high-fanout nets 誤判為 constraint failure。
 ```
 
 ---
@@ -321,11 +402,11 @@ report 化與 validation 過程中已修正：
 ## 9. 目前限制
 
 ```text
-1. whole-design equivalence 尚未接入；目前只有局部可證明 wrapper 會標 certificate。
-2. Technology mapping 尚未有 public TechnologyApply API。
+1. 大部分 public edit wrapper 使用 structural/local certificate；`MergeFunctionallyEquivalentGates` 已內建 mandatory whole-design SAT，其他 edit 仍可視 prompt 再呼叫 `equiv_query original/previous_edit`。
+2. Technology mapping 已作為 `edit_apply` 子功能公開；其 edit report 使用 rule-based local certificate，需要時再另外執行 whole-design `equiv_query`。
 3. depthChange 已接 global critical depth comparison，但尚未支援 opt request targetDepth / endpoint-specific depth comparison。
 4. 大型 optimization pass 尚未導入 EditTrace。
-5. CLI dispatcher 尚未建立，main.cpp 目前仍是簡單讀檔 / 輸出入口。
+5. tools.cpp 已接完整 public edit_apply command family 與 `report_query last_edit`；internal low-level rewiring 仍不對外開放。
 6. opt_report / opt_rollback 尚未實作。
 ```
 
@@ -349,6 +430,8 @@ runEditApply cleanup_buffers
 runEditApply insert_buffers_for_specific_net
 runEditApply blocks unchecked low-level primitive
 runEditApply validateEquivalence has certificate for public edit
+runEditApply functional equivalent merge / class-only search / cycle-safe representative
+runEditApply functional merge whole-design SAT / no-change / scoped merge / timeout-before-mutation
 runEditApply missing required rename argument
 runEditApply missing fanout net
 runEditApply invalid fanout limit
@@ -360,3 +443,5 @@ runEditApply unsupported command
 ```text
 Summary: 115 passed, 0 failed.
 ```
+
+另外 `mini test/test26` 的 functional search/merge C++ API regression 為 27 passed、0 failed，並覆蓋 whole-design verification failure rollback；官方 test29/test30 實測分別成功合併 7/1 顆 gate，並通過 whole-design SAT。

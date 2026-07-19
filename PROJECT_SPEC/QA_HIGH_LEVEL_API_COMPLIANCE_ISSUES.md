@@ -50,7 +50,7 @@
 | QAC-009 | function query 缺 Boolean equation export | `FunctionQuery` | testcase 有可能要求 derive Boolean equation | 目前有 SAT/equivalence/constant status，但沒有輸出 symbolic equation | Boolean expression 類 prompt 無法直接回答 | P2 | 新增 bounded cone expression builder，DFF.Q/PI/constant 當 leaf |
 | QAC-010 | 缺 symmetry / cut / articulation 類高階 query | analysis API | testcase prompt 可能問 symmetry、cut point、關鍵節點 | 目前 path/cone 可組合部分答案，但沒有專用 API | 特殊 analysis prompt 覆蓋不足 | P2 | 後續新增 graph analysis API：dominator / articulation / cut / symmetry |
 | QAC-011 | path query 缺 count-only safe mode | `PathQuery` | 有些 prompt 可能只問 path count | 目前 count 只能 enumerate 後 `paths.size()` | 大型 path count 會爆 | P2 | 新增 DP-based count 或 bounded count，並偵測 combinational DAG / loop guard |
-| QAC-012 | CLI / tools 是否完整包裝所有高階 API 尚未確認 | `tools.cpp`, `tools_high.cpp` | 最終系統要能由自然語言映射到 engine command | 有些 API 已有 CLI，有些仍可能只在 C++ API | LLM agent 可能無法直接呼叫某些功能 | P2 | 對照 `TOOLS_CLI_USAGE.md` 與實際 tools command，補缺口 |
+| QAC-012 | CLI / tools 是否完整包裝所有高階 API 尚未確認 | `tools.cpp`, `tools_high.cpp` | 最終系統要能由自然語言映射到 engine command | 有些 API 已有 CLI，有些仍可能只在 C++ API | LLM agent 可能無法直接呼叫某些功能 | P2 | 對照 `TOOLS_SPEC/README.md` 與實際 tools command，補缺口 |
 
 ---
 
@@ -80,8 +80,8 @@
 - 新增 `satisfiesFanoutLimit(int maxFanoutLimit)`。
 - 新增 `DirectConnectivityQueryType::FanoutLoadReport`。
 - 新增 `DirectConnectivityQueryType::GlobalFanoutReport`。
-- 新增 CLI command：`conn_query fanout_load <net>` / `conn_query fanout_report <net>`。
-- 新增 CLI command：`conn_query global_fanout [limit]` / `conn_query pi_fanout [limit]` / `conn_query fanout_violations <limit>`。
+- 當時新增 CLI command：`conn_query ...`；目前公開入口已整併為 `structure_query fanout_load <net>` / `structure_query fanout_report <net>`。
+- 目前公開入口為：`structure_query global_fanout [limit]` / `structure_query pi_fanout [limit]` / `structure_query fanout_violations <limit>`；舊 `conn_query` 只保留相容性。
 - tester 已覆蓋：
   - primitive gate input load
   - DFF `.D` load

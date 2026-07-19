@@ -1,4 +1,4 @@
-# Depth Query API
+# Depth Query API 整理
 
 這份文件整理 Depth Analysis / DepthQuery 的內部設計、depth model、底層 helper 與限制。
 
@@ -20,6 +20,8 @@ primary output depth
 DFF.D depth
 global critical path
 depth 超標 endpoint
+gate 是否位在任一 maximum-depth path
+最深 primary output fanin cone
 ```
 
 它不處理：
@@ -182,6 +184,7 @@ struct DepthReport {
 struct DepthQuery {
     DepthQueryType type = DepthQueryType::SpecificNet;
     std::string netName;
+    std::string gateName;
     int threshold = -1;
     bool includeCriticalPath = true;
 };
@@ -192,12 +195,16 @@ struct DepthQuery {
 ```cpp
 struct DepthReportSet {
     bool ok = false;
+    bool exists = false;
     std::string message;
     DepthQueryType type = DepthQueryType::SpecificNet;
     std::vector<DepthReport> reports;
     DepthReport worst;
     int threshold = -1;
     size_t count = 0;
+    std::string gateName;
+    int gateId = -1;
+    bool gateOnCriticalPath = false;
 };
 ```
 
@@ -220,6 +227,20 @@ dispatch 對照：
 | `DffD` | `analyzeDffDDepths()` | `reports`, `worst` |
 | `GlobalCriticalPath` | `findGlobalCriticalPath()` | `worst`, `reports[0]` |
 | `EndpointsExceedingDepth` | `findEndpointsExceedingDepth(threshold)` | `reports`, `count`, `worst` |
+| `PrimaryOutputsExceedingDepth` | bulk PO depth analysis + threshold filter | `reports`, `count`, `worst` |
+| `GateOnCriticalPath` | net level + remaining depth analysis | `gateOnCriticalPath`, `exists`, `worst` |
+| `DeepestOutputCone` | `analyzePrimaryOutputDepths()` | `worst`, `reports`, `count` |
+
+`analyzePrimaryOutputDepths()` 與 `analyzeDffDDepths()` 會先計算一次全設計 net levels，再讓所有 endpoint 共用；不會為每個 output/DFF.D 重跑整張 graph。critical path 也從同一份 level vector 重建。
+
+`GateOnCriticalPath` 的語意：
+
+```text
+判斷指定 combinational gate 是否位在任一 global maximum-depth path 上。
+它不是只檢查 findGlobalCriticalPath() 回傳的單一路徑，而是用：
+fanin depth to gate + gate cost + remaining depth to timing endpoint
+是否等於 global maximum depth。
+```
 
 ---
 
@@ -319,6 +340,8 @@ analyzeDffDDepths()
 getDffsWithDDepthGreaterThan()
 findGlobalCriticalPath()
 findEndpointsExceedingDepth()
+runDepthQuery(GateOnCriticalPath)
+runDepthQuery(DeepestOutputCone)
 DepthQuery / DepthReportSet / runDepthQuery()
 ```
 
@@ -327,12 +350,12 @@ DepthQuery / DepthReportSet / runDepthQuery()
 ```text
 mini test/tester.cpp 已覆蓋 computeNetLevels / computeGateLevels /
 findCriticalPathToNet / runDepthQuery(SpecificNet, DffD, GlobalCriticalPath)。
+mini test/test5/test5.cpp 已覆蓋 GateOnCriticalPath / DeepestOutputCone。
 ```
 
 後續建議補：
 
 ```text
-runDepthQuery(PrimaryOutputs)
-runDepthQuery(EndpointsExceedingDepth)
-getPrimaryOutputsWithDepthGreaterThan()
+real timing model
+target-depth optimization apply flow
 ```

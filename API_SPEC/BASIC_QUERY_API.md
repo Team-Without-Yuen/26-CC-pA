@@ -1,5 +1,7 @@
 # Basic Query API 整理
 
+> 公開 CLI 統一由 `structure_query` 提供；`BasicQuery` 保留為內部 C++ 的基礎物件與統計查詢 API。舊 `basic_query` 命令僅供相容，不列入新的公開 tool schema。
+
 這份文件整理 `Netlist` 最基礎的查詢 API，也就是後續 Cone / Path / Depth / Optimization 分析會共用的底層資訊查詢層。
 
 使用範例與 prompt 對應請看：
@@ -102,8 +104,10 @@ const std::vector<Port>& getPrimaryOutputs() const;
 注意：
 
 ```text
-getNetCount() 是內部 net 物件數量，可能包含 bus bit 與 constant net。
-getLogicalWireCount() 較接近 Verilog 宣告層級的 wire 數量。
+getGateCount() / getNetCount() 是底層 vector slot 數，用來維持 ID 穩定與 bounds check。
+edit 後這兩個 helper 可能包含 UNKNOWN gate / removed net tombstone，不應直接當作題目的 current-design 總數。
+BasicQuery::Summary 會自動過濾 tombstone；getLogicalWireCount() 也只統計 active net。
+net 數仍可能包含展開後的 bus bit 與 constant net。
 ```
 
 ---
@@ -181,7 +185,7 @@ std::vector<std::string> getCombinationalGateNames() const;
 用途：
 
 ```text
-列出 design 內所有 gate / net / PI / PO。
+列出 design 內所有 active gate / net / PI / PO。
 列出所有 DFF。
 列出所有 combinational gates。
 ```
@@ -369,8 +373,8 @@ BasicReport runBasicQuery(const BasicQuery& query) const;
 | `Summary` | design 基本規模與 gate type 統計 | counts、`gateTypeCounts` |
 | `ListGates` | 列出所有 gate | `gateIds`、`gateNames` |
 | `ListNets` | 列出所有 net | `netIds`、`netNames` |
-| `ListPrimaryInputs` | 列出所有 PI port | `portNames` |
-| `ListPrimaryOutputs` | 列出所有 PO port | `portNames` |
+| `ListPrimaryInputs` | 列出所有 PI port 與 width/range | `portNames`、`ports` |
+| `ListPrimaryOutputs` | 列出所有 PO port 與 width/range | `portNames`、`ports` |
 | `ListDffs` | 列出所有 DFF | `gateIds`、`gateNames` |
 | `ListCombinationalGates` | 列出所有組合邏輯 gates | `gateIds`、`gateNames` |
 | `GateInfo` | 查單一 gate | `objectId`、`typeName`、predicate flags、`formattedInfo` |
@@ -380,6 +384,10 @@ BasicReport runBasicQuery(const BasicQuery& query) const;
 | `GatesByType` | 列出指定 gate type | `gateIds`、`gateNames` |
 | `GatesWithConstantInput` | 找 constant input gates | `gateIds`、`gateNames`、`gateCount` |
 | `StructuralIssues` | 回報結構問題 | `undrivenNets`、`noLoadNets`、`floatingNets`、`unconnectedGates` |
+
+`ports` 是依 declaration 順序排列的 `PortSummary`，每筆包含 `name`、`width`、`msb`、`lsb`、`isBus`、`isInput`、`isOutput`。因此「列出所有 PI/PO 並附 bit width」只需要一次 `ListPrimaryInputs` 或 `ListPrimaryOutputs`。
+
+`Summary`、`ListGates`、`ListNets`、`CountByGateType` 與 structural issue helpers 都以 current active design 為準。`GateInfo` / `NetInfo` 查詢已移除的 tombstone 會回報 not found，不會將 `UNKNOWN` 暴露成題目中的 gate type。
 
 核心資料結構：
 
@@ -422,7 +430,7 @@ struct BasicReport {
 
 | Prompt 類型 | 低階 helper | 高階 query |
 |---|---|---|
-| How many gates are in this design? | `getGateCount()` | `Summary` |
+| How many gates are in this design? | active gate scan | `Summary` |
 | List all DFFs. | `getDffNames()` | `ListDffs` |
 | Count NAND gates. | `getGateCountByType(GateType::NAND)` | `CountByGateType` |
 | Is n1 a primary input? | `isPrimaryInputNet(getNetId("n1"))` | `NetInfo` |
@@ -452,6 +460,7 @@ Validity / type predicate
 Name listing
 Port / bus helper
 Structural issue helper
+Edit 後 active-design / tombstone 過濾
 BasicQuery / BasicReport 高階統一 API
 ```
 
@@ -459,7 +468,7 @@ BasicQuery / BasicReport 高階統一 API
 
 ```text
 mini test/tester.cpp 已覆蓋 runBasicQuery() 的 Summary / GateInfo / NetInfo / GatesWithConstantInput。
-目前 regression 結果：Summary: 45 passed, 0 failed.
+CLI integration regression test9-test16：142 passed, 0 failed。
 ```
 
 ---

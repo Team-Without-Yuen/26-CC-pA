@@ -1,5 +1,7 @@
 # Direct Connectivity Query API 整理
 
+> 公開 CLI 統一由 `structure_query` 提供；`DirectConnectivityQuery` 保留為內部 C++ 的一層連線查詢 API。舊 `conn_query` 命令僅供相容，不列入新的公開 tool schema。
+
 這份文件整理 `Netlist` 的直接連線查詢 API，也就是 Basic Query 和 Cone / Path Query 中間的一層。
 
 使用範例與 prompt 對應請看：

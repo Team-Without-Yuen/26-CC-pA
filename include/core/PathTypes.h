@@ -67,13 +67,17 @@ enum class DepthQueryType {
     PrimaryOutputs,           // 分析所有 primary output endpoints
     DffD,                     // 分析所有 DFF D-pin endpoints
     GlobalCriticalPath,       // 找出 PO 與 DFF.D 中最深的 timing endpoint
-    EndpointsExceedingDepth   // 找出所有 depth 大於 threshold 的 timing endpoints
+    EndpointsExceedingDepth,  // 找出所有 depth 大於 threshold 的 timing endpoints
+    PrimaryOutputsExceedingDepth, // 只找 depth 大於 threshold 的 primary outputs
+    GateOnCriticalPath,       // 判斷 gate 是否位在任一 global maximum-depth path 上
+    DeepestOutputCone         // 找出 fanin logic cone depth 最深的 primary output
 };
 
 // 描述一個 Depth Query；這一層只處理 depth/timing，不處理 function 或 through/avoid path 條件。
 struct DepthQuery {
     DepthQueryType type = DepthQueryType::SpecificNet;
     std::string netName;             // SpecificNet 使用的 endpoint net name
+    std::string gateName;            // GateOnCriticalPath 使用的 gate instance name
     int threshold = -1;              // EndpointsExceedingDepth 使用的 depth 門檻
     bool includeCriticalPath = true; // false 時回傳 report 會清空 criticalPath，降低資料量
 };
@@ -81,6 +85,7 @@ struct DepthQuery {
 // 保存 DepthQuery 的統一回傳結果。
 struct DepthReportSet {
     bool ok = false;                 // query 是否成功
+    bool exists = false;             // yes/no 型 depth query 的主要答案
     std::string message;             // 給 debug / LLM response 的簡短訊息
     DepthQueryType type = DepthQueryType::SpecificNet;
 
@@ -89,6 +94,10 @@ struct DepthReportSet {
 
     int threshold = -1;               // query 使用的 depth 門檻；未使用時為 -1
     size_t count = 0;                 // reports 數量
+
+    std::string gateName;             // GateOnCriticalPath 的查詢目標
+    int gateId = -1;                  // GateOnCriticalPath 的 gate ID
+    bool gateOnCriticalPath = false;  // GateOnCriticalPath 的主要 yes/no 答案
 };
 
 // 表示 path query 的抽象起點或終點類型。
@@ -128,7 +137,10 @@ enum class PathQueryMode {
     MinDepth,           // 回傳最短邏輯深度路徑
     MaxDepth,           // 回傳最長邏輯深度路徑
     EveryPathThrough,   // 判斷所有路徑是否都經過 requiredNodes
-    EveryPathAvoids     // 判斷所有路徑是否都避開 avoidedNodes
+    EveryPathAvoids,    // 判斷所有路徑是否都避開 avoidedNodes
+    FindMandatoryNodes, // 找出 source/target 間所有 directed paths 的共同 internal nets
+    IsSeparator,        // 指定 net 是否為 endpoints 間的 directed separator
+    DirectPiPoConnections // 找出 PI/PO 共用同一 net 的 depth-0 direct wires
 };
 
 // 描述一個完整的 startpoint-to-endpoint path query。
@@ -137,16 +149,35 @@ struct PathQuery {
     std::vector<PathEndpoint> endpoints;    // 一個或多個抽象終點
     std::vector<PathNode> requiredNodes;    // 每條符合條件的路徑必須經過的 net/gate
     std::vector<PathNode> avoidedNodes;     // 每條符合條件的路徑必須避開的 net/gate
+    std::string separatorCandidateNetName;  // IsSeparator 使用；endpoints 皆空時採 PI-to-PO cut 語意
     PathQueryMode mode = PathQueryMode::Exists;
     bool combinationalOnly = true;          // true 時遇到 DFF 視為 sequential boundary
     bool writePathsToFile = true;           // EnumerateAll 使用；預設自動將完整路徑列表寫入檔案
     std::string outputFilePath;             // EnumerateAll 寫檔路徑；空字串時使用預設檔名
     size_t maxPrintedPaths = 20;            // CLI / report 顯示用；不限制 result.paths 的完整內容
+    size_t maxEnumeratedPaths = 100000;     // EnumerateAll 安全上限；0 表示不限制
+    double enumerationTimeLimitSeconds = 55.0; // EnumerateAll wall-clock 上限；<=0 表示不限制
+    bool countOnly = false;                 // EnumerateAll 只計數，不保存每條 path
 };
 
 // 保存統一 path query 的結果；不同 mode 會使用不同欄位。
 struct PathQueryResult {
+    bool ok = false;                        // request 是否有效並完成高階 dispatch
+    bool unsupported = false;               // request 合法但目前模式/設定不支援
+    std::string message;                    // success/no-path/validation error 語意
+    std::string status;                     // mode-specific result status，例如 NO_PATH / SEPARATOR
     bool exists = false;                    // exists/every-path 類查詢的主要結果
+    bool pathExists = false;                 // separator/mandatory mode：endpoints 是否原本相連
+    bool isSeparator = false;                // IsSeparator 的主要結果
+    bool combinationalCycleDetected = false;// dominator-based mode 遇到 cycle
+    std::string separatorCandidateNetName;
+    int separatorCandidateNetId = -1;
+    std::vector<int> mandatoryNetIds;        // FindMandatoryNodes / IsSeparator 的共同節點
+    std::vector<std::string> mandatoryNetNames;
+    std::string witnessStartpoint;           // PI-to-PO cut 成立時的 witness PI
+    std::string witnessEndpoint;             // PI-to-PO cut 成立時的 witness PO
+    size_t checkedStartpointCount = 0;
+    size_t checkedEndpointCount = 0;
     int depth = -1;                         // min/max depth 類查詢的邏輯深度
     CombinationalPath path;                 // find any/min/max depth 的代表路徑
     std::vector<CombinationalPath> paths;   // enumerate all 的所有路徑
@@ -154,6 +185,14 @@ struct PathQueryResult {
     bool wrotePathsToFile = false;          // 是否已將完整 enumerate 結果寫到檔案
     std::string outputFilePath;             // 實際輸出檔案路徑
     bool completeEnumeration = true;        // true 表示沒有截斷 enumerate 結果
+    bool enumerationTimedOut = false;       // true 表示因 time limit 停止
+    bool enumerationPathLimitReached = false; // true 表示因 maxEnumeratedPaths 停止
+    bool countOnly = false;                 // true 表示 paths 可能為空，只保留 pathCount
+    std::string enumerationStopReason;      // 截斷原因，完整列舉時為空
+    std::vector<std::string> unresolvedStartpoints; // 無法解析的 start endpoint descriptions
+    std::vector<std::string> unresolvedEndpoints;   // 無法解析的 end endpoint descriptions
+    std::vector<std::string> unresolvedRequiredNodes; // 無法解析的 required nodes
+    std::vector<std::string> unresolvedAvoidedNodes;  // 無法解析的 avoided nodes
 };
 
 // 表示 register-to-register path wrapper 要執行哪一種查詢。
@@ -177,6 +216,9 @@ struct RegisterPathQuery {
     bool combinationalOnly = true;          // true 時 DFF 是 sequential boundary
     std::string outputFilePath;             // EnumerateAll 寫檔路徑；空字串時使用預設檔名
     size_t maxPrintedPaths = 20;            // CLI / report 顯示用；不限制完整結果
+    size_t maxEnumeratedPaths = 100000;     // EnumerateAll 安全上限；0 表示不限制
+    double enumerationTimeLimitSeconds = 55.0; // EnumerateAll wall-clock 上限；<=0 表示不限制
+    bool countOnly = false;                 // EnumerateAll 只計數，不保存每條 path
 };
 
 // 保存 register-to-register path query 的結果。
