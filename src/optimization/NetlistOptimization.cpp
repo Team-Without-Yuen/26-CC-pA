@@ -205,8 +205,6 @@ NetlistEditReport Netlist::trimDeadLogicWithReport() {
 //  回傳移除的 inverter pair 數量
 // ─────────────────────────────────────────────────────────────────────────────
 int Netlist::collapseBackToBackInverters() {
-    cleanupAllRemovableBuffers();
-
     int collapsed = 0;
     bool changed = true;
 

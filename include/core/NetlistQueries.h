@@ -272,7 +272,8 @@ struct FunctionReport {
 // =========================================================================
 
 enum class FunctionSearchQueryType {
-    NandEquivalentInputPairs // 搜尋 NAND(a, b) 與 targetNetName 功能等價的 internal signal pair
+    NandEquivalentInputPairs, // 搜尋 NAND(a, b) 與 targetNetName 功能等價的 internal signal pair
+    EquivalentGatePairs       // 搜尋 output function 相同的 active combinational gate pairs
 };
 
 enum class FunctionSearchMode {
@@ -280,10 +281,22 @@ enum class FunctionSearchMode {
     FindAll  // 搜尋全部候選；受 maxResults / timeLimitSeconds 限制
 };
 
+enum class FunctionSearchScope {
+    WholeDesign,
+    NetFanin,
+    NetFanout,
+    GateFanin,
+    GateFanout
+};
+
 struct FunctionSearchQuery {
     FunctionSearchQueryType type = FunctionSearchQueryType::NandEquivalentInputPairs;
     FunctionSearchMode mode = FunctionSearchMode::FindAny;
     std::string targetNetName;
+
+    FunctionSearchScope scope = FunctionSearchScope::WholeDesign;
+    std::string scopeName;
+    GateType gateTypeFilter = GateType::UNKNOWN;
 
     // 第一版只搜尋 active、scalar、非 PI/PO/constant、且有 driver 的 internal signals。
     bool internalSignalsOnly = true;
@@ -292,16 +305,30 @@ struct FunctionSearchQuery {
     size_t maxResults = 256;
     size_t simulationPatternCount = 256;
     double timeLimitSeconds = 30.0;
+    bool expandEquivalentPairs = true; // false 時只回傳 SAT-proven equivalenceClasses
 };
 
 struct FunctionSearchMatch {
+    int gateIdA = -1;
+    int gateIdB = -1;
     int netIdA = -1;
     int netIdB = -1;
+    std::string gateNameA;
+    std::string gateNameB;
     std::string netNameA;
     std::string netNameB;
     bool provenEquivalent = false;
     std::string proofMethod;  // 目前為 "SAT_UNSAT_MITER"
     std::string solverStatus; // 等價 proof 成功時為 "UNSAT"
+};
+
+struct FunctionSearchEquivalenceClass {
+    std::vector<int> gateIds;
+    std::vector<int> netIds;
+    std::vector<std::string> gateNames;
+    std::vector<std::string> netNames;
+    bool provenEquivalent = false;
+    std::string proofMethod;
 };
 
 struct FunctionSearchReport {
@@ -315,20 +342,29 @@ struct FunctionSearchReport {
 
     std::string status;
     std::string message;
+    FunctionSearchQueryType queryType = FunctionSearchQueryType::NandEquivalentInputPairs;
     std::string targetNetName;
     int targetNetId = -1;
+    FunctionSearchScope scope = FunctionSearchScope::WholeDesign;
+    std::string scopeName;
+    GateType gateTypeFilter = GateType::UNKNOWN;
 
     size_t candidateSignalCount = 0;
+    size_t candidateGateCount = 0;
     size_t simulationEligibleSignalCount = 0;
+    size_t simulationBucketCount = 0;
     size_t candidatePairsConsidered = 0;
     size_t candidatePairsRejectedBySimulation = 0;
     size_t satChecks = 0;
     size_t satUnknownCount = 0;
     size_t unsupportedSignalCount = 0;
+    size_t equivalenceClassCount = 0;
+    size_t equivalentPairCount = 0;
     size_t simulationPatternCount = 0;
     double elapsedSeconds = 0.0;
 
     std::vector<FunctionSearchMatch> matches;
+    std::vector<FunctionSearchEquivalenceClass> equivalenceClasses;
 };
 
 // =========================================================================

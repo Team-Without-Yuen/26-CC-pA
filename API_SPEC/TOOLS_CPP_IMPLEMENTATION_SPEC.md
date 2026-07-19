@@ -718,6 +718,7 @@ gate_on_critical_path
 | mode | API type | 參數 |
 |---|---|---|
 | `equivalence` | `Equivalence` | `net_a`, `net_b` |
+| `conditional_equivalence` | `ConditionalEquivalence` | `net_a`, `net_b`, `condition_net`, `condition_value` |
 | `can_be_value` | `CanBeValue` | `net`, `const_value` |
 | `constant` | `ConstantFunction` | `net`, `const_value` |
 | `always_zero` | `AlwaysZero` | `net` |
@@ -775,7 +776,7 @@ support_primary_inputs
 | Prompt | API / 狀態 |
 |---|---|
 | 是否存在 internal pair 使 NAND(a,b)==target | `func_search nand_pair <target>`；`FunctionSearchQuery::NandEquivalentInputPairs` |
-| arbitrary functional-equivalent gate pair search | SAT-based candidate/search API |
+| arbitrary functional-equivalent gate pair search | `func_search equivalent_pairs <scope> [scope_name] [--all] [--gate-type type]`；回傳 SAT-proven equivalence classes |
 
 ---
 
@@ -834,11 +835,12 @@ remove_dangling_logic
 remove_unused_nets
 remove_net_if_unused <net_name>
 merge_structurally_equivalent_gates
+merge_functionally_equivalent_gates <scope> [scope_name] [--gate-type type] [--patterns N] [--time-limit seconds]
 simplify_constants
 simplify_same_input
 ```
 
-`merge_equivalent_gates` 不對外開放：legacy 實作只做 structural identity，名稱會誤導 LLM。public structural merge 固定使用 `merge_structurally_equivalent_gates`；未來 SAT-based flow 使用獨立的 `merge_functionally_equivalent_gates`。
+`merge_equivalent_gates` 不對外開放：legacy 實作只做 structural identity，名稱會誤導 LLM。public structural merge 使用 `merge_structurally_equivalent_gates`；SAT-based functional merge 使用獨立的 `merge_functionally_equivalent_gates`。
 
 Buffer insertion：
 
@@ -972,22 +974,23 @@ What happened in the previous transformation?
 
 ---
 
-## 19. 目前仍需補高階 API 的 NewTestCase 題型
+## 19. NewTestCase 高階 API 狀態
 
-這些不可只靠補 `tools.cpp` 解決：
-
-| 題型 | 建議 owner API | 狀態 |
+| 題型 | Owner API | 狀態 |
 |---|---|---|
-| cone gate type breakdown | ConeReport extension | 小缺口 |
-| shared fanin cone gates | ConeQuery extension | 小缺口 |
-| PO-only depth exceeding count | DepthQuery extension | 小缺口 |
-| direct PI-to-PO depth-0 connections | PathQuery extension | 小缺口 |
-| path invalid endpoint vs no path | PathQueryResult validation fields | 必要修正 |
-| symmetry | `FunctionQueryType::Symmetry` | API/report/CLI/mini test22 已完成 |
+| cone gate type breakdown | ConeQuery | API/report/CLI 已完成 |
+| shared fanin cone gates | ConeQuery | API/report/CLI 已完成 |
+| PO-only depth exceeding count | DepthQuery | API/report/CLI 已完成 |
+| direct PI-to-PO depth-0 connections | PathQuery | API/report/CLI 已完成 |
+| path invalid endpoint vs no path | PathQueryResult | validation/status 已完成 |
+| conditional equivalence | FunctionQuery | API/report/CLI/mini test25 已完成 |
+| symmetry | FunctionQuery | API/report/CLI/mini test22 已完成 |
 | DFF enable/hold detection | SequentialPatternQuery | API/report/CLI/pagination 已完成 |
-| arbitrary functional duplicate/redundancy removal | SAT candidate + verified edit flow | 缺演算法 |
-| critical/max depth optimization | real OptApply | 未完成 |
-| cone depth optimization with basis constraint | scope-aware OptApply | 未完成 |
+| functional duplicate merge | SAT candidate + verified edit flow | 已完成並通過 test29/test30 |
+| test38 redundant gate removal | structural duplicate merge | 已完成；official flow 實測移除 14 gates |
+| general observability-only redundancy | ODC candidate + verified edit flow | 尚無已確認 testcase；不是 tools parser 漏接 |
+| critical/max depth optimization | real OptApply | 未完成，屬 optimization |
+| cone depth optimization with basis constraint | scope-aware OptApply | 未完成，屬 optimization |
 
 ---
 
@@ -1025,7 +1028,8 @@ whole-design equivalence 尚未整合
 | register-to-register path | `path_query` + DFF endpoint preset |
 | depth/critical/deepest/output threshold | `depth_query` |
 | named-net equivalence/constant/dependence/symmetry/equation | `func_query` |
-| unknown NAND-equivalent internal candidate pair search | `func_search` |
+| unknown NAND-equivalent internal candidate pair search | `func_search nand_pair` |
+| arbitrary functionally equivalent gate pair/group search | `func_search equivalent_pairs` |
 | cut/articulation/mandatory/separator | `path_query` |
 | DFF enable/hold semantics | `sequential_query` |
 | specified rename/cleanup/simplify/buffer/map | `edit_apply` |
@@ -1117,7 +1121,10 @@ PathQueryResult validation fields
 已完成：Symmetry API/report/CLI 與 official testcase 驗證
 已完成：NAND function pair search high-level API/report/mini test23
 已完成：`func_search nand_pair` CLI/report/help 與 mini test24
-待完成：arbitrary functional-equivalent gate pair search
+已完成：`func_search equivalent_pairs` whole/cone scope、gate filter、equivalence-class report 與 mini test26
+已完成：equivalent-pair class-only search、cycle-safe merge、whole-design SAT/rollback 與 test29/test30 實測
+已完成：test38 structural redundancy removal、累積 edit flow 與 whole-design SAT 驗證
+待完成：general observability-aware redundancy search/removal（hidden-case hardening）
 ```
 
 已實作 command contract：
@@ -1232,7 +1239,7 @@ complete / partial / unsupported expectation
 Batch 1 到 Batch 5 已完成並有獨立 integration test，test31 到 test40 command coverage audit 也已整理。Typed/scoped constant propagation、batch PI/PO width report、Basic active-design semantics、exact functional dependence、directed cut/articulation 與 symmetry analysis 已完成。下一步處理剩餘特殊分析與最佳化缺口：
 
 ```text
-1. Function pair search / observability-aware redundancy analysis。
+1. General observability-aware redundancy analysis（hidden-case hardening；official test38 已覆蓋）。
 2. Constrained depth optimization public flow。
 ```
 

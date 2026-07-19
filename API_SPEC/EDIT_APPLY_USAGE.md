@@ -58,12 +58,12 @@ if (report.success) {
 
 ## 2. Public Command 分類
 
-外部 LLM / CLI 只應使用這些 public command。低階 rewiring / arbitrary merge / driver replacement 不在這份 usage 文件中開放。
+外部 LLM / CLI 只應使用這些 public command。低階 rewiring、未經證明的 arbitrary merge、driver replacement 不在這份 usage 文件中開放；SAT-proven functional duplicate merge 只能走專用高階 command。
 
 | 類別 | Command kind | 常見問題 |
 |---|---|---|
 | Rename | `RenameGate`, `RenameNet` | 改 gate / net 名稱且保持功能不變 |
-| Cleanup / Simplification | `CleanupBuffers`, `CollapseDoubleInverter`, `LocalSimplificationFixpoint`, `SafeCleanupFixpoint`, `TrimDeadLogic`, `RemoveDanglingLogic`, `RemoveUnusedNets`, `MergeStructurallyEquivalentGates`, `SimplifyConstants`, `SimplifySameInput` | 移除結構冗餘、dangling、dead logic、unused nets、constant propagation、local simplification |
+| Cleanup / Simplification | `CleanupBuffers`, `CollapseDoubleInverter`, `LocalSimplificationFixpoint`, `SafeCleanupFixpoint`, `TrimDeadLogic`, `RemoveDanglingLogic`, `RemoveUnusedNets`, `MergeStructurallyEquivalentGates`, `MergeFunctionallyEquivalentGates`, `SimplifyConstants`, `SimplifySameInput` | 移除結構/功能重複、dangling、dead logic、unused nets、constant propagation、local simplification |
 | Buffer Insertion | `InsertBuffersForFanout`, `InsertBuffersForSpecificNet`, `InsertBuffersForDffControl`, `InsertBuffersOnEachLoad`, `InsertBufferAtDriver`, `InsertBufferBeforeGate`, `InsertBuffersByGateType` | 降 fanout、指定 signal/gate 插 BUF |
 | Technology Mapping | `ConvertToBasis`, `ReplaceGateType` | basis conversion、XOR/XNOR/OR 等 gate type replacement |
 | Safe Single-Net Cleanup | `RemoveNetIfUnused` | 移除已確認 unused 的 net |
@@ -82,6 +82,7 @@ if (report.success) {
 | `RemoveDanglingLogic` | 移除 dangling gates | 無 | `diff`, `validation.equivalenceMethod` |
 | `RemoveUnusedNets` | 移除 unused internal nets | 無 | `changedNetNames`, `diff` |
 | `MergeStructurallyEquivalentGates` | structural hashing merge | 無 | `diff`, `validation.equivalenceMethod` |
+| `MergeFunctionallyEquivalentGates` | SAT-based functional duplicate merge | `scope`，可選 `scopeName`, `gateType`, `simulationPatternCount`, `timeLimitSeconds` | `functionalMerge`, `diff`, `validation` |
 | `SimplifyConstants` | typed constant propagation | 可選 `gateType`, `constValue`, `inputCount` | `constantSimplification`, `diff`, `validation.equivalenceMethod` |
 | `SimplifySameInput` | same-input simplification | 無 | `diff`, `validation.equivalenceMethod` |
 | `InsertBuffersForFanout` | 全設計 fanout buffer insertion | `maxFanout` | `fanoutChange`, `changedGateNames` |
@@ -113,7 +114,9 @@ if (report.success) {
 | `maxFanout` | `int` | `-1` | fanout buffer insertion 使用；未設定時使用 4 |
 | `constValue` | `int` | `-1` | `SimplifyConstants`：`-1` 不限、`0/1` 指定 constant input |
 | `inputCount` | `int` | `-1` | `SimplifyConstants`：`-1` 不限、正整數指定 gate fanin 數 |
-| `gateType` | `GateType` | `UNKNOWN` | gate-type buffer 或 `SimplifyConstants` 使用；後者 `UNKNOWN` 表示不限 |
+| `gateType` | `GateType` | `UNKNOWN` | gate-type buffer、`SimplifyConstants` 或 functional merge filter；`UNKNOWN` 表示不限 |
+| `simulationPatternCount` | `size_t` | `256` | functional merge simulation prefilter，合法範圍 1..4096 |
+| `timeLimitSeconds` | `double` | `30.0` | functional search、mutation 與 whole-design SAT 共用總時間 |
 | `targetGateType` | `GateType` | `UNKNOWN` | `ReplaceGateType` 要移除/替換的 gate 類型 |
 | `allowedTypes` | `std::vector<GateType>` | `{}` | `ConvertToBasis` / `ReplaceGateType` 允許生成的 gate basis |
 | `bannedTypes` | `std::vector<GateType>` | `{}` | `ConvertToBasis` 額外禁止的 gate 類型 |
@@ -166,6 +169,7 @@ if (report.success) {
 | `fanoutChange` | fanout buffer insertion 類 command |
 | `mappingDelta` | technology mapping 類結果，包含 removed / added / final gate count |
 | `constantSimplification` | constant propagation 的 filter、candidate、simplified、skipped 與 target gate eliminated count |
+| `functionalMerge` | functional search/class 統計、merged/skipped 數量、whole-design SAT 狀態與逐筆 representative/removed records |
 | `changedGateIds`, `changedGateNames` | 新增、移除、修改的 gates |
 | `changedNetIds`, `changedNetNames` | 新增、移除、修改的 nets |
 
@@ -279,6 +283,8 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 | 新增 BUF 名稱 | `report.changedGateNames` |
 | 等價性理由 | `report.validation.equivalenceMethod`，應為 `LocalRewriteRule` |
 
+`InsertBuffersForSpecificNet` 的 `beforeMaxFanout` / `afterMaxFanout` 只統計指定 net（bus 時含各 bit）與本次建立的 buffer tree，不受其他未指定 high-fanout net 影響。全設計 fanout constraint 必須改用 `InsertBuffersForFanout`。
+
 ---
 
 ## 8. InsertBuffersOnEachLoad
@@ -345,6 +351,7 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 
 ```text
 找出 NOT -> NOT 並 collapse 成 wire。
+此 command 只處理 inverter pair，不會隱含執行 BUF cleanup；先前建立的 fanout buffer tree 會保留。
 ```
 
 寫法：
@@ -365,6 +372,8 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 | gate count 變化 | `report.diff.activeGateCountDelta` |
 | depth 變化 | `report.depthChange` |
 | 等價性理由 | `report.validation.equivalenceMethod`，應為 `LocalRewriteRule` |
+
+若第二顆 NOT 直接驅動 PO，目前會保守跳過；一般 internal NOT -> NOT chain 可直接 collapse。
 
 ---
 
@@ -569,7 +578,46 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 
 ---
 
-## 15. Prompt 對應表
+## 15. MergeFunctionallyEquivalentGates
+
+用途：搜尋指定 scope 內 output function 相同的 combinational gates，將每個 SAT-proven equivalence class 合併成一個 cycle-safe representative，最後對全部 PO 與 DFF.D endpoints 執行 whole-design SAT。
+
+```cpp
+Netlist::EditApplyRequest request;
+request.kind = Netlist::EditCommandKind::MergeFunctionallyEquivalentGates;
+request.scope = TargetScope::WHOLE_NETLIST;
+request.gateType = GateType::UNKNOWN;
+request.simulationPatternCount = 256;
+request.timeLimitSeconds = 30.0;
+request.validateEquivalence = true;
+request.rollbackOnFailure = true;
+
+const Netlist::NetlistEditReport report = netlist.runEditApply(request);
+```
+
+CLI：
+
+```text
+edit_apply merge_functionally_equivalent_gates whole --time-limit 30
+edit_apply merge_functionally_equivalent_gates net_fanin n10 --gate-type AND
+```
+
+必要判讀：
+
+| 想知道 | 讀取欄位 |
+|---|---|
+| 搜尋是否完整 | `functionalMerge.searchComplete`, `searchStatus` |
+| 找到多少等價類/pairs | `equivalenceClassCount`, `equivalentPairCount` |
+| 實際移除多少 gates | `mergedGateCount` 或 `-diff.activeGateCountDelta` |
+| 每顆保留/移除對象 | `functionalMerge.records` |
+| 是否有安全問題而跳過 | `skippedGateCount`, `skippedGateNames` |
+| 最終功能是否保持 | `validation.equivalenceMethod == WholeDesignSat` 且 `functionallyEquivalent=true` |
+
+搜尋不完整、任何 class 無法 cycle-safe 合併、structure validation 失敗、whole-design SAT timeout 或不等價時，整批 edit 不會留下部分修改。搜尋階段 timeout 發生在 mutation 前；修改後驗證失敗則 `rolledBack=true`。
+
+---
+
+## 16. Prompt 對應表
 
 | Prompt | 建議 EditCommandKind | 需要設定 | 主要讀取 |
 |---|---|---|---|
@@ -589,6 +637,7 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 | Simplify OR gates with constant 1 input. | `SimplifyConstants` | `gateType = OR`, `constValue = 1` | `eliminatedTargetGateCount`, `validation.equivalenceMethod` |
 | Replace all 2-input NAND gates tied to 1 with inverters. | `SimplifyConstants` | `gateType = NAND`, `constValue = 1`, `inputCount = 2` | `simplifiedGateNames`, `eliminatedTargetGateCount` |
 | Try to merge structural duplicates. | `MergeStructurallyEquivalentGates` | 無 | `changed`, `diff` |
+| Find and merge all gate pairs that are functionally equivalent. | `MergeFunctionallyEquivalentGates` | `scope = WHOLE_NETLIST` | `functionalMerge.mergedGateCount`, `records`, `validation` |
 | Remove unused internal nets. | `RemoveUnusedNets` | 無 | `changedNetNames`, `diff` |
 | Reconstruct the netlist using only AND and NOT gates. | `ConvertToBasis` | `scope = WHOLE_NETLIST`, `allowedTypes = {AND, NOT}` | `mappingDelta`, `validation.equivalenceMethod` |
 | Ensure the cone of n10 maintains only NOR and NOT gates. | `ConvertToBasis` | `scope = NET_FANIN`, `scopeName = "n10"`, `allowedTypes = {NOR, NOT}` | `mappingDelta`, `diff` |
@@ -597,7 +646,7 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 
 ---
 
-## 16. 何時不要用 EditApply
+## 17. 何時不要用 EditApply
 
 如果問題只是查詢，不要使用 `runEditApply()`。
 
@@ -617,18 +666,18 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 
 ---
 
-## 17. 等價性欄位解讀
+## 18. 等價性欄位解讀
 
 | equivalenceMethod | 意思 | 常見 command |
 |---|---|---|
 | `NotChecked` | 目前沒有等價性證明 | 不應出現在成功的 public `runEditApply()` edit |
 | `StructuralIdentity` | 名稱改變、unused/dangling/dead logic removal、structural merge | `RenameNet`, `RemoveDanglingLogic`, `TrimDeadLogic` |
 | `LocalRewriteRule` | 可由局部 Boolean identity 或安全 cleanup 組合證明 | `CleanupBuffers`, `CollapseDoubleInverter`, `SafeCleanupFixpoint`, `SimplifyConstants`, buffer insertion, `ConvertToBasis`, `ReplaceGateType` |
-| `WholeDesignSat` | current 與 original/previous-edit 的 whole-design SAT equivalence | tools `equiv_query` |
+| `WholeDesignSat` | current 與 original/previous-edit 的 whole-design SAT equivalence | `MergeFunctionallyEquivalentGates`、tools `equiv_query` |
 
 ---
 
-## 18. 測試狀態
+## 19. 測試狀態
 
 目前 `mini test/tester.cpp` 已涵蓋：
 
@@ -643,6 +692,8 @@ runEditApply invalid fanout limit
 runEditApply convert_basis whole allowed AND NOT
 runEditApply convert_basis net_fanin n10 allowed NOR NOT
 runEditApply replace_type XOR using NAND
+runEditApply functional merge whole/cone scope, class-only search, cycle-safe representative
+runEditApply functional merge whole-design SAT, no-change, detailed records, timeout-before-mutation
 runEditApply unsupported command
 ```
 
@@ -651,3 +702,5 @@ runEditApply unsupported command
 ```text
 Summary: 115 passed, 0 failed.
 ```
+
+`mini test/test26` 另有 27 個 C++ API assertions 與 18 個 CLI assertions，涵蓋 functional search/merge、timeout-before-mutation 與 verification-failure rollback；NewTestCase test29/test30 分別實測合併 7/1 顆 gate 並通過 whole-design SAT。

@@ -312,7 +312,8 @@ DetailedSatResult solveEquivalenceDetailed(const Netlist& netlist,
                                            const std::string& nameA,
                                            const std::string& nameB,
                                            const std::string& conditionName = "",
-                                           int conditionValue = -1) {
+                                           int conditionValue = -1,
+                                           double timeLimitSeconds = 30.0) {
     const std::vector<int> netsA = netlist.expandNetToBits(nameA);
     const std::vector<int> netsB = netlist.expandNetToBits(nameB);
     const bool conditional = !conditionName.empty();
@@ -435,7 +436,16 @@ DetailedSatResult solveEquivalenceDetailed(const Netlist& netlist,
     }
     solver.add(0);
 
-    TimeLimitTerminator terminator(30.0);
+    if (timeLimitSeconds <= 0.0) {
+        DetailedSatResult result;
+        result.unknown = true;
+        result.timedOut = true;
+        result.solverStatus = "TIMEOUT";
+        result.message = "Equivalence search reached its time limit before SAT verification.";
+        return result;
+    }
+
+    TimeLimitTerminator terminator(timeLimitSeconds);
     solver.connect_terminator(&terminator);
     const int solverResult = solver.solve();
     solver.disconnect_terminator();
@@ -1668,11 +1678,347 @@ DetailedSatResult solveNandPairEquivalenceDetailed(const Netlist& netlist,
     return makeSolveResult(solverResult, terminator);
 }
 
+bool collectFunctionSearchScopeGates(
+    const Netlist& netlist,
+    const FunctionSearchQuery& query,
+    std::vector<int>& gateIds,
+    std::string& error) {
+    if (query.scope == FunctionSearchScope::WholeDesign) {
+        gateIds.reserve(netlist.getGateCount());
+        for (size_t index = 0; index < netlist.getGateCount(); ++index) {
+            gateIds.push_back(static_cast<int>(index));
+        }
+        return true;
+    }
+    if (query.scopeName.empty()) {
+        error = "A non-whole Function Search scope requires scopeName.";
+        return false;
+    }
+
+    Netlist::ConeQuery coneQuery;
+    switch (query.scope) {
+    case FunctionSearchScope::NetFanin:
+        coneQuery.type = Netlist::ConeQueryType::NetTransitiveFanin;
+        coneQuery.netName = query.scopeName;
+        break;
+    case FunctionSearchScope::NetFanout:
+        coneQuery.type = Netlist::ConeQueryType::NetTransitiveFanout;
+        coneQuery.netName = query.scopeName;
+        break;
+    case FunctionSearchScope::GateFanin:
+        coneQuery.type = Netlist::ConeQueryType::GateTransitiveFanin;
+        coneQuery.gateName = query.scopeName;
+        break;
+    case FunctionSearchScope::GateFanout:
+        coneQuery.type = Netlist::ConeQueryType::GateTransitiveFanout;
+        coneQuery.gateName = query.scopeName;
+        break;
+    case FunctionSearchScope::WholeDesign:
+        break;
+    }
+
+    const Netlist::ConeReport cone = netlist.runConeQuery(coneQuery);
+    if (!cone.ok) {
+        error = cone.message;
+        return false;
+    }
+    gateIds = cone.gateIds;
+    std::sort(gateIds.begin(), gateIds.end());
+    gateIds.erase(std::unique(gateIds.begin(), gateIds.end()), gateIds.end());
+    return true;
+}
+
+FunctionSearchMatch makeEquivalentGatePairMatch(
+    const Netlist& netlist,
+    int gateIdA,
+    int gateIdB) {
+    FunctionSearchMatch match;
+    const Gate& gateA = netlist.getGate(gateIdA);
+    const Gate& gateB = netlist.getGate(gateIdB);
+    match.gateIdA = gateIdA;
+    match.gateIdB = gateIdB;
+    match.netIdA = gateA.outputNetId;
+    match.netIdB = gateB.outputNetId;
+    match.gateNameA = gateA.instName;
+    match.gateNameB = gateB.instName;
+    match.netNameA = netlist.getNet(gateA.outputNetId).name;
+    match.netNameB = netlist.getNet(gateB.outputNetId).name;
+    match.provenEquivalent = true;
+    match.proofMethod = "SAT_EQUIVALENCE_CLASS";
+    match.solverStatus = "UNSAT";
+    return match;
+}
+
+FunctionSearchEquivalenceClass makeEquivalenceClassReport(
+    const Netlist& netlist,
+    const std::vector<int>& gateIds) {
+    FunctionSearchEquivalenceClass result;
+    result.gateIds = gateIds;
+    result.provenEquivalent = gateIds.size() >= 2;
+    result.proofMethod = "SAT_EQUIVALENCE_CLASS";
+    result.netIds.reserve(gateIds.size());
+    result.gateNames.reserve(gateIds.size());
+    result.netNames.reserve(gateIds.size());
+    for (int gateId : gateIds) {
+        const Gate& gate = netlist.getGate(gateId);
+        result.netIds.push_back(gate.outputNetId);
+        result.gateNames.push_back(gate.instName);
+        result.netNames.push_back(netlist.getNet(gate.outputNetId).name);
+    }
+    return result;
+}
+
+FunctionSearchReport searchEquivalentGatePairs(
+    const Netlist& netlist,
+    const FunctionSearchQuery& query) {
+    FunctionSearchReport report;
+    report.queryType = query.type;
+    report.scope = query.scope;
+    report.scopeName = query.scopeName;
+    report.gateTypeFilter = query.gateTypeFilter;
+    report.simulationPatternCount = query.simulationPatternCount;
+
+    const auto startedAt = std::chrono::steady_clock::now();
+    auto elapsedSeconds = [&]() {
+        return std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - startedAt).count();
+    };
+    auto finish = [&]() -> FunctionSearchReport {
+        report.elapsedSeconds = elapsedSeconds();
+        return report;
+    };
+
+    const bool validGateTypeFilter =
+        query.gateTypeFilter == GateType::UNKNOWN ||
+        query.gateTypeFilter == GateType::AND ||
+        query.gateTypeFilter == GateType::OR ||
+        query.gateTypeFilter == GateType::NAND ||
+        query.gateTypeFilter == GateType::NOR ||
+        query.gateTypeFilter == GateType::NOT ||
+        query.gateTypeFilter == GateType::BUF ||
+        query.gateTypeFilter == GateType::XOR ||
+        query.gateTypeFilter == GateType::XNOR;
+    if (query.simulationPatternCount == 0 || query.simulationPatternCount > 4096 ||
+        query.timeLimitSeconds <= 0.0 || query.maxResults == 0 ||
+        !validGateTypeFilter) {
+        report.status = "INVALID_ARGUMENT";
+        report.message = "Equivalent gate-pair search requires 1..4096 simulation patterns, "
+                         "positive timeLimitSeconds, maxResults greater than zero, and a "
+                         "supported optional combinational gate-type filter.";
+        return finish();
+    }
+
+    std::vector<int> scopeGateIds;
+    std::string scopeError;
+    if (!collectFunctionSearchScopeGates(netlist, query, scopeGateIds, scopeError)) {
+        report.status = "SCOPE_NOT_FOUND";
+        report.message = "Function Search scope could not be resolved: " + scopeError;
+        return finish();
+    }
+
+    const SimulationResult simulation =
+        simulateNetlist(netlist, query.simulationPatternCount);
+    if (elapsedSeconds() >= query.timeLimitSeconds) {
+        report.status = "TIMEOUT";
+        report.message = "Equivalent gate-pair search reached its time limit during simulation.";
+        report.timedOut = true;
+        return finish();
+    }
+
+    std::vector<int> candidateGateIds;
+    std::map<SimulationSignature, std::vector<int>> buckets;
+    for (int gateId : scopeGateIds) {
+        if (!netlist.isValidGateId(gateId) || !netlist.isCombinationalGate(gateId)) {
+            continue;
+        }
+        const Gate& gate = netlist.getGate(gateId);
+        if (query.gateTypeFilter != GateType::UNKNOWN &&
+            gate.type != query.gateTypeFilter) {
+            continue;
+        }
+        if (!netlist.isValidNetId(gate.outputNetId)) {
+            ++report.unsupportedSignalCount;
+            continue;
+        }
+        const Net& output = netlist.getNet(gate.outputNetId);
+        if (output.isRemoved || output.isConst || output.name.empty() ||
+            output.driverGateId != gateId) {
+            ++report.unsupportedSignalCount;
+            continue;
+        }
+
+        candidateGateIds.push_back(gateId);
+        if (static_cast<size_t>(gate.outputNetId) >= simulation.known.size() ||
+            !simulation.known[gate.outputNetId]) {
+            ++report.unsupportedSignalCount;
+            continue;
+        }
+        buckets[simulation.signatures[gate.outputNetId]].push_back(gateId);
+    }
+    report.candidateGateCount = candidateGateIds.size();
+    report.candidateSignalCount = candidateGateIds.size();
+    for (const auto& bucket : buckets) {
+        report.simulationEligibleSignalCount += bucket.second.size();
+    }
+    report.simulationBucketCount = buckets.size();
+    const size_t allEligiblePairs = report.simulationEligibleSignalCount < 2
+        ? 0
+        : report.simulationEligibleSignalCount *
+              (report.simulationEligibleSignalCount - 1) / 2;
+    size_t sameBucketPairs = 0;
+    for (const auto& bucket : buckets) {
+        if (bucket.second.size() >= 2) {
+            sameBucketPairs += bucket.second.size() * (bucket.second.size() - 1) / 2;
+        }
+    }
+    report.candidatePairsRejectedBySimulation = allEligiblePairs - sameBucketPairs;
+
+    std::vector<std::vector<int>> provenClasses;
+    bool stop = false;
+    for (const auto& bucketEntry : buckets) {
+        const std::vector<int>& bucket = bucketEntry.second;
+        if (bucket.size() < 2) {
+            continue;
+        }
+
+        std::vector<std::vector<int>> bucketClasses;
+        for (int candidateGateId : bucket) {
+            if (elapsedSeconds() >= query.timeLimitSeconds) {
+                report.timedOut = true;
+                stop = true;
+                break;
+            }
+
+            bool matched = false;
+            bool unresolved = false;
+            for (std::vector<int>& equivalentClass : bucketClasses) {
+                const int representativeGateId = equivalentClass.front();
+                const Gate& representative = netlist.getGate(representativeGateId);
+                const Gate& candidate = netlist.getGate(candidateGateId);
+                ++report.candidatePairsConsidered;
+
+                const double remaining = query.timeLimitSeconds - elapsedSeconds();
+                const DetailedSatResult proof = solveEquivalenceDetailed(
+                    netlist,
+                    netlist.getNet(representative.outputNetId).name,
+                    netlist.getNet(candidate.outputNetId).name,
+                    "",
+                    -1,
+                    remaining);
+                ++report.satChecks;
+                if (!proof.conclusive()) {
+                    ++report.satUnknownCount;
+                    report.timedOut = report.timedOut || proof.timedOut;
+                    report.unsupported = report.unsupported || proof.unsupported;
+                    unresolved = true;
+                    if (proof.timedOut) {
+                        stop = true;
+                        break;
+                    }
+                    continue;
+                }
+                if (!proof.unsat) {
+                    continue;
+                }
+
+                equivalentClass.push_back(candidateGateId);
+                matched = true;
+                if (query.mode == FunctionSearchMode::FindAny) {
+                    report.matches.push_back(makeEquivalentGatePairMatch(
+                        netlist, representativeGateId, candidateGateId));
+                    report.equivalenceClasses.push_back(makeEquivalenceClassReport(
+                        netlist, equivalentClass));
+                    report.equivalenceClassCount = 1;
+                    report.equivalentPairCount = 1;
+                    report.found = true;
+                    report.ok = true;
+                    report.complete = true;
+                    report.status = "MATCH_FOUND";
+                    report.message = "Found a SAT-proven functionally equivalent gate pair.";
+                    return finish();
+                }
+                break;
+            }
+            if (stop) {
+                break;
+            }
+            if (!matched && !unresolved) {
+                bucketClasses.push_back({candidateGateId});
+            }
+        }
+
+        for (std::vector<int>& equivalentClass : bucketClasses) {
+            if (equivalentClass.size() >= 2) {
+                provenClasses.push_back(std::move(equivalentClass));
+            }
+        }
+        if (stop) {
+            break;
+        }
+    }
+
+    for (const std::vector<int>& equivalentClass : provenClasses) {
+        report.equivalenceClasses.push_back(
+            makeEquivalenceClassReport(netlist, equivalentClass));
+        ++report.equivalenceClassCount;
+        report.equivalentPairCount +=
+            equivalentClass.size() * (equivalentClass.size() - 1) / 2;
+    }
+
+    if (query.expandEquivalentPairs) {
+        for (const std::vector<int>& equivalentClass : provenClasses) {
+            for (size_t i = 0; i < equivalentClass.size(); ++i) {
+                for (size_t j = i + 1; j < equivalentClass.size(); ++j) {
+                    if (report.matches.size() >= query.maxResults) {
+                        report.truncated = true;
+                        break;
+                    }
+                    report.matches.push_back(makeEquivalentGatePairMatch(
+                        netlist, equivalentClass[i], equivalentClass[j]));
+                }
+                if (report.truncated) break;
+            }
+            if (report.truncated) break;
+        }
+    }
+    report.found = !report.equivalenceClasses.empty();
+
+    if (report.timedOut) {
+        report.status = "TIMEOUT";
+        report.message = "Equivalent gate-pair search reached its time limit; results are partial.";
+        return finish();
+    }
+    if (report.truncated) {
+        report.status = "RESULT_LIMIT_REACHED";
+        report.message = "Equivalent gate-pair search reached maxResults; results are partial.";
+        return finish();
+    }
+    if (report.satUnknownCount > 0 || report.unsupportedSignalCount > 0 ||
+        report.unsupported) {
+        report.status = report.unsupported ? "UNSUPPORTED_OR_PARTIAL" : "SOLVER_UNKNOWN";
+        report.message = "Equivalent gate-pair search could not classify every candidate.";
+        return finish();
+    }
+
+    report.ok = true;
+    report.complete = true;
+    report.allCandidatesExamined = true;
+    report.status = report.found ? "MATCHES_FOUND" : "NO_MATCH";
+    report.message = report.found
+        ? "All eligible gate outputs were classified into SAT-proven equivalence classes."
+        : "No functionally equivalent combinational gate pair exists in the selected scope.";
+    return finish();
+}
+
 } // namespace
 
 Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
     const FunctionSearchQuery& query) const {
     FunctionSearchReport report;
+    report.queryType = query.type;
+    report.scope = query.scope;
+    report.scopeName = query.scopeName;
+    report.gateTypeFilter = query.gateTypeFilter;
     report.targetNetName = query.targetNetName;
     report.simulationPatternCount = query.simulationPatternCount;
     const auto startedAt = std::chrono::steady_clock::now();
@@ -1685,6 +2031,9 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
         return report;
     };
 
+    if (query.type == FunctionSearchQueryType::EquivalentGatePairs) {
+        return searchEquivalentGatePairs(*this, query);
+    }
     if (query.type != FunctionSearchQueryType::NandEquivalentInputPairs) {
         report.status = "UNSUPPORTED_QUERY_TYPE";
         report.message = "Unsupported FunctionSearchQueryType";

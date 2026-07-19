@@ -649,6 +649,10 @@ void printFunctionReport(const Netlist::FunctionReport& report) {
     if (!report.netNameB.empty()) {
         std::cout << "  net B: " << report.netNameB << "\n";
     }
+    if (!report.conditionNetName.empty()) {
+        std::cout << "  condition net: " << report.conditionNetName << "\n";
+        std::cout << "  condition value: " << report.conditionValue << "\n";
+    }
     if (!report.status.empty()) {
         std::cout << "  status: " << report.status << "\n";
     }
@@ -734,10 +738,35 @@ void printFunctionReport(const Netlist::FunctionReport& report) {
 }
 
 // 印出 FunctionSearchQuery 的候選統計、完整性與 SAT-proven matches。
-void printFunctionSearchReport(const Netlist::FunctionSearchReport& report) {
+void printFunctionSearchReport(const Netlist& netlist,
+                               const Netlist::FunctionSearchReport& report) {
+    auto queryTypeName = [](Netlist::FunctionSearchQueryType type) {
+        return type == Netlist::FunctionSearchQueryType::EquivalentGatePairs
+            ? "EQUIVALENT_GATE_PAIRS"
+            : "NAND_EQUIVALENT_INPUT_PAIRS";
+    };
+    auto scopeName = [](Netlist::FunctionSearchScope scope) {
+        switch (scope) {
+        case Netlist::FunctionSearchScope::WholeDesign: return "WHOLE_DESIGN";
+        case Netlist::FunctionSearchScope::NetFanin: return "NET_FANIN";
+        case Netlist::FunctionSearchScope::NetFanout: return "NET_FANOUT";
+        case Netlist::FunctionSearchScope::GateFanin: return "GATE_FANIN";
+        case Netlist::FunctionSearchScope::GateFanout: return "GATE_FANOUT";
+        }
+        return "UNKNOWN";
+    };
+
     std::cout << "  report_status: " << report.status << "\n";
+    std::cout << "  search_type: " << queryTypeName(report.queryType) << "\n";
     std::cout << "  target_net: " << report.targetNetName << "\n";
     std::cout << "  target_net_id: " << report.targetNetId << "\n";
+    std::cout << "  scope: " << scopeName(report.scope) << "\n";
+    std::cout << "  scope_name: " << report.scopeName << "\n";
+    std::cout << "  gate_type_filter: "
+              << (report.gateTypeFilter == GateType::UNKNOWN
+                      ? "ANY"
+                      : netlist.gateTypeToString(report.gateTypeFilter))
+              << "\n";
     std::cout << "  found: " << (report.found ? "true" : "false") << "\n";
     std::cout << "  complete: " << (report.complete ? "true" : "false") << "\n";
     std::cout << "  all_candidates_examined: "
@@ -746,8 +775,11 @@ void printFunctionSearchReport(const Netlist::FunctionSearchReport& report) {
     std::cout << "  truncated: " << (report.truncated ? "true" : "false") << "\n";
     std::cout << "  unsupported: " << (report.unsupported ? "true" : "false") << "\n";
     std::cout << "  candidate_signal_count: " << report.candidateSignalCount << "\n";
+    std::cout << "  candidate_gate_count: " << report.candidateGateCount << "\n";
     std::cout << "  simulation_eligible_signal_count: "
               << report.simulationEligibleSignalCount << "\n";
+    std::cout << "  simulation_bucket_count: "
+              << report.simulationBucketCount << "\n";
     std::cout << "  candidate_pairs_considered: "
               << report.candidatePairsConsidered << "\n";
     std::cout << "  candidate_pairs_rejected_by_simulation: "
@@ -756,6 +788,10 @@ void printFunctionSearchReport(const Netlist::FunctionSearchReport& report) {
     std::cout << "  sat_unknown_count: " << report.satUnknownCount << "\n";
     std::cout << "  unsupported_signal_count: "
               << report.unsupportedSignalCount << "\n";
+    std::cout << "  equivalence_class_count: "
+              << report.equivalenceClassCount << "\n";
+    std::cout << "  equivalent_pair_count: "
+              << report.equivalentPairCount << "\n";
     std::cout << "  simulation_pattern_count: "
               << report.simulationPatternCount << "\n";
     std::cout << "  elapsed_seconds: " << report.elapsedSeconds << "\n";
@@ -764,6 +800,12 @@ void printFunctionSearchReport(const Netlist::FunctionSearchReport& report) {
     for (size_t index = 0; index < report.matches.size(); ++index) {
         const Netlist::FunctionSearchMatch& match = report.matches[index];
         std::cout << "    match " << (index + 1) << ":\n";
+        if (match.gateIdA >= 0 || match.gateIdB >= 0) {
+            std::cout << "      gate_a: " << match.gateNameA << "\n";
+            std::cout << "      gate_a_id: " << match.gateIdA << "\n";
+            std::cout << "      gate_b: " << match.gateNameB << "\n";
+            std::cout << "      gate_b_id: " << match.gateIdB << "\n";
+        }
         std::cout << "      net_a: " << match.netNameA << "\n";
         std::cout << "      net_a_id: " << match.netIdA << "\n";
         std::cout << "      net_b: " << match.netNameB << "\n";
@@ -772,6 +814,23 @@ void printFunctionSearchReport(const Netlist::FunctionSearchReport& report) {
                   << (match.provenEquivalent ? "true" : "false") << "\n";
         std::cout << "      proof_method: " << match.proofMethod << "\n";
         std::cout << "      solver_status: " << match.solverStatus << "\n";
+    }
+    std::cout << "  equivalence_classes:\n";
+    for (size_t index = 0; index < report.equivalenceClasses.size(); ++index) {
+        const Netlist::FunctionSearchEquivalenceClass& equivalentClass =
+            report.equivalenceClasses[index];
+        std::cout << "    class " << (index + 1) << ":\n";
+        std::cout << "      proven_equivalent: "
+                  << (equivalentClass.provenEquivalent ? "true" : "false") << "\n";
+        std::cout << "      proof_method: " << equivalentClass.proofMethod << "\n";
+        std::cout << "      member_count: " << equivalentClass.gateIds.size() << "\n";
+        for (size_t member = 0; member < equivalentClass.gateIds.size(); ++member) {
+            std::cout << "      member " << (member + 1) << ": "
+                      << equivalentClass.gateNames[member] << " (gate_id="
+                      << equivalentClass.gateIds[member] << ", net="
+                      << equivalentClass.netNames[member] << ", net_id="
+                      << equivalentClass.netIds[member] << ")\n";
+        }
     }
 }
 
@@ -1157,6 +1216,60 @@ void printEditReport(const Netlist& netlist, const Netlist::NetlistEditReport& r
         printStringList("    skipped_gate_names", summary.skippedGateNames);
     }
 
+    if (report.functionalMerge) {
+        const auto& summary = *report.functionalMerge;
+        std::cout << "  functional_merge:\n";
+        std::cout << "    scope: " << summary.scope << "\n";
+        std::cout << "    scope_name: " << summary.scopeName << "\n";
+        std::cout << "    gate_type_filter: "
+                  << (summary.gateTypeFilter == GateType::UNKNOWN
+                          ? "ANY"
+                          : netlist.gateTypeToString(summary.gateTypeFilter))
+                  << "\n";
+        std::cout << "    search_status: " << summary.searchStatus << "\n";
+        std::cout << "    search_complete: "
+                  << (summary.searchComplete ? "true" : "false") << "\n";
+        std::cout << "    search_timed_out: "
+                  << (summary.searchTimedOut ? "true" : "false") << "\n";
+        std::cout << "    whole_design_equivalence_checked: "
+                  << (summary.wholeDesignEquivalenceChecked ? "true" : "false")
+                  << "\n";
+        std::cout << "    whole_design_equivalent: "
+                  << (summary.wholeDesignEquivalent ? "true" : "false") << "\n";
+        std::cout << "    whole_design_timed_out: "
+                  << (summary.wholeDesignTimedOut ? "true" : "false") << "\n";
+        std::cout << "    candidate_gate_count: " << summary.candidateGateCount << "\n";
+        std::cout << "    equivalence_class_count: "
+                  << summary.equivalenceClassCount << "\n";
+        std::cout << "    equivalent_pair_count: "
+                  << summary.equivalentPairCount << "\n";
+        std::cout << "    sat_checks: " << summary.satChecks << "\n";
+        std::cout << "    merged_gate_count: " << summary.mergedGateCount << "\n";
+        std::cout << "    skipped_gate_count: " << summary.skippedGateCount << "\n";
+        std::cout << "    search_elapsed_seconds: "
+                  << summary.searchElapsedSeconds << "\n";
+        std::cout << "    total_elapsed_seconds: "
+                  << summary.totalElapsedSeconds << "\n";
+        std::cout << "    merge_record_count: " << summary.records.size() << "\n";
+        for (size_t index = 0; index < summary.records.size(); ++index) {
+            const auto& record = summary.records[index];
+            std::cout << "    merge_record " << (index + 1) << ":\n";
+            std::cout << "      representative_gate: "
+                      << record.representativeGateName << "\n";
+            std::cout << "      representative_gate_id: "
+                      << record.representativeGateId << "\n";
+            std::cout << "      representative_net: "
+                      << record.representativeNetName << "\n";
+            std::cout << "      representative_net_id: "
+                      << record.representativeNetId << "\n";
+            std::cout << "      removed_gate: " << record.removedGateName << "\n";
+            std::cout << "      removed_gate_id: " << record.removedGateId << "\n";
+            std::cout << "      removed_net: " << record.removedNetName << "\n";
+            std::cout << "      removed_net_id: " << record.removedNetId << "\n";
+        }
+        printStringList("    skipped_gate_names", summary.skippedGateNames);
+    }
+
     printIntList("  changed_gate_ids", report.changedGateIds);
     printIntList("  changed_net_ids", report.changedNetIds);
     printStringList("  changed_gate_names", report.changedGateNames);
@@ -1461,6 +1574,10 @@ bool buildFunctionQuery(std::istringstream& iss,
     if (m == "equivalence") {
         query.type = Netlist::FunctionQueryType::Equivalence;
         iss >> query.netNameA >> query.netNameB;
+    } else if (m == "conditional_equivalence" || m == "equivalence_when") {
+        query.type = Netlist::FunctionQueryType::ConditionalEquivalence;
+        iss >> query.netNameA >> query.netNameB
+            >> query.conditionNetName >> query.conditionValue;
     } else if (m == "can_be_value") {
         query.type = Netlist::FunctionQueryType::CanBeValue;
         iss >> query.netNameA >> query.constValue;
@@ -1498,21 +1615,54 @@ bool buildFunctionQuery(std::istringstream& iss,
     return true;
 }
 
-bool buildFunctionSearchQuery(std::istringstream& iss,
+bool buildFunctionSearchQuery(const Netlist& netlist,
+                              std::istringstream& iss,
                               const std::string& mode,
                               Netlist::FunctionSearchQuery& query,
                               std::string& error) {
     const std::string loweredMode = toLower(mode);
-    if (loweredMode != "nand_pair" &&
-        loweredMode != "nand_equivalent_pairs") {
+    const bool nandSearch =
+        loweredMode == "nand_pair" || loweredMode == "nand_equivalent_pairs";
+    const bool equivalentPairSearch =
+        loweredMode == "equivalent_pairs" || loweredMode == "equivalent_gate_pairs";
+    if (!nandSearch && !equivalentPairSearch) {
         error = "Unknown func_search mode: " + mode;
         return false;
     }
 
-    query.type = Netlist::FunctionSearchQueryType::NandEquivalentInputPairs;
-    if (!(iss >> query.targetNetName)) {
-        error = "nand_pair requires a scalar target net.";
-        return false;
+    if (nandSearch) {
+        query.type = Netlist::FunctionSearchQueryType::NandEquivalentInputPairs;
+        if (!(iss >> query.targetNetName)) {
+            error = "nand_pair requires a scalar target net.";
+            return false;
+        }
+    } else {
+        query.type = Netlist::FunctionSearchQueryType::EquivalentGatePairs;
+        std::string scopeToken;
+        if (!(iss >> scopeToken)) {
+            error = "equivalent_pairs requires a scope.";
+            return false;
+        }
+        const std::string loweredScope = toLower(scopeToken);
+        if (loweredScope == "whole" || loweredScope == "whole_design") {
+            query.scope = Netlist::FunctionSearchScope::WholeDesign;
+        } else if (loweredScope == "net_fanin") {
+            query.scope = Netlist::FunctionSearchScope::NetFanin;
+        } else if (loweredScope == "net_fanout") {
+            query.scope = Netlist::FunctionSearchScope::NetFanout;
+        } else if (loweredScope == "gate_fanin") {
+            query.scope = Netlist::FunctionSearchScope::GateFanin;
+        } else if (loweredScope == "gate_fanout") {
+            query.scope = Netlist::FunctionSearchScope::GateFanout;
+        } else {
+            error = "Unknown equivalent_pairs scope: " + scopeToken;
+            return false;
+        }
+        if (query.scope != Netlist::FunctionSearchScope::WholeDesign &&
+            !(iss >> query.scopeName)) {
+            error = "The selected equivalent_pairs scope requires a net or gate name.";
+            return false;
+        }
     }
 
     std::string option;
@@ -1523,10 +1673,34 @@ bool buildFunctionSearchQuery(std::istringstream& iss,
         } else if (lowered == "--find-any" || lowered == "-find_any") {
             query.mode = Netlist::FunctionSearchMode::FindAny;
         } else if (lowered == "--allow-same" || lowered == "-allow_same") {
+            if (!nandSearch) {
+                error = "--allow-same is only valid for nand_pair.";
+                return false;
+            }
             query.allowSameSignalPair = true;
         } else if (lowered == "--include-boundary-signals" ||
                    lowered == "-include_boundary_signals") {
+            if (!nandSearch) {
+                error = "--include-boundary-signals is only valid for nand_pair.";
+                return false;
+            }
             query.internalSignalsOnly = false;
+        } else if (lowered == "--gate-type" || lowered == "-gate_type") {
+            if (!equivalentPairSearch) {
+                error = "--gate-type is only valid for equivalent_pairs.";
+                return false;
+            }
+            std::string typeToken;
+            if (!(iss >> typeToken)) {
+                error = "--gate-type requires a combinational gate type.";
+                return false;
+            }
+            query.gateTypeFilter = netlist.stringToGateType(typeToken);
+            if (query.gateTypeFilter == GateType::UNKNOWN ||
+                query.gateTypeFilter == GateType::DFF) {
+                error = "--gate-type requires a supported combinational gate type.";
+                return false;
+            }
         } else if (lowered == "--max-results" || lowered == "-max_results") {
             std::string valueToken;
             int value = 0;
@@ -1767,6 +1941,56 @@ bool parsePublicEditApply(const Netlist& netlist,
         return parseTechnologyEditApply(netlist, iss, mode, request, error);
     }
 
+    if (m == "merge_functionally_equivalent_gates") {
+        request.kind =
+            Netlist::EditCommandKind::MergeFunctionallyEquivalentGates;
+        std::string scopeToken;
+        if (!(iss >> scopeToken) || !parseTargetScope(scopeToken, request.scope)) {
+            error = "merge_functionally_equivalent_gates requires a valid <scope>.";
+            return false;
+        }
+        if (scopeNeedsName(request.scope) && !(iss >> request.scopeName)) {
+            error = "The selected functional merge scope requires a net or gate name.";
+            return false;
+        }
+
+        std::string option;
+        while (iss >> option) {
+            const std::string lowered = toLower(option);
+            if (lowered == "--gate-type" || lowered == "-gate_type") {
+                std::string typeToken;
+                if (!(iss >> typeToken) ||
+                    !parseGateType(netlist, typeToken, request.gateType)) {
+                    error = "--gate-type requires a valid combinational gate type.";
+                    return false;
+                }
+            } else if (lowered == "--patterns" || lowered == "-patterns") {
+                std::string valueToken;
+                int value = 0;
+                if (!(iss >> valueToken) ||
+                    !parseStrictInteger(valueToken, value) ||
+                    value < 1 || value > 4096) {
+                    error = "--patterns requires an integer in the range 1..4096.";
+                    return false;
+                }
+                request.simulationPatternCount = static_cast<size_t>(value);
+            } else if (lowered == "--time-limit" || lowered == "-time_limit") {
+                std::string valueToken;
+                double value = 0.0;
+                if (!(iss >> valueToken) ||
+                    !parseStrictDouble(valueToken, value) || value <= 0.0) {
+                    error = "--time-limit requires a positive number of seconds.";
+                    return false;
+                }
+                request.timeLimitSeconds = value;
+            } else {
+                error = "Unknown functional merge option: " + option;
+                return false;
+            }
+        }
+        return true;
+    }
+
     if (m == "rename_gate" || m == "rename_net") {
         request.kind = m == "rename_gate"
             ? Netlist::EditCommandKind::RenameGate
@@ -1794,8 +2018,9 @@ bool parsePublicEditApply(const Netlist& netlist,
         request.kind = Netlist::EditCommandKind::RemoveUnusedNets;
     } else if (m == "merge_equivalent_gates") {
         error = "merge_equivalent_gates is not a public command: the legacy implementation "
-                "only proves structural identity. Use merge_structurally_equivalent_gates; "
-                "SAT-based functional merge is not implemented yet.";
+                "only proves structural identity. Use merge_structurally_equivalent_gates "
+                "for structural duplicates or merge_functionally_equivalent_gates for "
+                "SAT-proven functional merge.";
         return false;
     } else if (m == "merge_structurally_equivalent_gates") {
         request.kind = Netlist::EditCommandKind::MergeStructurallyEquivalentGates;
@@ -1997,6 +2222,7 @@ void printHelp() {
         << "\nFunction query\n"
         << "  func_query <mode> [args]\n"
         << "  mode: equivalence <net_a> <net_b> | can_be_value <net> <0|1>\n"
+        << "        conditional_equivalence <net_a> <net_b> <condition_net> <0|1>\n"
         << "        constant <net> <0|1> | always_zero <net> | always_one <net>\n"
         << "        truth_status <net> | depends_on <target_net> <input_net>\n"
         << "        symmetry <target_net_or_bus> <input_a> <input_b>\n"
@@ -2006,6 +2232,11 @@ void printHelp() {
         << "  func_search nand_pair <target_net> [--all] [--max-results n]\n"
         << "              [--patterns 1..4096] [--time-limit seconds]\n"
         << "              [--allow-same] [--include-boundary-signals]\n"
+        << "  func_search equivalent_pairs <scope> [scope_name] [--all]\n"
+        << "              [--gate-type type] [--max-results n]\n"
+        << "              [--patterns 1..4096] [--time-limit seconds]\n"
+        << "  scope: whole | net_fanin <net> | net_fanout <net>\n"
+        << "         gate_fanin <gate> | gate_fanout <gate>\n"
         << "  default mode finds one SAT-proven pair; --all requests complete enumeration\n"
         << "\nSequential pattern query\n"
         << "  sequential_query enable_hold <all|dff_name> [--summary-only]\n"
@@ -2019,6 +2250,8 @@ void printHelp() {
         << "  edit_apply safe_cleanup_fixpoint | trim_dead_logic | remove_dangling_logic\n"
         << "  edit_apply remove_unused_nets | remove_net_if_unused <net>\n"
         << "  edit_apply merge_structurally_equivalent_gates\n"
+        << "  edit_apply merge_functionally_equivalent_gates <scope> [scope_name]\n"
+        << "             [--gate-type type] [--patterns 1..4096] [--time-limit seconds]\n"
         << "  edit_apply simplify_constants [gate_type|all] [0|1|any] [--inputs N]\n"
         << "  edit_apply simplify_same_input\n"
         << "  edit_apply insert_buffers_for_fanout <max_fanout>\n"
@@ -2557,13 +2790,14 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
                 session,
                 command,
                 "",
-                "Usage: func_search nand_pair <target_net> [options]");
+                "Usage: func_search nand_pair <target_net> [options] | "
+                "func_search equivalent_pairs <scope> [scope_name] [options]");
             return true;
         }
 
         Netlist::FunctionSearchQuery query;
         std::string error;
-        if (!buildFunctionSearchQuery(iss, mode, query, error)) {
+        if (!buildFunctionSearchQuery(session.current, iss, mode, query, error)) {
             emitToolError(session, command, mode, error);
             return true;
         }
@@ -2587,7 +2821,7 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             response.status = report.ok ? ToolStatus::Ok : ToolStatus::Error;
         }
         emitToolResponse(session, response, [&]() {
-            printFunctionSearchReport(report);
+            printFunctionSearchReport(session.current, report);
         });
         return true;
     }
@@ -2834,7 +3068,13 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
 
         ToolResponse response;
         response.ok = report.success;
-        if (!report.success) {
+        const bool functionalMergeTimedOut =
+            report.functionalMerge &&
+            (report.functionalMerge->searchTimedOut ||
+             report.functionalMerge->wholeDesignTimedOut);
+        if (functionalMergeTimedOut) {
+            response.status = ToolStatus::Timeout;
+        } else if (!report.success) {
             response.status = ToolStatus::Error;
         } else if (!equivalenceComplete) {
             response.status = ToolStatus::Partial;

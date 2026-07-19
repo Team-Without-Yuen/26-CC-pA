@@ -86,8 +86,8 @@ Batch 5 已直接 expose `gate_on_critical`、`every_through`、`deepest_output`
 | --- | --- | --- |
 | reduce / optimize / minimize critical path depth through restructuring | `test22` 到 `test30`, `test33`, `test40` | 真正 depth optimization 尚未形成穩定 public API、report、rollback、basis constraint flow |
 | optimize cone depth while maintaining NAND/NOT, NOR/NOT, AND/OR/NOT | `test25` 到 `test28`, `test33`, `test40` | 需要 constrained depth optimization flow |
-| all gate pairs functionally equivalent | `test29`, `test30`, `test35` | 目前只安全支援 structural duplicate merge，尚未支援任意 SAT-based functional merge |
-| arbitrary redundant gates removable without changing functionality | `test38` | 需要 SAT / observability-aware redundancy removal |
+| all gate pairs functionally equivalent | `test29`, `test30`, `test35` | 已支援 SAT class search、cycle-safe functional merge、whole-design SAT 與 rollback；test29/test30 已實測 |
+| redundant gates removable without changing functionality | `test38` | 已確認是 structural duplicates；`MergeStructurallyEquivalentGates` 實測移除 14 gates，whole-design SAT 通過 |
 
 ## 5. 下一步建議
 
@@ -95,7 +95,7 @@ Batch 5 已直接 expose `gate_on_critical`、`every_through`、`deepest_output`
 
 | Priority | 要補的內容 | 原因 |
 | --- | --- | --- |
-| P1 | 補 SAT-based functional duplicate / redundancy detection | 可提升 `functionally equivalent gate pair` 與 redundant gate 題型 |
-| P2 | 整理 depth optimization public flow | 最難，但會影響最大分數的 optimization testcase |
+| P1 | 整理 depth optimization public flow | 仍影響 optimization testcase；不屬於目前 non-optimization API 補齊範圍 |
+| P2 | general observability-aware redundancy hardening | official test38 已由 structural merge 完整處理；此項只針對可能的 hidden 任意 ODC redundancy |
 
-目前結論：一般 query、mapping 與大部分 edit prompt 已能由 tools CLI 處理；whole-design equivalence 已涵蓋 PO 與 DFF.D，canonical DFF enable/hold API/CLI 已通過 test40，symmetry API/CLI 也已通過 test36/test37 與 mini test22 驗證。下一步進入 functional pair/redundancy search 與 constrained depth optimization；AND-only/general pattern 語意仍依官方定義保守處理。
+目前結論：已知 NewTestCase 的 non-optimization query、mapping 與 edit prompt 均已有 tools CLI routing。whole-design equivalence 已涵蓋 PO 與 DFF.D，functional duplicate search/merge 已通過 test29/test30，test38 structural redundancy flow 已實測移除 14 gates 並維持 reset fanout constraint，canonical DFF enable/hold 與 symmetry 也已完成驗證。剩餘主要方向是 constrained depth optimization，以及非官方已確認範圍的 general observability redundancy hardening；AND-only/general pattern 語意仍依官方定義保守處理。

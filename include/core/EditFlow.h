@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <string>
 #include <vector>
 
@@ -33,6 +34,7 @@ enum class EditCommandKind {
     RemoveUnusedNets,
     MergeEquivalentGates, // Legacy/internal structural merge alias；不可作為 functional merge 對外公開
     MergeStructurallyEquivalentGates,
+    MergeFunctionallyEquivalentGates,
     SimplifyConstants,
     SimplifySameInput,
 
@@ -82,6 +84,8 @@ struct EditApplyRequest {
     int pinIndex = -1;
     int constValue = -1;
     int inputCount = -1;
+    size_t simulationPatternCount = 256;
+    double timeLimitSeconds = 30.0;
 
     GateType gateType = GateType::UNKNOWN;
     GateType targetGateType = GateType::UNKNOWN;

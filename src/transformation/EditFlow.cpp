@@ -25,6 +25,7 @@ std::string editCommandKindName(EditCommandKind kind) {
         case EditCommandKind::RemoveUnusedNets: return "remove_unused_nets";
         case EditCommandKind::MergeEquivalentGates: return "merge_equivalent_gates";
         case EditCommandKind::MergeStructurallyEquivalentGates: return "merge_structurally_equivalent_gates";
+        case EditCommandKind::MergeFunctionallyEquivalentGates: return "merge_functionally_equivalent_gates";
         case EditCommandKind::SimplifyConstants: return "simplify_constants";
         case EditCommandKind::SimplifySameInput: return "simplify_same_input";
         case EditCommandKind::InsertBuffersForFanout: return "insert_buffers_for_fanout";
@@ -279,6 +280,26 @@ EditRequestValidation validateEditApplyRequest(const Netlist& netlist, const Edi
         case EditCommandKind::SimplifySameInput:
             return okValidation();
 
+        case EditCommandKind::MergeFunctionallyEquivalentGates: {
+            EditRequestValidation scopeCheck =
+                requireScopeTarget(netlist, request.scope, request.scopeName);
+            if (!scopeCheck.ok) return scopeCheck;
+            if (request.gateType != GateType::UNKNOWN &&
+                !isKnownCombinationalGateType(request.gateType)) {
+                return failedValidation(
+                    "gateType must be a supported combinational gate type or UNKNOWN.");
+            }
+            if (request.simulationPatternCount == 0 ||
+                request.simulationPatternCount > 4096) {
+                return failedValidation(
+                    "simulationPatternCount must be in the range 1..4096.");
+            }
+            if (request.timeLimitSeconds <= 0.0) {
+                return failedValidation("timeLimitSeconds must be positive.");
+            }
+            return okValidation();
+        }
+
         case EditCommandKind::MergeEquivalentGates:
             return failedValidation(
                 "MergeEquivalentGates is a legacy internal structural-merge alias. "
@@ -493,6 +514,14 @@ NetlistEditReport Netlist::runEditApply(const EditApplyRequest& request) {
             break;
         case EditCommandKind::MergeStructurallyEquivalentGates:
             report = mergeStructurallyEquivalentGatesWithReport();
+            break;
+        case EditCommandKind::MergeFunctionallyEquivalentGates:
+            report = mergeFunctionallyEquivalentGatesWithReport(
+                request.scope,
+                request.scopeName,
+                request.gateType,
+                request.simulationPatternCount,
+                request.timeLimitSeconds);
             break;
         case EditCommandKind::SimplifyConstants:
             report = simplifyGatesWithConstantsWithReport(

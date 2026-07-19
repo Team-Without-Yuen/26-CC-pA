@@ -126,6 +126,39 @@ struct ConstantSimplificationSummary {
     std::vector<std::string> skippedGateNames;
 };
 
+struct FunctionalGateMergeRecord {
+    int representativeGateId = -1;
+    int representativeNetId = -1;
+    int removedGateId = -1;
+    int removedNetId = -1;
+    std::string representativeGateName;
+    std::string representativeNetName;
+    std::string removedGateName;
+    std::string removedNetName;
+};
+
+struct FunctionalMergeSummary {
+    std::string scope;
+    std::string scopeName;
+    GateType gateTypeFilter = GateType::UNKNOWN;
+    std::string searchStatus;
+    bool searchComplete = false;
+    bool searchTimedOut = false;
+    bool wholeDesignEquivalenceChecked = false;
+    bool wholeDesignEquivalent = false;
+    bool wholeDesignTimedOut = false;
+    size_t candidateGateCount = 0;
+    size_t equivalenceClassCount = 0;
+    size_t equivalentPairCount = 0;
+    size_t satChecks = 0;
+    size_t mergedGateCount = 0;
+    size_t skippedGateCount = 0;
+    double searchElapsedSeconds = 0.0;
+    double totalElapsedSeconds = 0.0;
+    std::vector<FunctionalGateMergeRecord> records;
+    std::vector<std::string> skippedGateNames;
+};
+
 // Single shared report for mutation / optimization / transformation flows.
 struct NetlistEditReport {
     bool success = false;
@@ -146,6 +179,7 @@ struct NetlistEditReport {
     std::optional<FanoutChange> fanoutChange;
     std::optional<MappingDelta> mappingDelta;
     std::optional<ConstantSimplificationSummary> constantSimplification;
+    std::optional<FunctionalMergeSummary> functionalMerge;
 
     std::vector<int> changedGateIds;
     std::vector<int> changedNetIds;

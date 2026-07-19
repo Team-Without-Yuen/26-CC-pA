@@ -37,8 +37,8 @@ Technology mapping:
 1. depth optimization / restructure with cost function 仍屬未來 OptApply。
    目前 technology mapping 可維持 basis constraint，但不會自動最佳化 depth。
 
-2. 任意 functional-equivalent merge 仍不完整。
-   structural duplicate merge 可處理，但「任意功能等價 gate pair」需要更強的 SAT-based merge flow。
+2. 任意 functional-equivalent pair 已可由 `func_search equivalent_pairs` 搜尋，並由 `edit_apply merge_functionally_equivalent_gates` 完成 cycle-safe merge、詳細 report 與 whole-design SAT rollback。
+   structural duplicate 仍可使用成本較低的 `merge_structurally_equivalent_gates`；observability-aware redundancy removal 是不同問題，尚未完整。
 ```
 
 ---
@@ -49,13 +49,13 @@ Technology mapping:
 
 | Prompt 類型 | 出現 testcase | 對應 command | 目前狀態 |
 |---|---|---|---|
-| `Rename gate g0 to renamed_gate.` | test24 | `RenameGate` | API covered；tools CLI 尚未 expose |
-| `Change the identifier of gate g0 to renamed_gate...` | test25 | `RenameGate` | API covered；tools CLI 尚未 expose |
-| `Change the identifier of wire n74 to renamed_wire...` | test25 | `RenameNet` | API covered；tools CLI 尚未 expose |
-| `Try to rename internal signal n1289 to renamed_sig...` | test31 | `RenameNet` | API covered；tools CLI 尚未 expose |
-| `Rename wire n1214 to renamed_wire.` | test32 | `RenameNet` | API covered；tools CLI 尚未 expose |
-| `Update the name of signal n7431 to renamed_wire...` | test35 | `RenameNet` | API covered；tools CLI 尚未 expose |
-| `Update the name of signal n440 to renamed_wire...` | test38 | `RenameNet` | API covered；tools CLI 尚未 expose |
+| `Rename gate g0 to renamed_gate.` | test24 | `RenameGate` | API + tools CLI covered |
+| `Change the identifier of gate g0 to renamed_gate...` | test25 | `RenameGate` | API + tools CLI covered |
+| `Change the identifier of wire n74 to renamed_wire...` | test25 | `RenameNet` | API + tools CLI covered |
+| `Try to rename internal signal n1289 to renamed_sig...` | test31 | `RenameNet` | API + tools CLI covered |
+| `Rename wire n1214 to renamed_wire.` | test32 | `RenameNet` | API + tools CLI covered |
+| `Update the name of signal n7431 to renamed_wire...` | test35 | `RenameNet` | API + tools CLI covered |
+| `Update the name of signal n440 to renamed_wire...` | test38 | `RenameNet` | API + tools CLI covered |
 
 後續 follow-up：
 
@@ -69,12 +69,12 @@ List all gates that now connect to the renamed signal renamed_sig.
 
 | Prompt 類型 | 出現 testcase | 對應 command | 目前狀態 |
 |---|---|---|---|
-| `Trim unused wires and gates.` | test23 | `SafeCleanupFixpoint` | API covered；tools CLI 尚未 expose |
-| `Remove all dangling gates...` | test24, test26 | `RemoveDanglingLogic` | API covered；tools CLI 尚未 expose |
-| `Eliminate unused logic gates...` | test25 | `SafeCleanupFixpoint` | API covered；tools CLI 尚未 expose |
-| `Sweep out dangling gates.` | test28 | `RemoveDanglingLogic` | API covered；tools CLI 尚未 expose |
-| `Prune the netlist of unused gates.` | test29, test37 | `SafeCleanupFixpoint` | API covered；tools CLI 尚未 expose |
-| `Remove floating nodes that do not affect outputs.` | test30 | `SafeCleanupFixpoint` | API covered；tools CLI 尚未 expose |
+| `Trim unused wires and gates.` | test23 | `SafeCleanupFixpoint` | API + tools CLI covered |
+| `Remove all dangling gates...` | test24, test26 | `RemoveDanglingLogic` | API + tools CLI covered |
+| `Eliminate unused logic gates...` | test25 | `SafeCleanupFixpoint` | API + tools CLI covered |
+| `Sweep out dangling gates.` | test28 | `RemoveDanglingLogic` | API + tools CLI covered |
+| `Prune the netlist of unused gates.` | test29, test37 | `SafeCleanupFixpoint` | API + tools CLI covered |
+| `Remove floating nodes that do not affect outputs.` | test30 | `SafeCleanupFixpoint` | API + tools CLI covered |
 
 可由 report 回答的 follow-up：
 
@@ -94,7 +94,7 @@ How many redundant gates were removed?
 
 | Prompt 類型 | 出現 testcase | 對應 command | 目前狀態 |
 |---|---|---|---|
-| `Find all back-to-back inverter pairs and collapse them...` | test26, test27, test28, test29, test30, test31, test35, test38, test39, test40 | `CollapseDoubleInverter` | API covered；tools CLI 尚未 expose |
+| `Find all back-to-back inverter pairs and collapse them...` | test26, test27, test28, test29, test30, test31, test35, test38, test39, test40 | `CollapseDoubleInverter` | API + tools CLI covered |
 
 可由 report 回答：
 
@@ -126,13 +126,13 @@ How many NOT gates are currently in the design?
   -> BasicQuery::CountByGateType(NOT) after edit
 ```
 
-### 2.5 Structural Duplicate Merge
+### 2.5 Structural / Functional Duplicate Merge
 
 | Prompt 類型 | 出現 testcase | 對應 command | 目前狀態 |
 |---|---|---|---|
-| `Try to merge any pairs of gates ... structural duplicates.` | test33 | `MergeStructurallyEquivalentGates` | API covered；tools CLI 尚未 expose |
-| `Find and merge all gate pairs ... functionally equivalent.` | test29, test30 | future `MergeFunctionallyEquivalentGates` | Missing；需要 bounded candidate search、SAT proof、cycle-safe merge 與 rollback |
-| `Are there any redundant gates ... Remove them if found.` | test38 | `MergeStructurallyEquivalentGates` / cleanup fixpoint | API partial；prompt wording is broad |
+| `Try to merge any pairs of gates ... structural duplicates.` | test33 | `MergeStructurallyEquivalentGates` | API + tools CLI covered |
+| `Find and merge all gate pairs ... functionally equivalent.` | test29, test30 | `MergeFunctionallyEquivalentGates` | API + tools CLI covered；class-only SAT search、cycle-safe merge、whole-design SAT、rollback、detailed report |
+| `Are there any redundant gates ... Remove them if found.` | test38 | `MergeStructurallyEquivalentGates` | API + tools CLI covered；official circuit 實測為 14 個 structural duplicates，whole-design SAT 通過 |
 
 目前建議：
 
@@ -141,17 +141,18 @@ structural duplicates:
   use MergeStructurallyEquivalentGates
 
 arbitrary functional-equivalent merge:
-  future SAT-based merge candidate flow
+  use MergeFunctionallyEquivalentGates
+  CLI: edit_apply merge_functionally_equivalent_gates whole --time-limit 30
 ```
 
 ### 2.6 Buffer Insertion
 
 | Prompt 類型 | 出現 testcase | 對應 command | 目前狀態 |
 |---|---|---|---|
-| `Insert buffers wherever needed so that no gate drives more than 4 loads.` | test21 | `InsertBuffersForFanout(maxFanout=4)` | API covered；tools CLI 尚未 expose |
-| `Insert buffers wherever needed so that no signal drives more than 16 loads.` | test36 | `InsertBuffersForFanout(maxFanout=16)` | API covered；tools CLI 尚未 expose |
-| `Try to insert buffers on the reset signal n1 ... at most 4 loads per driver.` | test38 | `InsertBuffersForSpecificNet(netName=n1,maxFanout=4)` | API covered；tools CLI 尚未 expose |
-| `Insert a BUF gate on signal n2 so that each load ... dedicated buffer.` | test31, test39 | `InsertBuffersOnEachLoad(netName=n2)` | API covered；tools CLI 尚未 expose |
+| `Insert buffers wherever needed so that no gate drives more than 4 loads.` | test21 | `InsertBuffersForFanout(maxFanout=4)` | API + tools CLI covered |
+| `Insert buffers wherever needed so that no signal drives more than 16 loads.` | test36 | `InsertBuffersForFanout(maxFanout=16)` | API + tools CLI covered |
+| `Try to insert buffers on the reset signal n1 ... at most 4 loads per driver.` | test38 | `InsertBuffersForSpecificNet(netName=n1,maxFanout=4)` | API + tools CLI covered |
+| `Insert a BUF gate on signal n2 so that each load ... dedicated buffer.` | test31, test39 | `InsertBuffersOnEachLoad(netName=n2)` | API + tools CLI covered |
 
 可由 report 回答：
 
@@ -198,32 +199,20 @@ How many AND gates are now in the reconstructed netlist?
 
 ---
 
-## 3. API Covered But tools.cpp Not Fully Exposed
+## 3. tools.cpp Public Exposure
 
-`tools.cpp` 目前已有：
+Rename、cleanup、simplification、structural merge、buffer insertion、technology mapping 與 cached edit report 均已由 public `edit_apply` / `report_query` expose。正式 LLM-facing grammar 與 report 判讀見：
 
 ```text
-edit_apply convert_basis ...
-edit_apply replace_type ...
+TOOLS_SPEC/EDIT_APPLY_TOOL.md
+TOOLS_SPEC/REPORT_QUERY_TOOL.md
 ```
-
-尚未 expose 但 public API 已存在：
-
-| Command group | Needed CLI examples |
-|---|---|
-| Rename | `edit_apply rename_net <old> <new>` / `edit_apply rename_gate <old> <new>` |
-| Cleanup | `edit_apply remove_dangling_logic`, `edit_apply trim_dead_logic`, `edit_apply remove_unused_nets` |
-| Simplification | `edit_apply collapse_double_inverter`, `edit_apply simplify_constants`, `edit_apply simplify_same_input`, `edit_apply local_simplification_fixpoint` |
-| Structural merge | `edit_apply merge_structurally_equivalent_gates` |
-| Buffer insertion | `edit_apply insert_buffers_for_fanout <max>`, `edit_apply insert_buffers_for_net <net> <max>`, `edit_apply insert_buffers_on_each_load <net>` |
-
-建議下一步優先補這些 CLI command，因為它們會直接卡 test21、test23~40 的 edit 類 prompt routing。
 
 ---
 
-## 4. 仍需未來 API
+## 4. 已完成驗證與未來 API
 
-### 4.1 Original / Current Whole-Design Equivalence
+### 4.1 Original / Current Whole-Design Equivalence（已完成）
 
 Prompt 類型：
 
@@ -247,14 +236,7 @@ Covered by session original snapshot and tools `equiv_query original/previous_ed
 EditApply wrappers 仍先回 local rewrite certificate；題目明確要求整體證明時再執行 whole-design SAT query。
 ```
 
-建議 API：
-
-```text
-EquivalenceQuery / EquivalenceApply?:
-  save original snapshot on read
-  compare current vs original
-  return WholeDesignSat / StructuralIdentity / NotChecked
-```
+公開用法見 `TOOLS_SPEC/EQUIVALENCE_QUERY_TOOL.md`。
 
 ### 4.2 Depth Optimization / Restructuring With Cost Function
 
@@ -302,22 +284,16 @@ Find articulation points / cut points...
 Report D input enable/hold structures...
 ```
 
-這些不應塞進 EditApply。Boolean/function 問題由 `FunctionQuery`、cut/articulation 由 `GraphQuery`、DFF enable/hold 由已完成的 `SequentialPatternQuery` 負責。
+這些不應塞進 EditApply。Boolean/function 問題由 `FunctionQuery`、cut/articulation 由 public `PathQuery`、DFF enable/hold 由 `SequentialPatternQuery` 負責。
 
 ---
 
-## 5. 建議下一步
+## 5. 剩餘缺口
 
 ```text
-P0:
-  補 tools.cpp 的 public edit_apply CLI：
-    rename
-    cleanup / simplification
-    buffer insertion
+1. general observability-aware redundancy removal
+   official test38 已確認可由 structural duplicate merge 完整處理；但未知 hidden case 若要求「局部功能不同、只因 outputs 不可觀測而可刪除」的任意 redundancy，仍需 observability proof。
 
-P1:
-  補 original/current whole-design equivalence API。
-
-P2:
-  開始設計 OptApply for depth optimization。
+2. Objective-driven depth optimization 屬於未來 optimization flow；
+   固定 basis conversion 不等於 best-depth search。
 ```

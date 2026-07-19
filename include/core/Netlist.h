@@ -1081,6 +1081,14 @@ public:
     int mergeStructurallyEquivalentGates();
     NetlistEditReport mergeStructurallyEquivalentGatesWithReport();
 
+    // 以 FunctionSearch SAT 等價類合併跨結構但 output function 相同的 gates。
+    NetlistEditReport mergeFunctionallyEquivalentGatesWithReport(
+        TargetScope scope = TargetScope::WHOLE_NETLIST,
+        const std::string& scopeName = "",
+        GateType gateTypeFilter = GateType::UNKNOWN,
+        size_t simulationPatternCount = 256,
+        double timeLimitSeconds = 30.0);
+
     // =========================================================================
     // B-5: Unique name generator
     // =========================================================================
@@ -1262,6 +1270,8 @@ public:
     using NetlistDiff = ::NetlistDiff;
     using EditValidationResult = ::EditValidationResult;
     using NetlistEditReport = ::NetlistEditReport;
+    using FunctionalGateMergeRecord = ::FunctionalGateMergeRecord;
+    using FunctionalMergeSummary = ::FunctionalMergeSummary;
     using WholeDesignEquivalenceReport = ::WholeDesignEquivalenceReport;
     using NetlistEditOperationKind = ::NetlistEditOperationKind;
     using EquivalenceCheckMethod = ::EquivalenceCheckMethod;
@@ -1403,8 +1413,10 @@ public:
 
     using FunctionSearchQueryType = ::FunctionSearchQueryType;
     using FunctionSearchMode = ::FunctionSearchMode;
+    using FunctionSearchScope = ::FunctionSearchScope;
     using FunctionSearchQuery = ::FunctionSearchQuery;
     using FunctionSearchMatch = ::FunctionSearchMatch;
+    using FunctionSearchEquivalenceClass = ::FunctionSearchEquivalenceClass;
     using FunctionSearchReport = ::FunctionSearchReport;
 
     FunctionSearchReport runFunctionSearchQuery(const FunctionSearchQuery& query) const;

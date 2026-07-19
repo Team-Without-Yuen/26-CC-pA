@@ -1,8 +1,8 @@
 # Function Search 使用說明
 
-這份文件說明外部程式如何呼叫 `FunctionSearchQuery`。目前公開支援 `NAND(a,b) == target` 的 internal signal pair 搜尋。
+這份文件只負責說明 `FunctionSearchQuery` 與公開 `func_search` command 的使用方式。
 
-設計背景、證明流程與限制請看：
+設計背景與內部 contract 請看：
 
 ```text
 API_SPEC/FUNCTION_SEARCH_API.md
@@ -10,16 +10,108 @@ API_SPEC/FUNCTION_SEARCH_API.md
 
 ---
 
-## 1. FindAny
+## 1. 基本概念與入口
 
-對應 prompt：
-
-```text
-Does there exist any pair of internal signals (a, b) already in the netlist
-such that NAND(a, b) is equivalent to n25?
+```cpp
+const Netlist::FunctionSearchReport report =
+    netlist.runFunctionSearchQuery(query);
 ```
 
-呼叫方式：
+公開 CLI：
+
+```text
+func_search nand_pair ...
+func_search equivalent_pairs ...
+```
+
+標準流程是先選 search type，再設定 FindAny/FindAll、搜尋限制與 type-specific 欄位，最後必須檢查 `ok`、`complete` 與 status，不能只看 `matches.empty()`。
+
+---
+
+## 2. Mode / Command 總表
+
+| Mode | 必要輸入 | 主要輸出 | 語意 |
+|---|---|---|---|
+| `nand_pair` | scalar target net | `found`, `matches` | 搜尋 `NAND(a,b)==target` |
+| `equivalent_pairs` | scope，必要時 scope name | `equivalenceClasses`, `matches` | 搜尋 gate output function 等價類 |
+
+`FindAny` 找到一組 SAT-proven witness 即停止。`FindAll` 嘗試完整搜尋，但可能受 time limit、unsupported logic 或 `maxResults` 影響。
+
+---
+
+## 3. 輸入欄位
+
+共同欄位：
+
+| 欄位 | 預設 | 條件 |
+|---|---:|---|
+| `mode` | `FindAny` | `FindAny` 或 `FindAll` |
+| `maxResults` | 256 | 必須大於 0 |
+| `simulationPatternCount` | 256 | 1..4096 |
+| `timeLimitSeconds` | 30 | 必須大於 0 |
+| `expandEquivalentPairs` | true | 一般 query 保持 true；批次 merge 可設 false，只保留 classes 與總 pair count |
+
+`EquivalentGatePairs` scope：
+
+| Scope | `scopeName` |
+|---|---|
+| `WholeDesign` | 不使用 |
+| `NetFanin` | existing net |
+| `NetFanout` | existing net |
+| `GateFanin` | existing gate |
+| `GateFanout` | existing gate |
+
+`gateTypeFilter = GateType::UNKNOWN` 表示不限制 type；可設定 AND、OR、NAND、NOR、NOT、BUF、XOR 或 XNOR。
+
+---
+
+## 4. 回傳欄位與狀態判讀
+
+安全判讀：
+
+```cpp
+if (report.ok && report.complete && report.found) {
+    // 已證明至少存在一組。
+} else if (report.ok && report.complete && !report.found) {
+    // 完整搜尋後確定不存在。
+} else {
+    // partial / timeout / unsupported / invalid，不得回答不存在。
+}
+```
+
+主要狀態：
+
+| `status` | 判讀 |
+|---|---|
+| `MATCH_FOUND` | FindAny 找到 witness，exists 已完整回答 |
+| `MATCHES_FOUND` | FindAll 完整分類且至少一組 |
+| `NO_MATCH` | 完整搜尋後無結果 |
+| `RESULT_LIMIT_REACHED` | `matches` 只含前 N 組 |
+| `TIMEOUT` | 時間內無法完成 |
+| `SOLVER_UNKNOWN` | SAT 無法完成部分比較 |
+| `UNSUPPORTED_OR_PARTIAL` | 存在無法分析的候選 |
+| `TARGET_NOT_FOUND` | NAND search target 不存在 |
+| `SCOPE_NOT_FOUND` | equivalent-pair scope 不存在 |
+| `INVALID_ARGUMENT` | limit、filter 或必要輸入不合法 |
+
+`EquivalentGatePairs` 優先讀：
+
+```text
+equivalenceClassCount
+equivalentPairCount
+equivalenceClasses
+matches
+candidateGateCount
+satChecks
+```
+
+`equivalentPairCount` 是已證明 class 的 pair 總數；若 `truncated=true`，它可大於 `matches.size()`。
+
+---
+
+## 5. 各 Mode 使用範例
+
+### 5.1 搜尋 NAND-equivalent signal pair
 
 ```cpp
 Netlist::FunctionSearchQuery query;
@@ -28,167 +120,126 @@ query.mode = Netlist::FunctionSearchMode::FindAny;
 query.targetNetName = "n25";
 query.internalSignalsOnly = true;
 query.allowSameSignalPair = false;
-query.simulationPatternCount = 256;
 query.timeLimitSeconds = 30.0;
 
-const Netlist::FunctionSearchReport report =
-    netlist.runFunctionSearchQuery(query);
+const auto report = netlist.runFunctionSearchQuery(query);
 ```
 
-判讀方式：
-
-```cpp
-if (report.ok && report.complete && report.found) {
-    const auto& match = report.matches.front();
-    // NAND(match.netNameA, match.netNameB) 已由 SAT 證明等價於 n25。
-} else if (report.ok && report.complete && !report.found) {
-    // 完整搜尋後確定不存在。
-} else {
-    // timeout / unknown / unsupported，不能回答不存在。
-}
+```text
+func_search nand_pair n25 --time-limit 30
+func_search nand_pair n25 --all --max-results 256
 ```
 
-`FindAny` 找到第一組已證明的 pair 就停止，因此 `allCandidatesExamined` 不一定為 true，但存在性問題已完整回答。
+成功 match 的 proof 應為 `SAT_UNSAT_MITER / UNSAT`。
 
----
-
-## 2. FindAll
+### 5.2 搜尋 whole-design equivalent gate pairs
 
 ```cpp
 Netlist::FunctionSearchQuery query;
-query.type = Netlist::FunctionSearchQueryType::NandEquivalentInputPairs;
+query.type = Netlist::FunctionSearchQueryType::EquivalentGatePairs;
 query.mode = Netlist::FunctionSearchMode::FindAll;
-query.targetNetName = "target";
+query.scope = Netlist::FunctionSearchScope::WholeDesign;
 query.maxResults = 256;
 query.timeLimitSeconds = 30.0;
 
 const auto report = netlist.runFunctionSearchQuery(query);
 ```
 
-只有以下條件成立時，`matches` 才是完整集合：
+```text
+func_search equivalent_pairs whole --all --time-limit 30
+```
+
+讀取 `equivalenceClasses` 可直接取得分組；讀取 `matches` 可取得 pair records。
+
+### 5.3 限制在 cone
 
 ```cpp
-report.ok && report.complete && report.allCandidatesExamined &&
-!report.timedOut && !report.truncated
+query.scope = Netlist::FunctionSearchScope::NetFanin;
+query.scopeName = "n10";
 ```
 
-若 `status == "RESULT_LIMIT_REACHED"`，代表已證明至少還有一組結果超過上限，目前只得到前 `maxResults` 組。
+```text
+func_search equivalent_pairs net_fanin n10 --all
+func_search equivalent_pairs gate_fanout U15 --all
+```
 
----
-
-## 3. Match 欄位
+### 5.4 限制 gate type
 
 ```cpp
-for (const auto& match : report.matches) {
-    std::cout << match.netNameA << " " << match.netNameB << "\n";
-    std::cout << match.proofMethod << " " << match.solverStatus << "\n";
-}
+query.gateTypeFilter = GateType::AND;
 ```
-
-公開結果只會列出 SAT-proven matches：
 
 ```text
-provenEquivalent: true
-proofMethod: SAT_UNSAT_MITER
-solverStatus: UNSAT
+func_search equivalent_pairs whole --all --gate-type AND
 ```
 
-simulation signature 不會單獨成為 match proof。
+這代表 pair 的兩個成員都必須是 AND gate；不是要求它們的 fanin cone 只能含 AND。
 
 ---
 
-## 4. 錯誤與不完整結果
-
-| 狀態 | 外部行為 |
-|---|---|
-| `TARGET_NOT_FOUND` | 修正 target 名稱 |
-| `SCALAR_TARGET_REQUIRED` | 指定單一 net 或 bus bit |
-| `TIMEOUT` | 回報 unknown/partial，可調整時間上限後重試 |
-| `SOLVER_UNKNOWN` | 不得當成 no match |
-| `UNSUPPORTED_OR_PARTIAL` | 回報目前無法完整分析的 logic |
-| `RESULT_LIMIT_REACHED` | 明確註明只回傳部分 matches |
-
----
-
-## 5. API 責任邊界
-
-```text
-Are n1 and n2 equivalent?
-  -> FunctionQuery::Equivalence
-
-Does any pair (a,b) satisfy NAND(a,b)==n25?
-  -> FunctionSearchQuery::NandEquivalentInputPairs
-
-Find and merge all equivalent gates.
-  -> FunctionSearchQuery 負責找候選與證明
-  -> EditApply 負責實際修改及修改後驗證
-```
-
----
-
-## 6. tools CLI 使用
-
-格式：
+## 6. CLI Grammar
 
 ```text
 func_search nand_pair <target_net>
-    [--all]
+    [--find-any | --all]
     [--max-results N]
-    [--patterns N]
+    [--patterns 1..4096]
     [--time-limit seconds]
     [--allow-same]
     [--include-boundary-signals]
+
+func_search equivalent_pairs <scope> [scope_name]
+    [--find-any | --all]
+    [--gate-type type]
+    [--max-results N]
+    [--patterns 1..4096]
+    [--time-limit seconds]
+
+scope:
+    whole
+    net_fanin <net>
+    net_fanout <net>
+    gate_fanin <gate>
+    gate_fanout <gate>
 ```
 
-| Option | 預設 | 語意 |
-|---|---:|---|
-| `--all` | 關閉 | 使用 `FindAll`；未指定時使用 `FindAny` |
-| `--max-results N` | `256` | `FindAll` 最多保留幾組結果；達上限回 `partial` |
-| `--patterns N` | `256` | simulation patterns，合法範圍 `1..4096` |
-| `--time-limit seconds` | `30` | simulation、enumeration 與 SAT 共用時間 |
-| `--allow-same` | 關閉 | 允許 `(a,a)` |
-| `--include-boundary-signals` | 關閉 | 允許 PI 等 boundary signal；題目要求 internal signals 時不要使用 |
-
-範例：
-
-```text
-func_search nand_pair n25
-func_search nand_pair n25 --all --max-results 256 --time-limit 30
-```
-
-主要回傳欄位：
-
-```text
-report_status
-found
-complete
-all_candidates_examined
-timed_out
-truncated
-candidate_signal_count
-candidate_pairs_considered
-sat_checks
-match_count
-matches[].net_a / net_b / proof_method / solver_status
-```
-
-只有 `status: ok` 且 `complete: true` 時，LLM 才能把 found/no-match 當成完整答案。`status: partial`、`timeout` 或 `unsupported` 時，不得回答「不存在」。
+`--allow-same` 與 `--include-boundary-signals` 只屬於 `nand_pair`；`--gate-type` 只屬於 `equivalent_pairs`。錯用時 parser 直接回 error。
 
 ---
 
 ## 7. Prompt 對應
 
-| Prompt | Command | 主要讀取 |
+| Prompt 語意 | Command | 主要讀取 |
 |---|---|---|
-| Does there exist any internal pair `(a,b)` such that `NAND(a,b)==n25`? | `func_search nand_pair n25` | `found`、第一筆 SAT-proven match |
-| Find all such pairs. | `func_search nand_pair n25 --all` | `complete`、`all_candidates_examined`、`matches` |
+| 是否存在 signals 使 `NAND(a,b)==n25` | `func_search nand_pair n25` | `found`, 第一筆 match |
+| 列出所有這類 NAND pairs | `func_search nand_pair n25 --all` | `complete`, `matches` |
+| 找任意兩顆功能等價 gates | `func_search equivalent_pairs whole` | 第一筆 gate pair 與 proof |
+| 列出所有 equivalent gate groups | `func_search equivalent_pairs whole --all` | `equivalenceClasses` |
+| 找 n10 fanin cone 內的 equivalent gates | `func_search equivalent_pairs net_fanin n10 --all` | class/pair counts |
+| 找所有 functionally equivalent AND pairs | `func_search equivalent_pairs whole --all --gate-type AND` | filtered classes |
 
 ---
 
-## 8. 實作與測試狀態
+## 8. 何時不要使用
+
+| 問題 | 改用 |
+|---|---|
+| 已知兩條 net，只需判斷等價 | `func_query equivalence` |
+| 已知 condition 下判斷等價 | `func_query conditional_equivalence` |
+| 找結構 duplicate 並直接合併 | `edit_apply merge_structurally_equivalent_gates` |
+| 搜尋並合併跨結構 functional duplicates | `edit_apply merge_functionally_equivalent_gates <scope>` |
+| 修改後是否保持 whole-design function | `equiv_query previous_edit` 或 `equiv_query original` |
+| critical depth 最佳化 | optimization flow |
+| observability-aware redundant gate removal | 尚未由本 mode 支援 |
+
+---
+
+## 9. 實作與測試狀態
 
 ```text
-C++ API regression：mini test/test23
-CLI regression：mini test/test24
-Official prompt target：NewTestCase/test35 n25
+NAND C++ API：mini test/test23
+NAND CLI：mini test/test24
+Equivalent gate-pair search + functional merge C++ API / CLI：mini test/test26
 ```
+
+目前兩種 public modes 均只回 SAT-proven matches；simulation-only 結果不會出現在 `matches` 或 `equivalenceClasses`。

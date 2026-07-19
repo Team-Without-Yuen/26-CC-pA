@@ -164,8 +164,8 @@
 | 6 PI with highest fanout | `structure_query pi_fanout` | max-fanout PI names | `Ready` |
 | 7 collapse double inverters | `edit_apply collapse_double_inverter` | edit report + certificate | `Ready` |
 | 8 current maximum depth | `depth_query global_critical` | worst depth/path | `Ready` |
-| 9 remove arbitrary functionally redundant gates | no observability-aware redundancy remover | safe removed gates | `Missing` |
-| 10 redundant gates removed | depends on missing edit | removed count | `Missing` |
+| 9 remove redundant gates | `edit_apply merge_structurally_equivalent_gates` | structural-identity certificate + active gate delta | `Ready`；official test38 實測為 14 個 structural duplicates |
+| 10 redundant gates removed | `report_query last_edit` | `-diff.active_gate_count_delta` | `Ready`；official test38 為 14 |
 | 11 depth-0 PI-to-PO paths | `path_query direct_pi_po` | count + witnesses | `Ready` |
 | 12 articulation points between `n2/n14` | `path_query mandatory_nodes n2 n14` | path status + ordered articulation net list | `Ready` |
 | 13 rename `n440` | `edit_apply rename_net n440 renamed_wire` | changed names + certificate | `Ready` |
@@ -223,7 +223,8 @@
 |---|---|---|
 | Completed | symmetry analysis | test36、test37 與 mini test22 已驗證 |
 | Completed | NAND witness-pair function search | test35；API + CLI + mini test23/test24 |
-| P2 | observability-aware functional redundancy removal | test38 |
+| Completed | test38 structural redundancy removal | official flow 實測移除 14 gates，且 whole-design SAT 通過 |
+| P2 | general observability-aware redundancy removal | 尚無已確認 NewTestCase prompt；保留給 hidden-case hardening |
 | P3 | constrained depth optimization flow | test33, test40 and earlier optimization cases |
 
 ## Response Rules

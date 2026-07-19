@@ -1189,7 +1189,8 @@ Routing 原則：
 ```text
 精準指定 back-to-back inverter collapse 時，用 CollapseDoubleInverter。
 精準指定 dangling gates 時，可用 RemoveDanglingLogic。
-若 prompt 寫成 cleanup / prune / trim / redundant / floating nodes 這類較廣語意，優先用 SafeCleanupFixpoint。
+若 prompt 寫成 cleanup / prune / trim / floating nodes 這類較廣語意，優先用 SafeCleanupFixpoint。
+official test38 的 redundant-gate prompt 已由電路實測確認是 structural duplicates，固定使用 MergeStructurallyEquivalentGates，並由 active gate delta 回答移除數量。
 ```
 
 Coverage：
@@ -2125,9 +2126,11 @@ Future
 7. FunctionQuery::Symmetry（已完成）
    - SAT-based input-swap equivalence、bus target、counterexample report。
 
-8. FunctionSearchQuery（NAND pair mode 已完成）
+8. FunctionSearchQuery（NAND pair 與 equivalent gate-pair modes 已完成）
    - existing pair search，例如 NAND(a,b) == target。
-   - functional-equivalent gate pair 與 redundancy search 尚待擴充。
+   - whole/cone scope 內的 SAT-proven functional-equivalent gate pairs 與 gate-type filter。
+   - 實際 functional merge 由 `EditApply::MergeFunctionallyEquivalentGates` 負責，已完成 cycle-safe apply、whole-design SAT 與 rollback。
+   - official test38 已確認為 structural duplicates，可由 `MergeStructurallyEquivalentGates` 完整移除 14 gates；general observability-only redundancy search/removal 仍屬 hidden-case hardening。
 
 9. SequentialPatternQuery
    - DFF enable / hold structure detection。
