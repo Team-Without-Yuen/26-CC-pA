@@ -1,5 +1,5 @@
 #include "include/core/Netlist.h"
-#include "include/lib/cadical/cadical.hpp"
+#include "include/core/SatTime.h"
 #include <string>
 #include <algorithm>
 #include <vector>
@@ -96,91 +96,72 @@ NetlistEditReport finalizeBooleanPrimitiveReport(
 //  回傳移除的 gate 數量
 // ─────────────────────────────────────────────────────────────────────────────
 int Netlist::trimDeadLogic() {
+    const int NG = (int)gates.size();
+    const int NN = (int)nets.size();
+
     std::unordered_set<int> usefulGates;
     std::unordered_set<int> usefulNets;
-    std::queue<int> q; // 用於反向拓撲追查的 Net ID 佇列
+    std::queue<int> q;
 
-    // 【雙重保險起點】同時檢查 nets 標記，並探測結構上的真實 PO
-    for (int i = 0; i < (int)nets.size(); i++) {
-        if (nets[i].isPO) {
-            usefulNets.insert(i);
-            q.push(i);
-        }
-    }
+    auto pushNet = [&](int nid) {
+        if (nid >= 0 && nid < NN && usefulNets.insert(nid).second) q.push(nid);
+    };
 
-    // 如果發現 usefulNets 是空的（預防 Reader 漏標記），強制鎖定事實上的 PO
+    // --- 起點 1：所有真實 PO net ---
+    for (int i = 0; i < NN; ++i)
+        if (nets[i].isPO) pushNet(i);
+
+    // --- PO 正確性防線：偵測到完全沒有 PO 標記就放棄，不自動猜 ---
     if (q.empty()) {
-        std::vector<int> isUsedAsInput((int)nets.size(), 0);
-        for (const auto& g : gates) {
-            if (g.type == GateType::UNKNOWN) continue;
-            for (int inId : g.inputNetIds) {
-                if (inId >= 0) isUsedAsInput[inId] = 1;
-            }
-        }
-        for (int i = 0; i < (int)gates.size(); i++) {
-            if (gates[i].type == GateType::UNKNOWN) continue;
-            int onet = gates[i].outputNetId;
-            if (onet >= 0 && isUsedAsInput[onet] == 0) {
-                nets[onet].isPO = true; 
-                usefulNets.insert(onet);
-                q.push(onet);
-            }
-        }
+        std::cerr << "[trimDeadLogic][FATAL] no PO flagged on any net; "
+                     "parser/PO-marking bug. Skipping trim to stay safe.\n";
+        return 0;
     }
 
-    // 如果電路中有包含 DFF，DFF 的輸入端也是必須保留的反向 BFS 起點
-    for (int i = 0; i < (int)gates.size(); i++) {
-        if (gates[i].type == GateType::DFF) {
-            usefulGates.insert(i);
-            for (int inNetId : gates[i].inputNetIds) {
-                if (inNetId >= 0 && !usefulNets.count(inNetId)) {
-                    usefulNets.insert(inNetId);
-                    q.push(inNetId);
-                }
-            }
-        }
+    // --- 起點 2：所有 DFF 的 D 輸入（時序終點，必須保留）---
+    //     DFF 本身無條件視為有用；其控制腳(CK/RN/SN)與 D 都要保住上游。
+    for (int i = 0; i < NG; ++i) {
+        if (gates[i].type != GateType::DFF) continue;
+        usefulGates.insert(i);
+        for (int inNetId : gates[i].inputNetIds) pushNet(inNetId);
     }
 
-    // 【反向 BFS 擴散】標記所有對輸出有實質貢獻的邏輯閘
+    // --- 反向 BFS：標記所有對「PO / DFF.D」有貢獻的組合閘 ---
     while (!q.empty()) {
-        int currNetId = q.front();
-        q.pop();
+        int currNet = q.front(); q.pop();
 
-        int dgid = nets[currNetId].driverGateId;
-        if (dgid < 0) continue; // PI 或 Constant 沒有上游驅動閘
+        int dgid = nets[currNet].driverGateId;
+        if (dgid < 0 || dgid >= NG) continue;              // PI / 常數：無上游
+        if (gates[dgid].type == GateType::UNKNOWN) continue;
+        if (gates[dgid].type == GateType::DFF) continue;   // DFF 已在起點處理，別穿透
+        if (!usefulGates.insert(dgid).second) continue;    // 已標記過
 
-        if (gates[dgid].type != GateType::UNKNOWN && !usefulGates.count(dgid)) {
-            usefulGates.insert(dgid); // 認定此閘有用，安全鎖定
-            
-            for (int inNetId : gates[dgid].inputNetIds) {
-                if (inNetId >= 0 && !usefulNets.count(inNetId)) {
-                    usefulNets.insert(inNetId);
-                    q.push(inNetId);
-                }
-            }
-        }
+        for (int inNetId : gates[dgid].inputNetIds) pushNet(inNetId);
     }
 
-    // 【安全刪除階段】只有沒被標記、且絕對不連向 PO 的閘才允許刪除
-    int deadGateCount = 0;
-    for (int i = 0; i < (int)gates.size(); i++) {
-        if (gates[i].type == GateType::UNKNOWN) continue;
+    // --- 刪除：未被標記的組合閘 → UNKNOWN，並同步斷線 ---
+    int deadCount = 0;
+    for (int i = 0; i < NG; ++i) {
+        Gate& g = gates[i];
+        if (g.type == GateType::UNKNOWN || g.type == GateType::DFF) continue;
+        if (usefulGates.count(i)) continue;                // 有用，保留
 
-        int outNetId = gates[i].outputNetId;
-        
-        // 【PO 絕對保護盾】
-        if (outNetId >= 0 && (nets[outNetId].isPO || usefulNets.count(outNetId))) {
-            continue; // 強制留住 PO 的驅動閘
+        // 冪等的斷線：從每個 fanin net 的 loadGateIds 移除自己
+        for (int inId : g.inputNetIds) {
+            if (inId < 0 || inId >= NN) continue;
+            auto& L = nets[inId].loadGateIds;
+            L.erase(std::remove(L.begin(), L.end(), i), L.end());
         }
+        // 清掉自己 output net 的 driver（該 net 就此變懸空 / 待回收）
+        if (g.outputNetId >= 0 && g.outputNetId < NN)
+            nets[g.outputNetId].driverGateId = -1;
 
-        if (!usefulGates.count(i)) {
-            if (markGateRemoved(i)) {
-                deadGateCount++;
-            }
-        }
+        g.type = GateType::UNKNOWN;                         // 統一死活判定旗標
+        // g.inputNetIds.clear(); g.outputNetId = -1;       // 視需要可清空
+        ++deadCount;
     }
 
-    return deadGateCount;
+    return deadCount;
 }
 
 NetlistEditReport Netlist::trimDeadLogicWithReport() {

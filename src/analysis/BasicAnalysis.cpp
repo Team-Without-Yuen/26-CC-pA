@@ -244,7 +244,10 @@ std::map<GateType, int> Netlist::countGatesByType() const {
 
     for (size_t i = 0; i < getGateCount(); ++i) {
         const Gate& gate = getGate(static_cast<int>(i));
-        ++counts[gate.type];
+        // 過濾掉 UNKNOWN，只計算其他明確定義的 GateType
+        if (gate.type != GateType::UNKNOWN) {
+            ++counts[gate.type];
+        }
     }
     return counts;
 }

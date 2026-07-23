@@ -1,23 +1,78 @@
-# 1. 編譯器與基本參數設定
-CXX      = g++
-CC       = gcc
+# =============================================================
+#  NetlistTool - Main Makefile
+#  Supported environments: Linux / MSYS2 UCRT64 / MSYS2 MINGW64
+# =============================================================
 
-# 針對 C++ 的參數
-CXXFLAGS = -std=c++20 -DFMT_HEADER_ONLY -DWIN64 -DLIN64 -DWIN32_LEAN_AND_MEAN -DNOMINMAX \
-           -fpermissive -Wno-unknown-pragmas -Wno-narrowing -Wno-sign-compare -Wno-unused-parameter \
-           -Wno-misleading-indentation -Wno-unused-variable -Wno-unused-but-set-variable -Wno-format \
-           -Wno-dangling-else -Wno-class-memaccess -Wno-int-to-pointer-cast -Wno-overflow \
-           -Wall -O3 \
-           -I. -Iinclude -Iinclude/lib -Iinclude/lib/nauty \
-           -Iinclude/lib/abcsat -Iinclude/lib/abcesop
+CXX = g++
+CC  = gcc
+AR  = ar
 
-# 針對 C 語言的參數
-CFLAGS   = -DWIN64 -DLIN64 -DWIN32_LEAN_AND_MEAN -DNOMINMAX -fpermissive \
-           -Wno-narrowing -Wno-int-to-pointer-cast -Wno-overflow -Wall -O3 \
-           -Iinclude/lib/nauty -Iinclude/lib/abcsat -Iinclude/lib/abcesop
+# ---- 外部原始碼路徑 ----
+CADICAL_DIR = include/lib/cadical
+ABC_DIR     = include/lib/abc
 
-# 2. 原始碼與目的檔 (.o) 設定 
-# 尋找所有的 .cpp 檔案
+TARGET = NetlistTool
+
+# =============================================================
+# 1. 環境偵測
+#    產生三種身分之一: UCRT64 / MINGW64 / LINUX
+# =============================================================
+ifeq ($(MSYSTEM),UCRT64)
+    ENV        := UCRT64
+    IS_WINDOWS := 1
+else ifeq ($(MSYSTEM),MINGW64)
+    ENV        := MINGW64
+    IS_WINDOWS := 1
+else
+    ENV        := LINUX
+    IS_WINDOWS := 0
+endif
+
+$(info [INFO] Detected Environment: $(ENV))
+
+# ---- 依環境決定平台巨集、執行檔名、系統庫 ----
+ifeq ($(IS_WINDOWS),1)
+    PLATFORM_DEF = -DWIN64 -DWIN32_LEAN_AND_MEAN -DNOMINMAX
+    TARGET_BIN   = $(TARGET).exe
+    SYS_LIBS     = -lpthread -lm
+else
+    PLATFORM_DEF = -DLIN64
+    TARGET_BIN   = $(TARGET)
+    SYS_LIBS     = -lpthread -lm -ldl
+endif
+
+# =============================================================
+# 2. 編譯參數
+# =============================================================
+COMMON_WARN = -Wno-unknown-pragmas -Wno-narrowing -Wno-sign-compare \
+              -Wno-unused-parameter -Wno-misleading-indentation \
+              -Wno-unused-variable -Wno-unused-but-set-variable \
+              -Wno-format -Wno-dangling-else -Wno-class-memaccess \
+              -Wno-int-to-pointer-cast -Wno-overflow
+
+COMMON_INC  = -I. -Iinclude -Iinclude/lib -Iinclude/lib/nauty \
+              -Iinclude/lib/abcsat -Iinclude/lib/abcesop \
+              -I$(CADICAL_DIR)/src -I$(ABC_DIR)/src
+
+# ABC 標頭需要的巨集,必須與編 libabc.a 時 (scripts/build_abc.sh) 一致
+# 另:FMT_USE_WINDOWS_H=0 阻止 fmt 引入 <windows.h>,避免其 rpcndr.h 的
+#     'typedef unsigned char boolean' 與 nauty 的 'typedef int boolean' 衝突。
+ifeq ($(IS_WINDOWS),1)
+    ABC_DEFS = -DABC_USE_STDINT_H -DNUNLOCKED -DFMT_USE_WINDOWS_H=0
+else
+    ABC_DEFS =
+endif
+
+CXXFLAGS = -std=c++20 -O3 -Wall $(PLATFORM_DEF) $(ABC_DEFS) -DFMT_HEADER_ONLY \
+           -fpermissive $(COMMON_WARN) $(COMMON_INC)
+
+CFLAGS   = -O3 -Wall $(PLATFORM_DEF) $(ABC_DEFS) \
+           -Wno-narrowing -Wno-int-to-pointer-cast -Wno-overflow \
+           $(COMMON_INC)
+
+# =============================================================
+# 3. 原始碼與目的檔
+# =============================================================
 SRCS_CPP = main.cpp \
            $(wildcard src/core/*.cpp) \
            $(wildcard src/io/*.cpp) \
@@ -27,62 +82,70 @@ SRCS_CPP = main.cpp \
            $(wildcard include/lib/abcsat/*.cpp) \
            $(wildcard include/lib/abcesop/*.cpp)
 
-# 尋找所有的 .c 檔案
-SRCS_C   = 
+SRCS_C   =
 
-# 將 .cpp 與 .c 轉換為對應的 .o 檔名
-OBJS_CPP = $(SRCS_CPP:.cpp=.o)
-OBJS_C   = $(SRCS_C:.c=.o)
-OBJS     = $(OBJS_CPP) $(OBJS_C)
+OBJS = $(SRCS_CPP:.cpp=.o) $(SRCS_C:.c=.o)
 
-TARGET   = NetlistTool
+# 標頭依賴追蹤 (改了 .h 會自動重編)
+DEPS = $(OBJS:.o=.d)
 
-# 3. 自動偵測作業系統與環境
-ifeq ($(OS),Windows_NT)
-    TARGET_BIN = $(TARGET).exe
-    CLEAN_CMD  = rm -f $(OBJS) $(TARGET_BIN)
+# =============================================================
+# 4. 外部靜態庫路徑
+# =============================================================
+CADICAL_LIB = $(CADICAL_DIR)/build/libcadical.a
+ABC_LIB     = $(ABC_DIR)/libabc.a
+LDFLAGS = -Wl,--start-group $(ABC_LIB) $(CADICAL_LIB) -Wl,--end-group $(SYS_LIBS)
 
-    # 透過 MSYSTEM 變數區分 UCRT64 與 MINGW64
-    ifeq ($(MSYSTEM),UCRT64)
-        $(info [INFO] Detected Environment: Windows UCRT64)
-        LDFLAGS = -Linclude/lib/cadical/win/ucrt64 -lcadical
-    else
-        $(info [INFO] Detected Environment: Windows MinGW64)
-        LDFLAGS = -Linclude/lib/cadical/win/mingw64 -lcadical
-    endif
-else
-    $(info [INFO] Detected Environment: Linux)
-    TARGET_BIN = $(TARGET)
-    CLEAN_CMD  = rm -f $(OBJS) $(TARGET_BIN)
-    LDFLAGS    = -Linclude/lib/cadical/linux -lcadical
-endif
+# =============================================================
+# 5. 規則
+# =============================================================
+.PHONY: all clean clean_all libs
 
-# 4. 編譯規則
-
-# 避免有名為 all 或 clean 的檔案干擾 make 執行
-.PHONY: all clean
-
-# 預設目標 (輸入 make 就會執行這個)
 all: $(TARGET_BIN)
 
-# 連結所有的 .o 檔生成最終執行檔
-$(TARGET_BIN): $(OBJS)
-	@echo "[LINK] Generating executable $@"
-	@$(CXX) $(CXXFLAGS) $^ $(LDFLAGS) -o $@
-	@echo "[SUCCESS] Build complete!"
+# 只想 (重) 建外部庫時:make libs
+libs: $(CADICAL_LIB) $(ABC_LIB)
 
-# 定義 .cpp 如何編譯成 .o
+# ---- CaDiCaL:configure 後只編 libcadical.a (跳過會用到 mmap 的 mobical) ----
+$(CADICAL_LIB):
+	@echo "[BUILD] Compiling CaDiCaL ($(ENV))..."
+	@cd $(CADICAL_DIR) && ./configure
+	@cd $(CADICAL_DIR)/build && $(MAKE) -j4 libcadical.a
+	@echo "[BUILD] CaDiCaL done -> $(CADICAL_LIB)"
+
+# ---- ABC:委派給腳本,依環境帶入正確旗標並用 xargs ar 打包 ----
+$(ABC_LIB):
+	@echo "[BUILD] Compiling Berkeley ABC ($(ENV))..."
+	@ENV=$(ENV) bash scripts/build_abc.sh "$(ABC_DIR)"
+	@echo "[BUILD] ABC done -> $(ABC_LIB)"
+
+# ---- 主程式連結 ----
+$(TARGET_BIN): $(CADICAL_LIB) $(ABC_LIB) $(OBJS)
+	@echo "[LINK] $@"
+	@$(CXX) $(OBJS) $(LDFLAGS) -o $@
+	@echo "[SUCCESS] Build complete -> $@"
+
+# ---- 編譯樣式規則 (含 -MMD -MP 產生 .d 依賴檔) ----
 %.o: %.cpp
-	@echo "[CXX]  Compiling $<"
-	@$(CXX) $(CXXFLAGS) -c $< -o $@
+	@echo "[CXX] $<"
+	@$(CXX) $(CXXFLAGS) -MMD -MP -c $< -o $@
 
-# 定義 .c 如何編譯成 .o
 %.o: %.c
-	@echo "[CC]   Compiling $<"
-	@$(CC) $(CFLAGS) -c $< -o $@
+	@echo "[CC]  $<"
+	@$(CC) $(CFLAGS) -MMD -MP -c $< -o $@
 
-# 清除所有編譯出來的 .o 檔與執行檔
+# ---- 清理 ----
 clean:
-	@echo "[CLEAN] Removing object files and executable..."
-	@$(CLEAN_CMD)
+	@echo "[CLEAN] Removing objects & executable..."
+	@rm -f $(OBJS) $(DEPS) $(TARGET_BIN) $(TARGET).exe
 	@echo "[CLEAN] Done."
+
+clean_all: clean
+	@echo "[CLEAN] Cleaning CaDiCaL & ABC builds..."
+	-@cd $(CADICAL_DIR) && $(MAKE) clean 2>/dev/null || true
+	-@cd $(ABC_DIR) && $(MAKE) clean 2>/dev/null || true
+	@rm -f $(CADICAL_LIB) $(ABC_LIB)
+	@echo "[CLEAN_ALL] Done."
+
+# 引入自動產生的標頭依賴
+-include $(DEPS)

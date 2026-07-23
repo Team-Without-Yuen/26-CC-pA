@@ -115,8 +115,12 @@ public:
     // 依 ID 取得 Gate；呼叫者需先確認 id 合法。
     const Gate& getGate(int id) const { return gates[id]; } 
 
+    Gate& getGateMutable(int id) { return gates[id]; }
+
     // 依 ID 取得 Net；呼叫者需先確認 id 合法。
     const Net& getNet(int id) const { return nets[id]; } 
+
+    Net&  getNetMutable(int id)  { return nets[id]; }
 
     // 取得 gate 總數；包含 combinational gates 與 DFF。
     size_t getGateCount() const { return gates.size(); }

@@ -1,8 +1,5 @@
 # 編譯指令
 make
 
-# 清除舊的執行檔：
-make clean
-
 # 執行指令：
 ./NetlistTool.exe test01.v output.v

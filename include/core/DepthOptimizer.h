@@ -112,12 +112,6 @@ struct DepthOptimizerConfig {
     // -1 表示尊重個別 OptimizationCandidate 內帶的 targetDepth (Default)
     // 若大於 0，則作為單一 Critical Path 最佳化時的目標深度限制
     int targetDepthPerPath = -1;
-
-    /*// 策略開關 (Strategy Toggles)
-    bool enableBufferAndNotBypass = true; // 啟用冗餘 BUF/NOT 消除
-    bool enableTreeBalancing = true;      // 啟用代數樹平衡 (Algebraic Tree Balancing)
-    bool enableDeMorganPushing = true;    // 啟用德摩根推擠 (DeMorgan Pushing)
-    bool enableConeResynthesis = true;    // 啟用 K-feasible Cut + Exact Synthesis*/
 };
 
 // =========================================================================
@@ -139,31 +133,34 @@ public:
     // -------------------------------------------------------------------------
 
     // Critical Path 最佳化主控流程
+    //
+    // ============================ 整體流程總覽 ============================
+    // 依「題目約束的類型」分派到不同路徑。約束分三大類：
+    //
+    //  (A) 純基底題（bannedTypes 空 + allowed 剛好是 AIG 或 XAG 的閘集）
+    //        → 對應 mockturtle 網路直接優化，優化完即輸出，不做反相吸收
+    //
+    //  (B) 全域一般限制題（允許複合閘、或禁止某些基礎閘，但非純 AIG/XAG）
+    //        → 先用 XAG 自由優化取得最小深度
+    //        → 【基底強制】把「被禁止的基礎閘」換成允許的等價組合（合規，不可選）
+    //        → 【反相吸收】把散落的 NOT 吃進 NAND/NOR/XNOR（省深度，機會型）
+    //        → 輸出
+    //
+    //  (C) 局部 Cone 限制題（某個 cone 內部只能用特定閘集）
+    //        → 先把整個電路當「無限制」自由優化（XAG）
+    //        → 切出受限 cone（K-feasible cut 界定範圍）
+    //        → 對該 cone 依受限基底重合成（exact synthesis / 受限 resynth）
+    //        → 縫回原電路
+    //        → 輸出
+    //
+    // 每個階段之後都做 trimDeadLogic 清死邏輯，結算前必做一次確保面積正確。
+    // =====================================================================
     OptimizationResult executeCriticalPathOptimization(Netlist& netlist, 
                                                        TechMapper& techMapper,
-                                                       const std::vector<GateType>& allowedTypes,
                                                        const ConeReport& targetConeReport,
+                                                       const std::vector<GateType>& allowedTypes = {},
                                                        const std::vector<GateType>& bannedTypes = {},
                                                        bool verbose = false);
-
-    // -------------------------------------------------------------------------
-    // 底層 API (Low-Level APIs)
-    // -------------------------------------------------------------------------
-
-    // K-feasible Cut 精確合成 (One-Shot Pass)
-    /*bool runExactDepthPass(Netlist& netlist, 
-                           TechMapper& mapper, 
-                           OptimizationCandidate& candidate, 
-                           const std::vector<GateType>& allowedTypes, 
-                           const std::vector<GateType>& bannedTypes, bool verbose); 
-                           
-    bool runExactAreaPass(Netlist& netlist, 
-                          TechMapper& mapper, 
-                          OptimizationCandidate& candidate, 
-                          int strictDepthLimit, 
-                          const std::vector<GateType>& allowedTypes, 
-                          const std::vector<GateType>& bannedTypes, 
-                          bool verbose);*/
 
 private:
     DepthOptimizerConfig config; // 用來儲存引擎的設定值
@@ -183,4 +180,7 @@ private:
 
     // 輔助函式：DEPTH 模式下的 Cut 評分機制
     CutScore evaluateDepthCut(Netlist& netlist, const KCut& cut, int rootGateId, const std::unordered_set<int>& criticalGateSet);
+
+    // 全 netlist 的 NOT(NOT x) → x 消除。
+    int eliminateDoubleInverters(Netlist& netlist);
 };
