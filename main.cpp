@@ -193,6 +193,7 @@ int main(int argc, char* argv[]) {
             else if (p == "nor-not")   allowedTypes = parseGateList("nor,not");
             else if (p == "xnor-and")  allowedTypes = parseGateList("xnor,and");
             else if (p == "no-and")    bannedTypes  = parseGateList("and");
+            else if (p == "nand-no")    bannedTypes  = parseGateList("nand,not");
             else std::cerr << "[Warn] unknown preset: " << p << "\n";
         }
         else if (a == "-h" || a == "--help") { printUsage(argv[0]); return 0; }
