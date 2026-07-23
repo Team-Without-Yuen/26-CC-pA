@@ -1,0 +1,5 @@
+read NewTestCase/test36/test36.v
+func_query symmetry n11 n3 n9[0]
+read NewTestCase/test37/test37.v
+func_query symmetry n8 n3 n4[0]
+quit

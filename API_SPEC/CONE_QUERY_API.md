@@ -23,6 +23,7 @@ List gates that can affect output y.
 Count gates reachable from g0.
 Find the transitive fanout cone of net n3.
 Find the transitive fanin cone of gate g1.
+Which output has the largest fanin cone?
 ```
 
 這一層不做：
@@ -32,6 +33,7 @@ Find the transitive fanin cone of gate g1.
 直接相連查詢 -> DirectConnectivityQuery
 指定 startpoint 到 endpoint 的 path search -> PathQuery
 global timing depth / critical path -> DepthAnalysis
+deepest output cone by logic depth -> DepthQuery
 optimization rewrite
 ```
 
@@ -207,6 +209,8 @@ ConeReport runConeQuery(const ConeQuery& query) const;
 | `NetTransitiveFanout` | 從指定 net 往 fanout 方向追 |
 | `GateTransitiveFanin` | 從指定 gate output net 往 fanin 方向追 |
 | `GateTransitiveFanout` | 從指定 gate output net 往 fanout 方向追 |
+| `LargestOutputCone` | 掃描所有 primary output bit，找 fanin cone gateCount 最大者 |
+| `SharedFaninGates` | 直接計算兩個 net fanin cones 的 shared gate intersection |
 
 核心資料結構：
 
@@ -214,6 +218,7 @@ ConeReport runConeQuery(const ConeQuery& query) const;
 struct ConeQuery {
     ConeQueryType type;
     std::string netName;
+    std::string secondNetName;
     std::string gateName;
     bool includeIds = true;
     bool includeNames = true;
@@ -228,10 +233,14 @@ struct ConeReport {
     ConeQueryType type;
     std::string sourceName;
     int sourceId = -1;
+    std::string secondSourceName;
+    int secondSourceId = -1;
     ConeResult cone;
 
     size_t netCount = 0;
     size_t gateCount = 0;
+    std::map<GateType, int> gateTypeCounts;
+    size_t checkedOutputCount = 0;
     std::vector<int> rootNetIds;
     std::vector<std::string> rootNetNames;
     std::vector<int> netIds;
@@ -247,6 +256,18 @@ struct ConeReport {
     std::vector<std::string> shortestPathNetNames;
 };
 ```
+
+`LargestOutputCone` 回傳規則：
+
+```text
+1. sourceName/sourceId 是最大 fanin cone 的 primary output net。
+2. cone/rootNetIds/netNames/gateNames 等欄位對應該 output 的 fanin cone。
+3. gateCount 使用 getConeGateCount()，只計算有效 combinational gates，不計 DFF boundary。
+4. checkedOutputCount 表示掃描了多少個 primary output bit。
+5. 若多個 output gateCount 相同，會以 netCount 較大者優先；仍相同時保留先遇到的 output。
+```
+
+`SharedFaninGates` 會分別建立兩個 transitive fanin cones，對排序後的 gate IDs 做 intersection，並回傳 shared `gateIds/gateNames/gateTypeCounts`。兩個名稱都合法但沒有交集時是成功的零結果，不是錯誤。
 
 ---
 
@@ -267,20 +288,22 @@ ConeResult net/gate helper
 Cone gate names/count wrapper
 Cone local longest/shortest path wrapper
 ConeQuery / ConeReport 高階 API
+LargestOutputCone
+Cone gateTypeCounts
+SharedFaninGates
 ```
 
 測試狀態：
 
 ```text
 mini test/tester.cpp 已覆蓋 runConeQuery() 的 NetTransitiveFanin / NetTransitiveFanout / GateTransitiveFanin。
-目前 regression 結果：Summary: 45 passed, 0 failed.
+mini test/test6/test6.cpp 已覆蓋 LargestOutputCone。
 ```
 
 後續可補：
 
 ```text
 1. 在 tester 補 GateTransitiveFanout 的高階 query case。
-2. 增加 cone size / cone gate type breakdown report。
-3. 增加 scope-aware cone query，供 transformation / optimization 限定修改範圍。
-4. 若遇到超大 cone，可加入 traversal budget 或 result limit。
+2. 增加 scope-aware cone query，供 transformation / optimization 限定修改範圍。
+3. 若遇到超大 cone，可加入 traversal budget 或 result limit。
 ```

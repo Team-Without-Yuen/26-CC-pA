@@ -1,17 +1,17 @@
-# Startpoint-to-Endpoint PathQuery 使用說明
+# Path Query 使用說明
 
 這份文件只負責說明 `PathQuery` 怎麼使用。  
 設計背景與整理筆記請看：
 
 ```text
-API_SPEC/STARTPOINT_ENDPOINT_PATH_ANALYSIS.md
+API_SPEC/PATH_QUERY_API.md
 ```
 
 ---
 
 ## 1. 基本概念
 
-`PathQuery` 用來回答「從某些起點走到某些終點」的組合邏輯路徑問題。
+`PathQuery` 用來回答 endpoints 間的組合邏輯 path、reachability、mandatory node 與 separator/cut。register-to-register 使用 DffQ/DffD endpoint preset；cut/articulation 不再要求 LLM 選擇另一個 Graph tool。
 
 基本形式：
 
@@ -144,6 +144,7 @@ query.mode
 | `MaxDepth` | 找最長 logic depth 路徑 | `result.path`, `result.depth` | 可用於 critical path 類問題 |
 | `EveryPathThrough` | 所有既有路徑是否都經過 requiredNodes？ | `result.exists` | 沒有任何原始路徑時回 false |
 | `EveryPathAvoids` | 所有既有路徑是否都避開 avoidedNodes？ | `result.exists` | 沒有任何原始路徑時回 false |
+| `DirectPiPoConnections` | 找 PI/PO 共用同一 net 的 depth-0 連線 | `result.paths`, `result.pathCount` | 不需要 startpoints/endpoints，也不做全路徑列舉 |
 
 常用寫法：
 
@@ -155,6 +156,9 @@ query.mode = Netlist::PathQueryMode::MinDepth;
 query.mode = Netlist::PathQueryMode::MaxDepth;
 query.mode = Netlist::PathQueryMode::EveryPathThrough;
 query.mode = Netlist::PathQueryMode::EveryPathAvoids;
+query.mode = Netlist::PathQueryMode::FindMandatoryNodes;
+query.mode = Netlist::PathQueryMode::IsSeparator;
+query.mode = Netlist::PathQueryMode::DirectPiPoConnections;
 ```
 
 ---
@@ -202,7 +206,15 @@ Netlist::PathQueryResult result = netlist.runPathQuery(query);
 
 | 欄位 | 用途 |
 |---|---|
+| `ok` | request 是否有效並完成 dispatch |
+| `unsupported` | request 合法但設定目前不支援 |
+| `message` | success、no-path 或 validation error 語意 |
+| `status` | separator/mandatory mode 的精確分類 |
 | `exists` | 是否找到路徑，或 every-path 條件是否成立 |
+| `pathExists` | mandatory/separator endpoints 是否原本相連 |
+| `isSeparator` | 指定 candidate 是否為 directed separator |
+| `mandatoryNetIds` / `mandatoryNetNames` | endpoints 間所有 paths 共同經過的 internal nets |
+| `witnessStartpoint` / `witnessEndpoint` | PI-to-PO cut 成立時的 witness pair |
 | `depth` | `path` 的 logic depth；沒找到時為 `-1` |
 | `path` | 單一路徑，供 `FindAny` / `MinDepth` / `MaxDepth` 使用 |
 | `paths` | 多條路徑，供 `EnumerateAll` 使用 |
@@ -210,6 +222,14 @@ Netlist::PathQueryResult result = netlist.runPathQuery(query);
 | `wrotePathsToFile` | 是否已將完整路徑列表寫到檔案 |
 | `outputFilePath` | 實際輸出檔案路徑 |
 | `completeEnumeration` | 是否完整列舉，未截斷 |
+| `enumerationTimedOut` | `EnumerateAll` 是否因 wall-clock time limit 停止 |
+| `enumerationPathLimitReached` | `EnumerateAll` 是否因 `maxEnumeratedPaths` 停止 |
+| `countOnly` | 是否只計數、不保存每條 path |
+| `enumerationStopReason` | 若列舉被截斷，記錄停止原因 |
+| `unresolvedStartpoints` / `unresolvedEndpoints` | 無法解析的 endpoint descriptions |
+| `unresolvedRequiredNodes` / `unresolvedAvoidedNodes` | 無法解析的 constraint nodes |
+
+名稱錯誤時 `ok=false` 並填 unresolved 欄位；名稱都合法但沒有 path 時 `ok=true, exists=false`。呼叫端應先檢查 `ok`，不能直接把所有 `exists=false` 都翻成「沒有路徑」。
 
 `path` 裡面存的是 ID：
 
@@ -232,10 +252,34 @@ for (int gateId : result.path.gateIds) {
 
 ---
 
-## 7. EnumerateAll 自動寫檔
+## 7. EnumerateAll 自動寫檔與安全限制
 
 大型 testcase 若要求完整列出所有 paths，`EnumerateAll` 會預設寫出完整 path list，避免 terminal 輸出過大。
 若沒有指定 `outputFilePath`，預設輸出到 `path_enumeration_output.txt`。
+
+官方時限中 basic operation request 為 60 秒，其他 request 為 300 秒。因此 `EnumerateAll` 目前有預設保護：
+
+```text
+query.maxEnumeratedPaths = 100000;
+query.enumerationTimeLimitSeconds = 55.0;
+query.countOnly = false;
+```
+
+語意如下：
+
+| 欄位 | 預設值 | 用途 |
+|---|---:|---|
+| `maxEnumeratedPaths` | `100000` | 最多列舉並保存多少條 path；`0` 表示不限制 |
+| `enumerationTimeLimitSeconds` | `55.0` | `EnumerateAll` 的 wall-clock 上限；`<=0` 表示不限制 |
+| `countOnly` | `false` | true 時只更新 `pathCount`，不把每條 path 放進 `result.paths` |
+
+若列舉被安全限制停止：
+
+```text
+result.completeEnumeration = false
+result.enumerationTimedOut 或 result.enumerationPathLimitReached = true
+result.enumerationStopReason 會說明停止原因
+```
 
 ```cpp
 Netlist::PathQuery query;
@@ -246,6 +290,8 @@ query.endpoints.push_back(Netlist::PathEndpoint(
     Netlist::PathEndpointType::PrimaryOutput, "n12"));
 query.outputFilePath = "paths_output.txt";  // 可省略；省略時使用預設檔名
 query.maxPrintedPaths = 20;                 // 只影響 CLI / report 顯示，不影響完整檔案
+query.maxEnumeratedPaths = 100000;          // 可依題目調整
+query.enumerationTimeLimitSeconds = 55.0;   // basic operation 建議保守設 55 秒
 
 Netlist::PathQueryResult result = netlist.runPathQuery(query);
 ```
@@ -258,6 +304,9 @@ Netlist::PathQueryResult result = netlist.runPathQuery(query);
 | 是否寫檔成功 | `result.wrotePathsToFile` |
 | 輸出檔案 | `result.outputFilePath` |
 | 是否完整 enumerate | `result.completeEnumeration` |
+| 是否因時間停止 | `result.enumerationTimedOut` |
+| 是否因數量上限停止 | `result.enumerationPathLimitReached` |
+| 截斷原因 | `result.enumerationStopReason` |
 
 輸出檔格式：
 
@@ -270,13 +319,29 @@ Path 0
   gates: g1 -> g2
 ```
 
-目前版本仍會先把完整 `result.paths` 保存在 memory。測試環境有 128GB RAM，因此第一版先不做 streaming DFS。
+目前版本若 `countOnly=false`，仍會把列舉到的 `result.paths` 保存在 memory；若 prompt 只問數量，建議設定 `countOnly=true`，可避免大量 path object 佔用記憶體。
 
 ---
 
 ## 8. 使用範例
 
-### 8.0 全域 register-to-register path
+### 8.0 找所有 depth-0 PI-to-PO direct connections
+
+```cpp
+Netlist::PathQuery query;
+query.mode = Netlist::PathQueryMode::DirectPiPoConnections;
+Netlist::PathQueryResult result = netlist.runPathQuery(query);
+```
+
+CLI：
+
+```text
+path_query direct_pi_po
+```
+
+每筆 `result.paths[i]` 只含一個同時為 PI 與 PO 的 net，`gateIds` 為空，因此 depth 為 0。
+
+### 8.1 全域 register-to-register path
 
 如果問題是「所有 register-to-register paths」、「任意 DFF.Q 到任意 DFF.D」、
 「最長 register-to-register path」，`PathQuery` 可直接使用 all-DFF endpoint，
@@ -306,9 +371,20 @@ path_query enumerate all_dff_q all_dff_d -out reg_paths.txt -max_print 0
 path_query max_depth dff_q:* dff_d:*
 ```
 
-`RegisterPathQuery` 仍保留作為便利 wrapper，但主要語意已整合進 `PathQuery` endpoint resolver。
+`RegisterPathQuery` 僅保留為 legacy/internal convenience wrapper。對外一律使用 `PathQuery` endpoint resolver：`DffQ("")` 表示所有 DFF.Q，`DffD("")` 表示所有 DFF.D。
+`RegisterPathQuery::EnumerateAll` 也支援與 `PathQuery` 相同的安全欄位：
 
-### 8.1 是否存在 a 到 y 的路徑
+```text
+query.maxEnumeratedPaths
+query.enumerationTimeLimitSeconds
+query.countOnly
+```
+
+這些欄位會直接轉傳到底層 `PathQuery`，結果可從 `report.pathResult.completeEnumeration`、
+`report.pathResult.enumerationPathLimitReached`、`report.pathResult.enumerationTimedOut`
+與 `report.pathResult.enumerationStopReason` 讀取。
+
+### 8.2 是否存在 a 到 y 的路徑
 
 ```cpp
 Netlist::PathQuery query;
@@ -322,7 +398,7 @@ Netlist::PathQueryResult result = netlist.runPathQuery(query);
 bool answer = result.exists;
 ```
 
-### 8.2 找一條 PI a 到 PO y 的路徑
+### 8.3 找一條 PI a 到 PO y 的路徑
 
 ```cpp
 Netlist::PathQuery query;
@@ -335,7 +411,7 @@ query.endpoints.push_back(Netlist::PathEndpoint(
 Netlist::PathQueryResult result = netlist.runPathQuery(query);
 ```
 
-### 8.3 找所有 PI 到 ff1.D 的最大 logic depth
+### 8.4 找所有 PI 到 ff1.D 的最大 logic depth
 
 ```cpp
 Netlist::PathQuery query;
@@ -348,7 +424,7 @@ query.endpoints.push_back(Netlist::PathEndpoint(
 Netlist::PathQueryResult result = netlist.runPathQuery(query);
 ```
 
-### 8.4 找 a 到 y 且避開 n3 的最短路徑
+### 8.5 找 a 到 y 且避開 n3 的最短路徑
 
 ```cpp
 Netlist::PathQuery query;
@@ -363,7 +439,7 @@ query.avoidedNodes.push_back(Netlist::PathNode(
 Netlist::PathQueryResult result = netlist.runPathQuery(query);
 ```
 
-### 8.5 所有 a 到 y 的路徑是否都經過 g1
+### 8.6 所有 a 到 y 的路徑是否都經過 g1
 
 ```cpp
 Netlist::PathQuery query;
@@ -378,7 +454,7 @@ query.requiredNodes.push_back(Netlist::PathNode(
 Netlist::PathQueryResult result = netlist.runPathQuery(query);
 ```
 
-### 8.6 所有 a 到 y 的路徑是否都避開 n3
+### 8.7 所有 a 到 y 的路徑是否都避開 n3
 
 ```cpp
 Netlist::PathQuery query;
@@ -393,15 +469,62 @@ query.avoidedNodes.push_back(Netlist::PathNode(
 Netlist::PathQueryResult result = netlist.runPathQuery(query);
 ```
 
+### 8.8 找出 endpoints 間的 mandatory nodes
+
+```cpp
+Netlist::PathQuery query;
+query.mode = Netlist::PathQueryMode::FindMandatoryNodes;
+query.startpoints.push_back(Netlist::PathEndpoint(
+    Netlist::PathEndpointType::SpecificNet, "n2"));
+query.endpoints.push_back(Netlist::PathEndpoint(
+    Netlist::PathEndpointType::SpecificNet, "n14"));
+
+const auto result = netlist.runPathQuery(query);
+```
+
+CLI：
+
+```text
+path_query mandatory_nodes net:n2 net:n14
+```
+
+底層使用 dominator，不列舉所有 paths。`NO_PATH` 與「connected 但沒有 mandatory internal net」會用不同 status 回報。
+
+### 8.9 檢查 separator / PI-to-PO cut
+
+指定 endpoints：
+
+```text
+path_query is_separator net:n2 net:n14 n10
+```
+
+掃描是否切斷至少一組 PI-to-PO pair：
+
+```text
+path_query pi_po_cut n55104
+```
+
+對應 C++：
+
+```cpp
+Netlist::PathQuery query;
+query.mode = Netlist::PathQueryMode::IsSeparator;
+query.separatorCandidateNetName = "n55104";
+
+const auto result = netlist.runPathQuery(query);
+```
+
+沒有設定 endpoints 時採 PI-to-PO cut 語意；若指定 endpoints，必須各自解析成一條 scalar net。
+
 ---
 
 ## 9. 注意事項
 
 ```text
 1. PathEndpoint 和 PathNode 都會自動解析 ID。
-2. 名稱不存在時，通常回傳空結果或 false。
+2. 名稱不存在時回 `ok=false` 並列在 unresolved 欄位；合法的 zero-result 才是 `ok=true, exists=false`。
 3. GateInput 若使用 primitive gate，通常要指定 pinIndex。
-4. EnumerateAll 目前沒有 maxPaths / timeout 保護。
+4. EnumerateAll 目前有 `maxEnumeratedPaths` / `enumerationTimeLimitSeconds` / `countOnly` 保護；完整列舉需求若被截斷，需回報 `completeEnumeration=false` 與停止原因。
 5. EveryPathThrough / EveryPathAvoids 不採用 vacuous truth；沒有原始路徑時回 false。
 6. 目前 combinationalOnly=false 尚未支援。
 ```
@@ -415,6 +538,8 @@ Netlist::PathQueryResult result = netlist.runPathQuery(query);
 型別檔案：include/core/PathTypes.h
 tester：mini test/tester.cpp
 目前 regression：Summary: 58 passed, 0 failed.
+timeout guard：mini test/test7/test7.cpp，Summary: 5 passed, 0 failed.
+register path timeout guard：mini test/test8/test8.cpp，Summary: 3 passed, 0 failed.
 ```
 
 目前 `runPathQuery()` 已覆蓋：
@@ -426,4 +551,5 @@ MinDepth
 MaxDepth
 EveryPathThrough
 EveryPathAvoids
+DirectPiPoConnections
 ```

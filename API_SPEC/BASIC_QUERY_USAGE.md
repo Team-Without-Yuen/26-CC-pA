@@ -1,5 +1,7 @@
 # Basic Query 使用說明
 
+> 對外請使用 `structure_query <mode> [args]`。本文件中的 `BasicQuery` 是 `structure_query` 內部 dispatch 的 C++ API；舊 `basic_query` CLI 僅保留相容性。
+
 這份文件只負責說明 `BasicQuery` 怎麼使用。  
 設計背景與分類整理請看：
 
@@ -57,11 +59,11 @@ if (report.ok) {
 
 | Query type | 問題類型 | 需要設定 | 主要讀取欄位 |
 |---|---|---|---|
-| `Summary` | 設計規模與統計 | 無 | `gateCount`, `netCount`, `logicalWireCount`, `primaryInputCount`, `primaryOutputCount`, `gateTypeCounts` |
-| `ListGates` | 列出所有 gate | 無 | `gateIds`, `gateNames`, `gateCount` |
-| `ListNets` | 列出所有 net | 無 | `netIds`, `netNames`, `netCount` |
-| `ListPrimaryInputs` | 列出所有 PI ports | 無 | `portNames`, `primaryInputCount` |
-| `ListPrimaryOutputs` | 列出所有 PO ports | 無 | `portNames`, `primaryOutputCount` |
+| `Summary` | current active design 規模與統計 | 無 | `gateCount`, `netCount`, `logicalWireCount`, `primaryInputCount`, `primaryOutputCount`, `gateTypeCounts` |
+| `ListGates` | 列出所有 active gate | 無 | `gateIds`, `gateNames`, `gateCount` |
+| `ListNets` | 列出所有 active net | 無 | `netIds`, `netNames`, `netCount` |
+| `ListPrimaryInputs` | 列出所有 PI ports 與 width/range | 無 | `portNames`, `ports`, `primaryInputCount` |
+| `ListPrimaryOutputs` | 列出所有 PO ports 與 width/range | 無 | `portNames`, `ports`, `primaryOutputCount` |
 | `ListDffs` | 列出所有 DFF | 無 | `gateIds`, `gateNames`, `gateCount` |
 | `ListCombinationalGates` | 列出所有組合邏輯 gate | 無 | `gateIds`, `gateNames`, `gateCount` |
 | `GateInfo` | 查單一 gate 基本資訊 | `name` = gate instance name | `exists`, `objectId`, `objectName`, `typeName`, `isDff`, `isCombinational`, `formattedInfo` |
@@ -142,6 +144,7 @@ if (report.ok) {
 | `isConstant` | net 是否 constant |
 | `isBus` | port 是否 bus |
 | `portWidth` | port bit width |
+| `ports` | batch PI/PO summaries；每筆含 name、width、msb/lsb、bus 與 direction flags |
 
 ### 4.4 List 類欄位
 
@@ -192,6 +195,8 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 | PO port 數量 | `report.primaryOutputCount` |
 | 各 gate type 數量 | `report.gateTypeCounts` |
 
+`gateCount` / `netCount` 是 current design 的 active object 數，不包含 edit 留下的 `UNKNOWN` gate 或 `isRemoved` net slot。底層 `getGateCount()` / `getNetCount()` 則保留 physical slot count，不應由 LLM 直接當作題目答案。
+
 ---
 
 ## 6. List 類 Query
@@ -206,8 +211,8 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 |---|---|---|
 | `ListGates` | `query.type = BasicQueryType::ListGates` | `gateIds`, `gateNames` |
 | `ListNets` | `query.type = BasicQueryType::ListNets` | `netIds`, `netNames` |
-| `ListPrimaryInputs` | `query.type = BasicQueryType::ListPrimaryInputs` | `portNames` |
-| `ListPrimaryOutputs` | `query.type = BasicQueryType::ListPrimaryOutputs` | `portNames` |
+| `ListPrimaryInputs` | `query.type = BasicQueryType::ListPrimaryInputs` | `portNames`, `ports` |
+| `ListPrimaryOutputs` | `query.type = BasicQueryType::ListPrimaryOutputs` | `portNames`, `ports` |
 | `ListDffs` | `query.type = BasicQueryType::ListDffs` | `gateIds`, `gateNames` |
 | `ListCombinationalGates` | `query.type = BasicQueryType::ListCombinationalGates` | `gateIds`, `gateNames` |
 
@@ -500,8 +505,8 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 | Count all NAND gates. | `CountByGateType` | `gateType = NAND` | `gateCount` |
 | List all gates. | `ListGates` | 無 | `gateNames` |
 | List all nets. | `ListNets` | 無 | `netNames` |
-| List all primary inputs. | `ListPrimaryInputs` | 無 | `portNames` |
-| List all primary outputs. | `ListPrimaryOutputs` | 無 | `portNames` |
+| List all primary inputs with their bit widths. | `ListPrimaryInputs` | 無 | `ports` |
+| List all primary outputs with their bit widths. | `ListPrimaryOutputs` | 無 | `ports` |
 | List all DFFs. | `ListDffs` | 無 | `gateNames` |
 | List all combinational gates. | `ListCombinationalGates` | 無 | `gateNames` |
 | Report gate g1. | `GateInfo` | `name = "g1"` | `formattedInfo`, `typeName` |
@@ -536,7 +541,7 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 
 | BasicQueryType | 底層 helper |
 |---|---|
-| `Summary` | `getGateCount()`, `getNetCount()`, `getLogicalWireCount()`, `countGatesByType()` |
+| `Summary` | 以 `getGateCount()` / `getNetCount()` 作為掃描邊界，過濾 tombstone，並使用 `getLogicalWireCount()` / `countGatesByType()` |
 | `ListGates` | `getAllGateNames()` |
 | `ListNets` | `getAllNetNames()` |
 | `ListPrimaryInputs` | `getPrimaryInputNames()` |
@@ -559,5 +564,5 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 實作檔案：src/analysis/BasicAnalysis.cpp
 型別檔案：include/core/NetlistQueries.h
 tester：mini test/tester.cpp
-目前 regression：Summary: 45 passed, 0 failed.
+CLI integration regression test9-test16：142 passed, 0 failed.
 ```

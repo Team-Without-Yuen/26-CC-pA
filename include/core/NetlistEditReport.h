@@ -68,11 +68,14 @@ struct EditValidationResult {
     bool structureChecked = false;
     bool structureValid = false;
     bool problemAConstraintsChecked = false;
+    bool problemAConstraintsBaselineValid = false;
     bool problemAConstraintsValid = false;
+    bool problemAConstraintsRegressed = false;
     bool equivalenceChecked = false;
     bool functionallyEquivalent = false;
     EquivalenceCheckMethod equivalenceMethod = EquivalenceCheckMethod::NotChecked;
     std::vector<std::string> messages;
+    std::vector<std::string> newProblemAConstraintViolations;
 };
 
 // Depth/timing change summary for depth-driven rewrites.
@@ -103,6 +106,59 @@ struct MappingDelta {
     std::vector<std::string> modifiedGateNames;
 };
 
+// Candidate and outcome details for one scoped constant-propagation pass.
+// UNKNOWN/-1 filters mean "all" and preserve the legacy global behavior.
+struct ConstantSimplificationSummary {
+    GateType targetGateType = GateType::UNKNOWN;
+    int targetConstValue = -1;
+    int targetInputCount = -1;
+
+    size_t candidateCount = 0;
+    size_t simplifiedCount = 0;
+    size_t skippedCount = 0;
+    int eliminatedTargetGateCount = 0;
+
+    std::vector<int> candidateGateIds;
+    std::vector<int> simplifiedGateIds;
+    std::vector<int> skippedGateIds;
+    std::vector<std::string> candidateGateNames;
+    std::vector<std::string> simplifiedGateNames;
+    std::vector<std::string> skippedGateNames;
+};
+
+struct FunctionalGateMergeRecord {
+    int representativeGateId = -1;
+    int representativeNetId = -1;
+    int removedGateId = -1;
+    int removedNetId = -1;
+    std::string representativeGateName;
+    std::string representativeNetName;
+    std::string removedGateName;
+    std::string removedNetName;
+};
+
+struct FunctionalMergeSummary {
+    std::string scope;
+    std::string scopeName;
+    GateType gateTypeFilter = GateType::UNKNOWN;
+    std::string searchStatus;
+    bool searchComplete = false;
+    bool searchTimedOut = false;
+    bool wholeDesignEquivalenceChecked = false;
+    bool wholeDesignEquivalent = false;
+    bool wholeDesignTimedOut = false;
+    size_t candidateGateCount = 0;
+    size_t equivalenceClassCount = 0;
+    size_t equivalentPairCount = 0;
+    size_t satChecks = 0;
+    size_t mergedGateCount = 0;
+    size_t skippedGateCount = 0;
+    double searchElapsedSeconds = 0.0;
+    double totalElapsedSeconds = 0.0;
+    std::vector<FunctionalGateMergeRecord> records;
+    std::vector<std::string> skippedGateNames;
+};
+
 // Single shared report for mutation / optimization / transformation flows.
 struct NetlistEditReport {
     bool success = false;
@@ -122,6 +178,8 @@ struct NetlistEditReport {
     std::optional<DepthChange> depthChange;
     std::optional<FanoutChange> fanoutChange;
     std::optional<MappingDelta> mappingDelta;
+    std::optional<ConstantSimplificationSummary> constantSimplification;
+    std::optional<FunctionalMergeSummary> functionalMerge;
 
     std::vector<int> changedGateIds;
     std::vector<int> changedNetIds;
@@ -132,4 +190,33 @@ struct NetlistEditReport {
     void addWarning(const std::string& warning) {
         warnings.push_back(warning);
     }
+};
+
+struct WholeDesignEquivalenceReport {
+    bool ok = false;
+    bool equivalent = false;
+    bool timeBudgetExceeded = false;
+    std::string message;
+
+    int comparedOutputCount = 0;
+    int skippedOutputCount = 0;
+    int comparedDffDCount = 0;
+    int skippedDffDCount = 0;
+    double timeBudgetSeconds = 0.0;
+    std::vector<std::string> matchedOutputNames;
+    std::vector<std::string> mismatchedOutputNames;
+    std::vector<std::string> skippedOutputNames;
+    std::vector<std::string> matchedDffDNames;
+    std::vector<std::string> mismatchedDffDNames;
+    std::vector<std::string> skippedDffDNames;
+    std::vector<std::string> missingInputNames;
+    std::vector<std::string> extraInputNames;
+    std::vector<std::string> missingOutputNames;
+    std::vector<std::string> extraOutputNames;
+    std::vector<std::string> missingDffNames;
+    std::vector<std::string> extraDffNames;
+    std::vector<std::string> unsupportedReasons;
+    std::vector<std::string> warnings;
+
+    EquivalenceCheckMethod method = EquivalenceCheckMethod::NotChecked;
 };

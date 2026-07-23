@@ -151,7 +151,10 @@ VerilogWriter
 | --- | --- |
 | `src/analysis/BasicAnalysis.cpp` | ID/name/type/count/port/basic structural issue |
 | `src/analysis/ConnectivityAnalysis.cpp` | net driver/load、gate input/output、fanin/fanout |
-| `src/analysis/FunctionAnalysis.cpp` | CaDiCaL SAT、equivalence、always 0/1、truth status |
+| `src/analysis/FunctionAnalysis.cpp` | CaDiCaL SAT、equivalence、functional dependence、symmetry、always 0/1、truth status、simulation-filtered Function Search |
+| `src/analysis/SequentialPatternAnalysis.cpp` | DFF D-input canonical enable/hold pattern 與 sequential semantic report |
+| `src/analysis/WholeDesignEquivalence.cpp` | current/original batched SAT、PO 與 DFF.D boundary equivalence |
+| `src/analysis/GraphAnalysis.cpp` | directed PI-to-PO cut 與 source-target articulation analysis |
 | `src/analysis/ConeAnalysis.cpp` | transitive fanin/fanout cone、cone-local longest/shortest path |
 | `src/analysis/PathAnalysis.cpp` | startpoint-to-endpoint path query 與 endpoint resolver |
 | `src/analysis/DepthAnalysis.cpp` | logic depth、critical path、DepthQuery |
@@ -165,6 +168,8 @@ VerilogWriter
 | `src/io/VerilogReader.cpp` | restricted Verilog parser frontend |
 | `src/io/VerilogWriter.cpp` | restricted Verilog writer |
 | `src/transformation/NetlistTransformation.cpp` | graph mutation primitive 與 buffer insertion |
+| `src/transformation/EditFlow.cpp` | public edit validation/dispatch、transaction report 與 rollback policy |
+| `src/transformation/TechMapper.cpp` | basis conversion 與 gate-type replacement |
 | `src/optimization/NetlistOptimization.cpp` | cleanup/simplification pass、validation/rollback helper |
 
 詳細 ownership 請看：
@@ -190,16 +195,32 @@ computeNetLevels()
 ...
 ```
 
-第二層是高階 unified query：
+第二層是內部高階 C++ query：
 
 ```text
 runBasicQuery()
 runDirectConnectivityQuery()
 runFunctionQuery()
+runFunctionSearchQuery()
+runSequentialPatternQuery()
+runGraphQuery()
 runConeQuery()
 runPathQuery()
+runRegisterPathQuery()
 runDepthQuery()
+checkWholeDesignEquivalence()
+runEditApply()
 ```
+
+第三層是提供 LLM/tools 使用的公開 facade：
+
+```text
+structure_query -> runBasicQuery() / runDirectConnectivityQuery()
+path_query      -> runPathQuery()，必要時使用 Graph dominator engine
+其他分類 command -> 對應的高階 query/edit API
+```
+
+`runGraphQuery()` 與 `runRegisterPathQuery()` 仍保留為內部/相容入口，但不再各自占用公開 tool schema；register path 使用 PathQuery 的 `DffQ`/`DffD` endpoint preset。
 
 高階 query 的目的：
 
@@ -247,6 +268,7 @@ VerilogWriter
 runBasicQuery
 runDirectConnectivityQuery
 runFunctionQuery
+runFunctionSearchQuery
 runConeQuery
 runPathQuery
 runDepthQuery
@@ -256,21 +278,30 @@ runDepthQuery
 Windows UCRT64 編譯方式：
 
 ```powershell
-g++ -std=c++20 -I. -Ilib "mini test/tester.cpp" src/core/*.cpp src/io/*.cpp src/analysis/*.cpp src/optimization/*.cpp src/transformation/*.cpp -L./include/lib/win/ucrt64 -lcadical -o "mini test/tester.exe"
-.\mini test\tester.exe
+$sources = Get-ChildItem -Path src -Recurse -Filter *.cpp |
+    Where-Object { $_.Name -notin @('MockturtleConverter.cpp', 'DepthOptimizer.cpp') } |
+    ForEach-Object { $_.FullName }
+g++ -std=c++20 -I. -Ilib "mini test/tester.cpp" $sources `
+    -L./include/lib/cadical/win/ucrt64 -lcadical -o "mini test/tester.exe"
+& ".\mini test\tester.exe"
 ```
 
 目前已驗證：
 
 ```text
 Summary: 45 passed, 0 failed.
+Sequential pattern mini test: 15 passed, 0 failed.
+Sequential edit-flow mini test: 13 passed, 0 failed.
+Sequential CLI mini test: 12 passed, 0 failed.
+Whole-design equivalence mini test: 9 passed, 0 failed.
 ```
 
 注意：
 
 ```text
-目前環境請使用 include/lib/win/ucrt64/libcadical.a。
-include/lib/win/mingw64/libcadical.a 在目前 g++ runtime 下可能出現 stat64i32 linker error。
+目前環境請使用 include/lib/cadical/win/ucrt64/libcadical.a。
+include/lib/cadical/win/mingw64/libcadical.a 在目前 g++ runtime 下可能出現 stat64i32 linker error。
+mockturtle headers 尚未配置時，focused analysis build 應暫時排除 MockturtleConverter.cpp 與 DepthOptimizer.cpp。
 ```
 
 ## 10. Project Spec Documents
@@ -290,7 +321,7 @@ BASIC_QUERY_API.md
 DIRECT_CONNECTIVITY_QUERY_API.md
 FUNCTION_ANALYSIS_API.md
 CONE_QUERY_API.md
-STARTPOINT_ENDPOINT_PATH_ANALYSIS.md
+PATH_QUERY_API.md
 DEPTH_ANALYSIS.md
 ...
 ```

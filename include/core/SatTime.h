@@ -11,10 +11,11 @@ private:
     std::chrono::time_point<std::chrono::steady_clock> start_time;
     double time_limit_seconds;
     int call_counter; // 新增一個計數器
+    bool terminated = false;
 
 public:
     // 傳入想設定的秒數，並記錄當下時間
-    TimeLimitTerminator(double limit) : time_limit_seconds(limit) {
+    TimeLimitTerminator(double limit) : time_limit_seconds(limit), call_counter(0) {
         start_time = std::chrono::steady_clock::now();
     }
 
@@ -31,6 +32,11 @@ public:
         // 真正檢查時間
         auto now = std::chrono::steady_clock::now();
         std::chrono::duration<double> elapsed = now - start_time;
-        return elapsed.count() >= time_limit_seconds; 
+        terminated = elapsed.count() >= time_limit_seconds;
+        return terminated; 
+    }
+
+    bool wasTerminated() const {
+        return terminated;
     }
 };

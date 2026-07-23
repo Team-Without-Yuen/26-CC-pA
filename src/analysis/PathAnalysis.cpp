@@ -1,5 +1,6 @@
 #include "include/core/Netlist.h"
 #include <algorithm>
+#include <chrono>
 #include <fstream>
 #include <queue>
 #include <string>
@@ -22,6 +23,41 @@ struct SearchState {
     int previousStateIndex;
     int previousGateId;
 };
+
+struct PathEnumerationOptions {
+    size_t maxPaths = 0;
+    double timeLimitSeconds = 0.0;
+    bool countOnly = false;
+};
+
+struct PathEnumerationState {
+    size_t pathCount = 0;
+    bool complete = true;
+    bool timedOut = false;
+    bool pathLimitReached = false;
+    std::chrono::steady_clock::time_point startTime = std::chrono::steady_clock::now();
+};
+
+bool shouldStopEnumeration(const PathEnumerationOptions& options,
+                           PathEnumerationState& state) {
+    if (options.maxPaths > 0 && state.pathCount >= options.maxPaths) {
+        state.complete = false;
+        state.pathLimitReached = true;
+        return true;
+    }
+
+    if (options.timeLimitSeconds > 0.0) {
+        const auto now = std::chrono::steady_clock::now();
+        const std::chrono::duration<double> elapsed = now - state.startTime;
+        if (elapsed.count() >= options.timeLimitSeconds) {
+            state.complete = false;
+            state.timedOut = true;
+            return true;
+        }
+    }
+
+    return false;
+}
 
 // 將 ID 序列以名稱形式寫成 a -> b -> c，供完整 path enumeration 檔案使用。
 void writeNamedSequence(std::ostream& out,
@@ -81,6 +117,34 @@ bool resolvePathNodes(const Netlist& netlist,
         resolvedNodes.push_back(resolved);
     }
     return true;
+}
+
+std::string describePathEndpoint(const Netlist::PathEndpoint& endpoint) {
+    std::string typeName;
+    switch (endpoint.type) {
+    case Netlist::PathEndpointType::SpecificNet: typeName = "net"; break;
+    case Netlist::PathEndpointType::PrimaryInput: typeName = "pi"; break;
+    case Netlist::PathEndpointType::PrimaryOutput: typeName = "po"; break;
+    case Netlist::PathEndpointType::DffQ: typeName = "dff_q"; break;
+    case Netlist::PathEndpointType::DffD: typeName = "dff_d"; break;
+    case Netlist::PathEndpointType::DffClock: typeName = "dff_clock"; break;
+    case Netlist::PathEndpointType::DffReset: typeName = "dff_reset"; break;
+    case Netlist::PathEndpointType::GateOutput: typeName = "gate_out"; break;
+    case Netlist::PathEndpointType::GateInput: typeName = "gate_in"; break;
+    }
+
+    std::string description = typeName + ":" + endpoint.name;
+    if (!endpoint.pinName.empty()) {
+        description += ":" + endpoint.pinName;
+    } else if (endpoint.pinIndex >= 0) {
+        description += ":" + std::to_string(endpoint.pinIndex);
+    }
+    return description;
+}
+
+std::string describePathNode(const Netlist::PathNode& node) {
+    return std::string(node.type == Netlist::PathNodeType::Net ? "net:" : "gate:") +
+           node.name;
 }
 
 // 將 RegisterPathQueryMode 對應到底層 PathQueryMode。
@@ -305,9 +369,19 @@ void enumeratePathsDepthFirst(
     const std::vector<unsigned char>& alreadyPassedRequired,
     Netlist::CombinationalPath& currentPath,
     std::unordered_set<int>& netsInCurrentPath,
-    std::vector<Netlist::CombinationalPath>& results) {
+    std::vector<Netlist::CombinationalPath>& results,
+    const PathEnumerationOptions& options,
+    PathEnumerationState& state) {
+    if (shouldStopEnumeration(options, state)) {
+        return;
+    }
+
     const Net& currentNet = netlist.getNet(currentNetId);
     for (int gateId : currentNet.loadGateIds) {
+        if (shouldStopEnumeration(options, state)) {
+            return;
+        }
+
         const Gate& gate = netlist.getGate(gateId);
         if (gate.type == GateType::DFF ||
             gate.outputNetId < 0 ||
@@ -329,13 +403,17 @@ void enumeratePathsDepthFirst(
 
         if (nextNetId == endNetId) {
             if (allRequiredPassed(passedRequired)) {
-                results.push_back(currentPath);
+                state.pathCount++;
+                if (!options.countOnly) {
+                    results.push_back(currentPath);
+                }
             }
         } else {
             netsInCurrentPath.insert(nextNetId);
             enumeratePathsDepthFirst(netlist, nextNetId, endNetId,
                                      requiredNodes, avoidedNodes, passedRequired,
-                                     currentPath, netsInCurrentPath, results);
+                                     currentPath, netsInCurrentPath, results,
+                                     options, state);
             netsInCurrentPath.erase(nextNetId);
         }
 
@@ -350,7 +428,9 @@ std::vector<Netlist::CombinationalPath> enumeratePathsMatching(
     const std::string& startNet,
     const std::string& endNet,
     const std::vector<ResolvedPathNode>& requiredNodes,
-    const std::vector<ResolvedPathNode>& avoidedNodes) {
+    const std::vector<ResolvedPathNode>& avoidedNodes,
+    const PathEnumerationOptions& options,
+    PathEnumerationState& state) {
     std::vector<Netlist::CombinationalPath> results;
     const int startNetId = netlist.getNetId(startNet);
     const int endNetId = netlist.getNetId(endNet);
@@ -366,7 +446,10 @@ std::vector<Netlist::CombinationalPath> enumeratePathsMatching(
     currentPath.netIds.push_back(startNetId);
     if (startNetId == endNetId) {
         if (allRequiredPassed(passedRequired)) {
-            results.push_back(currentPath);
+            state.pathCount++;
+            if (!options.countOnly) {
+                results.push_back(currentPath);
+            }
         }
         return results;
     }
@@ -375,7 +458,8 @@ std::vector<Netlist::CombinationalPath> enumeratePathsMatching(
     netsInCurrentPath.insert(startNetId);
     enumeratePathsDepthFirst(netlist, startNetId, endNetId,
                              requiredNodes, avoidedNodes, passedRequired,
-                             currentPath, netsInCurrentPath, results);
+                             currentPath, netsInCurrentPath, results,
+                             options, state);
     return results;
 }
 
@@ -640,7 +724,9 @@ Netlist::CombinationalPath Netlist::findAnyCombinationalPathThroughAvoiding(
 std::vector<Netlist::CombinationalPath> Netlist::enumerateCombinationalPaths(
     const std::string& startNet,
     const std::string& endNet) const {
-    return enumeratePathsMatching(*this, startNet, endNet, {}, {});
+    PathEnumerationOptions options;
+    PathEnumerationState state;
+    return enumeratePathsMatching(*this, startNet, endNet, {}, {}, options, state);
 }
 
 // 以 DFS backtracking 列出所有避開全部指定節點的組合邏輯路徑。
@@ -653,7 +739,9 @@ Netlist::enumerateCombinationalPathsAvoiding(
     if (!resolvePathNodes(*this, avoidedNodes, avoided)) {
         return std::vector<CombinationalPath>();
     }
-    return enumeratePathsMatching(*this, startNet, endNet, {}, avoided);
+    PathEnumerationOptions options;
+    PathEnumerationState state;
+    return enumeratePathsMatching(*this, startNet, endNet, {}, avoided, options, state);
 }
 
 // 以 DFS backtracking 列出所有經過全部指定節點的組合邏輯路徑。
@@ -666,7 +754,9 @@ Netlist::enumerateCombinationalPathsThrough(
     if (!resolvePathNodes(*this, requiredNodes, required)) {
         return std::vector<CombinationalPath>();
     }
-    return enumeratePathsMatching(*this, startNet, endNet, required, {});
+    PathEnumerationOptions options;
+    PathEnumerationState state;
+    return enumeratePathsMatching(*this, startNet, endNet, required, {}, options, state);
 }
 
 // 以 DFS 列出所有經過全部 requiredNodes 且避開全部 avoidedNodes 的組合路徑。
@@ -682,7 +772,9 @@ Netlist::enumerateCombinationalPathsThroughAvoiding(
         !resolvePathNodes(*this, avoidedNodes, avoided)) {
         return std::vector<CombinationalPath>();
     }
-    return enumeratePathsMatching(*this, startNet, endNet, required, avoided);
+    PathEnumerationOptions options;
+    PathEnumerationState state;
+    return enumeratePathsMatching(*this, startNet, endNet, required, avoided, options, state);
 }
 
 // 判斷所有既有路徑是否都經過 requiredNodes 中每一個節點；無原始路徑時回傳 false。
@@ -1041,18 +1133,194 @@ std::vector<int> Netlist::resolvePathEndpoints(
     return resolvedNetIds;
 }
 
-// 執行統一 path query；目前支援 Exists、FindAny、EnumerateAll、MaxDepth 與 every-path 類模式。
+// 執行統一 endpoint connectivity/path query。
 Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
     PathQueryResult result;
+    auto importGraphReport = [&result](const GraphReport& graphReport) {
+        result.ok = graphReport.ok;
+        result.unsupported = graphReport.unsupported;
+        result.message = graphReport.message;
+        result.status = graphReport.status;
+        result.exists = graphReport.exists;
+        result.pathExists = graphReport.pathExists;
+        result.isSeparator = graphReport.isCut;
+        result.combinationalCycleDetected = graphReport.combinationalCycleDetected;
+        result.separatorCandidateNetName = graphReport.candidateNetName;
+        result.separatorCandidateNetId = graphReport.candidateNetId;
+        result.mandatoryNetIds = graphReport.articulationNetIds;
+        result.mandatoryNetNames = graphReport.articulationNetNames;
+        result.witnessStartpoint = graphReport.witnessPrimaryInput;
+        result.witnessEndpoint = graphReport.witnessPrimaryOutput;
+        result.checkedStartpointCount = graphReport.checkedPrimaryInputCount;
+        result.checkedEndpointCount = graphReport.checkedPrimaryOutputCount;
+    };
+
     if (!query.combinationalOnly) {
+        result.unsupported = true;
+        result.message = "Path query currently supports combinationalOnly=true only";
         return result;
     }
 
-    const std::vector<int> startNetIds = resolvePathEndpoints(query.startpoints);
-    const std::vector<int> endNetIds = resolvePathEndpoints(query.endpoints);
-    if (startNetIds.empty() || endNetIds.empty()) {
+    // 無 endpoints 的 IsSeparator 保留原 PI-to-PO cut 語意；底層重用 dominator engine。
+    if (query.mode == PathQueryMode::IsSeparator &&
+        query.startpoints.empty() && query.endpoints.empty()) {
+        if (query.separatorCandidateNetName.empty() ||
+            !query.requiredNodes.empty() || !query.avoidedNodes.empty()) {
+            result.message =
+                "PI-to-PO IsSeparator requires separatorCandidateNetName and no path constraints";
+            return result;
+        }
+        GraphQuery graphQuery;
+        graphQuery.type = GraphQueryType::IsCutNetBetweenPiPo;
+        graphQuery.netName = query.separatorCandidateNetName;
+        importGraphReport(runGraphQuery(graphQuery));
         return result;
     }
+
+    if (query.mode == PathQueryMode::DirectPiPoConnections) {
+        if (!query.startpoints.empty() || !query.endpoints.empty() ||
+            !query.requiredNodes.empty() || !query.avoidedNodes.empty()) {
+            result.message =
+                "DirectPiPoConnections does not accept endpoints or path constraints";
+            return result;
+        }
+        const std::vector<int> primaryInputNetIds = getPrimaryInputNetIds();
+        const std::vector<int> primaryOutputNetIds = getPrimaryOutputNetIds();
+        const std::unordered_set<int> outputNetSet(primaryOutputNetIds.begin(),
+                                                   primaryOutputNetIds.end());
+        std::unordered_set<int> seenNetIds;
+        for (int netId : primaryInputNetIds) {
+            if (!isValidNetId(netId) || outputNetSet.count(netId) == 0 ||
+                !seenNetIds.insert(netId).second) {
+                continue;
+            }
+            CombinationalPath path;
+            path.netIds.push_back(netId);
+            result.paths.push_back(path);
+        }
+        result.ok = true;
+        result.message = "Direct PI-to-PO connection query completed";
+        result.pathCount = result.paths.size();
+        result.exists = result.pathCount > 0;
+        if (result.exists) {
+            result.path = result.paths.front();
+            result.depth = 0;
+        }
+        return result;
+    }
+
+    std::vector<int> startNetIds;
+    std::vector<int> endNetIds;
+    std::unordered_set<int> seenStartNetIds;
+    std::unordered_set<int> seenEndNetIds;
+
+    if (query.startpoints.empty()) {
+        result.unresolvedStartpoints.push_back("<missing>");
+    }
+    for (const PathEndpoint& endpoint : query.startpoints) {
+        const std::vector<int> endpointNetIds = resolvePathEndpoint(endpoint);
+        if (endpointNetIds.empty()) {
+            result.unresolvedStartpoints.push_back(describePathEndpoint(endpoint));
+            continue;
+        }
+        for (int netId : endpointNetIds) {
+            if (seenStartNetIds.insert(netId).second) {
+                startNetIds.push_back(netId);
+            }
+        }
+    }
+
+    if (query.endpoints.empty()) {
+        result.unresolvedEndpoints.push_back("<missing>");
+    }
+    for (const PathEndpoint& endpoint : query.endpoints) {
+        const std::vector<int> endpointNetIds = resolvePathEndpoint(endpoint);
+        if (endpointNetIds.empty()) {
+            result.unresolvedEndpoints.push_back(describePathEndpoint(endpoint));
+            continue;
+        }
+        for (int netId : endpointNetIds) {
+            if (seenEndNetIds.insert(netId).second) {
+                endNetIds.push_back(netId);
+            }
+        }
+    }
+
+    auto collectUnresolvedNodes = [&](const std::vector<PathNode>& nodes,
+                                      std::vector<std::string>& unresolved) {
+        for (const PathNode& node : nodes) {
+            std::vector<ResolvedPathNode> resolved;
+            if (!resolvePathNodes(*this, {node}, resolved)) {
+                unresolved.push_back(describePathNode(node));
+            }
+        }
+    };
+    collectUnresolvedNodes(query.requiredNodes, result.unresolvedRequiredNodes);
+    collectUnresolvedNodes(query.avoidedNodes, result.unresolvedAvoidedNodes);
+
+    if (!result.unresolvedStartpoints.empty() ||
+        !result.unresolvedEndpoints.empty() ||
+        !result.unresolvedRequiredNodes.empty() ||
+        !result.unresolvedAvoidedNodes.empty()) {
+        result.message = "Path query contains unresolved endpoints or constraint nodes";
+        return result;
+    }
+
+    if (query.mode == PathQueryMode::FindMandatoryNodes ||
+        query.mode == PathQueryMode::IsSeparator) {
+        if (!query.requiredNodes.empty() || !query.avoidedNodes.empty()) {
+            result.message =
+                "Mandatory-node and separator modes do not accept required/avoided constraints";
+            return result;
+        }
+        if (startNetIds.size() != 1 || endNetIds.size() != 1) {
+            result.message =
+                "Mandatory-node and separator modes require exactly one resolved start and endpoint";
+            return result;
+        }
+
+        if (query.mode == PathQueryMode::IsSeparator) {
+            result.separatorCandidateNetName = query.separatorCandidateNetName;
+            result.separatorCandidateNetId = getNetId(query.separatorCandidateNetName);
+            if (!isValidNetId(result.separatorCandidateNetId) ||
+                getNet(result.separatorCandidateNetId).isRemoved) {
+                result.ok = false;
+                result.exists = false;
+                result.isSeparator = false;
+                result.status = "SEPARATOR_NOT_FOUND";
+                result.message = "Separator candidate net not found: " +
+                                 query.separatorCandidateNetName;
+                return result;
+            }
+        }
+
+        GraphQuery graphQuery;
+        graphQuery.type = GraphQueryType::ArticulationPointsBetween;
+        graphQuery.sourceNetName = nets[startNetIds.front()].name;
+        graphQuery.targetNetName = nets[endNetIds.front()].name;
+        const GraphReport graphReport = runGraphQuery(graphQuery);
+        importGraphReport(graphReport);
+        if (query.mode == PathQueryMode::FindMandatoryNodes || !graphReport.ok ||
+            !graphReport.pathExists) {
+            return result;
+        }
+
+        result.separatorCandidateNetName = query.separatorCandidateNetName;
+        result.separatorCandidateNetId = getNetId(query.separatorCandidateNetName);
+        result.isSeparator = std::find(result.mandatoryNetIds.begin(),
+                                       result.mandatoryNetIds.end(),
+                                       result.separatorCandidateNetId) !=
+                             result.mandatoryNetIds.end();
+        result.exists = result.isSeparator;
+        result.status = result.isSeparator ? "SEPARATOR" : "NOT_SEPARATOR";
+        result.message = result.isSeparator
+            ? "Candidate is a directed separator between the selected endpoints."
+            : "Candidate is not a directed separator between the selected endpoints.";
+        return result;
+    }
+
+    result.ok = true;
+    result.message = "Path query completed";
 
     switch (query.mode) {
     case PathQueryMode::Exists:
@@ -1089,24 +1357,63 @@ Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
         return result;
 
     case PathQueryMode::EnumerateAll:
+    {
+        std::vector<ResolvedPathNode> required;
+        std::vector<ResolvedPathNode> avoided;
+        if (!resolvePathNodes(*this, query.requiredNodes, required) ||
+            !resolvePathNodes(*this, query.avoidedNodes, avoided)) {
+            return result;
+        }
+
+        PathEnumerationOptions options;
+        options.maxPaths = query.maxEnumeratedPaths;
+        options.timeLimitSeconds = query.enumerationTimeLimitSeconds;
+        options.countOnly = query.countOnly;
+        PathEnumerationState state;
+
+        bool stopEnumeration = false;
         for (int startNetId : startNetIds) {
+            if (stopEnumeration) {
+                break;
+            }
             for (int endNetId : endNetIds) {
+                if (shouldStopEnumeration(options, state)) {
+                    stopEnumeration = true;
+                    break;
+                }
+
                 std::vector<CombinationalPath> paths =
-                    enumerateCombinationalPathsThroughAvoiding(
+                    enumeratePathsMatching(
+                        *this,
                         nets[startNetId].name,
                         nets[endNetId].name,
-                        query.requiredNodes,
-                        query.avoidedNodes);
+                        required,
+                        avoided,
+                        options,
+                        state);
                 result.paths.insert(result.paths.end(), paths.begin(), paths.end());
+                if (shouldStopEnumeration(options, state)) {
+                    stopEnumeration = true;
+                    break;
+                }
             }
         }
-        result.pathCount = result.paths.size();
-        result.exists = !result.paths.empty();
-        if (result.exists) {
+        result.pathCount = state.pathCount;
+        result.exists = result.pathCount > 0;
+        result.completeEnumeration = state.complete;
+        result.enumerationTimedOut = state.timedOut;
+        result.enumerationPathLimitReached = state.pathLimitReached;
+        result.countOnly = query.countOnly;
+        if (state.timedOut) {
+            result.enumerationStopReason = "Enumeration stopped by time limit.";
+        } else if (state.pathLimitReached) {
+            result.enumerationStopReason = "Enumeration stopped by maxEnumeratedPaths limit.";
+        }
+        if (!result.paths.empty()) {
             result.path = result.paths.front();
             result.depth = result.path.depth();
         }
-        if (query.writePathsToFile) {
+        if (query.writePathsToFile && !query.countOnly) {
             result.outputFilePath = query.outputFilePath.empty()
                                         ? "path_enumeration_output.txt"
                                         : query.outputFilePath;
@@ -1114,6 +1421,7 @@ Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
                 writeCombinationalPathsToFile(*this, result.paths, result.outputFilePath);
         }
         return result;
+    }
 
     case PathQueryMode::MinDepth:
         for (int startNetId : startNetIds) {
@@ -1151,6 +1459,8 @@ Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
 
     case PathQueryMode::EveryPathThrough: {
         if (query.requiredNodes.empty()) {
+            result.ok = false;
+            result.message = "EveryPathThrough requires at least one required node";
             return result;
         }
 
@@ -1175,6 +1485,8 @@ Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
 
     case PathQueryMode::EveryPathAvoids: {
         if (query.avoidedNodes.empty()) {
+            result.ok = false;
+            result.message = "EveryPathAvoids requires at least one avoided node";
             return result;
         }
 
@@ -1196,6 +1508,13 @@ Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
         result.exists = sawAnyPath;
         return result;
     }
+
+    case PathQueryMode::FindMandatoryNodes:
+    case PathQueryMode::IsSeparator:
+        return result;
+
+    case PathQueryMode::DirectPiPoConnections:
+        return result;
 
     }
 
@@ -1225,6 +1544,9 @@ Netlist::runRegisterPathQuery(const RegisterPathQuery& query) const {
     pathQuery.avoidedNodes = query.avoidedNodes;
     pathQuery.combinationalOnly = query.combinationalOnly;
     pathQuery.maxPrintedPaths = query.maxPrintedPaths;
+    pathQuery.maxEnumeratedPaths = query.maxEnumeratedPaths;
+    pathQuery.enumerationTimeLimitSeconds = query.enumerationTimeLimitSeconds;
+    pathQuery.countOnly = query.countOnly;
 
     if (query.mode == RegisterPathQueryMode::EnumerateAll) {
         pathQuery.writePathsToFile = true;
@@ -1257,6 +1579,10 @@ Netlist::runRegisterPathQuery(const RegisterPathQuery& query) const {
     }
 
     report.pathResult = runPathQuery(pathQuery);
+    if (!report.pathResult.ok) {
+        report.message = report.pathResult.message;
+        return report;
+    }
     report.ok = true;
     report.exists = report.pathResult.exists;
     report.depth = report.pathResult.depth;

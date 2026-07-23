@@ -50,8 +50,8 @@ public:
     //    - 從 analysis 結果整理 optimization candidate。
     //
     // 4. Unified High-Level Query APIs
-    //    - BasicQuery、DirectConnectivityQuery、FunctionQuery、ConeQuery、
-    //      PathQuery。這些是之後給 LLM / prompt dispatch 使用的穩定入口。
+    //    - BasicQuery、DirectConnectivityQuery、FunctionQuery（含 symmetry）、FunctionSearchQuery、
+    //      ConeQuery、PathQuery。這些是之後給 LLM / prompt dispatch 使用的穩定入口。
     //
     // 分類規則：
     // - const 且只回傳資訊者，優先放 Analysis。
@@ -114,18 +114,16 @@ public:
 
     // 依 ID 取得 Gate；呼叫者需先確認 id 合法。
     const Gate& getGate(int id) const { return gates[id]; } 
-
     Gate& getGateMutable(int id) { return gates[id]; }
 
     // 依 ID 取得 Net；呼叫者需先確認 id 合法。
     const Net& getNet(int id) const { return nets[id]; } 
-
     Net&  getNetMutable(int id)  { return nets[id]; }
 
-    // 取得 gate 總數；包含 combinational gates 與 DFF。
+    // 取得 gates vector 的 slot 數；包含 edit 後保留 ID 的 tombstone。
     size_t getGateCount() const { return gates.size(); }
 
-    // 取得 net 總數；包含 PI/PO/internal/constant net。
+    // 取得 nets vector 的 slot 數；包含 edit 後保留 ID 的 tombstone。
     size_t getNetCount() const { return nets.size(); }
 
     // 取得邏輯 Wire 的總數（多位寬展開的 bit 如 "data[0]", "data[1]" 會被視為同一個 "data"）
@@ -169,10 +167,10 @@ public:
     // 判斷指定 net 是否為 constant net；netId 無效時回傳 false。
     bool isConstantNet(int netId) const;
 
-    // 依照 gates vector 順序列出所有 gate instance names。
+    // 依照 gates vector 順序列出所有 active gate instance names。
     std::vector<std::string> getAllGateNames() const;
 
-    // 依照 nets vector 順序列出所有 net names。
+    // 依照 nets vector 順序列出所有 active net names。
     std::vector<std::string> getAllNetNames() const;
 
     // 依照 port declaration 順序列出 primary input port names。
@@ -221,13 +219,22 @@ public:
     std::vector<int> getGatesByType(GateType type) const;
 
     // 找出含有 constant input 的 gates；type=UNKNOWN 表示不限定 gate type，constValue=-1 表示不限定 0/1
-    std::vector<int> findGatesWithConstInput(GateType type = GateType::UNKNOWN, int constValue = -1) const;
+    std::vector<int> findGatesWithConstInput(
+        GateType type = GateType::UNKNOWN,
+        int constValue = -1,
+        int inputCount = -1) const;
 
     // 找出含有 constant input 的 gates，並回傳它們的實例名稱 (Instance Name)
-    std::vector<std::string> getGateNamesWithConstInput(GateType type = GateType::UNKNOWN, int constValue = -1) const;
+    std::vector<std::string> getGateNamesWithConstInput(
+        GateType type = GateType::UNKNOWN,
+        int constValue = -1,
+        int inputCount = -1) const;
 
     // 計算含有 constant input 的 gates 的數量
-    size_t countGatesWithConstInput(GateType type = GateType::UNKNOWN, int constValue = -1) const;
+    size_t countGatesWithConstInput(
+        GateType type = GateType::UNKNOWN,
+        int constValue = -1,
+        int inputCount = -1) const;
 
     // 給定特定的 Gate Instance Name，回傳包含其類型與 I/O 連線狀態的格式化字串
     std::string getGateInfo(const std::string& instName) const;
@@ -979,8 +986,8 @@ public:
     NetlistEditReport trimDeadLogicWithReport();
     int collapseBackToBackInverters();
     NetlistEditReport collapseBackToBackInvertersWithReport();
-    // 合併結構等價的 gate（相同 type + 相同 input net 集合）
-    // 回傳合併的 gate 數量
+    // Legacy/internal structural merge alias。名稱不代表 SAT functional equivalence，
+    // 對外請使用 mergeStructurallyEquivalentGates()。
     int mergeEquivalentGates();
     NetlistEditReport mergeEquivalentGatesWithReport();
 
@@ -1075,6 +1082,14 @@ public:
     // 合併所有結構等價的 gate 群組，回傳合併數量
     int mergeStructurallyEquivalentGates();
     NetlistEditReport mergeStructurallyEquivalentGatesWithReport();
+
+    // 以 FunctionSearch SAT 等價類合併跨結構但 output function 相同的 gates。
+    NetlistEditReport mergeFunctionallyEquivalentGatesWithReport(
+        TargetScope scope = TargetScope::WHOLE_NETLIST,
+        const std::string& scopeName = "",
+        GateType gateTypeFilter = GateType::UNKNOWN,
+        size_t simulationPatternCount = 256,
+        double timeLimitSeconds = 30.0);
 
     // =========================================================================
     // B-5: Unique name generator
@@ -1173,10 +1188,20 @@ public:
 
     int simplifyAllGatesWithConstants();
     NetlistEditReport simplifyAllGatesWithConstantsWithReport();
+    int simplifyGatesWithConstants(
+        GateType type,
+        int constValue = -1,
+        int inputCount = -1);
+    NetlistEditReport simplifyGatesWithConstantsWithReport(
+        GateType type,
+        int constValue = -1,
+        int inputCount = -1);
     int simplifyAllSameInputGates();
     NetlistEditReport simplifyAllSameInputGatesWithReport();
     int runLocalSimplificationFixpoint();
     NetlistEditReport runLocalSimplificationFixpointWithReport();
+    int runSafeCleanupFixpoint();
+    NetlistEditReport runSafeCleanupFixpointWithReport();
 
     // =========================================================================
     // B-8: compactRemovedGatesWithIdMap
@@ -1247,6 +1272,9 @@ public:
     using NetlistDiff = ::NetlistDiff;
     using EditValidationResult = ::EditValidationResult;
     using NetlistEditReport = ::NetlistEditReport;
+    using FunctionalGateMergeRecord = ::FunctionalGateMergeRecord;
+    using FunctionalMergeSummary = ::FunctionalMergeSummary;
+    using WholeDesignEquivalenceReport = ::WholeDesignEquivalenceReport;
     using NetlistEditOperationKind = ::NetlistEditOperationKind;
     using EquivalenceCheckMethod = ::EquivalenceCheckMethod;
 
@@ -1378,6 +1406,55 @@ public:
     FunctionReport runFunctionQuery(const FunctionQuery& query) const;
 
     // =========================================================================
+    // 統一 Function Search Query API
+    //
+    // FunctionQuery 驗證已知 target；FunctionSearchQuery 則在指定 scope 內自行產生
+    // signal candidates，再以 simulation 做必要條件篩選、SAT 做最終證明。
+    // 本 API 為 read-only，不修改 netlist。
+    // =========================================================================
+
+    using FunctionSearchQueryType = ::FunctionSearchQueryType;
+    using FunctionSearchMode = ::FunctionSearchMode;
+    using FunctionSearchScope = ::FunctionSearchScope;
+    using FunctionSearchQuery = ::FunctionSearchQuery;
+    using FunctionSearchMatch = ::FunctionSearchMatch;
+    using FunctionSearchEquivalenceClass = ::FunctionSearchEquivalenceClass;
+    using FunctionSearchReport = ::FunctionSearchReport;
+
+    FunctionSearchReport runFunctionSearchQuery(const FunctionSearchQuery& query) const;
+
+    // =========================================================================
+    // 統一 Sequential Pattern Query API
+    //
+    // 這一層組合既有 DFF pin、cone 與 function helper，推導 D-input 的 register
+    // control semantics。第一版只辨識 canonical feedback-MUX enable/hold pattern，
+    // 並把 AND-only 結構保留為 semantics-pending candidate。
+    // =========================================================================
+
+    using SequentialPatternQueryType = ::SequentialPatternQueryType;
+    using DffInputPatternKind = ::DffInputPatternKind;
+    using SequentialPatternDetectionMethod = ::SequentialPatternDetectionMethod;
+    using SequentialPatternQuery = ::SequentialPatternQuery;
+    using DffInputPattern = ::DffInputPattern;
+    using DffInputPatternReport = ::DffInputPatternReport;
+    using SequentialPatternReportSet = ::SequentialPatternReportSet;
+
+    SequentialPatternReportSet runSequentialPatternQuery(
+        const SequentialPatternQuery& query) const;
+
+    // Directed combinational graph query；DFF 作為 boundary，不產生 D-to-Q edge。
+    using GraphQueryType = ::GraphQueryType;
+    using GraphQuery = ::GraphQuery;
+    using GraphReport = ::GraphReport;
+    GraphReport runGraphQuery(const GraphQuery& query) const;
+
+    // 比較 this(current) 與 original 的同名 PI、PO 與 DFF.D endpoint Boolean function。
+    // 使用 combinational SAT miter；DFF Q 視為 sequential boundary leaf。
+    WholeDesignEquivalenceReport checkWholeDesignEquivalence(
+        const Netlist& original,
+        double totalTimeBudgetSeconds = 240.0) const;
+
+    // =========================================================================
     // 統一 Cone Query API
     //
     // 這一層回答跨多層 reachable / transitive fanin / transitive fanout 問題。
@@ -1398,17 +1475,16 @@ public:
     //
     // 這一層把 PI、PO、DFF.Q、DFF.D、Gate output、Gate input、Specific net
     // 這些不同語意的起點/終點統一描述，再由 1.5 的 resolver helper 轉成 net ID。
-    // PathQueryMode 決定要做 exists、find any、enumerate、min/max depth
-    // 或 every-path 類查詢。
+    // PathQueryMode 決定要做 exists、find any、enumerate、min/max depth、
+    // every-path，或 mandatory-node/separator 類查詢。
     // =========================================================================
 
-    // 執行統一 path query；目前支援 Exists、FindAny、EnumerateAll、MinDepth、MaxDepth、
-    // EveryPathThrough、EveryPathAvoids。
+    // 執行統一 path query；目前支援一般 path、register endpoint preset、
+    // mandatory nodes 與 directed separator/cut。
     // 若 mode 尚未支援、端點解析失敗，或 combinationalOnly=false，回傳預設空結果。
     PathQueryResult runPathQuery(const PathQuery& query) const;
 
-    // 執行 register-to-register path query。
-    // 這是 runPathQuery() 的高階 wrapper：自動把所有或指定 DFF.Q 當起點，
-    // 所有或指定 DFF.D 當終點，並沿用 requiredNodes / avoidedNodes 條件。
+    // Legacy/internal register-to-register convenience wrapper。
+    // 公開工具應使用 runPathQuery() 的 DffQ/DffD endpoint preset；本函式保留相容性。
     RegisterPathReport runRegisterPathQuery(const RegisterPathQuery& query) const;
 };

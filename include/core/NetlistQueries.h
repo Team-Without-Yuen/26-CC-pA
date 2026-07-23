@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <map>
 #include <string>
 #include <vector>
@@ -43,8 +44,19 @@ struct BasicQuery {
     std::string name;                       // GateInfo/NetInfo/PortInfo 使用的物件名稱
     GateType gateType = GateType::UNKNOWN;  // gate type filter；UNKNOWN 表示不限制或列全部
     int constValue = -1;                    // constant input filter：-1 不限制，0 表示 1'b0，1 表示 1'b1
+    int inputCount = -1;                    // gate input-count filter：-1 表示不限制
     bool includeIds = true;                 // 回傳 report 時是否填 gateIds/netIds
     bool includeNames = true;               // 回傳 report 時是否填 gateNames/netNames/portNames
+};
+
+struct PortSummary {
+    std::string name;
+    int width = 0;
+    int msb = -1;
+    int lsb = -1;
+    bool isBus = false;
+    bool isInput = false;
+    bool isOutput = false;
 };
 
 struct BasicReport {
@@ -76,6 +88,7 @@ struct BasicReport {
     std::vector<std::string> gateNames;     // 查詢得到的 gate names
     std::vector<std::string> netNames;      // 查詢得到的 net names
     std::vector<std::string> portNames;     // 查詢得到的 port names
+    std::vector<PortSummary> ports;         // batch PI/PO name、width、range、direction
 
     std::map<GateType, int> gateTypeCounts; // 各 gate type 統計
 
@@ -183,18 +196,29 @@ struct DirectConnectivityReport {
 
 enum class FunctionQueryType {
     Equivalence,       // 檢查 netNameA 與 netNameB 是否功能等價
+    ConditionalEquivalence, // 固定 conditionNetName 後檢查 netNameA/netNameB 是否等價
     CanBeValue,        // 檢查 netNameA 是否存在某組輸入可等於 constValue
     ConstantFunction,  // 檢查 netNameA 是否恆等於 constValue
     AlwaysZero,        // 檢查 netNameA 是否永遠為 0
     AlwaysOne,         // 檢查 netNameA 是否永遠為 1
-    TruthStatus        // 回報 netNameA 是 always 0、always 1，或 non-constant
+    TruthStatus,       // 回報 netNameA 是 always 0、always 1，或 non-constant
+    FunctionalDependence, // 檢查 netNameA 的 Boolean function 是否依賴 netNameB PI / pseudo-PI
+    Symmetry,          // 檢查 netNameA function 交換兩個 PI / pseudo-PI 後是否不變
+    BooleanExpression, // 展開 netNameA 的完整 Boolean expression
+    SimplifiedBooleanExpression, // 以 maxExpressionDepth 限制展開深度
+    PrimaryInputsOfNet // 回報 netNameA fanin cone 的 PI / pseudo-PI leaves
 };
 
 struct FunctionQuery {
     FunctionQueryType type = FunctionQueryType::TruthStatus;
     std::string netNameA;   // 主要分析目標；Equivalence 時代表第一個 net / bus
     std::string netNameB;   // Equivalence 使用的第二個 net / bus
+    std::string conditionNetName; // ConditionalEquivalence 使用的 scalar condition net
+    std::string symmetryInputNameA; // Symmetry 使用的第一個 scalar PI / DFF.Q pseudo-PI
+    std::string symmetryInputNameB; // Symmetry 使用的第二個 scalar PI / DFF.Q pseudo-PI
+    int conditionValue = -1; // ConditionalEquivalence 使用；只能是 0 或 1
     int constValue = -1;    // CanBeValue / ConstantFunction 使用；只能是 0 或 1
+    int maxExpressionDepth = 10; // SimplifiedBooleanExpression 使用；必須 >= 0
 };
 
 struct FunctionReport {
@@ -204,15 +228,274 @@ struct FunctionReport {
 
     std::string netNameA;         // 查詢目標 A
     std::string netNameB;         // 查詢目標 B
+    std::string conditionNetName; // ConditionalEquivalence 的 condition net
+    std::string symmetryInputNameA; // Symmetry 的第一個交換輸入
+    std::string symmetryInputNameB; // Symmetry 的第二個交換輸入
     int netIdA = -1;              // scalar net A 的 ID；bus 或不存在時可為 -1
     int netIdB = -1;              // scalar net B 的 ID；bus 或不存在時可為 -1
+    int conditionNetId = -1;      // condition net ID；未使用時為 -1
+    int symmetryInputNetIdA = -1; // 第一個交換輸入 net ID
+    int symmetryInputNetIdB = -1; // 第二個交換輸入 net ID
+    int conditionValue = -1;      // condition 固定值；未使用時為 -1
     int constValue = -1;          // query 指定或推導出的常數值；unknown 時為 -1
 
     bool equivalent = false;      // Equivalence 結果
     bool canBeZero = false;       // TruthStatus / CanBeValue 輔助資訊
     bool canBeOne = false;        // TruthStatus / CanBeValue 輔助資訊
     bool isConstant = false;      // TruthStatus 結果；always 0 或 always 1 時為 true
+    bool inputInStructuralSupport = false; // FunctionalDependence：input 是否出現在 fanin support
+    bool dependsOnInput = false;  // FunctionalDependence 的 exact SAT/cofactor 結果
+    bool symmetric = false;       // Symmetry 的主要答案；UNSAT proof 時為 true
+    bool symmetryInputAInStructuralSupport = false;
+    bool symmetryInputBInStructuralSupport = false;
+    bool counterexampleFound = false; // SAT 找到交換後 target 改變的 assignment
+    std::vector<std::string> mismatchedTargetBitNames; // bus target 可有多個不同 bits
+    std::map<std::string, int> counterexampleAssignments; // 交換前的 cone leaf values
+    std::map<std::string, int> outputValuesBeforeSwap;
+    std::map<std::string, int> outputValuesAfterSwap;
     std::string status;           // "ALWAYS_ZERO"、"ALWAYS_ONE"、"NON_CONSTANT" 或錯誤描述
+    bool solverRan = false;       // SAT 類 query 是否真的呼叫 solver
+    bool solverTimedOut = false;  // true 表示 SAT solver 因 time limit 回 UNKNOWN
+    bool solverUnknown = false;   // true 表示 solver 回 UNKNOWN，不能當成 false
+    bool unsupported = false;     // true 表示 cone / gate type / argument 不支援
+    std::string solverStatus;     // "SAT"、"UNSAT"、"TIMEOUT"、"UNKNOWN"、"UNSUPPORTED"
+
+    std::string expression;        // BooleanExpression / SimplifiedBooleanExpression 結果
+    size_t expressionLength = 0;   // expression.size()，方便 LLM 決定是否摘要
+    int maxExpressionDepth = -1;   // SimplifiedBooleanExpression 實際使用的 depth limit
+    bool expressionDepthLimited = false; // true 表示這次輸出使用 depth-limited expansion
+    std::vector<std::string> supportPrimaryInputs; // fanin cone PI / DFF.Q pseudo-PI leaves
+};
+
+// =========================================================================
+// Function Search Query Types
+// =========================================================================
+
+enum class FunctionSearchQueryType {
+    NandEquivalentInputPairs, // 搜尋 NAND(a, b) 與 targetNetName 功能等價的 internal signal pair
+    EquivalentGatePairs       // 搜尋 output function 相同的 active combinational gate pairs
+};
+
+enum class FunctionSearchMode {
+    FindAny, // 找到第一組已證明的結果即可停止
+    FindAll  // 搜尋全部候選；受 maxResults / timeLimitSeconds 限制
+};
+
+enum class FunctionSearchScope {
+    WholeDesign,
+    NetFanin,
+    NetFanout,
+    GateFanin,
+    GateFanout
+};
+
+struct FunctionSearchQuery {
+    FunctionSearchQueryType type = FunctionSearchQueryType::NandEquivalentInputPairs;
+    FunctionSearchMode mode = FunctionSearchMode::FindAny;
+    std::string targetNetName;
+
+    FunctionSearchScope scope = FunctionSearchScope::WholeDesign;
+    std::string scopeName;
+    GateType gateTypeFilter = GateType::UNKNOWN;
+
+    // 第一版只搜尋 active、scalar、非 PI/PO/constant、且有 driver 的 internal signals。
+    bool internalSignalsOnly = true;
+    bool allowSameSignalPair = false;
+
+    size_t maxResults = 256;
+    size_t simulationPatternCount = 256;
+    double timeLimitSeconds = 30.0;
+    bool expandEquivalentPairs = true; // false 時只回傳 SAT-proven equivalenceClasses
+};
+
+struct FunctionSearchMatch {
+    int gateIdA = -1;
+    int gateIdB = -1;
+    int netIdA = -1;
+    int netIdB = -1;
+    std::string gateNameA;
+    std::string gateNameB;
+    std::string netNameA;
+    std::string netNameB;
+    bool provenEquivalent = false;
+    std::string proofMethod;  // 目前為 "SAT_UNSAT_MITER"
+    std::string solverStatus; // 等價 proof 成功時為 "UNSAT"
+};
+
+struct FunctionSearchEquivalenceClass {
+    std::vector<int> gateIds;
+    std::vector<int> netIds;
+    std::vector<std::string> gateNames;
+    std::vector<std::string> netNames;
+    bool provenEquivalent = false;
+    std::string proofMethod;
+};
+
+struct FunctionSearchReport {
+    bool ok = false;       // request 合法且答案已確定；partial/timeout 時為 false
+    bool found = false;    // 至少找到一組 SAT-proven match
+    bool complete = false; // FindAny 已決定 exists，或 FindAll 已完整列舉
+    bool allCandidatesExamined = false;
+    bool timedOut = false;
+    bool truncated = false;
+    bool unsupported = false;
+
+    std::string status;
+    std::string message;
+    FunctionSearchQueryType queryType = FunctionSearchQueryType::NandEquivalentInputPairs;
+    std::string targetNetName;
+    int targetNetId = -1;
+    FunctionSearchScope scope = FunctionSearchScope::WholeDesign;
+    std::string scopeName;
+    GateType gateTypeFilter = GateType::UNKNOWN;
+
+    size_t candidateSignalCount = 0;
+    size_t candidateGateCount = 0;
+    size_t simulationEligibleSignalCount = 0;
+    size_t simulationBucketCount = 0;
+    size_t candidatePairsConsidered = 0;
+    size_t candidatePairsRejectedBySimulation = 0;
+    size_t satChecks = 0;
+    size_t satUnknownCount = 0;
+    size_t unsupportedSignalCount = 0;
+    size_t equivalenceClassCount = 0;
+    size_t equivalentPairCount = 0;
+    size_t simulationPatternCount = 0;
+    double elapsedSeconds = 0.0;
+
+    std::vector<FunctionSearchMatch> matches;
+    std::vector<FunctionSearchEquivalenceClass> equivalenceClasses;
+};
+
+// =========================================================================
+// Sequential Pattern Query Types
+// =========================================================================
+
+enum class SequentialPatternQueryType {
+    DffEnableHold
+};
+
+enum class DffInputPatternKind {
+    MuxHold,
+    AndGatedDataCandidate
+};
+
+enum class SequentialPatternDetectionMethod {
+    StructuralCanonical,
+    StructuralCanonicalWithSat
+};
+
+struct SequentialPatternQuery {
+    SequentialPatternQueryType type = SequentialPatternQueryType::DffEnableHold;
+    std::string dffName;              // 空字串表示分析所有 active DFF
+    bool includeAndGatedCandidates = true;
+    bool verifyCanonicalMatchesWithSat = false;
+};
+
+struct DffInputPattern {
+    DffInputPatternKind kind = DffInputPatternKind::MuxHold;
+    SequentialPatternDetectionMethod detectionMethod =
+        SequentialPatternDetectionMethod::StructuralCanonical;
+
+    std::string enableNetName;
+    std::string dataNetName;
+    std::string dataBranchNetName; // 實際接到 branch gate 的 net；可能是反相後訊號
+    std::string feedbackNetName;
+    int enableNetId = -1;
+    int dataNetId = -1;
+    int dataBranchNetId = -1;
+    int feedbackNetId = -1;
+    int activeLevel = -1;            // 1: active-high, 0: active-low, -1: unknown
+    bool dataInverted = false;
+
+    bool structuralMatch = false;
+    bool holdFunctionallyProven = false;
+    bool loadFunctionallyProven = false;
+    bool confirmed = false;
+    bool semanticsPending = false;   // 目前 AND-only candidate 的官方定義尚待確認
+
+    bool solverRan = false;
+    bool solverTimedOut = false;
+    bool solverUnknown = false;
+    std::string solverStatus;
+
+    std::vector<int> evidenceGateIds;
+    std::vector<std::string> evidenceGateNames;
+    std::vector<std::string> candidateInputNetNames;
+    std::string message;
+};
+
+struct DffInputPatternReport {
+    bool ok = false;
+    bool matched = false;            // 至少一個 confirmed enable/hold pattern
+    std::string status;
+    std::string message;
+
+    int dffGateId = -1;
+    std::string dffName;
+    int dNetId = -1;
+    int qNetId = -1;
+    std::string dNetName;
+    std::string qNetName;
+    bool qFeedbackObserved = false; // canonical local pattern 中觀察到自己的 Q feedback
+
+    std::vector<DffInputPattern> patterns;
+};
+
+struct SequentialPatternReportSet {
+    bool ok = false;
+    bool exists = false;
+    std::string status;
+    std::string message;
+
+    SequentialPatternQueryType type = SequentialPatternQueryType::DffEnableHold;
+    size_t totalDffCount = 0;
+    size_t analyzedDffCount = 0;
+    size_t matchedDffCount = 0;      // 依 DFF instance 去重
+    size_t candidateDffCount = 0;    // 包含 semanticsPending candidate 的 DFF 數量
+    std::vector<DffInputPatternReport> reports;
+};
+
+// =========================================================================
+// Directed Combinational Graph Query Types
+// =========================================================================
+
+enum class GraphQueryType {
+    IsCutNetBetweenPiPo,       // 指定 internal net 是否切斷至少一組 PI-to-PO connectivity
+    ArticulationPointsBetween // 列出 source/target 間出現在所有 directed paths 的 internal nets
+};
+
+struct GraphQuery {
+    GraphQueryType type = GraphQueryType::IsCutNetBetweenPiPo;
+    std::string netName;       // IsCutNetBetweenPiPo candidate
+    std::string sourceNetName; // ArticulationPointsBetween source
+    std::string targetNetName; // ArticulationPointsBetween target
+};
+
+struct GraphReport {
+    bool ok = false;
+    bool exists = false;       // cut yes/no，或 articulation list 是否非空
+    bool unsupported = false;
+    bool combinationalCycleDetected = false;
+    std::string message;
+    std::string status;
+
+    std::string candidateNetName;
+    int candidateNetId = -1;
+    std::string sourceNetName;
+    int sourceNetId = -1;
+    std::string targetNetName;
+    int targetNetId = -1;
+
+    bool pathExists = false;
+    bool isCut = false;
+    size_t checkedPrimaryInputCount = 0;
+    size_t checkedPrimaryOutputCount = 0;
+    std::string witnessPrimaryInput;
+    std::string witnessPrimaryOutput;
+
+    std::vector<int> articulationNetIds;
+    std::vector<std::string> articulationNetNames;
 };
 
 // =========================================================================
@@ -223,12 +506,15 @@ enum class ConeQueryType {
     NetTransitiveFanin,   // 從指定 net 往 fanin 方向追溯
     NetTransitiveFanout,  // 從指定 net 往 fanout 方向展開
     GateTransitiveFanin,  // 從指定 gate output net 往 fanin 方向追溯
-    GateTransitiveFanout  // 從指定 gate output net 往 fanout 方向展開
+    GateTransitiveFanout, // 從指定 gate output net 往 fanout 方向展開
+    LargestOutputCone,    // 掃描所有 primary outputs，找 fanin cone gateCount 最大者
+    SharedFaninGates      // 取得兩個 net fanin cones 的 shared gate intersection
 };
 
 struct ConeQuery {
     ConeQueryType type = ConeQueryType::NetTransitiveFanin;
     std::string netName;       // NetTransitiveFanin / NetTransitiveFanout 使用
+    std::string secondNetName; // SharedFaninGates 使用的第二個 net
     std::string gateName;      // GateTransitiveFanin / GateTransitiveFanout 使用
     bool includeIds = true;    // 是否填 netIds/gateIds/rootNetIds
     bool includeNames = true;  // 是否填 netNames/gateNames/rootNetNames
@@ -243,16 +529,20 @@ struct ConeReport {
     ConeQueryType type = ConeQueryType::NetTransitiveFanin;
     std::string sourceName;                // 使用者指定的來源名稱
     int sourceId = -1;                     // 來源 net ID 或 gate ID
+    std::string secondSourceName;           // SharedFaninGates 的第二個來源 net
+    int secondSourceId = -1;                // SharedFaninGates 的第二個來源 net ID
     ConeResult cone;                       // 原始 cone 結果，供底層演算法繼續使用
 
     size_t netCount = 0;                   // cone 內有效 net 數量
     size_t gateCount = 0;                  // cone 內有效 combinational gate 數量
+    size_t checkedOutputCount = 0;         // LargestOutputCone 掃描的 PO bit 數量
     std::vector<int> rootNetIds;           // cone roots，支援 bus 多 root
     std::vector<std::string> rootNetNames; // root net names
     std::vector<int> netIds;               // cone 內 net IDs
     std::vector<int> gateIds;              // cone 內 gate IDs
     std::vector<std::string> netNames;     // cone 內 net names
     std::vector<std::string> gateNames;    // cone 內 gate names
+    std::map<GateType, int> gateTypeCounts; // cone/shared result 內各 gate type 數量
 
     int longestDepth = -1;                 // cone 內 longest net path depth
     int shortestDepth = -1;                // cone 內 shortest net path depth

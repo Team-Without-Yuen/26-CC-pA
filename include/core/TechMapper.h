@@ -6,15 +6,6 @@
 #include <unordered_map>
 #include "include/core/Netlist.h"
 
-// 定義轉換的作用範圍
-enum class TargetScope {
-    WHOLE_NETLIST,  // 針對整個電路 (預設)
-    NET_FANIN,      // 針對 Net 的 Fanin
-    NET_FANOUT,     // 針對 Net 的 Fanout
-    GATE_FANIN,     // 針對 Gate 的 Fanin
-    GATE_FANOUT     // 針對 Gate 的 Fanout
-};
-
 // 定義優化目標
 enum class OptimizationGoal {
     AREA,   // 最小化總閘數
@@ -661,6 +652,20 @@ public:
                                  const std::vector<GateType>& allowedTypes, 
                                  const std::vector<GateType>& bannedTypes = {},
                                  bool verbose = false);
+
+    NetlistEditReport convertToBasisWithReport(Netlist& netlist,
+                                               TargetScope scope,
+                                               const std::string& name,
+                                               const std::vector<GateType>& allowedTypes,
+                                               const std::vector<GateType>& bannedTypes = {},
+                                               bool verbose = false);
+
+    NetlistEditReport replaceGateTypeWithReport(Netlist& netlist,
+                                                GateType targetType,
+                                                const std::vector<GateType>& allowedTypes,
+                                                TargetScope scope,
+                                                const std::string& name,
+                                                bool verbose = false);
         
     // 自訂規則映射引擎 (Interactive Custom Technology Mapping)
     // 此函式允許使用者透過指定一個替換規則中的「欲拔除的積木 (Target)」與「欲生成的積木 (Allowed)」的數量限制

@@ -31,6 +31,40 @@ MappingDelta makeMappingDelta(const TechMapReport& techReport) {
     return delta;
 }
 
+ConeResult coneForScope(Netlist& netlist, TargetScope scope, const std::string& name) {
+    switch (scope) {
+        case TargetScope::NET_FANIN:
+            return netlist.getTransitiveFaninCone(name);
+        case TargetScope::NET_FANOUT:
+            return netlist.getTransitiveFanoutCone(name);
+        case TargetScope::GATE_FANIN:
+            return netlist.getGateTransitiveFaninCone(name);
+        case TargetScope::GATE_FANOUT:
+            return netlist.getGateTransitiveFanoutCone(name);
+        case TargetScope::WHOLE_NETLIST:
+        default:
+            return ConeResult();
+    }
+}
+
+int countGateTypeInScope(Netlist& netlist, TargetScope scope, const std::string& name, GateType type) {
+    if (scope == TargetScope::WHOLE_NETLIST) {
+        return netlist.getGateCountByType(type);
+    }
+
+    int count = 0;
+    ConeResult cone = coneForScope(netlist, scope, name);
+    for (int gateId : netlist.getConeGateIds(cone)) {
+        if (!netlist.isValidGateId(gateId) || netlist.isGateRemoved(gateId)) {
+            continue;
+        }
+        if (netlist.getGate(gateId).type == type) {
+            ++count;
+        }
+    }
+    return count;
+}
+
 NetlistEditReport finalizeTechMapEditReport(
     Netlist& netlist,
     const Netlist& before,
@@ -57,6 +91,11 @@ NetlistEditReport finalizeTechMapEditReport(
     if (!report.success) {
         netlist.restoreFrom(before);
         report.rolledBack = true;
+    } else {
+        Netlist::certifyEquivalence(
+            report,
+            EquivalenceCheckMethod::LocalRewriteRule,
+            "Technology mapping uses function-preserving rewrite rules.");
     }
 
     return report;
@@ -2648,6 +2687,10 @@ TechMapReport TechMapper::convertToBasis(Netlist& netlist,
         // 電路裡根本沒有這種閘 → 本來就合規，跳過，不要誤判失敗
         if (netlist.getGateCountByType(targetType) == 0) continue;
         
+        if (countGateTypeInScope(netlist, scope, name, targetType) == 0) {
+            continue;
+        }
+        
         // 強制設為 1，確保引擎進入「拆解 (1-to-N)」模式
         std::map<GateType, int> targetConstraints = {{targetType, 1}};
 
@@ -2682,7 +2725,8 @@ TechMapReport TechMapper::convertToBasis(Netlist& netlist,
 
         // 檢查該步驟是否失敗
         // 只有當電路中還殘留該種類的 Gate 時，才回報錯誤 (代表我們用現有的白名單積木，無法數學等價地展開它)
-        if (stepReport.status != TechMapStatus::SUCCESS || netlist.getGateCountByType(targetType) > 0) {
+        const int remainingInScope = countGateTypeInScope(netlist, scope, name, targetType);
+        if (stepReport.status != TechMapStatus::SUCCESS || remainingInScope > 0) {
             finalReport.status = (stepReport.status != TechMapStatus::SUCCESS) ? stepReport.status : TechMapStatus::ERROR_NOT_EQUIVALENT;
             finalReport.message = "Basis conversion failed! Remaining gates of type: " + std::to_string((int)targetType);
             return finalReport;
@@ -2711,6 +2755,61 @@ TechMapReport TechMapper::convertToBasis(Netlist& netlist,
     }
 
     return finalReport;
+}
+
+NetlistEditReport TechMapper::convertToBasisWithReport(
+    Netlist& netlist,
+    TargetScope scope,
+    const std::string& name,
+    const std::vector<GateType>& allowedTypes,
+    const std::vector<GateType>& bannedTypes,
+    bool verbose)
+{
+    Netlist before = netlist.cloneForRollback();
+    TechMapReport techReport = convertToBasis(
+        netlist,
+        scope,
+        name,
+        allowedTypes,
+        bannedTypes,
+        verbose);
+    return finalizeTechMapEditReport(netlist, before, techReport, "convertToBasis");
+}
+
+NetlistEditReport TechMapper::replaceGateTypeWithReport(
+    Netlist& netlist,
+    GateType targetType,
+    const std::vector<GateType>& allowedTypes,
+    TargetScope scope,
+    const std::string& name,
+    bool verbose)
+{
+    Netlist before = netlist.cloneForRollback();
+
+    std::map<GateType, int> allowedConstraints;
+    for (GateType type : allowedTypes) {
+        allowedConstraints[type] = -1;
+    }
+
+    TechMapReport techReport;
+    if (countGateTypeInScope(netlist, scope, name, targetType) == 0) {
+        techReport.status = TechMapStatus::SUCCESS;
+        techReport.message = "No gates of the requested type were found in the selected scope.";
+        techReport.finalGateCount[targetType] = netlist.getGateCountByType(targetType);
+        for (GateType type : allowedTypes) {
+            techReport.finalGateCount[type] = netlist.getGateCountByType(type);
+        }
+    } else {
+        techReport = customMapTechnology(
+            netlist,
+            {{targetType, 1}},
+            allowedConstraints,
+            scope,
+            name,
+            verbose);
+    }
+
+    return finalizeTechMapEditReport(netlist, before, techReport, "replaceGateType");
 }
 
 // 自訂規則映射引擎 (Interactive Custom Technology Mapping)

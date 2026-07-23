@@ -1,6 +1,8 @@
-# Analysis API 整理與功能劃分
+# High-Level API 責任與功能劃分
 
-這份文件整理目前 `Netlist` 裡已經建立的分析 API，目標是：
+這份文件整理目前 `Netlist` 裡已建立或規劃中的 read-only query、edit 與 optimization 高階 API，目標是：
+
+對外 facade 與 legacy command 的最終邊界另見 `API_SPEC/PUBLIC_API_CONSOLIDATION.md`。
 
 ```text
 1. 明確劃分每一類高階 API 的責任。
@@ -23,13 +25,20 @@
 
 | 高階 API | 負責問題 | 不負責問題 |
 |---|---|---|
-| `BasicQuery` | gate/net/port 的基本資訊、數量、type、PI/PO/DFF、structural issue | 連線、cone、path、depth、function |
-| `DirectConnectivityQuery` | 直接相連：net driver/load、gate input/output、immediate fanin/fanout | transitive cone、多層路徑、timing depth |
-| `FunctionQuery` | Boolean function：等價、可能為 0/1、always 0/1、truth status | reachable、path、depth、critical path |
-| `ConeQuery` | transitive fanin/fanout cone 內有哪些 nets/gates | 指定 A 到 B 的 path、global critical path、function equivalence |
-| `PathQuery` | 指定 startpoint 到 endpoint 的路徑 exists/find/enumerate/min/max/through/avoid | 全設計 timing endpoint 掃描、功能常數判斷 |
-| `DepthQuery / DepthAnalysis` | logic level、endpoint depth、critical path、PO/DFF.D depth、depth 超標 endpoint | Boolean truth status、一般路徑條件查詢 |
-| `OptimizationCandidate` | 根據 depth report 建立最佳化候選與 target gate 偵測 | 純分析總入口、實際 rewrite |
+| `StructureQuery`（公開 tool facade） | gate/net/port 基本資訊、統計、structural issue，以及一層 driver/load/fanout/pin connectivity | transitive cone、多層路徑、Boolean function、修改 |
+| `ConeQuery` | transitive fanin/fanout 的 net/gate 集合與集合摘要 | 指定 A-to-B path、全域 critical path、功能證明 |
+| `PathQuery` | endpoint path、DFF.Q-to-DFF.D path、mandatory nodes、separator 與 PI-to-PO cut | 全設計 timing endpoint 掃描、Boolean function |
+| `DepthQuery / DepthAnalysis` | timing arrival depth、PO/DFF.D depth、global critical path、depth threshold | arbitrary through/avoid path、Boolean function |
+| `FunctionQuery` | 已指定 net/bus 的 Boolean 性質：equivalence、constant、dependence、symmetry、expression | 未知候選搜尋、cross-design equivalence、修改 |
+| `FunctionSearchQuery` | 未知 internal signal 候選搜尋；目前支援 SAT-proven `NAND(a,b)==target` | 修改 netlist、任意 functional duplicate/redundancy removal |
+| `SequentialPatternQuery` | 從 DFF D-input logic 推導 enable/hold 等 register-control pattern | 一般 DFF 列表、clock/reset 直接連線、修改 |
+| `WholeDesignEquivalence` | current 與 original/previous snapshot 的 PO+DFF.D 等價證明 | 同一 design 中兩條 internal nets 的比較 |
+| `EditApply` | 執行使用者指定且已有安全規則/certificate 的 transformation | cost-driven 最佳化搜尋、未知功能候選搜尋 |
+| `OptimizationCandidate / OptApply` | 建立最佳化候選；未來依 cost function 搜尋並 transactional apply | 一般 read-only query、固定指定 mapping 的語意 |
+
+`FunctionSearchQuery` 負責「候選未知、需要從大量 signals/gates 中搜尋」的 Boolean discovery；它不修改 netlist。第一版 `NandEquivalentInputPairs` 已完成，其他 functional pair/redundancy mode 仍不得用 `FunctionQuery` 或 structural merge 假裝覆蓋。
+
+`StructureQuery` 是 tools/LLM-facing facade，內部依 mode dispatch 到 `BasicQuery` 或 `DirectConnectivityQuery`。`PathQuery` 對外統一 endpoint connectivity；register path endpoint 展開及 Graph dominator 演算法仍保留為內部元件。
 
 目前 source ownership：
 
@@ -37,17 +46,22 @@
 |---|---|
 | `BasicQuery` | `src/analysis/BasicAnalysis.cpp` |
 | `DirectConnectivityQuery` | `src/analysis/ConnectivityAnalysis.cpp` |
-| `FunctionQuery` | `src/analysis/FunctionAnalysis.cpp` |
+| `FunctionQuery` | `src/analysis/FunctionAnalysis.cpp`（含 equivalence、dependence、symmetry、constant/truth） |
+| `FunctionSearchQuery` | `src/analysis/FunctionAnalysis.cpp`（simulation filter + SAT proof） |
+| `SequentialPatternQuery` | `src/analysis/SequentialPatternAnalysis.cpp` |
+| `GraphQuery`（PathQuery 內部 engine） | `src/analysis/GraphAnalysis.cpp` |
 | `ConeQuery` | `src/analysis/ConeAnalysis.cpp` |
 | `PathQuery` | `src/analysis/PathAnalysis.cpp` |
 | `DepthQuery / DepthAnalysis` | `src/analysis/DepthAnalysis.cpp` |
+| `WholeDesignEquivalence` | `src/analysis/WholeDesignEquivalence.cpp` |
 | `OptimizationCandidate` | `src/analysis/OptimizationAnalysis.cpp` |
+| `EditApply` | `src/transformation/EditFlow.cpp` + operation owner |
 
 目前共用 query/report 型別位置：
 
 | Header | 內容 |
 |---|---|
-| `include/core/NetlistQueries.h` | Basic / DirectConnectivity / Function / Cone query/report |
+| `include/core/NetlistQueries.h` | Basic / DirectConnectivity / Function / SequentialPattern / Graph / Cone query/report |
 | `include/core/PathTypes.h` | Path / Depth query/report 與 endpoint/path 型別 |
 | `include/core/OptimizationTypes.h` | Optimization result / candidate 型別 |
 
@@ -76,18 +90,32 @@ Low-level storage / lookup
     +-- Depth helper
     +-- Function/SAT helper
     |
-High-level Query API
+Public high-level Query API
     |
-    +-- BasicQuery
-    +-- DirectConnectivityQuery
-    +-- FunctionQuery
+    +-- StructureQuery facade
     +-- ConeQuery
     +-- PathQuery
     +-- DepthQuery / DepthAnalysis
+    +-- FunctionQuery
+    +-- SequentialPatternQuery
+    +-- WholeDesignEquivalence
+
+Internal query engines / adapters
     |
-Optimization-facing analysis
+    +-- BasicQuery
+    +-- DirectConnectivityQuery
+    +-- GraphQuery dominator engine
+    +-- RegisterPathQuery legacy wrapper
     |
+Search / planning layer
+    |
+    +-- FunctionSearchQuery (read-only discovery; NAND pair mode completed)
     +-- OptimizationCandidate
+    |
+Mutation / optimization layer
+    |
+    +-- EditApply (specified transformation)
+    +-- OptApply (cost-driven search and apply)
 ```
 
 目前還沒有總入口 `AnalysisQuery`。短期不建議先做總入口，因為各高階 API 邊界還在逐步穩定。
@@ -263,6 +291,41 @@ API_SPEC/FUNCTION_ANALYSIS_USAGE.md
 
 ---
 
+### 5.1 SequentialPatternQuery
+
+定位：
+
+```text
+組合既有 DFF pin、cone、path 與 Function/SAT helper，推導 D-input 的 register-control semantics。
+```
+
+高階入口：
+
+```cpp
+SequentialPatternReportSet runSequentialPatternQuery(
+    const SequentialPatternQuery& query) const;
+```
+
+第一版只公開 `DffEnableHold`，回答：
+
+```text
+哪些 DFF 具有 canonical feedback-MUX enable/hold structure？
+Enable/data/Q-feedback 分別是哪條 net？
+Enable 是 active-high 或 active-low？
+符合條件的 unique DFF 數量是多少？
+```
+
+它不重做 `ListDffs`、clock/reset load、fanin cone 或 SAT encoding，而是重用既有 API。AND-only D-input 目前只回報 semantics-pending candidate，不計入 confirmed `matchedDffCount`。
+
+文件：
+
+```text
+API_SPEC/SEQUENTIAL_PATTERN_API.md
+API_SPEC/SEQUENTIAL_PATTERN_USAGE.md
+```
+
+---
+
 ## 6. ConeQuery
 
 定位：
@@ -328,7 +391,7 @@ API_SPEC/CONE_QUERY_USAGE.md
 定位：
 
 ```text
-回答指定 startpoint 到 endpoint 的路徑問題。
+回答 endpoint 間路徑、register boundary path，以及 mandatory/separator 類 connectivity 問題。
 ```
 
 高階入口：
@@ -346,6 +409,9 @@ Find all paths from A to D through B.
 Does every path from A to D pass through B?
 Find the shortest path from A to D.
 Find the longest path from any PI to DFF D-pin.
+List mandatory internal nets between A and D.
+Does candidate C separate A from D?
+Is C a directed PI-to-PO cut net?
 ```
 
 應使用 `PathQuery` 的情況：
@@ -359,13 +425,17 @@ Find the longest path from any PI to DFF D-pin.
 | 最長路徑 | `MaxDepth` |
 | 所有路徑是否經過某些節點 | `EveryPathThrough` |
 | 所有路徑是否避開某些節點 | `EveryPathAvoids` |
+| 求 source/target 間 mandatory internal nets | `FindMandatoryNodes` |
+| 判斷指定 candidate 是否為 separator | `IsSeparator` |
+| register-to-register path | 上述 path mode + `DffQ` / `DffD` endpoint kind |
 
 邊界：
 
 ```text
-PathQuery 必須有 startpoint/endpoints。
+一般 PathQuery mode 必須有 startpoints/endpoints；`DirectPiPoConnections` 與 PI-to-PO cut preset 不需要一般 endpoints。
 PathQuery 的 MaxDepth 是指定 startpoint-to-endpoint 範圍內的最長路徑。
 全設計 worst endpoint / critical path 屬於 DepthAnalysis。
+mandatory/separator 由 `GraphAnalysis.cpp` 的 dominator engine 計算，不使用大量 path enumeration。
 ```
 
 容易混淆的點：
@@ -380,8 +450,8 @@ PathQuery 的 MaxDepth 是指定 startpoint-to-endpoint 範圍內的最長路徑
 文件：
 
 ```text
-API_SPEC/STARTPOINT_ENDPOINT_PATH_ANALYSIS.md
-API_SPEC/STARTPOINT_ENDPOINT_PATH_QUERY_USAGE.md
+API_SPEC/PATH_QUERY_API.md
+API_SPEC/PATH_QUERY_USAGE.md
 ```
 
 ---
@@ -435,6 +505,7 @@ getMaximumLogicDepthFromPiToDffD()
 | `DffD` | 所有 DFF D-pin depth | 無 | `reports`, `worst` |
 | `GlobalCriticalPath` | 全設計最深 timing endpoint | 無 | `worst`, `worst.criticalPath` |
 | `EndpointsExceedingDepth` | 找 depth 大於 threshold 的 endpoints | `threshold` | `reports`, `count`, `worst` |
+| `PrimaryOutputsExceedingDepth` | 只找 depth 大於 threshold 的 PO bits | `threshold` | `reports`, `count`, `worst` |
 
 `DepthQuery` 輸入欄位：
 
@@ -442,7 +513,7 @@ getMaximumLogicDepthFromPiToDffD()
 |---|---|
 | `type` | 決定執行哪一種 depth query |
 | `netName` | `SpecificNet` 使用，指定要分析的 net/output |
-| `threshold` | `EndpointsExceedingDepth` 使用，指定 depth 門檻 |
+| `threshold` | exceeding 類 query 使用，指定 depth 門檻 |
 | `includeCriticalPath` | 是否回傳完整 critical path；只問數量時可設為 `false` |
 
 `DepthReportSet` 回傳欄位：
@@ -483,7 +554,7 @@ Prompt 對應：
 | 單一 output/net 的最大 logic depth | `DepthQuery::SpecificNet` | `worst.depth` |
 | 單一 output/net 的 critical path | `DepthQuery::SpecificNet` + `includeCriticalPath = true` | `worst.criticalPath` |
 | 所有 primary outputs 的 depth | `DepthQuery::PrimaryOutputs` | `reports`, `worst` |
-| 有幾個 outputs depth 大於 N | `DepthQuery::EndpointsExceedingDepth` 後篩 `PrimaryOutput`，或 `getPrimaryOutputsWithDepthGreaterThan(N)` | `count` 或 filtered count |
+| 有幾個 outputs depth 大於 N | `DepthQuery::PrimaryOutputsExceedingDepth` | `count` |
 | 所有 DFF D-pin depth | `DepthQuery::DffD` | `reports`, `worst` |
 | 全設計 global critical path | `DepthQuery::GlobalCriticalPath` | `worst`, `worst.criticalPath` |
 | 找出 depth 超過 target 的 timing endpoints | `DepthQuery::EndpointsExceedingDepth` | `reports`, `count`, `worst` |
@@ -498,6 +569,7 @@ Prompt 對應：
 | 所有 DFF.D depth | `DepthQuery::DffD` 或 `analyzeDffDDepths()` |
 | 全設計 critical path | `DepthQuery::GlobalCriticalPath` 或 `findGlobalCriticalPath()` |
 | depth 超標 endpoints | `DepthQuery::EndpointsExceedingDepth` 或 `findEndpointsExceedingDepth()` |
+| depth 超標 primary outputs | `DepthQuery::PrimaryOutputsExceedingDepth` 或 `getPrimaryOutputsWithDepthGreaterThan()` |
 
 邊界：
 
@@ -530,7 +602,7 @@ What is the max depth from input n2 to output n12?
 How many outputs have a logic depth greater than 4?
 ```
 
-應使用 `DepthQuery::EndpointsExceedingDepth` 或 `getPrimaryOutputsWithDepthGreaterThan(4)`。
+應使用 `DepthQuery::PrimaryOutputsExceedingDepth`；底層亦可用 `getPrimaryOutputsWithDepthGreaterThan(4)`。
 
 文件：
 
@@ -668,17 +740,119 @@ DepthAnalysis 的 critical path。
 
 ---
 
+### 10.6 FunctionQuery vs WholeDesignEquivalence
+
+| API | 比較範圍 |
+|---|---|
+| `FunctionQuery::Equivalence` | 同一張 netlist 中，使用者已指定的兩條 net/bus |
+| `WholeDesignEquivalence` | 兩個 design snapshots 的所有對應 PO 與 DFF.D next-state boundary |
+
+prompt 出現 `current/original/previous/transformed design` 時必須使用 whole-design checker，不能逐條猜 internal net。
+
+---
+
+### 10.7 PathQuery facade vs GraphQuery engine
+
+| 公開 Path mode / 內部 engine | 語意 |
+|---|---|
+| `PathQuery::EveryPathThrough` | 指定 startpoint/endpoints 的所有路徑是否經過指定 node |
+| `PathQuery::IsSeparator` | 判斷指定 net 是否為 source/target separator，或使用 PI-to-PO cut preset |
+| `PathQuery::FindMandatoryNodes` | 一次求出指定 source/target 間的 mandatory internal nets |
+| internal `GraphQuery` | 提供上述 mode 使用的 directed dominator/cut 演算法與 cycle/status report |
+
+公開 routing 一律進入 `PathQuery`；`GraphQuery` 是 authoritative algorithm owner，但不再是獨立的 LLM-facing command。舊 `graph_query` 只保留相容性。
+
+---
+
+### 10.8 EditApply vs OptApply
+
+```text
+使用者已指定要做哪種 transformation
+  -> EditApply
+
+使用者指定 objective/cost function，要求工具搜尋較佳結果
+  -> OptApply
+```
+
+例子：
+
+| Prompt | Owner |
+|---|---|
+| Convert cone n8 to NAND/NOT | `EditApply::ConvertToBasis` |
+| Replace every XOR with NAND implementation | `EditApply::ReplaceGateType` |
+| Minimize depth while remaining NAND/NOT | future `OptApply` |
+| Find best depth / report original if optimal | future `OptApply` |
+
+`EditApply` 可以提供 before/after depth，但不能因為 report 有 depth 欄位就宣稱已做最佳化搜尋。
+
+---
+
+### 10.9 FunctionQuery vs FunctionSearchQuery
+
+```text
+候選名稱已知，只需證明一個 Boolean property
+  -> FunctionQuery
+
+候選未知，需要 enumeration/filter/SAT/time budget/completeness
+  -> FunctionSearchQuery
+```
+
+例如 `Are n1 and n2 equivalent?` 屬 FunctionQuery；`Does any pair (a,b) satisfy NAND(a,b)==n25?` 屬 FunctionSearchQuery。搜尋 report 必須有 `complete/timedOut/candidateCount`，不能只沿用 FunctionReport 的單一 `exists`。
+
+---
+
+### 10.10 Cleanup Specific Pass vs SafeCleanupFixpoint
+
+| Prompt | Owner |
+|---|---|
+| collapse double inverters | 指定的 `CollapseDoubleInverter` |
+| remove dangling logic | 指定的 `RemoveDanglingLogic` |
+| prune/clean unused logic（廣義） | `SafeCleanupFixpoint` umbrella |
+| remove arbitrary functionally redundant logic | 未來 observability-aware redundancy flow |
+
+`SafeCleanupFixpoint` 只組合已知安全 cleanup 規則，不代表 arbitrary SAT redundancy removal。
+
+---
+
+### 10.11 BasicQuery::GateInfo vs DirectConnectivityQuery
+
+`GateInfo` 可以附帶單一 gate 的 pins，因為它是 object snapshot；但涉及關係集合、分類 load、fanout constraint 或「所有相連 gate」時，authoritative owner 是 DirectConnectivityQuery。tools 不應從 GateInfo 字串重新解析 connectivity。
+
+---
+
+### 10.12 SequentialPatternQuery 的組合責任
+
+SequentialPatternQuery 會重用 DFF pin lookup、Cone 與 Function SAT，但輸出的是 register-control semantics，因此不是重複 API。一般 `List all DFFs` 仍用 BasicQuery；`DFFs driven by clock n0` 仍用 DirectConnectivityQuery；只有 enable/hold/feedback-MUX pattern 使用 SequentialPatternQuery。
+
+---
+
 ## 11. Prompt Routing 規則
 
 | Prompt 關鍵語意 | 應使用 API |
 |---|---|
-| count / list / type / is PI / is DFF / structural issue | `BasicQuery` |
-| directly connected / driver / load / input nets / output net / immediate fanin/fanout | `DirectConnectivityQuery` |
-| equivalent / always 0 / always 1 / can become 0/1 / truth status | `FunctionQuery` |
+| count / list / type / is PI / is DFF / structural issue | public `StructureQuery` -> internal `BasicQuery` |
+| directly connected / driver / load / input nets / output net / immediate fanin/fanout | public `StructureQuery` -> internal `DirectConnectivityQuery` |
+| same-design named nets equivalent / constant / dependence / symmetry / expression | `FunctionQuery` |
+| unknown pair/candidate search / exists any pair | `FunctionSearchQuery`；目前公開 NAND pair mode |
+| DFF enable / hold / feedback MUX / register control pattern | `SequentialPatternQuery` |
 | reachable / transitive fanin / transitive fanout / cone / can affect | `ConeQuery` |
 | path from A to B / through / avoid / every path / shortest path / longest path between endpoints | `PathQuery` |
+| register-to-register path | `PathQuery` with `DffQ` / `DffD` endpoints |
 | depth / level / critical path / endpoints exceeding depth / PO depth / DFF.D depth | `DepthQuery / DepthAnalysis` |
-| optimize / candidate / target depth / removable buffer on critical path | `OptimizationCandidate` 或 optimization API |
+| cut / articulation / mandatory nodes / separator | public `PathQuery` -> internal `GraphQuery` engine |
+| current vs original/previous design equivalence | `WholeDesignEquivalence` |
+| rename / cleanup / specified rewrite / basis conversion | `EditApply` |
+| minimize / optimize / best / cost function | `OptimizationCandidate` + future `OptApply` |
+
+Routing precedence：
+
+```text
+1. 先判斷是否修改 current design。
+2. 修改且有 objective/cost function -> OptApply；指定操作 -> EditApply。
+3. read-only 且比較 design snapshots -> WholeDesignEquivalence。
+4. read-only 且候選未知 -> FunctionSearchQuery 或其他 search API。
+5. 其餘依 function / graph / path / depth / cone / connectivity / basic 語意選 owner。
+```
 
 ---
 
@@ -698,6 +872,8 @@ VerilogReader / VerilogWriter
 runBasicQuery()
 runDirectConnectivityQuery()
 runFunctionQuery()
+runFunctionSearchQuery()
+runSequentialPatternQuery()
 runConeQuery()
 runPathQuery()
 runDepthQuery()
@@ -707,15 +883,26 @@ runDepthQuery()
 目前驗證結果：
 
 ```text
-Summary: 45 passed, 0 failed.
+Sequential pattern mini test: 15 passed, 0 failed.
+Sequential edit-flow mini test: 13 passed, 0 failed.
+Sequential CLI mini test: 12 passed, 0 failed.
+NewTestCase/test40 original: 2585 DFF analyzed, 1583 canonical matches.
+NewTestCase/test40 post-edit: 1590 confirmed matches, 1975 candidates, query about 0.050 s.
+Full mapping/edit/PO+DFF.D-equivalence/query flow: about 33.7 s.
 ```
 
 Windows 目前建議使用：
 
 ```powershell
-g++ -std=c++20 -I. -Ilib "mini test/tester.cpp" src/core/*.cpp src/io/*.cpp src/analysis/*.cpp src/optimization/*.cpp src/transformation/*.cpp -L./include/lib/win/ucrt64 -lcadical -o "mini test/tester.exe"
-.\mini test\tester.exe
+$sources = Get-ChildItem -Path src -Recurse -Filter *.cpp |
+    Where-Object { $_.Name -notin @('MockturtleConverter.cpp', 'DepthOptimizer.cpp') } |
+    ForEach-Object { $_.FullName }
+g++ -std=c++20 -I. -Ilib "mini test/test19/test19.cpp" $sources `
+    -L./include/lib/cadical/win/ucrt64 -lcadical -o "mini test/test19/test19.exe"
+& ".\mini test\test19\test19.exe"
 ```
+
+目前 wildcard 全編譯會因 mockturtle header 尚未配置而失敗；以上驗證命令只排除該未完成模組及其 `DepthOptimizer.cpp` dependent。
 
 ## 13. 下一步建議
 
@@ -748,7 +935,7 @@ enum class AnalysisQueryType {
 總入口如果要做，應該只是包裝：
 
 ```text
-AnalysisQuery -> dispatch 到既有 runBasicQuery / runDirectConnectivityQuery / runFunctionQuery / runConeQuery / runPathQuery / runDepthQuery
+AnalysisQuery -> dispatch 到既有 runBasicQuery / runDirectConnectivityQuery / runFunctionQuery / runFunctionSearchQuery / runConeQuery / runPathQuery / runDepthQuery
 ```
 
 不能讓 `AnalysisQuery` 自己新增另一套重複語意。

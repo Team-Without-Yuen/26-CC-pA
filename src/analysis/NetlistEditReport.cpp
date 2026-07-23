@@ -1,5 +1,7 @@
 #include "include/core/Netlist.h"
 
+#include <set>
+
 namespace {
 
 bool hasStatsChange(const NetlistDiff& diff) {
@@ -84,14 +86,43 @@ NetlistDiff Netlist::diffStats(const NetlistStats& before, const NetlistStats& a
 }
 
 EditValidationResult Netlist::validateEditResult(const Netlist& before, const Netlist& after) {
-    (void)before;
-
     EditValidationResult result;
     result.structureChecked = true;
     result.structureValid = after.validateStructure();
 
     result.problemAConstraintsChecked = true;
-    result.problemAConstraintsValid = after.validateProblemAConstraints();
+    auto collectProblemAViolations = [](const Netlist& netlist) {
+        std::set<std::string> violations;
+        for (const Net& net : netlist.nets) {
+            if (net.isRemoved || !net.isPO) continue;
+            if (net.driverGateId < 0 && !net.isPI && !net.isConst) {
+                violations.insert("PO net " + net.name + " has no driver.");
+            }
+        }
+        for (const Gate& gate : netlist.gates) {
+            if (gate.type == GateType::DFF && gate.outputNetId < 0) {
+                violations.insert("DFF gate " + gate.instName + " has invalid outputNetId.");
+            }
+        }
+        return violations;
+    };
+
+    const std::set<std::string> beforeViolations = collectProblemAViolations(before);
+    const std::set<std::string> afterViolations = collectProblemAViolations(after);
+    result.problemAConstraintsBaselineValid = beforeViolations.empty();
+    result.problemAConstraintsValid = afterViolations.empty();
+    for (const std::string& violation : afterViolations) {
+        if (beforeViolations.count(violation) == 0) {
+            result.newProblemAConstraintViolations.push_back(violation);
+        }
+    }
+    result.problemAConstraintsRegressed =
+        !result.newProblemAConstraintViolations.empty();
+    if (!result.problemAConstraintsBaselineValid &&
+        !result.problemAConstraintsRegressed) {
+        result.messages.push_back(
+            "The loaded baseline already violates Problem A structural constraints; this edit introduced no new violations.");
+    }
 
     result.equivalenceChecked = false;
     result.functionallyEquivalent = false;
@@ -155,7 +186,7 @@ NetlistEditReport Netlist::buildEditReport(
     report.validation = validateEditResult(before, after);
     report.success =
         report.validation.structureValid &&
-        report.validation.problemAConstraintsValid;
+        !report.validation.problemAConstraintsRegressed;
 
     if (report.success) {
         report.message = report.changed ? "Edit completed." : "Edit completed with no structural count change.";

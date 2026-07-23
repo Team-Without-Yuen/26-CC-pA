@@ -743,11 +743,36 @@ NetlistEditReport Netlist::insertBuffersForSpecificNetWithReport(
     int maxFanout)
 {
     Netlist before = cloneForRollback();
-    GlobalFanoutReport beforeFanout = getGlobalFanoutReport(maxFanout);
+    const std::vector<int> targetNetIds = expandNetToBits(wireName);
+
+    auto summarizeScopedFanout = [this, maxFanout](const std::vector<int>& netIds) {
+        FanoutChange summary;
+        summary.targetFanout = maxFanout;
+        summary.afterMaxFanout = -1;
+        summary.meetsConstraint = !netIds.empty() && maxFanout >= 2;
+
+        std::unordered_set<int> visited;
+        for (int netId : netIds) {
+            if (netId < 0 || netId >= static_cast<int>(nets.size()) ||
+                !visited.insert(netId).second) {
+                continue;
+            }
+
+            const FanoutLoadReport fanout = getFanoutLoadReport(netId);
+            const int loadCount = static_cast<int>(fanout.totalLoadCount);
+            summary.afterMaxFanout = std::max(summary.afterMaxFanout, loadCount);
+            if (loadCount > maxFanout) {
+                summary.meetsConstraint = false;
+                summary.violatingNetNames.push_back(nets[netId].name);
+            }
+        }
+        return summary;
+    };
+
+    const FanoutChange beforeScopedFanout = summarizeScopedFanout(targetNetIds);
 
     BufferInsertionReport insertion = insertBuffersForSpecificNet(wireName, maxFanout);
 
-    GlobalFanoutReport afterFanout = getGlobalFanoutReport(maxFanout);
     NetlistEditReport report = buildEditReport(
         before,
         *this,
@@ -756,15 +781,14 @@ NetlistEditReport Netlist::insertBuffersForSpecificNetWithReport(
 
     report.changed = report.changed || insertion.getTotalInserted() > 0;
 
-    FanoutChange fanoutChange;
-    fanoutChange.beforeMaxFanout = static_cast<int>(beforeFanout.maxFanout);
-    fanoutChange.afterMaxFanout = static_cast<int>(afterFanout.maxFanout);
-    fanoutChange.targetFanout = maxFanout;
-    fanoutChange.improved = beforeFanout.maxFanout > afterFanout.maxFanout;
-    fanoutChange.meetsConstraint = afterFanout.satisfiesLimit;
-    for (const FanoutLoadReport& violation : afterFanout.violatingReports) {
-        fanoutChange.violatingNetNames.push_back(violation.netName);
+    std::vector<int> bufferedTreeNetIds = targetNetIds;
+    for (const BufInsertRecord& record : insertion.records) {
+        bufferedTreeNetIds.push_back(record.outputNetId);
     }
+    FanoutChange fanoutChange = summarizeScopedFanout(bufferedTreeNetIds);
+    fanoutChange.beforeMaxFanout = beforeScopedFanout.afterMaxFanout;
+    fanoutChange.improved =
+        fanoutChange.beforeMaxFanout > fanoutChange.afterMaxFanout;
     report.fanoutChange = fanoutChange;
 
     for (const BufInsertRecord& record : insertion.records) {

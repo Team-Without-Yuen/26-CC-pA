@@ -1,5 +1,7 @@
 # Direct Connectivity Query 使用說明
 
+> 對外請使用 `structure_query <mode> [args]`。本文件中的 `DirectConnectivityQuery` 是 `structure_query` 內部 dispatch 的 C++ API；舊 `conn_query` CLI 僅保留相容性。
+
 這份文件只負責說明 `DirectConnectivityQuery` 怎麼使用。  
 設計背景與分類整理請看：
 

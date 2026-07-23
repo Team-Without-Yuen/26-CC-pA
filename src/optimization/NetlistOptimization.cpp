@@ -186,8 +186,6 @@ NetlistEditReport Netlist::trimDeadLogicWithReport() {
 //  回傳移除的 inverter pair 數量
 // ─────────────────────────────────────────────────────────────────────────────
 int Netlist::collapseBackToBackInverters() {
-    cleanupAllRemovableBuffers();
-
     int collapsed = 0;
     bool changed = true;
 
@@ -832,14 +830,37 @@ bool Netlist::simplifyGateWithConstant(int gateId) {
     Gate& g = gates[gateId];
     if (g.type == GateType::UNKNOWN || g.type == GateType::DFF) return false;
     if (g.outputNetId < 0) return false;
-    if (nets[g.outputNetId].isPO) return false;
 
     int outNetId = g.outputNetId;
     int const0   = getConst0NetId();
     int const1   = getConst1NetId();
 
+    auto rewriteGateInPlace = [&](GateType newType, const std::vector<int>& newInputs) -> bool {
+        if (g.type == newType && g.inputNetIds == newInputs) return false;
+
+        for (int inNetId : g.inputNetIds) {
+            if (inNetId < 0 || inNetId >= (int)nets.size()) continue;
+            auto& loads = nets[inNetId].loadGateIds;
+            loads.erase(std::remove(loads.begin(), loads.end(), gateId), loads.end());
+        }
+
+        g.type = newType;
+        g.inputNetIds = newInputs;
+        for (int inNetId : newInputs) {
+            if (inNetId < 0 || inNetId >= (int)nets.size()) continue;
+            auto& loads = nets[inNetId].loadGateIds;
+            if (std::find(loads.begin(), loads.end(), gateId) == loads.end()) {
+                loads.push_back(gateId);
+            }
+        }
+        return true;
+    };
+
     auto replaceGateWithNet = [&](int srcNetId) -> bool {
         if (srcNetId < 0) return false;
+        if (nets[outNetId].isPO) {
+            return rewriteGateInPlace(GateType::BUF, {srcNetId});
+        }
         replaceAllLoadsOfNet(outNetId, srcNetId);
         for (int inNetId : g.inputNetIds) {
             if (inNetId < 0) continue;
@@ -855,23 +876,7 @@ bool Netlist::simplifyGateWithConstant(int gateId) {
 
     auto insertNotAndReplace = [&](int srcNetId) -> bool {
         if (srcNetId < 0) return false;
-        static int notCounter = 0;
-        notCounter++;
-        for (int inNetId : g.inputNetIds) {
-            if (inNetId < 0) continue;
-            auto& loads = nets[inNetId].loadGateIds;
-            loads.erase(std::remove(loads.begin(), loads.end(), gateId), loads.end());
-        }
-        g.type = GateType::NOT;
-        g.inputNetIds = { srcNetId };
-        nets[srcNetId].loadGateIds.push_back(gateId);
-        return true;
-    };
-
-    // commutative gate helper（和 mergeEquivalentGates 保持一致）
-    auto isCommutative = [](GateType t) {
-        return t == GateType::AND || t == GateType::OR  || t == GateType::XOR ||
-               t == GateType::NAND || t == GateType::NOR || t == GateType::XNOR;
+        return rewriteGateInPlace(GateType::NOT, {srcNetId});
     };
 
     GateType t = g.type;
@@ -885,27 +890,96 @@ bool Netlist::simplifyGateWithConstant(int gateId) {
     }
 
     if (g.inputNetIds.size() < 2) return false;
-    int a = g.inputNetIds[0];
-    int b = g.inputNetIds[1];
-    bool aIs0 = isConst0Net(a), aIs1 = isConst1Net(a);
-    bool bIs0 = isConst0Net(b), bIs1 = isConst1Net(b);
-    if (!aIs0 && !aIs1 && !bIs0 && !bIs1) return false;
 
-    // 正規化：commutative gate 把常數放到 b
-    if (isCommutative(t) && (aIs0 || aIs1)) {
-        std::swap(a, b);
-        std::swap(aIs0, bIs0);
-        std::swap(aIs1, bIs1);
+    std::vector<int> nonConstantInputs;
+    int zeroCount = 0;
+    int oneCount = 0;
+    for (int inputNetId : g.inputNetIds) {
+        if (isConst0Net(inputNetId)) {
+            zeroCount++;
+        } else if (isConst1Net(inputNetId)) {
+            oneCount++;
+        } else {
+            nonConstantInputs.push_back(inputNetId);
+        }
+    }
+    if (zeroCount == 0 && oneCount == 0) return false;
+
+    auto reducePositiveGate = [&](GateType reducedType, int emptyValue) -> bool {
+        if (nonConstantInputs.empty()) {
+            return replaceGateWithNet(emptyValue == 0 ? const0 : const1);
+        }
+        if (nonConstantInputs.size() == 1) {
+            return replaceGateWithNet(nonConstantInputs.front());
+        }
+        return rewriteGateInPlace(reducedType, nonConstantInputs);
+    };
+
+    auto reduceNegativeGate = [&](GateType reducedType, int emptyValue) -> bool {
+        if (nonConstantInputs.empty()) {
+            return replaceGateWithNet(emptyValue == 0 ? const0 : const1);
+        }
+        if (nonConstantInputs.size() == 1) {
+            return insertNotAndReplace(nonConstantInputs.front());
+        }
+        return rewriteGateInPlace(reducedType, nonConstantInputs);
+    };
+
+    if (t == GateType::AND) {
+        if (zeroCount > 0) return replaceGateWithNet(const0);
+        return reducePositiveGate(GateType::AND, 1);
+    }
+    if (t == GateType::OR) {
+        if (oneCount > 0) return replaceGateWithNet(const1);
+        return reducePositiveGate(GateType::OR, 0);
+    }
+    if (t == GateType::NAND) {
+        if (zeroCount > 0) return replaceGateWithNet(const1);
+        return reduceNegativeGate(GateType::NAND, 0);
+    }
+    if (t == GateType::NOR) {
+        if (oneCount > 0) return replaceGateWithNet(const0);
+        return reduceNegativeGate(GateType::NOR, 1);
+    }
+    if (t == GateType::XOR || t == GateType::XNOR) {
+        const bool invertResult =
+            (t == GateType::XNOR) ^ ((oneCount % 2) != 0);
+        if (nonConstantInputs.empty()) {
+            return replaceGateWithNet(invertResult ? const1 : const0);
+        }
+        if (nonConstantInputs.size() == 1) {
+            return invertResult
+                ? insertNotAndReplace(nonConstantInputs.front())
+                : replaceGateWithNet(nonConstantInputs.front());
+        }
+        return rewriteGateInPlace(
+            invertResult ? GateType::XNOR : GateType::XOR,
+            nonConstantInputs);
     }
 
-    if      (t == GateType::AND)  { if (bIs1) return replaceGateWithNet(a);      if (bIs0) return replaceGateWithNet(const0); }
-    else if (t == GateType::OR)   { if (bIs0) return replaceGateWithNet(a);      if (bIs1) return replaceGateWithNet(const1); }
-    else if (t == GateType::XOR)  { if (bIs0) return replaceGateWithNet(a);      if (bIs1) return insertNotAndReplace(a); }
-    else if (t == GateType::NAND) { if (bIs1) return insertNotAndReplace(a);     if (bIs0) return replaceGateWithNet(const1); }
-    else if (t == GateType::NOR)  { if (bIs0) return insertNotAndReplace(a);     if (bIs1) return replaceGateWithNet(const0); }
-    else if (t == GateType::XNOR) { if (bIs0) return insertNotAndReplace(a);     if (bIs1) return replaceGateWithNet(a); }
-
     return false;
+}
+
+bool supportsConstantSimplification(GateType type) {
+    return type == GateType::AND || type == GateType::OR ||
+           type == GateType::NOT || type == GateType::NAND ||
+           type == GateType::NOR || type == GateType::XOR ||
+           type == GateType::XNOR || type == GateType::BUF;
+}
+
+std::vector<int> findConstantSimplificationCandidates(
+    const Netlist& netlist,
+    GateType type,
+    int constValue,
+    int inputCount)
+{
+    std::vector<int> result;
+    for (int gateId : netlist.findGatesWithConstInput(type, constValue, inputCount)) {
+        if (supportsConstantSimplification(netlist.getGate(gateId).type)) {
+            result.push_back(gateId);
+        }
+    }
+    return result;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -2001,25 +2075,79 @@ bool Netlist::validateAfterMutation() const {
 
 // 對所有 gate 執行一輪 constant propagation，回傳化簡的 gate 數
 int Netlist::simplifyAllGatesWithConstants() {
-    int count = 0;
-    for (int i = 0; i < (int)gates.size(); i++)
-        if (simplifyGateWithConstant(i)) count++;
-    return count;
+    return simplifyGatesWithConstants(GateType::UNKNOWN, -1, -1);
 }
 
 NetlistEditReport Netlist::simplifyAllGatesWithConstantsWithReport() {
+    return simplifyGatesWithConstantsWithReport(GateType::UNKNOWN, -1, -1);
+}
+
+int Netlist::simplifyGatesWithConstants(
+    GateType type,
+    int constValue,
+    int inputCount)
+{
+    const std::vector<int> candidates =
+        findConstantSimplificationCandidates(*this, type, constValue, inputCount);
+    int count = 0;
+    for (int gateId : candidates) {
+        if (simplifyGateWithConstant(gateId)) count++;
+    }
+    return count;
+}
+
+NetlistEditReport Netlist::simplifyGatesWithConstantsWithReport(
+    GateType type,
+    int constValue,
+    int inputCount)
+{
     Netlist before = cloneForRollback();
-    int simplified = simplifyAllGatesWithConstants();
-    return finalizeEditReport(
+    ConstantSimplificationSummary summary;
+    summary.targetGateType = type;
+    summary.targetConstValue = constValue;
+    summary.targetInputCount = inputCount;
+    summary.candidateGateIds =
+        findConstantSimplificationCandidates(*this, type, constValue, inputCount);
+    summary.candidateCount = summary.candidateGateIds.size();
+
+    for (int gateId : summary.candidateGateIds) {
+        const std::string gateName =
+            (gateId >= 0 && gateId < (int)gates.size()) ? gates[gateId].instName : "";
+        summary.candidateGateNames.push_back(gateName);
+        if (simplifyGateWithConstant(gateId)) {
+            summary.simplifiedGateIds.push_back(gateId);
+            summary.simplifiedGateNames.push_back(gateName);
+        } else {
+            summary.skippedGateIds.push_back(gateId);
+            summary.skippedGateNames.push_back(gateName);
+        }
+    }
+
+    summary.simplifiedCount = summary.simplifiedGateIds.size();
+    summary.skippedCount = summary.skippedGateIds.size();
+    if (type != GateType::UNKNOWN) {
+        summary.eliminatedTargetGateCount =
+            static_cast<int>(before.getGateCountByType(type)) -
+            static_cast<int>(getGateCountByType(type));
+    }
+
+    NetlistEditReport report = finalizeEditReport(
         *this,
         before,
-        simplified,
-        "simplifyAllGatesWithConstants",
+        static_cast<int>(summary.simplifiedCount),
+        "simplifyGatesWithConstants",
         NetlistEditOperationKind::Simplification,
         "Constant simplification completed.",
         "Constant simplification failed validation and was rolled back.",
         EquivalenceCheckMethod::LocalRewriteRule,
         "Equivalence certified by local constant-folding Boolean identities.");
+    report.constantSimplification = summary;
+    report.changedGateIds = summary.simplifiedGateIds;
+    report.changedGateNames = summary.simplifiedGateNames;
+    if (summary.skippedCount > 0) {
+        report.addWarning("Some matching gates could not be simplified because their structure is unsupported.");
+    }
+    return report;
 }
 
 // 對所有 gate 執行一輪 same-input 化簡，回傳化簡的 gate 數
@@ -2078,6 +2206,49 @@ NetlistEditReport Netlist::runLocalSimplificationFixpointWithReport() {
         "Local simplification fixpoint failed validation and was rolled back.",
         EquivalenceCheckMethod::LocalRewriteRule,
         "Equivalence certified by composing local cleanup and simplification rewrite rules.");
+}
+
+// 反覆執行安全 cleanup pass，直到 fixpoint。
+// 適合對應「trim/prune/remove unused or redundant logic」這類高階 prompt。
+int Netlist::runSafeCleanupFixpoint() {
+    int total = 0;
+    bool changed = true;
+
+    while (changed) {
+        int round = 0;
+        round += runLocalSimplificationFixpoint();
+        round += mergeStructurallyEquivalentGates();
+        round += trimDeadLogic();
+        round += removeDanglingLogic();
+        round += removeUnusedNets();
+
+        total += round;
+        changed = round > 0;
+    }
+
+    return total;
+}
+
+NetlistEditReport Netlist::runSafeCleanupFixpointWithReport() {
+    Netlist before = cloneForRollback();
+
+    int changedCount = runSafeCleanupFixpoint();
+    NetlistEditReport report = finalizeEditReport(
+        *this,
+        before,
+        changedCount,
+        "runSafeCleanupFixpoint",
+        NetlistEditOperationKind::Simplification,
+        "Safe cleanup fixpoint completed.",
+        "Safe cleanup fixpoint failed validation and was rolled back.",
+        EquivalenceCheckMethod::LocalRewriteRule,
+        "Equivalence certified by composing safe local rewrite, structural cleanup, and unreachable-logic removal rules.");
+
+    if (report.success && changedCount == 0) {
+        report.addWarning("No safe cleanup opportunities were found.");
+    }
+
+    return report;
 }
 
 // =============================================================================
