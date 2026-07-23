@@ -1,5 +1,5 @@
 #include "include/core/Netlist.h"
-#include "include/lib/cadical/cadical.hpp"
+#include "include/core/SatTime.h"
 
 #include <algorithm>
 #include <chrono>
