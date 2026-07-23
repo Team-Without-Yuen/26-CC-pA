@@ -114,9 +114,11 @@ public:
 
     // 依 ID 取得 Gate；呼叫者需先確認 id 合法。
     const Gate& getGate(int id) const { return gates[id]; } 
+    Gate& getGateMutable(int id) { return gates[id]; }
 
     // 依 ID 取得 Net；呼叫者需先確認 id 合法。
     const Net& getNet(int id) const { return nets[id]; } 
+    Net&  getNetMutable(int id)  { return nets[id]; }
 
     // 取得 gates vector 的 slot 數；包含 edit 後保留 ID 的 tombstone。
     size_t getGateCount() const { return gates.size(); }

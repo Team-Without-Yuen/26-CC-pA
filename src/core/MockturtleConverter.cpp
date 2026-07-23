@@ -1,5 +1,6 @@
 #include "include/core/MockturtleConverter.h"
 #include <unordered_map>
+#include <iostream>
 #include <vector>
 #include <string>
 
@@ -8,80 +9,75 @@ namespace {
 // 內部輔助函式：針對 Netlist 中的組合邏輯閘進行拓撲排序
 // 採用 Kahn's Algorithm (基於入度計算)，避免遞迴造成的 Stack Overflow
 std::vector<int> ComputeTopologicalOrder(const Netlist& nl) {
+    const int netCount  = (int)nl.getNetCount();
+    const int gateCount = (int)nl.getGateCount();
+
     std::vector<int> topoOrder;
-    std::vector<bool> netVisited(nl.getNetCount(), false);
+    topoOrder.reserve(gateCount);
+    std::vector<bool> netVisited(netCount, false);
 
-    // 1. 標記所有常數 Net 為已就緒 (起點)
-    for (size_t i = 0; i < nl.getNetCount(); ++i) {
-        if (nl.getNet(i).isConst) {
-            netVisited[i] = true;
-        }
-    }
+    // 1~3. 標記常數 / PI / DFF-Q 為已就緒 (sources)
+    for (int i = 0; i < netCount; ++i)
+        if (nl.getNet(i).isConst) netVisited[i] = true;
 
-    // 2. 標記所有 Primary Inputs (PI) 為已就緒 (起點)
-    for (const auto& port : nl.getPrimaryInputs()) {
-        for (int netId : port.netIds) {
-            if (netId >= 0 && netId < (int)nl.getNetCount()) {
-                netVisited[netId] = true;
-            }
-        }
-    }
+    for (const auto& port : nl.getPrimaryInputs())
+        for (int netId : port.netIds)
+            if (netId >= 0 && netId < netCount) netVisited[netId] = true;
 
-    // 3. 標記所有 DFF 的輸出 Net (Q) 為已就緒 (時序電路的起點，視為 Pseudo-PI)
-    for (size_t i = 0; i < nl.getGateCount(); ++i) {
+    for (int i = 0; i < gateCount; ++i) {
         const auto& gate = nl.getGate(i);
-        if (gate.type == GateType::DFF) {
-            if (gate.outputNetId >= 0 && gate.outputNetId < (int)nl.getNetCount()) {
-                netVisited[gate.outputNetId] = true;
-            }
-        }
+        if (gate.type == GateType::DFF &&
+            gate.outputNetId >= 0 && gate.outputNetId < netCount)
+            netVisited[gate.outputNetId] = true;
     }
 
-    // 4. 計算各個組合邏輯閘的入度 (即尚未就緒的 input net 數量)
-    std::vector<int> inDegree(nl.getGateCount(), 0);
+    // 4. 入度 = 「相異」且尚未就緒的 input net 數
+    //    以相異 net 計數，不再受 loadGateIds 是否去重影響 (tied-input 安全)
+    std::vector<int> inDegree(gateCount, 0);
     std::vector<int> queue;
-    queue.reserve(nl.getGateCount());
+    queue.reserve(gateCount);
 
-    for (size_t i = 0; i < nl.getGateCount(); ++i) {
-        const auto& gate = nl.getGate(i);
-        if (gate.type == GateType::DFF) continue; // DFF 不參與組合邏輯的排序
+    for (int g = 0; g < gateCount; ++g) {
+        const auto& gate = nl.getGate(g);
+        if (gate.type == GateType::DFF) continue;
 
-        int needed = 0;
-        for (int netId : gate.inputNetIds) {
-            if (netId >= 0 && !netVisited[netId]) {
-                needed++;
-            }
-        }
-        inDegree[i] = needed;
-        if (needed == 0) {
-            queue.push_back(i);
-        }
+        std::unordered_set<int> pending;                 // 去重
+        for (int netId : gate.inputNetIds)
+            if (netId >= 0 && netId < netCount && !netVisited[netId])
+                pending.insert(netId);
+
+        inDegree[g] = (int)pending.size();
+        if (inDegree[g] == 0) queue.push_back(g);
     }
 
-    // 5. 拓撲排序核心：依序彈出入度為 0 的邏輯閘，並更新受其驅動的下一級邏輯閘
+    // 5. Kahn 主迴圈:同一條 net 對同一顆 gate 只 decrement 一次
     size_t head = 0;
     while (head < queue.size()) {
         int gateId = queue[head++];
         topoOrder.push_back(gateId);
 
-        const auto& gate = nl.getGate(gateId);
-        int outNetId = gate.outputNetId;
-        if (outNetId >= 0 && outNetId < (int)nl.getNetCount()) {
-            netVisited[outNetId] = true;
-            const auto& outNet = nl.getNet(outNetId);
-            for (int nextGateId : outNet.loadGateIds) {
-                if (nextGateId >= 0 && nextGateId < (int)nl.getGateCount()) {
-                    const auto& nextGate = nl.getGate(nextGateId);
-                    if (nextGate.type == GateType::DFF) continue; // DFF 輸入端為 Pseudo-PO，不阻塞排序
+        int outNetId = nl.getGate(gateId).outputNetId;
+        if (outNetId < 0 || outNetId >= netCount) continue;
+        if (netVisited[outNetId]) continue;              // 防呆:避免重複釋放
+        netVisited[outNetId] = true;
 
-                    inDegree[nextGateId]--;
-                    if (inDegree[nextGateId] == 0) {
-                        queue.push_back(nextGateId);
-                    }
-                }
-            }
+        std::unordered_set<int> firedGate;               // 「這條 net」內對 gate 去重
+        for (int nextGateId : nl.getNet(outNetId).loadGateIds) {
+            if (nextGateId < 0 || nextGateId >= gateCount) continue;
+            if (!firedGate.insert(nextGateId).second) continue;   // tied-input:已扣過
+            if (nl.getGate(nextGateId).type == GateType::DFF) continue;
+            if (--inDegree[nextGateId] == 0) queue.push_back(nextGateId);
         }
     }
+
+    // 診斷:偵測未能排序的組合閘 (輸入懸空 / 組合迴路)
+    int combCount = 0;
+    for (int g = 0; g < gateCount; ++g)
+        if (nl.getGate(g).type != GateType::DFF) ++combCount;
+    if ((int)topoOrder.size() != combCount)
+        std::cerr << "[TopoSort][WARN] " << (combCount - (int)topoOrder.size())
+                  << " combinational gate(s) unresolved "
+                     "(undriven input or combinational loop).\n";
 
     return topoOrder;
 }
@@ -130,14 +126,30 @@ Ntk DoNetlistConversion(const Netlist& nl) {
         }
     }
 
+    // 安全查表:net 未建立 signal 時明確警告並退回 const0，取代靜默 operator[]
+    auto sigOf = [&](const Gate& gate, int idx) -> signal_t {
+        if (idx >= (int)gate.inputNetIds.size()) return ntk.get_constant(false);
+        int netId = gate.inputNetIds[idx];
+        if (netId < 0) return ntk.get_constant(false);           // 明確懸空
+
+        auto it = netToSignal.find(netId);
+        if (it == netToSignal.end()) {
+            std::cerr << "[NetlistToNtk][WARN] gate '" << gate.instName
+                      << "' input net " << netId
+                      << " unresolved; tying to const0.\n";
+            return ntk.get_constant(false);
+        }
+        return it->second;
+    };
+
     // 4. 依照拓撲順序建立組合邏輯閘
     std::vector<int> topoOrder = ComputeTopologicalOrder(nl);
     for (int gateId : topoOrder) {
         const auto& gate = nl.getGate(gateId);
         
         // 安全地獲取 2-input 訊號；若未連接線路則預設接至常數 0
-        signal_t a = (gate.inputNetIds.size() > 0 && gate.inputNetIds[0] != -1) ? netToSignal[gate.inputNetIds[0]] : ntk.get_constant(false);
-        signal_t b = (gate.inputNetIds.size() > 1 && gate.inputNetIds[1] != -1) ? netToSignal[gate.inputNetIds[1]] : ntk.get_constant(false);
+        signal_t a = sigOf(gate, 0);
+        signal_t b = sigOf(gate, 1);
 
         signal_t outSig;
         // Mockturtle 具備統一介面，即使是 AIG，呼叫 create_xor 亦會自動在底層拆解為 AND+Inverter
@@ -326,6 +338,17 @@ Netlist DoMockturtleToNetlist(const Ntk& ntk, const Netlist& old_nl) {
         }
     }
 
+    // 安全查表:node 尚未對應到 net 時警告並退回 const0
+    auto netOfNode = [&](auto node) -> int {
+        int netId = nodeToNet[node];
+        if (netId < 0) {
+            /*std::cerr << "[NtkToNetlist][WARN] node " << (uint64_t)node
+                      << " referenced before assignment; using const0.\n";*/
+            return const0_net;
+        }
+        return netId;
+    };
+
     // Step 2: 遍歷 Mockturtle 內部邏輯並重建 Gates 
     int gate_counter = 0;
     int net_counter = 0;
@@ -336,7 +359,7 @@ Netlist DoMockturtleToNetlist(const Ntk& ntk, const Netlist& old_nl) {
 
         int input_nets[2];
         for (int i = 0; i < 2; ++i) {
-            int base_net_id = nodeToNet[ntk.get_node(fanins[i])];
+            int base_net_id = netOfNode(ntk.get_node(fanins[i]));   // 前面已改的安全查表
             if (ntk.is_complemented(fanins[i])) {
                 int not_gate_id = new_nl.addGate(getNewGateName(gate_counter++), GateType::NOT);
                 int not_out_net = new_nl.addNet(getNewNetName(net_counter++));
@@ -383,7 +406,7 @@ Netlist DoMockturtleToNetlist(const Ntk& ntk, const Netlist& old_nl) {
             continue; 
         }
 
-        int internal_drive_net = nodeToNet[ntk.get_node(po_signal)];
+        int internal_drive_net = netOfNode(ntk.get_node(po_signal));
 
         if (ntk.is_complemented(po_signal)) {
             // 反相的情況，使用 NOT Gate 橋接
@@ -403,7 +426,7 @@ Netlist DoMockturtleToNetlist(const Ntk& ntk, const Netlist& old_nl) {
     // 3b. 處理 DFF 輸入端
     for (int new_dff_id : new_dff_ids) {
         auto pseudo_po_signal = ntk.po_at(po_index++);
-        int internal_drive_net = nodeToNet[ntk.get_node(pseudo_po_signal)];
+        int internal_drive_net = netOfNode(ntk.get_node(pseudo_po_signal));
 
         if (ntk.is_complemented(pseudo_po_signal)) {
             int not_gate_id = new_nl.addGate(getNewGateName(gate_counter++), GateType::NOT);
@@ -416,6 +439,11 @@ Netlist DoMockturtleToNetlist(const Ntk& ntk, const Netlist& old_nl) {
         }
     }
 
+    // === NOT dedup pass ===
+    // 把「輸入同一條 net」的多顆 NOT 合併成一顆：
+    //   保留每條來源 net 的第一顆 NOT，其餘 NOT 的 fanout 全部改接到那顆
+    mergeDuplicateInverters(new_nl);
+
     return new_nl;
 }
 
@@ -427,4 +455,87 @@ Netlist XagToNetlist(const mockturtle::xag_network& xag, const Netlist& old_nl) 
 
 Netlist AigToNetlist(const mockturtle::aig_network& aig, const Netlist& old_nl) {
     return DoMockturtleToNetlist<mockturtle::aig_network>(aig, old_nl);
+}
+
+// 合併輸入同一條 net 的重複 NOT：保留第一顆，其餘 fanout 改接、標死。
+// 在完整 netlist 上做，安全不成環；只省 area、不動深度。
+int mergeDuplicateInverters(Netlist& netlist) {
+    std::unordered_map<int, int> canonicalInvOut;  // src_net -> 代表 NOT 的輸出 net
+    int merged = 0;
+
+    for (int g = 0; g < (int)netlist.getGateCount(); ++g) {
+        Gate& gate = netlist.getGateMutable(g);
+        if (gate.type != GateType::NOT) continue;
+        if (gate.inputNetIds.empty() || gate.inputNetIds[0] < 0) continue;
+        if (gate.outputNetId < 0) continue;
+
+        int src    = gate.inputNetIds[0];
+        int outNet = gate.outputNetId;
+
+        // 保護：輸出是 PO net 就不動這顆（廢掉會讓 PO 失去 driver）
+        // 這裡使用 const getter 即可，因為只是讀取 isPO
+        if (netlist.getNet(outNet).isPO) continue;
+
+        auto it = canonicalInvOut.find(src);
+        if (it == canonicalInvOut.end()) {
+            canonicalInvOut[src] = outNet;   // 第一顆，當代表
+            continue;
+        }
+
+        int canonOut = it->second;
+        if (canonOut == outNet) continue;    // 防呆
+
+        redirectNetLoads(netlist, outNet, canonOut);  // 這顆的下游改吃代表的輸出 (呼叫 Optimizer 內部的 helper)
+        detachGate(netlist, g);                       // 標死並斷線
+        ++merged;
+    }
+    return merged;
+}
+
+// 把所有「吃 fromNet 當輸入」的閘，改成吃 toNet；並搬移 loadGateIds。
+void redirectNetLoads(Netlist& netlist, int fromNet, int toNet) {
+    if (fromNet < 0 || toNet < 0 ||
+        fromNet >= (int)netlist.getNetCount() || toNet >= (int)netlist.getNetCount()) return;
+
+    // 透過 public API 取得可修改的 (Mutable) Net 參考
+    Net& fromNetObj = netlist.getNetMutable(fromNet);
+    Net& toNetObj = netlist.getNetMutable(toNet);
+
+    for (int gid : fromNetObj.loadGateIds) {
+        if (gid < 0 || gid >= (int)netlist.getGateCount()) continue;
+        
+        // 透過 public API 取得可修改的 Gate 參考
+        Gate& g = netlist.getGateMutable(gid);
+        if (g.type == GateType::UNKNOWN) continue;
+
+        for (auto& in : g.inputNetIds) {
+            if (in == fromNet) in = toNet;
+        }
+
+        toNetObj.loadGateIds.push_back(gid);
+    }
+    fromNetObj.loadGateIds.clear();
+}
+
+// 把一顆閘標死並從其 fanin 的 loadGateIds 斷開。
+void detachGate(Netlist& netlist, int gid) {
+    if (gid < 0 || gid >= (int)netlist.getGateCount()) return;
+    
+    // 透過 public API 取得可修改的 Gate 參考
+    Gate& g = netlist.getGateMutable(gid);
+
+    for (int in : g.inputNetIds) {
+        if (in < 0 || in >= (int)netlist.getNetCount()) continue;
+        
+        // 透過 public API 取得前級 Net 並移除負載
+        Net& n = netlist.getNetMutable(in);
+        auto& L = n.loadGateIds;
+        L.erase(std::remove(L.begin(), L.end(), gid), L.end());
+    }
+    
+    if (g.outputNetId >= 0 && g.outputNetId < (int)netlist.getNetCount()) {
+        netlist.getNetMutable(g.outputNetId).driverGateId = -1;
+    }
+
+    g.type = GateType::UNKNOWN;
 }

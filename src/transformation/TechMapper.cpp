@@ -1,6 +1,6 @@
 #include "include/core/Netlist.h"
 #include "include/core/TechMapper.h"
-#include "include/lib/cadical/cadical.hpp"
+#include "include/core/SatTime.h"
 #include <string>
 #include <iostream>
 #include <functional>
@@ -631,7 +631,8 @@ bool TechMapper::executeMappingPass(Netlist& netlist,
                                     const std::vector<TechMapRule>& validRules, 
                                     TechMapReport& report, 
                                     bool verbose,
-                                    bool allowLogicDuplication) {
+                                    bool allowLogicDuplication,
+                                    const std::unordered_set<int>* strictContainment) {
     if (validRules.empty()) return false;
     bool actualChangesMade = false;
     bool isChanged;
@@ -671,6 +672,16 @@ bool TechMapper::executeMappingPass(Netlist& netlist,
                     // 合法性驗證 (檢查 Fanout)
                     if (isValidSubgraph(netlist, ctx, rootId, allowLogicDuplication)) {
                         
+                        // 嚴格範圍檢查：匹配到的整個子圖必須落在指定範圍內。
+                        // 否則替換會動到範圍外的閘（cone 題會破壞受限基底）。
+                        if (strictContainment != nullptr) {
+                            bool escaped = false;
+                            for (int gid : ctx.matchedGates) {
+                                if (strictContainment->count(gid) == 0) { escaped = true; break; }
+                            }
+                            if (escaped) continue;   // 跨界，換下一條規則
+                        }
+
                         // 由於 Duplication 可能導致有些 Gate 被保留，
                         // 將 report 傳入 applyRule，在真正拔除時才 +1，數字才會精準！
                         if (verbose) {
@@ -2206,8 +2217,412 @@ std::shared_ptr<PatternNode> TechMapper::findMinimumDepthPattern(const std::vect
     return nullptr;
 }
 
+// 全域電路優化引擎 (Pattern Optimization Engine)
+// 針對給定的目標形狀 (LHS) 進行自動化的「面積」或「深度」化簡。
+TechMapReport TechMapper::optimizePattern(Netlist& netlist,
+                                          std::shared_ptr<PatternNode> lhsTarget,
+                                          OptimizationGoal goal,
+                                          const std::unordered_set<int>& targetCone, 
+                                          bool verbose,
+                                          int maxAreaOverhead, 
+                                          int maxDepthConstraint,                    
+                                          const std::vector<GateType>& allowedTypes, 
+                                          const std::vector<GateType>& bannedTypes) {
+    TechMapReport finalReport;
+
+    if (!lhsTarget || targetCone.empty()) {
+        finalReport.status = TechMapStatus::ERROR_INVALID_CONSTRAINTS;
+        finalReport.message = "Failed: lhsTarget is null or targetCone is empty.";
+        return finalReport;
+    }
+
+    if (verbose) {
+        std::cout << "=================================================\n";
+        std::cout << "[Optimize Engine] Goal: " << (goal == OptimizationGoal::AREA ? "AREA" : "DEPTH") << " Reduction\n";
+        if (maxDepthConstraint != -1) {
+            std::cout << "[Optimize Engine] Constraint: Max Depth <= " << maxDepthConstraint << "\n";
+        }
+    }
+
+    // 分析目標 LHS，萃取真值表與當前成本
+    int N = countPrimaryInputs(lhsTarget); 
+
+    TechMapReport simReport;
+    std::vector<bool> truthTable = simulatePattern(lhsTarget, N, simReport, false);
+
+    if (simReport.status != TechMapStatus::SUCCESS || truthTable.empty()) {
+        finalReport.status = TechMapStatus::ERROR_SIMULATION_FAILED;
+        // 將真正的錯誤原因印出來
+        finalReport.message = "Simulation aborted: " + simReport.message; 
+        if (verbose) std::cout << "[Error] " << finalReport.message << " (N = " << N << ")\n";
+        return finalReport;
+    }
+
+    // 計算目前的基準代價 (Baseline Cost)
+    auto lhsData = countGates(lhsTarget); 
+    int currentArea = lhsData.second;
+    int currentDepth = calculateDepth(lhsTarget); 
+    int currentCost = (goal == OptimizationGoal::AREA) ? currentArea : currentDepth;
+
+    // 產生真值表 Hash
+    std::string targetHash = generateTruthTableHash(truthTable);
+
+    if (verbose) {
+        std::cout << "[Info] Extracted Truth Table Hash: [" << targetHash << "] (N = " << N << ")\n";
+        std::cout << "[Info] Baseline " << (goal == OptimizationGoal::AREA ? "Area" : "Depth") 
+                  << " = " << currentCost << " gates/levels.\n";
+    }
+
+    std::string ruleName = "OptRule_" + (goal == OptimizationGoal::AREA ? std::string("A_") : std::string("D_")) + targetHash;
+
+    // 用來追蹤目前找到的最佳解 (初始為無效規則)
+    bool ruleExistsAndIsOptimal = false;
+    int bestCostSoFar = currentCost; 
+    // 預設一條「空轉」規則，代表尚未找到任何比現狀更好的方案
+    TechMapRule bestRule("Baseline_No_Op", RuleSource::USER_CUSTOM, targetHash, lhsTarget, lhsTarget); 
+    bestRule.targetCounts = lhsData.first;
+    bestRule.allowedCounts = lhsData.first; // 允許的等於目標，等於沒換
+
+    std::unordered_set<GateType> allowedSet(allowedTypes.begin(), allowedTypes.end());
+    std::unordered_set<GateType> bannedSet(bannedTypes.begin(), bannedTypes.end());
+
+    // 檢查快取 / 查找表 (防污染與分級檢查)
+    for (const auto& rule : rules) {
+        // 條件 1：真值表必須一模一樣 (邏輯等價)
+        if (rule.truthTableHash == targetHash) {
+            
+            // 檢查這條規則的 replacementPattern 是否使用了違規的 Gate
+            bool isValidGateMix = true;
+            auto rhsGateCounts = countGates(rule.replacementPattern).first; // 取得該規則使用的閘種類與數量
+            
+            for (const auto& pair : rhsGateCounts) {
+                GateType t = pair.first;
+                // 如果有白名單，且這個閘不在白名單內 -> 違規
+                if (!allowedSet.empty() && allowedSet.find(t) == allowedSet.end()) {
+                    isValidGateMix = false; break;
+                }
+                // 如果這個閘在黑名單內 -> 違規
+                if (bannedSet.find(t) != bannedSet.end()) {
+                    isValidGateMix = false; break;
+                }
+            }
+
+            // 如果這條快取規則違反了當前的 Gate 限制，直接跳過不採用
+            if (!isValidGateMix) continue;
+
+            // 檢查深度約束 (DCAR 防護機制)
+            int ruleDepth = calculateDepth(rule.replacementPattern);
+            if (maxDepthConstraint != -1 && ruleDepth > maxDepthConstraint) {
+                if (verbose) std::cout << "[Info] Skipping rule " << rule.name << " due to depth constraint violation (" << ruleDepth << " > " << maxDepthConstraint << ").\n";
+                continue;
+            }
+
+            // 計算這條規則的實際 Cost
+            int ruleCost = (goal == OptimizationGoal::AREA) ? rule.addedGateCount : ruleDepth;
+            
+            // 條件 2a：這條規則已經是經過認證的「絕對最佳解」
+            if ((goal == OptimizationGoal::AREA && rule.source == RuleSource::OPTIMIZED_AREA) ||
+                (goal == OptimizationGoal::DEPTH && rule.source == RuleSource::OPTIMIZED_DEPTH)) {
+                
+                ruleExistsAndIsOptimal = true;
+                bestRule = rule;
+                bestCostSoFar = ruleCost;
+                if (verbose) std::cout << "[Info] Hit verified OPTIMAL cache: " << rule.name << " (Cost: " << ruleCost << ").\n";
+                break; // 找到了絕對極限，直接跳出迴圈下班！
+            }
+            
+            // 條件 2b：這是一條標準庫的次佳解，如果比目前的電路小，先當作備胎！
+            if (rule.source == RuleSource::STANDARD_LIBRARY || rule.source == RuleSource::AUTO_LEARNED_SAT) {
+                if (ruleCost < bestCostSoFar) {
+                    bestCostSoFar = ruleCost;
+                    bestRule = rule;
+                    if (verbose) std::cout << "[Info] Found better baseline in cache: " << rule.name << " (Cost: " << ruleCost << ").\n";
+                    // 不 break，因為我們還要看有沒有更完美的 OPTIMIZED 規則
+                }
+            }
+        }
+    }
+
+    // 啟動 SAT 引擎尋找絕對最佳解
+    if (!ruleExistsAndIsOptimal && bestCostSoFar > 1) {
+        if (verbose) std::cout << "[Info] No verified optimal rule found. Firing up EXACT SYNTHESIS engine to beat Cost < " << bestCostSoFar << "...\n";
+
+        TechMapReport optReport;
+        std::shared_ptr<PatternNode> bestRhs = nullptr;
+
+        // 核心呼叫：尋找嚴格小於 bestCostSoFar 的結構
+        if (goal == OptimizationGoal::AREA) {
+            bestRhs = findMinimumAreaPattern(truthTable, N, bestCostSoFar, optReport, verbose, maxDepthConstraint, allowedTypes, bannedTypes);
+        } else {
+            bestRhs = findMinimumDepthPattern(truthTable, N, bestCostSoFar, currentArea, optReport, verbose, maxAreaOverhead, allowedTypes, bannedTypes);
+        }
+
+        if (bestRhs && optReport.status == TechMapStatus::SUCCESS) {
+            // SAT 成功找到了突破極限的解！
+            auto rhsData = countGates(bestRhs);
+            RuleSource newSource = (goal == OptimizationGoal::AREA) ? RuleSource::OPTIMIZED_AREA : RuleSource::OPTIMIZED_DEPTH;
+            
+            // 建立並註冊這條黃金規則 (使用新的建構子)
+            TechMapRule newRule(ruleName, newSource, targetHash, lhsTarget, bestRhs);
+            newRule.targetCounts = lhsData.first;
+            newRule.allowedCounts = rhsData.first;
+            newRule.removedGateCount = lhsData.second;
+            newRule.addedGateCount = rhsData.second;
+            
+            rules.push_back(newRule);
+            bestRule = newRule;
+            
+            if (verbose) std::cout << "[Success] Exact synthesis found a smaller pattern! Registered as: " << ruleName << "\n";
+        } 
+        else if (bestRule.replacementPattern != nullptr) {
+            // SAT 引擎找不到更小的 (或 Timeout 了)，但我們在查找表中剛好有找到比原本還小的標準庫規則！
+            if (verbose) std::cout << "[Info] SAT couldn't beat the baseline. Using the best known cached rule instead.\n";
+        } 
+        else {
+            // SAT 找不到，且快取也沒有比原本更好的解 (代表原電路已經是極限了)
+            finalReport.status = TechMapStatus::ERROR_UNSAT;
+            finalReport.message = "Optimization Failed: The given LHS is already mathematically optimal (or SAT timed out).";
+            if (verbose) std::cout << "[Failed] " << finalReport.message << "\n";
+            return finalReport;
+        }
+    }
+
+    // 執行電路替換
+    int finalCost = (goal == OptimizationGoal::AREA) ? bestRule.addedGateCount : calculateDepth(bestRule.replacementPattern);
+    
+    if (finalCost >= currentCost) {
+        finalReport.status = TechMapStatus::SUCCESS;
+        finalReport.message = "Optimization complete: The original circuit is already mathematically optimal. No changes made.";
+        if (verbose) {
+            std::cout << "[Success] " << finalReport.message << "\n";
+            std::cout << "=================================================\n";
+        }
+        return finalReport;
+    }
+
+    if (verbose) std::cout << "[Info] Applying rule [" << bestRule.name << "] (Cost: " << finalCost << ") to the netlist...\n";
+
+    return applySpecificRule(netlist, 
+                             bestRule, 
+                             targetCone, 
+                             verbose);
+}
+
+// 筛选「反相吸收」规则。
+std::vector<TechMapRule> TechMapper::getInverterAbsorptionRules(
+        const std::map<GateType, int>& rhsAllowed) const {
+
+    std::vector<TechMapRule> picked;
+
+    for (const auto& rule : rules) {
+        // (1) 只收标准库规则
+        if (rule.source != RuleSource::STANDARD_LIBRARY) continue;
+
+        // (3) 深度必须严格减少（吸收 = 把 NOT+闸 的 2 层压成 1 层）
+        if (rule.replacementDepth >= rule.targetDepth) continue;
+
+        // (4) 面积不增（addedGateCount - removedGateCount <= 0）
+        if (rule.getCostDelta() > 0) continue;
+
+        // (2) RHS 只能用允许且非禁的闸：逐一检查 RHS 用到的每种闸
+        bool rhsOk = true;
+        for (const auto& kv : rule.allowedCounts) {   // allowedCounts = RHS 各 gate 数量
+            GateType t = kv.first;
+            auto it = rhsAllowed.find(t);
+            if (it == rhsAllowed.end()) {   // RHS 用到一个不在允许集里的闸 → 淘汰
+                rhsOk = false;
+                break;
+            }
+            // rhsAllowed 的 value 用 -1 表无限制；这里只要「存在于允许集」即可
+        }
+        if (!rhsOk) continue;
+
+        picked.push_back(rule);
+    }
+
+    // 排序：深度收益优先（replacementDepth - targetDepth 越负越好），面积其次
+    std::sort(picked.begin(), picked.end(), [](const TechMapRule& a, const TechMapRule& b) {
+        int da = a.replacementDepth - a.targetDepth;
+        int db = b.replacementDepth - b.targetDepth;
+        if (da != db) return da < db;                 // 深度降越多越前面
+        return a.getCostDelta() < b.getCostDelta();   // 深度相同看面积
+    });
+
+    return picked;
+}
+
+// 依 allowed/banned 組出「RHS 可用的積木庫」
+std::map<GateType, int> TechMapper::buildRhsAllowedSet(
+        const std::vector<GateType>& allowedTypes,
+        const std::vector<GateType>& bannedTypes) const {
+    std::map<GateType, int> rhsAllowed;
+    std::vector<GateType> allComb = {GateType::AND, GateType::OR, GateType::NAND, GateType::NOR,
+                                     GateType::NOT, GateType::BUF, GateType::XOR, GateType::XNOR};
+    std::unordered_set<GateType> bannedSet(bannedTypes.begin(), bannedTypes.end());
+    std::unordered_set<GateType> allowedSet(allowedTypes.begin(), allowedTypes.end());
+    for (GateType t : allComb) {
+        bool ok = allowedSet.empty() ? true : (allowedSet.count(t) > 0);  // 空白名單 = 全允許
+        if (bannedSet.count(t)) ok = false;
+        if (ok) rhsAllowed[t] = -1;
+    }
+    return rhsAllowed;
+}
+
+// 用标准库双向规则把 NOT+复合闸 合并成 NAND/NOR/XNOR。
+TechMapReport TechMapper::absorbInverters(Netlist& netlist,
+                                          const std::vector<GateType>& allowedTypes,
+                                          const std::vector<GateType>& bannedTypes,
+                                          bool verbose) {
+    TechMapReport report;
+
+    // 组 RHS 允许集：allowed 里、且不在 banned 里的闸
+    // 关键：banned 的闸（尤其阶段 4 刚消灭的 AND/XOR）必须排除，防止吸收把它合并回来
+    std::map<GateType, int> rhsAllowed = buildRhsAllowedSet(allowedTypes, bannedTypes);
+
+    std::vector<TechMapRule> absorbRules = getInverterAbsorptionRules(rhsAllowed);
+
+    if (absorbRules.empty()) {
+        report.status = TechMapStatus::ERROR_RULE_NOT_FOUND;
+        report.message = "No inverter-absorption rules available under current basis.";
+        return report;
+    }
+
+    // 全域扫描、不允许 logic duplication
+    bool changed = executeMappingPass(netlist, nullptr, absorbRules, report, verbose, false, nullptr);
+
+    report.status = changed ? TechMapStatus::SUCCESS : TechMapStatus::ERROR_SIMULATION_FAILED;
+    return report;
+}
+
+// 範圍限定的反相吸收：只在 scopeGates 內部進行 NOT+複合閘 的合併。
+//   scopeGates 同時作為「root 候選範圍」與「子圖嚴格包含範圍」，
+//   確保絕不動到範圍外的閘（cone 題用來隔離 cone 內 / cone 外）。
+TechMapReport TechMapper::absorbInvertersOnGateSet(
+        Netlist& netlist,
+        const std::unordered_set<int>& scopeGates,
+        const std::vector<GateType>& allowedTypes,
+        const std::vector<GateType>& bannedTypes,
+        bool verbose) {
+
+    TechMapReport report;
+
+    if (scopeGates.empty()) {
+        report.status = TechMapStatus::SUCCESS;   // 沒東西可做，不算失敗
+        report.message = "Empty scope; nothing to absorb.";
+        return report;
+    }
+
+    std::map<GateType, int> rhsAllowed = buildRhsAllowedSet(allowedTypes, bannedTypes);
+    std::vector<TechMapRule> absorbRules = getInverterAbsorptionRules(rhsAllowed);
+
+    if (absorbRules.empty()) {
+        // 這個範圍的基底下沒有可用的吸收規則（例如只允許 NOR+NOT）
+        report.status = TechMapStatus::SUCCESS;   // 不是錯誤，只是沒得吸
+        report.message = "No absorption rules available under this basis.";
+        return report;
+    }
+
+    bool changed = executeMappingPass(
+        netlist,
+        &scopeGates,                       // root 候選限定在範圍內
+        absorbRules,
+        report,
+        verbose,
+        /*allowLogicDuplication=*/false,   // 吸收不複製邏輯
+        /*strictContainment=*/&scopeGates  // 子圖也必須完全落在範圍內
+    );
+
+    report.status = TechMapStatus::SUCCESS;   // 有沒有吸到都算成功（機會型優化）
+    report.message = changed ? "Absorption applied." : "No absorbable pattern in scope.";
+    return report;
+}
+
+// 直接對「指定的 gate id 集合」做基底強制，不重算 cone。
+// cone 範圍由 ConeReport.gateIds 給定，避免與內部 cone 演算法不一致。
+TechMapReport TechMapper::convertToBasisOnGateSet(Netlist& netlist,
+                                                  const std::unordered_set<int>& coneGates,
+                                                  const std::vector<GateType>& allowedTypes,
+                                                  const std::vector<GateType>& bannedTypes,
+                                                  bool verbose) {
+    TechMapReport finalReport;
+    finalReport.status = TechMapStatus::SUCCESS;
+    finalReport.message = "Cone basis conversion succeeded.";
+
+    std::vector<GateType> allComb = {
+        GateType::AND, GateType::OR, GateType::NAND, GateType::NOR,
+        GateType::NOT, GateType::BUF, GateType::XOR, GateType::XNOR
+    };
+
+    // 1. 決定要消滅的目標集合（黑名單 + 不在白名單內的）
+    std::unordered_set<GateType> targetsToRemoveSet(bannedTypes.begin(), bannedTypes.end());
+    if (!allowedTypes.empty()) {
+        std::unordered_set<GateType> allowedSet(allowedTypes.begin(), allowedTypes.end());
+        for (GateType t : allComb)
+            if (!allowedSet.count(t)) targetsToRemoveSet.insert(t);
+    }
+
+    // 2. 允許的積木庫（給替換引擎的 RHS 約束）
+    std::map<GateType, int> allowedConstraints;
+    for (GateType t : allComb)
+        if (!targetsToRemoveSet.count(t)) allowedConstraints[t] = -1;
+
+    if (allowedConstraints.empty()) {
+        finalReport.status = TechMapStatus::ERROR_INVALID_CONSTRAINTS;
+        finalReport.message = "All gates banned; no basis.";
+        return finalReport;
+    }
+
+    std::vector<RuleSource> strictSources = { RuleSource::STANDARD_LIBRARY };
+
+    // 3. 逐一消滅每種非法閘，scope 固定為傳入的 coneGates
+    for (GateType targetType : targetsToRemoveSet) {
+
+        // 電路裡根本沒有這種閘 → 本來就合規，跳過，不要誤判失敗
+        if (netlist.getGateCountByType(targetType) == 0) continue;
+
+        std::map<GateType, int> targetConstraints = {{targetType, 1}};
+
+        // 只在 cone 內還有這種閘時才處理（避免無謂呼叫）
+        // 注意：getGateCountByType 是全域計數，這裡改成掃 coneGates 判斷
+        bool existsInCone = false;
+        for (int gid : coneGates) {
+            if (gid >= 0 && gid < (int)netlist.getGateCount() &&
+                netlist.getGate(gid).type == targetType) { existsInCone = true; break; }
+        }
+        if (!existsInCone) continue;
+
+        if (verbose)
+            std::cout << "[Cone Basis] eliminating type " << (int)targetType << " in cone...\n";
+
+        // 直接把 coneGates 當 scope 傳給 core，不重算 cone
+        TechMapReport stepReport = mapTechnologyCore(
+            netlist, targetConstraints, allowedConstraints,
+            &coneGates,               // ← scopeGates 直接用傳入的集合
+            strictSources, verbose);
+
+        // 檢查 cone 內是否還殘留該類型（用 coneGates 掃，不用全域計數）
+        bool stillExists = false;
+        for (int gid : coneGates) {
+            if (gid >= 0 && gid < (int)netlist.getGateCount() &&
+                netlist.getGate(gid).type == targetType) { stillExists = true; break; }
+        }
+        if (stepReport.status != TechMapStatus::SUCCESS || stillExists) {
+            finalReport.status = (stepReport.status != TechMapStatus::SUCCESS)
+                               ? stepReport.status : TechMapStatus::ERROR_NOT_EQUIVALENT;
+            finalReport.message = "Cone basis conversion failed: type "
+                                + std::to_string((int)targetType) + " remains.";
+            return finalReport;
+        }
+
+        for (const auto& p : stepReport.removedCountByType) finalReport.removedCountByType[p.first] += p.second;
+        for (const auto& p : stepReport.addedCountByType)   finalReport.addedCountByType[p.first]   += p.second;
+    }
+
+    return finalReport;
+}
+
 //-----------------------------------------------------------------------------------------------------------------------------
-// 高階 API (並非直接給LLM使用)
+// 高階 API
 
 // 全域/區域 邏輯閘轉換引擎 (Technology Mapping / Basis Conversion)
 TechMapReport TechMapper::convertToBasis(Netlist& netlist,  
@@ -2268,6 +2683,10 @@ TechMapReport TechMapper::convertToBasis(Netlist& netlist,
 
     // 3. 迴圈依序消滅每一種不合法的 Gate
     for (GateType targetType : targetsToRemove) {
+
+        // 電路裡根本沒有這種閘 → 本來就合規，跳過，不要誤判失敗
+        if (netlist.getGateCountByType(targetType) == 0) continue;
+        
         if (countGateTypeInScope(netlist, scope, name, targetType) == 0) {
             continue;
         }
@@ -2559,195 +2978,4 @@ NetlistEditReport TechMapper::customMapTechnologyWithReport(
     TechMapReport techReport = customMapTechnology(
         netlist, targetConstraints, allowedConstraints, scope, name, verbose);
     return finalizeTechMapEditReport(netlist, before, techReport, "customMapTechnology");
-}
-
-// 全域電路優化引擎 (Pattern Optimization Engine)
-// 針對給定的目標形狀 (LHS) 進行自動化的「面積」或「深度」化簡。
-TechMapReport TechMapper::optimizePattern(Netlist& netlist,
-                                          std::shared_ptr<PatternNode> lhsTarget,
-                                          OptimizationGoal goal,
-                                          const std::unordered_set<int>& targetCone, 
-                                          bool verbose,
-                                          int maxAreaOverhead, 
-                                          int maxDepthConstraint,                    
-                                          const std::vector<GateType>& allowedTypes, 
-                                          const std::vector<GateType>& bannedTypes) {
-    TechMapReport finalReport;
-
-    if (!lhsTarget || targetCone.empty()) {
-        finalReport.status = TechMapStatus::ERROR_INVALID_CONSTRAINTS;
-        finalReport.message = "Failed: lhsTarget is null or targetCone is empty.";
-        return finalReport;
-    }
-
-    if (verbose) {
-        std::cout << "=================================================\n";
-        std::cout << "[Optimize Engine] Goal: " << (goal == OptimizationGoal::AREA ? "AREA" : "DEPTH") << " Reduction\n";
-        if (maxDepthConstraint != -1) {
-            std::cout << "[Optimize Engine] Constraint: Max Depth <= " << maxDepthConstraint << "\n";
-        }
-    }
-
-    // 分析目標 LHS，萃取真值表與當前成本
-    int N = countPrimaryInputs(lhsTarget); 
-
-    TechMapReport simReport;
-    std::vector<bool> truthTable = simulatePattern(lhsTarget, N, simReport, false);
-
-    if (simReport.status != TechMapStatus::SUCCESS || truthTable.empty()) {
-        finalReport.status = TechMapStatus::ERROR_SIMULATION_FAILED;
-        // 將真正的錯誤原因印出來
-        finalReport.message = "Simulation aborted: " + simReport.message; 
-        if (verbose) std::cout << "[Error] " << finalReport.message << " (N = " << N << ")\n";
-        return finalReport;
-    }
-
-    // 計算目前的基準代價 (Baseline Cost)
-    auto lhsData = countGates(lhsTarget); 
-    int currentArea = lhsData.second;
-    int currentDepth = calculateDepth(lhsTarget); 
-    int currentCost = (goal == OptimizationGoal::AREA) ? currentArea : currentDepth;
-
-    // 產生真值表 Hash
-    std::string targetHash = generateTruthTableHash(truthTable);
-
-    if (verbose) {
-        std::cout << "[Info] Extracted Truth Table Hash: [" << targetHash << "] (N = " << N << ")\n";
-        std::cout << "[Info] Baseline " << (goal == OptimizationGoal::AREA ? "Area" : "Depth") 
-                  << " = " << currentCost << " gates/levels.\n";
-    }
-
-    std::string ruleName = "OptRule_" + (goal == OptimizationGoal::AREA ? std::string("A_") : std::string("D_")) + targetHash;
-
-    // 用來追蹤目前找到的最佳解 (初始為無效規則)
-    bool ruleExistsAndIsOptimal = false;
-    int bestCostSoFar = currentCost; 
-    // 預設一條「空轉」規則，代表尚未找到任何比現狀更好的方案
-    TechMapRule bestRule("Baseline_No_Op", RuleSource::USER_CUSTOM, targetHash, lhsTarget, lhsTarget); 
-    bestRule.targetCounts = lhsData.first;
-    bestRule.allowedCounts = lhsData.first; // 允許的等於目標，等於沒換
-
-    std::unordered_set<GateType> allowedSet(allowedTypes.begin(), allowedTypes.end());
-    std::unordered_set<GateType> bannedSet(bannedTypes.begin(), bannedTypes.end());
-
-    // 檢查快取 / 查找表 (防污染與分級檢查)
-    for (const auto& rule : rules) {
-        // 條件 1：真值表必須一模一樣 (邏輯等價)
-        if (rule.truthTableHash == targetHash) {
-            
-            // 檢查這條規則的 replacementPattern 是否使用了違規的 Gate
-            bool isValidGateMix = true;
-            auto rhsGateCounts = countGates(rule.replacementPattern).first; // 取得該規則使用的閘種類與數量
-            
-            for (const auto& pair : rhsGateCounts) {
-                GateType t = pair.first;
-                // 如果有白名單，且這個閘不在白名單內 -> 違規
-                if (!allowedSet.empty() && allowedSet.find(t) == allowedSet.end()) {
-                    isValidGateMix = false; break;
-                }
-                // 如果這個閘在黑名單內 -> 違規
-                if (bannedSet.find(t) != bannedSet.end()) {
-                    isValidGateMix = false; break;
-                }
-            }
-
-            // 如果這條快取規則違反了當前的 Gate 限制，直接跳過不採用
-            if (!isValidGateMix) continue;
-
-            // 檢查深度約束 (DCAR 防護機制)
-            int ruleDepth = calculateDepth(rule.replacementPattern);
-            if (maxDepthConstraint != -1 && ruleDepth > maxDepthConstraint) {
-                if (verbose) std::cout << "[Info] Skipping rule " << rule.name << " due to depth constraint violation (" << ruleDepth << " > " << maxDepthConstraint << ").\n";
-                continue;
-            }
-
-            // 計算這條規則的實際 Cost
-            int ruleCost = (goal == OptimizationGoal::AREA) ? rule.addedGateCount : ruleDepth;
-            
-            // 條件 2a：這條規則已經是經過認證的「絕對最佳解」
-            if ((goal == OptimizationGoal::AREA && rule.source == RuleSource::OPTIMIZED_AREA) ||
-                (goal == OptimizationGoal::DEPTH && rule.source == RuleSource::OPTIMIZED_DEPTH)) {
-                
-                ruleExistsAndIsOptimal = true;
-                bestRule = rule;
-                bestCostSoFar = ruleCost;
-                if (verbose) std::cout << "[Info] Hit verified OPTIMAL cache: " << rule.name << " (Cost: " << ruleCost << ").\n";
-                break; // 找到了絕對極限，直接跳出迴圈下班！
-            }
-            
-            // 條件 2b：這是一條標準庫的次佳解，如果比目前的電路小，先當作備胎！
-            if (rule.source == RuleSource::STANDARD_LIBRARY || rule.source == RuleSource::AUTO_LEARNED_SAT) {
-                if (ruleCost < bestCostSoFar) {
-                    bestCostSoFar = ruleCost;
-                    bestRule = rule;
-                    if (verbose) std::cout << "[Info] Found better baseline in cache: " << rule.name << " (Cost: " << ruleCost << ").\n";
-                    // 不 break，因為我們還要看有沒有更完美的 OPTIMIZED 規則
-                }
-            }
-        }
-    }
-
-    // 啟動 SAT 引擎尋找絕對最佳解
-    if (!ruleExistsAndIsOptimal && bestCostSoFar > 1) {
-        if (verbose) std::cout << "[Info] No verified optimal rule found. Firing up EXACT SYNTHESIS engine to beat Cost < " << bestCostSoFar << "...\n";
-
-        TechMapReport optReport;
-        std::shared_ptr<PatternNode> bestRhs = nullptr;
-
-        // 核心呼叫：尋找嚴格小於 bestCostSoFar 的結構
-        if (goal == OptimizationGoal::AREA) {
-            bestRhs = findMinimumAreaPattern(truthTable, N, bestCostSoFar, optReport, verbose, maxDepthConstraint, allowedTypes, bannedTypes);
-        } else {
-            bestRhs = findMinimumDepthPattern(truthTable, N, bestCostSoFar, currentArea, optReport, verbose, maxAreaOverhead, allowedTypes, bannedTypes);
-        }
-
-        if (bestRhs && optReport.status == TechMapStatus::SUCCESS) {
-            // SAT 成功找到了突破極限的解！
-            auto rhsData = countGates(bestRhs);
-            RuleSource newSource = (goal == OptimizationGoal::AREA) ? RuleSource::OPTIMIZED_AREA : RuleSource::OPTIMIZED_DEPTH;
-            
-            // 建立並註冊這條黃金規則 (使用新的建構子)
-            TechMapRule newRule(ruleName, newSource, targetHash, lhsTarget, bestRhs);
-            newRule.targetCounts = lhsData.first;
-            newRule.allowedCounts = rhsData.first;
-            newRule.removedGateCount = lhsData.second;
-            newRule.addedGateCount = rhsData.second;
-            
-            rules.push_back(newRule);
-            bestRule = newRule;
-            
-            if (verbose) std::cout << "[Success] Exact synthesis found a smaller pattern! Registered as: " << ruleName << "\n";
-        } 
-        else if (bestRule.replacementPattern != nullptr) {
-            // SAT 引擎找不到更小的 (或 Timeout 了)，但我們在查找表中剛好有找到比原本還小的標準庫規則！
-            if (verbose) std::cout << "[Info] SAT couldn't beat the baseline. Using the best known cached rule instead.\n";
-        } 
-        else {
-            // SAT 找不到，且快取也沒有比原本更好的解 (代表原電路已經是極限了)
-            finalReport.status = TechMapStatus::ERROR_UNSAT;
-            finalReport.message = "Optimization Failed: The given LHS is already mathematically optimal (or SAT timed out).";
-            if (verbose) std::cout << "[Failed] " << finalReport.message << "\n";
-            return finalReport;
-        }
-    }
-
-    // 執行電路替換
-    int finalCost = (goal == OptimizationGoal::AREA) ? bestRule.addedGateCount : calculateDepth(bestRule.replacementPattern);
-    
-    if (finalCost >= currentCost) {
-        finalReport.status = TechMapStatus::SUCCESS;
-        finalReport.message = "Optimization complete: The original circuit is already mathematically optimal. No changes made.";
-        if (verbose) {
-            std::cout << "[Success] " << finalReport.message << "\n";
-            std::cout << "=================================================\n";
-        }
-        return finalReport;
-    }
-
-    if (verbose) std::cout << "[Info] Applying rule [" << bestRule.name << "] (Cost: " << finalCost << ") to the netlist...\n";
-
-    return applySpecificRule(netlist, 
-                             bestRule, 
-                             targetCone, 
-                             verbose);
 }

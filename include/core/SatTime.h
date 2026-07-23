@@ -1,6 +1,6 @@
 #pragma once
 
-#include "include/lib/cadical/cadical.hpp"
+#include "lib/cadical/src/cadical.hpp"
 #include <chrono>
 #include <string>
 #include <vector>

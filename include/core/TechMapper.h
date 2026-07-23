@@ -58,11 +58,13 @@ struct TechMapRule {
     std::shared_ptr<PatternNode> targetPattern;  
     std::map<GateType, int> targetCounts;  // 例: {OR: 3}
     int removedGateCount;                  // 總計拔掉幾顆閘
+    int targetDepth;       // LHS 树深度
 
     // 右邊 (RHS)：替換上去的新形狀
     std::shared_ptr<PatternNode> replacementPattern; 
     std::map<GateType, int> allowedCounts; // 例: {NOR: 2, NAND: 1}
-    int addedGateCount;                      
+    int addedGateCount;      
+    int replacementDepth;  // RHS 树深度
     
     // 建構子
     TechMapRule(std::string ruleName, 
@@ -81,10 +83,12 @@ struct TechMapRule {
         // 走訪並分析左邊 (Target) 的特徵
         std::unordered_set<PatternNode*> visitedTarget;
         analyzePattern(targetPattern, visitedTarget, targetCounts, removedGateCount);
+        targetDepth = computePatternDepth(targetPattern);
 
         // 走訪並分析右邊 (Replacement) 的特徵
         std::unordered_set<PatternNode*> visitedReplacement;
         analyzePattern(replacementPattern, visitedReplacement, allowedCounts, addedGateCount);
+        replacementDepth = computePatternDepth(replacementPattern);
     }
 
     // 計算這條規則套用後，電路總閘數的變化 (負數代表變好)
@@ -112,6 +116,14 @@ private:
         for (const auto& input : node->inputs) {
             analyzePattern(input, visited, gateCounts, totalCount);
         }
+    }
+
+    int computePatternDepth(const std::shared_ptr<PatternNode>& node) {
+        if (!node || node->nodeType != NodeType::GATE) return 0;   // PI/CONST = 0
+        int mx = 0;
+        for (const auto& in : node->inputs)
+            mx = std::max(mx, computePatternDepth(in));
+        return mx + 1;                                             // 这颗闸 +1
     }
 };
 
@@ -428,7 +440,8 @@ public:
                             const std::vector<TechMapRule>& validRules, 
                             TechMapReport& report, 
                             bool verbose,
-                            bool allowLogicDuplication = false);
+                            bool allowLogicDuplication = false,
+                            const std::unordered_set<int>* strictContainment = nullptr);
 
     // 底層的實作引擎
     TechMapReport mapTechnologyCore(Netlist& netlist, 
@@ -562,6 +575,57 @@ public:
                                                          const std::vector<GateType>& allowedTypes, 
                                                          const std::vector<GateType>& bannedTypes);
 
+    // 全域電路優化引擎 (Pattern Optimization Engine)
+    // 針對給定的目標形狀 (LHS) 進行自動化的「面積」或「深度」化簡。
+    // targetCone         : 圖形匹配與替換的掃描錐體範圍 (Gate ID 集合)
+    // maxAreaOverhead    : 針對深度優化時，容許的額外面積極限 (預設為 0，代表由引擎動態決定)
+    // maxDepthConstraint : 深度優化的最大層數限制 (預設 -1，代表不設限)
+    // allowedTypes       : RHS 允許使用的閘類型白名單 (例如 AIG 模式傳入 {AND, NOT})
+    // bannedTypes        : RHS 嚴格禁止使用的閘類型黑名單
+    TechMapReport optimizePattern(Netlist& netlist,
+                                  std::shared_ptr<PatternNode> lhsTarget,
+                                  OptimizationGoal goal,
+                                  const std::unordered_set<int>& targetCone,
+                                  bool verbose = false,
+                                  int maxAreaOverhead = 0,
+                                  int maxDepthConstraint= -1,
+                                  const std::vector<GateType>& allowedTypes = {},
+                                  const std::vector<GateType>& bannedTypes = {});
+
+    // 筛选「反相吸收」规则。
+    //   条件全部满足才收：
+    //   (1) 只用 STANDARD_LIBRARY（不碰 user custom / SAT 学来的规则）
+    //   (2) RHS 只用「允许且非禁」的闸（rhsAllowed 控制，防止合并回被禁闸）
+    //   (3) 深度严格减少（replacementDepth < targetDepth）——这才是吸收的意义
+    //   (4) 面积不增（getCostDelta() <= 0）——吸收顺便省面积，绝不为深度爆面积
+    //   排序键：深度收益优先（越负越好），面积其次。
+    std::vector<TechMapRule> getInverterAbsorptionRules(const std::map<GateType, int>& rhsAllowed) const;
+
+    // 依 allowed/banned 組出「RHS 可用的積木庫」
+    std::map<GateType, int> buildRhsAllowedSet(const std::vector<GateType>& allowedTypes,
+                                               const std::vector<GateType>& bannedTypes) const;
+
+    // 用标准库双向规则把 NOT+复合闸 合并成 NAND/NOR/XNOR。
+    TechMapReport absorbInverters(Netlist& netlist,
+                                  const std::vector<GateType>& allowedTypes,
+                                  const std::vector<GateType>& bannedTypes, bool verbose);
+
+    // 範圍限定的反相吸收：只在 scopeGates 內部進行 NOT+複合閘 的合併。
+    //   scopeGates 同時作為「root 候選範圍」與「子圖嚴格包含範圍」，
+    //   確保絕不動到範圍外的閘（cone 題用來隔離 cone 內 / cone 外）。
+    TechMapReport absorbInvertersOnGateSet(Netlist& netlist,
+                                           const std::unordered_set<int>& scopeGates,
+                                           const std::vector<GateType>& allowedTypes,
+                                           const std::vector<GateType>& bannedTypes, bool verbose);
+
+    // 直接對「指定的 gate id 集合」做基底強制，不重算 cone。
+    // cone 範圍由 ConeReport.gateIds 給定，避免與內部 cone 演算法不一致。                              
+    TechMapReport convertToBasisOnGateSet(Netlist& netlist,
+                                          const std::unordered_set<int>& coneGates,
+                                          const std::vector<GateType>& allowedTypes,
+                                          const std::vector<GateType>& bannedTypes, 
+                                          bool verbose);
+
     //----------------------------------------------------------------------------------------------------------------------------------------------------
     // 高階 API
 
@@ -628,27 +692,4 @@ public:
                                                 TargetScope scope,
                                                 const std::string& name,
                                                 bool verbose);
-
-
-    // 全域電路優化引擎 (Pattern Optimization Engine)
-    // 針對給定的目標形狀 (LHS) 進行自動化的「面積」或「深度」化簡。
-    // netlist            : 要進行操作與替換的實體電路網表 (Netlist)
-    // lhsTarget          : 欲進行化簡的目標局部電路形狀 (Abstract Syntax Tree, PatternNode 結構)
-    // goal               : 優化的目標方向。支援 OptimizationGoal::AREA (最小化閘數) 或 OptimizationGoal::DEPTH (層數)
-    // targetCone         : 圖形匹配與替換的掃描錐體範圍 (Gate ID 集合)
-    // verbose            : 是否印出詳細的推論過程與優化日誌 (true 為開啟)
-    // maxAreaOverhead    : 針對深度優化時，容許的額外面積極限 (預設為 0，代表由引擎動態決定)
-    // maxDepthConstraint : 深度優化的最大層數限制 (預設 -1，代表不設限)
-    // allowedTypes       : RHS 允許使用的閘類型白名單 (例如 AIG 模式傳入 {AND, NOT})
-    // bannedTypes        : RHS 嚴格禁止使用的閘類型黑名單
-    // 回傳值              : TechMapReport (包含優化執行的結果狀態、增減的邏輯閘數量以及詳細訊息)
-    TechMapReport optimizePattern(Netlist& netlist,
-                                  std::shared_ptr<PatternNode> lhsTarget,
-                                  OptimizationGoal goal,
-                                  const std::unordered_set<int>& targetCone,
-                                  bool verbose = false,
-                                  int maxAreaOverhead = 0,
-                                  int maxDepthConstraint= -1,
-                                  const std::vector<GateType>& allowedTypes = {},
-                                  const std::vector<GateType>& bannedTypes = {});
 };
