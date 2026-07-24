@@ -131,7 +131,9 @@ VerilogWriter
 | Header | 負責內容 |
 | --- | --- |
 | `include/core/NetlistTypes.h` | `GateType`、`Net`、`Port`、`Gate`、`ConeResult` |
-| `include/core/NetlistQueries.h` | Basic / Connectivity / Function / Cone query/report types |
+| `include/core/NetlistQueries.h` | Basic / Connectivity / Function / Sequential Pattern / Cone query/report types |
+| `include/core/FunctionalPatternEngine.h` | 內部 functional pattern matcher、role binding、proof 與 search result |
+| `include/core/BitParallelSimulation.h` | Function Search 與 Functional Pattern 共用的 simulation signature/result 介面 |
 | `include/core/PathTypes.h` | Path / Depth query/report/path endpoint types |
 | `include/core/OptimizationTypes.h` | Optimization result / candidate types |
 | `include/core/Netlist.h` | 主要 `Netlist` class facade 與 API 宣告 |
@@ -151,8 +153,9 @@ VerilogWriter
 | --- | --- |
 | `src/analysis/BasicAnalysis.cpp` | ID/name/type/count/port/basic structural issue |
 | `src/analysis/ConnectivityAnalysis.cpp` | net driver/load、gate input/output、fanin/fanout |
-| `src/analysis/FunctionAnalysis.cpp` | CaDiCaL SAT、equivalence、functional dependence、symmetry、always 0/1、truth status、simulation-filtered Function Search |
-| `src/analysis/SequentialPatternAnalysis.cpp` | DFF D-input canonical enable/hold pattern 與 sequential semantic report |
+| `src/analysis/FunctionAnalysis.cpp` | CaDiCaL SAT、equivalence、functional dependence、symmetry、always 0/1、truth status、共用 bit-parallel simulator、simulation-filtered Function Search |
+| `src/analysis/SequentialPatternAnalysis.cpp` | DFF D-input canonical fast path、functional match adapter 與 sequential semantic report |
+| `src/analysis/FunctionalPatternEngine.cpp` | technology-independent candidate search、simulation-aware ranking、matcher registry 與 per-DFF hybrid SAT session |
 | `src/analysis/WholeDesignEquivalence.cpp` | current/original batched SAT、PO 與 DFF.D boundary equivalence |
 | `src/analysis/GraphAnalysis.cpp` | directed PI-to-PO cut 與 source-target articulation analysis |
 | `src/analysis/ConeAnalysis.cpp` | transitive fanin/fanout cone、cone-local longest/shortest path |
@@ -165,12 +168,15 @@ VerilogWriter
 | File | 負責內容 |
 | --- | --- |
 | `src/core/Netlist.cpp` | construction API、name/id lookup、基本 accessor |
+| `src/core/MockturtleConverter.cpp` | Netlist 與 mockturtle AIG/XAG adapter、sequential boundary 重建 |
 | `src/io/VerilogReader.cpp` | restricted Verilog parser frontend |
 | `src/io/VerilogWriter.cpp` | restricted Verilog writer |
 | `src/transformation/NetlistTransformation.cpp` | graph mutation primitive 與 buffer insertion |
 | `src/transformation/EditFlow.cpp` | public edit validation/dispatch、transaction report 與 rollback policy |
-| `src/transformation/TechMapper.cpp` | basis conversion 與 gate-type replacement |
+| `src/transformation/TechMapper.cpp` | basis conversion、gate-type replacement、strict-scope mapping 與 inverter absorption |
 | `src/optimization/NetlistOptimization.cpp` | cleanup/simplification pass、validation/rollback helper |
+| `src/optimization/DepthOptimizer.cpp` | internal critical-path candidate generator；使用 Problem A depth metric |
+| `src/optimization/OptimizationFlow.cpp` | high-level optimization transaction；basis/depth/equivalence validation 與 commit/rollback |
 
 詳細 ownership 請看：
 
@@ -278,11 +284,16 @@ runDepthQuery
 Windows UCRT64 編譯方式：
 
 ```powershell
+make libs
 $sources = Get-ChildItem -Path src -Recurse -Filter *.cpp |
     Where-Object { $_.Name -notin @('MockturtleConverter.cpp', 'DepthOptimizer.cpp') } |
     ForEach-Object { $_.FullName }
-g++ -std=c++20 -I. -Ilib "mini test/tester.cpp" $sources `
-    -L./include/lib/cadical/win/ucrt64 -lcadical -o "mini test/tester.exe"
+g++ -std=c++20 -I. -Iinclude -Iinclude/lib `
+    -Iinclude/lib/cadical/src -Iinclude/lib/abc/src `
+    "mini test/tester.cpp" $sources `
+    -Wl,--start-group ./include/lib/abc/libabc.a `
+    ./include/lib/cadical/build/libcadical.a -Wl,--end-group `
+    -lpthread -lm -o "mini test/tester.exe"
 & ".\mini test\tester.exe"
 ```
 
@@ -299,9 +310,10 @@ Whole-design equivalence mini test: 9 passed, 0 failed.
 注意：
 
 ```text
-目前環境請使用 include/lib/cadical/win/ucrt64/libcadical.a。
-include/lib/cadical/win/mingw64/libcadical.a 在目前 g++ runtime 下可能出現 stat64i32 linker error。
-mockturtle headers 尚未配置時，focused analysis build 應暫時排除 MockturtleConverter.cpp 與 DepthOptimizer.cpp。
+新版 Makefile 會依 UCRT64 / MINGW64 / Linux 自動從原始碼建立
+include/lib/cadical/build/libcadical.a 與 include/lib/abc/libabc.a。
+第一次先執行 make libs；後續保留 .o / .d 與兩個 .a 可避免重新完整編譯。
+focused analysis build 可排除 MockturtleConverter.cpp 與 DepthOptimizer.cpp 以縮短測試時間。
 ```
 
 ## 10. Project Spec Documents

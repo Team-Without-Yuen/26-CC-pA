@@ -1,7 +1,11 @@
 #include "include/core/Netlist.h"
+#include "include/core/BitParallelSimulation.h"
+#include "include/core/FunctionalPatternEngine.h"
 
 #include <algorithm>
 #include <array>
+#include <chrono>
+#include <optional>
 #include <unordered_set>
 
 namespace {
@@ -17,6 +21,12 @@ struct BranchRef {
     int gateId = -1;
     std::array<LiteralRef, 2> literals;
 };
+
+using Clock = std::chrono::steady_clock;
+
+double elapsedSeconds(const Clock::time_point& start) {
+    return std::chrono::duration<double>(Clock::now() - start).count();
+}
 
 bool isActiveNet(const Netlist& netlist, int netId) {
     return netlist.isValidNetId(netId) && !netlist.getNet(netId).isRemoved;
@@ -189,7 +199,9 @@ bool matchBranchPair(const Netlist& netlist,
             pattern.dataBranchNetName = netlist.getNet(pattern.dataBranchNetId).name;
             pattern.feedbackNetName = netlist.getNet(qNetId).name;
             pattern.activeLevel = 1 - holdValue;
+            pattern.holdLevel = holdValue;
             pattern.dataInverted = data.inverted;
+            pattern.dataFunctionResolved = true;
             pattern.structuralMatch = true;
             pattern.confirmed = true;
             pattern.message = "Canonical feedback multiplexer detected.";
@@ -353,16 +365,108 @@ void mergeSatEvidence(DffInputPattern& pattern,
     }
 }
 
+const FunctionalPatternRoleBinding* findRoleBinding(
+    const FunctionalPatternMatch& match,
+    FunctionalPatternRole role) {
+    for (const FunctionalPatternRoleBinding& binding : match.bindings) {
+        if (binding.role == role) {
+            return &binding;
+        }
+    }
+    return nullptr;
+}
+
+DffInputPattern makeFunctionalMuxPattern(
+    const Netlist& netlist,
+    const FunctionalPatternMatch& match) {
+    DffInputPattern pattern;
+    pattern.kind = DffInputPatternKind::MuxHold;
+    pattern.detectionMethod = SequentialPatternDetectionMethod::FunctionalCofactorSat;
+    pattern.activeLevel = match.activeLevel;
+    pattern.holdLevel = match.holdLevel;
+    pattern.dataFunctionResolved = match.dataFunctionResolved;
+    pattern.dataSearchAttempted = match.dataSearchAttempted;
+    pattern.dataSearchComplete = match.dataSearchComplete;
+    pattern.dataSearchTimedOut = match.dataSearchTimedOut;
+    pattern.dataCandidateCount = match.dataCandidateCount;
+    pattern.dataCandidatesExamined = match.dataCandidatesExamined;
+    pattern.holdFunctionallyProven = match.proven;
+    pattern.loadFunctionallyProven = match.dataFunctionResolved;
+    pattern.confirmed = match.proven;
+    pattern.solverRan = std::any_of(
+        match.proofs.begin(),
+        match.proofs.end(),
+        [](const FunctionalPatternProofResult& proof) { return proof.solverRan; });
+    pattern.solverTimedOut = std::any_of(
+        match.proofs.begin(),
+        match.proofs.end(),
+        [](const FunctionalPatternProofResult& proof) { return proof.timedOut; });
+    pattern.solverUnknown = std::any_of(
+        match.proofs.begin(),
+        match.proofs.end(),
+        [](const FunctionalPatternProofResult& proof) { return proof.unknown; });
+
+    if (const FunctionalPatternRoleBinding* binding =
+            findRoleBinding(match, FunctionalPatternRole::Control)) {
+        pattern.enableNetId = binding->netId;
+        pattern.enableNetName = binding->netName;
+    }
+    if (const FunctionalPatternRoleBinding* binding =
+            findRoleBinding(match, FunctionalPatternRole::Feedback)) {
+        pattern.feedbackNetId = binding->netId;
+        pattern.feedbackNetName = binding->netName;
+    }
+    if (const FunctionalPatternRoleBinding* binding =
+            findRoleBinding(match, FunctionalPatternRole::Data)) {
+        pattern.dataNetId = binding->netId;
+        pattern.dataNetName = binding->netName;
+        pattern.dataBranchNetId = binding->netId;
+        pattern.dataBranchNetName = binding->netName;
+        pattern.dataInverted = binding->inverted;
+    }
+
+    for (int gateId : match.evidenceGateIds) {
+        appendUnique(pattern.evidenceGateIds, gateId);
+        if (isActiveGate(netlist, gateId)) {
+            pattern.evidenceGateNames.push_back(netlist.getGate(gateId).instName);
+        }
+    }
+    pattern.solverStatus = pattern.dataFunctionResolved
+        ? "PROVEN"
+        : "HOLD_PROVEN_DATA_UNRESOLVED";
+    pattern.message = match.message;
+    return pattern;
+}
+
 } // namespace
 
 Netlist::SequentialPatternReportSet Netlist::runSequentialPatternQuery(
     const SequentialPatternQuery& query) const {
+    const Clock::time_point queryStart = Clock::now();
     SequentialPatternReportSet result;
     result.type = query.type;
 
     if (query.type != SequentialPatternQueryType::DffEnableHold) {
         result.status = "UNSUPPORTED_QUERY";
         result.message = "Unsupported sequential pattern query type.";
+        result.complete = false;
+        result.elapsedSeconds = elapsedSeconds(queryStart);
+        return result;
+    }
+    if (query.enableFunctionalFallback &&
+        (query.maxFunctionalCandidates == 0 ||
+         query.maxFunctionalMatchesPerDff == 0 ||
+         (query.resolveFunctionalDataNets &&
+          query.maxFunctionalDataCandidatesPerMatch == 0) ||
+         (query.enableFunctionalSimulationFilter &&
+          (query.functionalSimulationPatternCount == 0 ||
+           query.functionalSimulationPatternCount > 4096)) ||
+         query.functionalPerDffTimeLimitSeconds <= 0.0 ||
+         query.functionalTimeLimitSeconds <= 0.0)) {
+        result.status = "INVALID_ARGUMENT";
+        result.message = "Functional fallback requires positive candidate, match, and time limits.";
+        result.complete = false;
+        result.elapsedSeconds = elapsedSeconds(queryStart);
         return result;
     }
 
@@ -374,6 +478,8 @@ Netlist::SequentialPatternReportSet Netlist::runSequentialPatternQuery(
         if (!isDffGate(gateId) || isGateRemoved(gateId)) {
             result.status = "DFF_NOT_FOUND";
             result.message = "DFF not found: " + query.dffName;
+            result.complete = false;
+            result.elapsedSeconds = elapsedSeconds(queryStart);
             return result;
         }
         targets.push_back(query.dffName);
@@ -384,10 +490,13 @@ Netlist::SequentialPatternReportSet Netlist::runSequentialPatternQuery(
         result.ok = true;
         result.status = "NO_DFF";
         result.message = "The design contains no active DFF instances.";
+        result.elapsedSeconds = elapsedSeconds(queryStart);
         return result;
     }
 
     bool partial = false;
+    FunctionalPatternEngine functionalEngine;
+    std::optional<BitParallelSimulationResult> functionalSimulation;
     for (const std::string& dffName : targets) {
         DffInputPatternReport report;
         report.dffName = dffName;
@@ -436,6 +545,97 @@ Netlist::SequentialPatternReportSet Netlist::runSequentialPatternQuery(
             report.patterns.push_back(std::move(muxPattern));
         }
 
+        const bool canonicalConfirmed = std::any_of(
+            report.patterns.begin(),
+            report.patterns.end(),
+            [](const DffInputPattern& pattern) { return pattern.confirmed; });
+        if (query.enableFunctionalFallback && !canonicalConfirmed) {
+            report.functionalFallbackAttempted = true;
+            if (query.enableFunctionalSimulationFilter && !functionalSimulation.has_value()) {
+                const Clock::time_point simulationStart = Clock::now();
+                functionalSimulation.emplace(simulateNetlistBitParallel(
+                    *this,
+                    query.functionalSimulationPatternCount));
+                result.functionalSimulationPatternCount =
+                    query.functionalSimulationPatternCount;
+                result.functionalSimulationSeconds =
+                    elapsedSeconds(simulationStart);
+            }
+            const double remaining =
+                query.functionalTimeLimitSeconds - elapsedSeconds(queryStart);
+            if (remaining <= 0.0) {
+                report.functionalFallbackComplete = false;
+                report.functionalFallbackTimedOut = true;
+                result.timedOut = true;
+                partial = true;
+            } else {
+                FunctionalPatternSearchOptions options;
+                options.maxCandidates = query.maxFunctionalCandidates;
+                options.maxMatches = query.maxFunctionalMatchesPerDff;
+                options.findAllMatches = query.findAllFunctionalMatches;
+                options.resolveDataNets = query.resolveFunctionalDataNets;
+                options.maxDataCandidatesPerMatch =
+                    query.maxFunctionalDataCandidatesPerMatch;
+                options.timeLimitSeconds = std::min(
+                    remaining,
+                    query.functionalPerDffTimeLimitSeconds);
+                FunctionalPatternContext context = buildSequentialPatternContext(
+                    *this,
+                    report.dffGateId,
+                    report.dNetId,
+                    report.qNetId);
+                if (functionalSimulation.has_value()) {
+                    context.simulation = &functionalSimulation.value();
+                }
+                const FunctionalPatternSearchResult search = functionalEngine.search(
+                    FunctionalPatternKind::MuxHold,
+                    *this,
+                    context,
+                    options);
+
+                report.functionalFallbackComplete = search.complete;
+                report.functionalFallbackTimedOut = search.timedOut;
+                report.functionalCandidateLimitReached = search.candidateLimitReached;
+                report.functionalCandidateCount = search.candidateCount;
+                report.functionalSearchableCandidateCount =
+                    search.searchableCandidateCount;
+                report.functionalCandidatesExamined = search.candidatesExamined;
+                report.functionalUnexaminedCandidateCount =
+                    search.unexaminedCandidateCount;
+                report.functionalInconclusiveCandidateCount =
+                    search.inconclusiveCandidateCount;
+                report.functionalSimulationCandidateCount =
+                    search.simulationCandidateCount;
+                report.functionalSimulationRejectedCandidateCount =
+                    search.simulationRejectedCandidateCount;
+                report.functionalSatCheckCount = search.satCheckCount;
+                result.functionalCandidateCount += search.candidateCount;
+                result.functionalSearchableCandidateCount +=
+                    search.searchableCandidateCount;
+                result.functionalCandidatesExamined += search.candidatesExamined;
+                result.functionalUnexaminedCandidateCount +=
+                    search.unexaminedCandidateCount;
+                result.functionalInconclusiveCandidateCount +=
+                    search.inconclusiveCandidateCount;
+                result.functionalSimulationCandidateCount +=
+                    search.simulationCandidateCount;
+                result.functionalSimulationRejectedCandidateCount +=
+                    search.simulationRejectedCandidateCount;
+                result.functionalSatCheckCount += search.satCheckCount;
+                result.functionalMatchCount += search.matches.size();
+                result.timedOut = result.timedOut || search.timedOut;
+                if (!search.complete || search.timedOut) {
+                    partial = true;
+                }
+                if (!search.matches.empty()) {
+                    report.qFeedbackObserved = true;
+                }
+                for (const FunctionalPatternMatch& match : search.matches) {
+                    report.patterns.push_back(makeFunctionalMuxPattern(*this, match));
+                }
+            }
+        }
+
         if (query.includeAndGatedCandidates && report.patterns.empty()) {
             DffInputPattern andCandidate = makeAndCandidate(*this, report.dNetId);
             if (andCandidate.structuralMatch) {
@@ -455,23 +655,29 @@ Netlist::SequentialPatternReportSet Netlist::runSequentialPatternQuery(
             ++result.candidateDffCount;
         }
 
-        report.ok = true;
-        report.status = report.matched
-            ? "ENABLE_HOLD_FOUND"
-            : (hasCandidate ? "CANDIDATE_FOUND" : "NO_PATTERN");
-        report.message = report.matched
-            ? "Confirmed DFF enable/hold pattern found."
-            : (hasCandidate
-                ? "Only semantics-pending D-input candidates were found."
-                : "No supported DFF enable/hold pattern was found.");
+        report.ok = !report.functionalFallbackTimedOut;
+        report.status = !report.functionalFallbackComplete
+            ? "PARTIAL"
+            : (report.matched
+                ? "ENABLE_HOLD_FOUND"
+                : (hasCandidate ? "CANDIDATE_FOUND" : "NO_PATTERN"));
+        report.message = !report.functionalFallbackComplete
+            ? "Functional fallback was incomplete; returned confirmed matches remain valid, but absence is inconclusive."
+            : (report.matched
+                ? "Confirmed DFF enable/hold pattern found."
+                : (hasCandidate
+                    ? "Only semantics-pending D-input candidates were found."
+                    : "No supported DFF enable/hold pattern was found."));
         result.reports.push_back(std::move(report));
     }
 
-    result.ok = true;
+    result.ok = !result.timedOut;
     result.exists = result.matchedDffCount > 0;
+    result.complete = !partial;
     result.status = partial ? "PARTIAL" : "OK";
     result.message = partial
         ? "Sequential pattern analysis completed with inconclusive or invalid records."
         : "Sequential pattern analysis completed.";
+    result.elapsedSeconds = elapsedSeconds(queryStart);
     return result;
 }

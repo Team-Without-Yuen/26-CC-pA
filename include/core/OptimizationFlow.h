@@ -3,11 +3,19 @@
 #include <string>
 #include <vector>
 
+#include "include/core/EditFlow.h"
+
 enum class OptPassKind {
     Unknown,
     CleanupBufferChain,
     CollapseDoubleInverter,
-    LocalSimplificationFixpoint
+    LocalSimplificationFixpoint,
+    CriticalPathDepth
+};
+
+enum class OptDepthObjective {
+    GlobalMaximum,
+    ScopedFaninCone
 };
 
 struct OptQueryRequest {
@@ -42,7 +50,17 @@ struct OptQueryReport {
 struct OptApplyRequest {
     OptPassKind passKind = OptPassKind::Unknown;
     std::vector<int> candidateIds;
+
+    TargetScope scope = TargetScope::WHOLE_NETLIST;
+    std::string scopeName;
+    OptDepthObjective depthObjective = OptDepthObjective::GlobalMaximum;
+    std::vector<GateType> allowedTypes;
+    std::vector<GateType> bannedTypes;
+    int targetDepth = -1;
+    double timeLimitSeconds = 240.0;
+    bool requireDepthImprovement = true;
+    bool verbose = false;
+
     bool validateEquivalence = false;
     bool rollbackOnFailure = true;
 };
-

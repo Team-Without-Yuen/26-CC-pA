@@ -354,6 +354,7 @@ struct FunctionQuery {
     int conditionValue = -1;
     int constValue = -1;
     int maxExpressionDepth = 10;
+    double timeLimitSeconds = 30.0;
 };
 
 struct FunctionReport {

@@ -219,6 +219,7 @@ struct FunctionQuery {
     int conditionValue = -1; // ConditionalEquivalence 使用；只能是 0 或 1
     int constValue = -1;    // CanBeValue / ConstantFunction 使用；只能是 0 或 1
     int maxExpressionDepth = 10; // SimplifiedBooleanExpression 使用；必須 >= 0
+    double timeLimitSeconds = 30.0; // SAT query wall-clock limit
 };
 
 struct FunctionReport {
@@ -382,7 +383,8 @@ enum class DffInputPatternKind {
 
 enum class SequentialPatternDetectionMethod {
     StructuralCanonical,
-    StructuralCanonicalWithSat
+    StructuralCanonicalWithSat,
+    FunctionalCofactorSat
 };
 
 struct SequentialPatternQuery {
@@ -390,6 +392,18 @@ struct SequentialPatternQuery {
     std::string dffName;              // 空字串表示分析所有 active DFF
     bool includeAndGatedCandidates = true;
     bool verifyCanonicalMatchesWithSat = false;
+    // Opt-in because full-design functional fallback can consume a bounded SAT budget.
+    bool enableFunctionalFallback = false;
+    // Limits candidates that still require reachability/SAT; simulation-safe Rejects do not consume quota.
+    size_t maxFunctionalCandidates = 64;
+    size_t maxFunctionalMatchesPerDff = 8;
+    bool findAllFunctionalMatches = true;
+    bool resolveFunctionalDataNets = true;
+    size_t maxFunctionalDataCandidatesPerMatch = 16;
+    bool enableFunctionalSimulationFilter = true;
+    size_t functionalSimulationPatternCount = 256;
+    double functionalPerDffTimeLimitSeconds = 0.25;
+    double functionalTimeLimitSeconds = 5.0;
 };
 
 struct DffInputPattern {
@@ -406,7 +420,14 @@ struct DffInputPattern {
     int dataBranchNetId = -1;
     int feedbackNetId = -1;
     int activeLevel = -1;            // 1: active-high, 0: active-low, -1: unknown
+    int holdLevel = -1;
     bool dataInverted = false;
+    bool dataFunctionResolved = false;
+    bool dataSearchAttempted = false;
+    bool dataSearchComplete = true;
+    bool dataSearchTimedOut = false;
+    size_t dataCandidateCount = 0;
+    size_t dataCandidatesExamined = 0;
 
     bool structuralMatch = false;
     bool holdFunctionallyProven = false;
@@ -437,7 +458,19 @@ struct DffInputPatternReport {
     int qNetId = -1;
     std::string dNetName;
     std::string qNetName;
-    bool qFeedbackObserved = false; // canonical local pattern 中觀察到自己的 Q feedback
+    bool qFeedbackObserved = false; // canonical 或 functional pattern 中觀察到自己的 Q feedback
+    bool functionalFallbackAttempted = false;
+    bool functionalFallbackComplete = true;
+    bool functionalFallbackTimedOut = false;
+    bool functionalCandidateLimitReached = false;
+    size_t functionalCandidateCount = 0;           // all structural control candidates
+    size_t functionalSearchableCandidateCount = 0; // structural minus simulation-safe Reject
+    size_t functionalCandidatesExamined = 0;       // searchable candidates entering the loop
+    size_t functionalUnexaminedCandidateCount = 0; // guarded searchable minus examined
+    size_t functionalInconclusiveCandidateCount = 0; // entered candidates with timeout/unknown/unsupported
+    size_t functionalSimulationCandidateCount = 0;
+    size_t functionalSimulationRejectedCandidateCount = 0;
+    size_t functionalSatCheckCount = 0;
 
     std::vector<DffInputPattern> patterns;
 };
@@ -445,6 +478,8 @@ struct DffInputPatternReport {
 struct SequentialPatternReportSet {
     bool ok = false;
     bool exists = false;
+    bool complete = true;
+    bool timedOut = false;
     std::string status;
     std::string message;
 
@@ -453,6 +488,18 @@ struct SequentialPatternReportSet {
     size_t analyzedDffCount = 0;
     size_t matchedDffCount = 0;      // 依 DFF instance 去重
     size_t candidateDffCount = 0;    // 包含 semanticsPending candidate 的 DFF 數量
+    size_t functionalCandidateCount = 0;           // sum of per-DFF structural candidates
+    size_t functionalSearchableCandidateCount = 0; // sum of per-DFF searchable candidates
+    size_t functionalCandidatesExamined = 0;       // sum of per-DFF examined candidates
+    size_t functionalUnexaminedCandidateCount = 0; // sum of per-DFF unexamined candidates
+    size_t functionalInconclusiveCandidateCount = 0; // sum of per-DFF inconclusive candidates
+    size_t functionalSimulationPatternCount = 0;
+    size_t functionalSimulationCandidateCount = 0;
+    size_t functionalSimulationRejectedCandidateCount = 0;
+    size_t functionalSatCheckCount = 0;
+    size_t functionalMatchCount = 0;
+    double functionalSimulationSeconds = 0.0;
+    double elapsedSeconds = 0.0;
     std::vector<DffInputPatternReport> reports;
 };
 

@@ -106,8 +106,11 @@ static int checkConeCompliance(Netlist& nl,
                                const std::string& coneNetName,
                                const std::vector<GateType>& allowed,
                                const std::vector<GateType>& banned) {
-    ConeResult cr = nl.getTransitiveFaninCone(coneNetName);
-    std::vector<int> gids = nl.getConeGateIds(cr);
+    const RewriteScopeResolution resolved =
+        resolveRewriteScope(nl, TargetScope::NET_FANIN, coneNetName);
+    std::vector<int> gids = resolved.ok
+        ? nl.getConeGateIds(resolved.cone)
+        : std::vector<int>{};
 
     int violations = 0;
     for (int gid : gids) {
@@ -227,21 +230,29 @@ int main(int argc, char* argv[]) {
     // ---- 建立 ConeReport ----
     ConeReport coneReport;
     if (!coneNetName.empty()) {
-        // 依你的 API 建立 cone report；若有現成的 query 介面請替換這裡
-        coneReport.cone        = myCircuit.getTransitiveFaninCone(coneNetName);
+        const RewriteScopeResolution resolved =
+            resolveRewriteScope(myCircuit, TargetScope::NET_FANIN, coneNetName);
+        if (!resolved.ok) {
+            std::cerr << "[Error] Cannot resolve cone '" << coneNetName
+                      << "': " << resolved.message << "\n";
+            return -1;
+        }
+
+        coneReport.cone        = resolved.cone;
         coneReport.gateIds     = myCircuit.getConeGateIds(coneReport.cone);
         coneReport.rootNetIds  = coneReport.cone.rootNetIds;
         coneReport.sourceName  = coneNetName;
         coneReport.type        = ConeQueryType::NetTransitiveFanin;
         coneReport.gateCount   = coneReport.gateIds.size();
-        coneReport.exists      = !coneReport.gateIds.empty();
+        coneReport.exists      = !coneReport.rootNetIds.empty();
         coneReport.ok          = coneReport.exists;
 
         if (!coneReport.ok) {
-            std::cerr << "[Error] Cone '" << coneNetName << "' not found or empty!\n";
+            std::cerr << "[Error] Cone '" << coneNetName << "' has no valid root!\n";
             return -1;
         }
-        std::cout << "[Info] Cone '" << coneNetName << "' has "
+        std::cout << "[Info] Cone '" << coneNetName << "' resolved to '"
+                  << resolved.resolvedRootNetName << "' with "
                   << coneReport.gateIds.size() << " gates\n\n";
     }
 

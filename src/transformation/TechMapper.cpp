@@ -32,19 +32,7 @@ MappingDelta makeMappingDelta(const TechMapReport& techReport) {
 }
 
 ConeResult coneForScope(Netlist& netlist, TargetScope scope, const std::string& name) {
-    switch (scope) {
-        case TargetScope::NET_FANIN:
-            return netlist.getTransitiveFaninCone(name);
-        case TargetScope::NET_FANOUT:
-            return netlist.getTransitiveFanoutCone(name);
-        case TargetScope::GATE_FANIN:
-            return netlist.getGateTransitiveFaninCone(name);
-        case TargetScope::GATE_FANOUT:
-            return netlist.getGateTransitiveFanoutCone(name);
-        case TargetScope::WHOLE_NETLIST:
-        default:
-            return ConeResult();
-    }
+    return resolveRewriteScope(netlist, scope, name).cone;
 }
 
 int countGateTypeInScope(Netlist& netlist, TargetScope scope, const std::string& name, GateType type) {
@@ -720,7 +708,8 @@ TechMapReport TechMapper::mapTechnologyCore(Netlist& netlist,
                                             const std::map<GateType, int>& allowedConstraints, // 生成目標限制
                                             const std::unordered_set<int>* scopeGates,
                                             const std::vector<RuleSource>& allowedSources,
-                                            bool verbose) {
+                                            bool verbose,
+                                            const std::unordered_set<int>* strictContainment) {
     TechMapReport report;
     
     // 預先紀錄初始快照 (Snapshot)
@@ -733,7 +722,14 @@ TechMapReport TechMapper::mapTechnologyCore(Netlist& netlist,
     std::vector<TechMapRule> validRules = getValidRules(targetConstraints, allowedConstraints, allowedSources);
 
     // 執行統一的替換引擎
-    bool mappingChanged = executeMappingPass(netlist, scopeGates, validRules, report, verbose);
+    bool mappingChanged = executeMappingPass(
+        netlist,
+        scopeGates,
+        validRules,
+        report,
+        verbose,
+        false,
+        strictContainment);
 
     // 統一使用 Snapshot 數學反推法結算「新增數量」
     for (const auto& pair : allowedConstraints) {
@@ -2490,7 +2486,10 @@ TechMapReport TechMapper::absorbInverters(Netlist& netlist,
     // 全域扫描、不允许 logic duplication
     bool changed = executeMappingPass(netlist, nullptr, absorbRules, report, verbose, false, nullptr);
 
-    report.status = changed ? TechMapStatus::SUCCESS : TechMapStatus::ERROR_SIMULATION_FAILED;
+    report.status = TechMapStatus::SUCCESS;
+    report.message = changed
+        ? "Absorption applied."
+        : "No absorbable inverter pattern found.";
     return report;
 }
 
@@ -2597,8 +2596,10 @@ TechMapReport TechMapper::convertToBasisOnGateSet(Netlist& netlist,
         // 直接把 coneGates 當 scope 傳給 core，不重算 cone
         TechMapReport stepReport = mapTechnologyCore(
             netlist, targetConstraints, allowedConstraints,
-            &coneGates,               // ← scopeGates 直接用傳入的集合
-            strictSources, verbose);
+            &coneGates,
+            strictSources,
+            verbose,
+            &coneGates);
 
         // 檢查 cone 內是否還殘留該類型（用 coneGates 掃，不用全域計數）
         bool stillExists = false;
@@ -2635,6 +2636,13 @@ TechMapReport TechMapper::convertToBasis(Netlist& netlist,
     TechMapReport finalReport;
     finalReport.status = TechMapStatus::SUCCESS;
     finalReport.message = "Successfully converted circuit to the specified basis.";
+
+    const RewriteScopeResolution initialScope = resolveRewriteScope(netlist, scope, name);
+    if (!initialScope.ok) {
+        finalReport.status = TechMapStatus::ERROR_INVALID_CONSTRAINTS;
+        finalReport.message = "Failed to resolve rewrite scope: " + initialScope.message;
+        return finalReport;
+    }
 
     std::vector<GateType> allCombinational = {
         GateType::AND, GateType::OR, GateType::NAND, GateType::NOR,
@@ -2701,24 +2709,31 @@ TechMapReport TechMapper::convertToBasis(Netlist& netlist,
         TechMapReport stepReport;
         
         // 呼叫底層對應 Scope 的遞迴查找與替換引擎
+        const RewriteScopeResolution stepScope = resolveRewriteScope(netlist, scope, name);
+        if (!stepScope.ok) {
+            finalReport.status = TechMapStatus::ERROR_INVALID_CONSTRAINTS;
+            finalReport.message = "Failed to resolve rewrite scope: " + stepScope.message;
+            return finalReport;
+        }
+
         switch (scope) {
             case TargetScope::WHOLE_NETLIST:
                 stepReport = mapTechnology(netlist, targetConstraints, allowedConstraints, strictSources, verbose);
                 break;
             case TargetScope::NET_FANIN:
-                stepReport = mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getTransitiveFaninCone(name), strictSources, verbose);
-                break;
             case TargetScope::NET_FANOUT:
-                stepReport = mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getTransitiveFanoutCone(name), strictSources, verbose);
-                break;
             case TargetScope::GATE_FANIN:
-                stepReport = mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getGateTransitiveFaninCone(name), strictSources, verbose);
-                break;
             case TargetScope::GATE_FANOUT:
-                stepReport = mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getGateTransitiveFanoutCone(name), strictSources, verbose);
+                stepReport = mapTechnologyForCone(
+                    netlist,
+                    targetConstraints,
+                    allowedConstraints,
+                    stepScope.cone,
+                    strictSources,
+                    verbose);
                 break;
             default:
-                finalReport.status = TechMapStatus::ERROR_NOT_EQUIVALENT;
+                finalReport.status = TechMapStatus::ERROR_INVALID_CONSTRAINTS;
                 finalReport.message = "Failed: Invalid TargetScope.";
                 return finalReport;
         }
@@ -2851,20 +2866,31 @@ TechMapReport TechMapper::customMapTechnology(Netlist& netlist,
     
     // 建立一個 Lambda 函式來封裝底層 API 呼叫，方便我們在學習新規則後重複執行
     auto runMapping = [&]() -> TechMapReport {
+        const RewriteScopeResolution resolvedScope = resolveRewriteScope(netlist, scope, name);
+        if (!resolvedScope.ok) {
+            TechMapReport errReport;
+            errReport.status = TechMapStatus::ERROR_INVALID_CONSTRAINTS;
+            errReport.message = "Failed to resolve rewrite scope: " + resolvedScope.message;
+            return errReport;
+        }
+
         switch (scope) {
             case TargetScope::WHOLE_NETLIST:
                 return mapTechnology(netlist, targetConstraints, allowedConstraints, allSources, verbose);
             case TargetScope::NET_FANIN:
-                return mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getTransitiveFaninCone(name), allSources, verbose);
-            case TargetScope::NET_FANOUT:
-                return mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getTransitiveFanoutCone(name), allSources,  verbose);
             case TargetScope::GATE_FANIN:
-                return mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getGateTransitiveFaninCone(name), allSources, verbose);
+            case TargetScope::NET_FANOUT:
             case TargetScope::GATE_FANOUT:
-                return mapTechnologyForCone(netlist, targetConstraints, allowedConstraints, netlist.getGateTransitiveFanoutCone(name), allSources,verbose);
+                return mapTechnologyForCone(
+                    netlist,
+                    targetConstraints,
+                    allowedConstraints,
+                    resolvedScope.cone,
+                    allSources,
+                    verbose);
             default:
                 TechMapReport errReport;
-                errReport.status = TechMapStatus::ERROR_RULE_NOT_FOUND;
+                errReport.status = TechMapStatus::ERROR_INVALID_CONSTRAINTS;
                 errReport.message = "Failed: Invalid TargetScope provided.";
                 return errReport;
         }

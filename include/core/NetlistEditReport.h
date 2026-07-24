@@ -159,6 +159,32 @@ struct FunctionalMergeSummary {
     std::vector<std::string> skippedGateNames;
 };
 
+struct DepthOptimizationSummary {
+    std::string objectiveMetric;
+    std::string scope;
+    std::string requestedScopeName;
+    std::string resolvedRootNetName;
+    std::string coreStatus;
+    std::string coreMessage;
+
+    std::vector<GateType> allowedTypes;
+    std::vector<GateType> bannedTypes;
+
+    bool resolvedThroughDffDataPin = false;
+    bool baselineConstraintsSatisfied = false;
+    bool finalConstraintsSatisfied = false;
+    bool candidateGenerated = false;
+    bool candidateAccepted = false;
+    bool wholeDesignEquivalenceChecked = false;
+    bool wholeDesignEquivalent = false;
+    bool wholeDesignTimedOut = false;
+
+    int comparedOutputCount = 0;
+    int comparedDffDCount = 0;
+    double timeBudgetSeconds = 0.0;
+    double elapsedSeconds = 0.0;
+};
+
 // Single shared report for mutation / optimization / transformation flows.
 struct NetlistEditReport {
     bool success = false;
@@ -180,6 +206,7 @@ struct NetlistEditReport {
     std::optional<MappingDelta> mappingDelta;
     std::optional<ConstantSimplificationSummary> constantSimplification;
     std::optional<FunctionalMergeSummary> functionalMerge;
+    std::optional<DepthOptimizationSummary> depthOptimization;
 
     std::vector<int> changedGateIds;
     std::vector<int> changedNetIds;

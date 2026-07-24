@@ -31,6 +31,16 @@
 
 編好的 `.a` / `.o` **不進版本控制**,每個人在自己的環境第一次建置時會自動編出外部函式庫。
 
+目前有兩個不同入口：
+
+| 入口 | 用途 | 建置檔 |
+|------|------|--------|
+| `main.cpp` → `NetlistTool.exe` | critical-path optimizer 的整合測試程式 | 根目錄 `Makefile` |
+| `tools.cpp` → `tools.exe` | 給 LLM 使用的 public command CLI | `TOOLS_SPEC/Makefile` |
+
+兩者共用相同的 `src/`、ABC 與 CaDiCaL library，但不可把
+`NetlistTool.exe` 的實驗性 optimizer 參數當成正式 tools schema。
+
 ### 一般流程
 
 在 **對應環境的終端機** (Linux shell、或 MSYS2 的 **UCRT64** / **MINGW64** 視窗) 進到專案根目錄:
@@ -38,6 +48,14 @@
 ```bash
 make          # 首次會自動編 CaDiCaL + ABC,再編主程式
 ```
+
+若要建置 LLM-facing tools CLI：
+
+```bash
+make -f TOOLS_SPEC/Makefile
+```
+
+這個 target 會共用相同的 ABC/CaDiCaL build，輸出 `tools.exe`。
 
 首次建置會較久 (ABC 有一千多個檔案)。編完得到:
 
@@ -52,6 +70,37 @@ make          # 首次會自動編 CaDiCaL + ABC,再編主程式
 | `make libs` | 只 (重) 建 `libcadical.a` 與 `libabc.a` |
 | `make clean` | 清掉主程式的 `.o` / `.d` 與執行檔 |
 | `make clean_all` | 連同 ABC、CaDiCaL 的編譯結果一起清除 |
+
+### Tools Regression
+
+在 PowerShell 7 從專案根目錄執行：
+
+```powershell
+.\scripts\run_tools_regression.ps1 -Profile Quick
+.\scripts\run_tools_regression.ps1 -Profile Tools
+.\scripts\run_tools_regression.ps1 -Profile Full
+```
+
+| Profile | 內容 |
+|---|---|
+| `Quick` | 使用現有 `tools.exe` 跑 test32、diff 與文件檢查 |
+| `Tools` | 重新建置 `tools.exe`，跑 test9、test21、test27、test32 |
+| `Full` | 跑全部 PowerShell CLI regressions，並重新編譯/執行 C++ test31 |
+
+完整 stdout/stderr 存在 `Testing/tools-regression/<timestamp>/`；該目錄已由
+`.gitignore` 排除。終端只顯示 PASS/FAIL、耗時與失敗步驟最後 40 行。
+
+官方 bounded optimization smoke 是可選項，不會預設加入 `Full`：
+
+```powershell
+.\scripts\run_tools_regression.ps1 -Profile Quick `
+    -OfficialOptimizationSmoke -OfficialCases 40 `
+    -OptimizationTimeLimitSeconds 30 -OfficialCaseTimeoutSeconds 120
+```
+
+`OptimizationTimeLimitSeconds` 是傳給 high-level API 的預算；
+`OfficialCaseTimeoutSeconds` 是 runner 的 process-level hard timeout，可在
+mockturtle 尚未支援 cooperative cancellation 時避免整個測試無限卡住。
 
 ### 環境偵測
 

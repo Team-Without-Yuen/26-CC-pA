@@ -82,7 +82,7 @@
 | 16 list PIs with widths | `structure_query list_pi` | ordered name/width/range summaries | `Ready` |
 | 17 merge structural duplicates | `edit_apply merge_structurally_equivalent_gates` | edit report + certificate | `Ready` |
 | 18 number merged | `report_query last_edit` | removed active gate count | `Ready` |
-| 19 optimize `n8` depth under NAND/NOT | future constrained optimizer | best accepted depth or original | `Future` |
+| 19 optimize `n8` depth under NAND/NOT | `opt_apply critical_path_depth --scope net_fanin n8 --objective cone --allowed NAND NOT` | n8 resolves to a large D-pin cone；120 s outer timeout still expires inside mockturtle | `Blocked (Core Runtime)` |
 
 ## test34
 
@@ -209,11 +209,11 @@
 | 9 POs with widths | `structure_query list_po` | ordered name/width/range summaries | `Ready` |
 | 10 list XOR gates | `structure_query gates_by_type XOR` | names/count | `Ready` |
 | 11 max register-to-register depth | `path_query max_depth all_dff_q all_dff_d` | representative DFF pair + depth/path | `Ready` |
-| 12 report DFF enable/hold structures | `sequential_query enable_hold all`，依 next offset 分頁 | DFF names、pattern、D-input logic、pagination completeness | `Ready (Canonical)` |
-| 13 count DFFs with enable/hold | `sequential_query enable_hold all --summary-only` | `matched_dff_count` unique confirmed DFF count | `Ready (Canonical)` |
+| 12 report DFF enable/hold structures | 先用 `sequential_query enable_hold all`；需要非 canonical functional search 時 opt-in `--functional-fallback` 並依 next offset 分頁 | DFF names、pattern、D-input logic、functional/pagination completeness | `Ready (Canonical + Bounded Functional)` |
+| 13 count DFFs with enable/hold | canonical：`sequential_query enable_hold all --summary-only`；functional lower bound：再加 `--functional-fallback --functional-find-any --no-resolve-functional-data` 與明確 budget | `matched_dff_count` unique confirmed DFF count；只有 `complete:true` 才是完整數量 | `Ready (Canonical + Bounded Functional)` |
 | 14 `g0` type and pins | `structure_query gate_info g0` | type + pin connections | `Ready` |
 | 15 output with largest fanin cone | `cone_query largest_output` | selected output + gate count | `Ready` |
-| 16 optimize `n14` depth under NAND/NOT | future constrained optimizer | best accepted depth or original | `Future` |
+| 16 optimize `n14` depth under NAND/NOT | `opt_apply critical_path_depth --scope net_fanin n14 --objective cone --allowed NAND NOT` | `NOT(NAND(n514,n412))` is proven optimal at depth 2；original retained | `Ready` |
 | 17 current depth of cone `n14` | `depth_query net n14` | depth/path | `Ready` |
 | 18 current maximum depth | `depth_query global_critical` | worst depth/path | `Ready` |
 
@@ -224,13 +224,14 @@
 | Completed | symmetry analysis | test36、test37 與 mini test22 已驗證 |
 | Completed | NAND witness-pair function search | test35；API + CLI + mini test23/test24 |
 | Completed | test38 structural redundancy removal | official flow 實測移除 14 gates，且 whole-design SAT 通過 |
+| Partial | constrained depth optimization flow | test40 official flow PASS；test33 large D-pin cone blocked by non-preemptible global XAG core |
+| P1 | cooperative timeout / cone-isolated resynthesis | `--time-limit` cannot interrupt one mockturtle primitive；blocks test33 bounded completion |
 | P2 | general observability-aware redundancy removal | 尚無已確認 NewTestCase prompt；保留給 hidden-case hardening |
-| P3 | constrained depth optimization flow | test33, test40 and earlier optimization cases |
 
 ## Response Rules
 
 1. SAT、equivalence、path enumeration 只有在 `complete: true` 時才能當最終答案。
-2. `report_query last_edit` 只能回答緊接前一次 edit 的 delta；新的 edit 會覆蓋 cached report。
+2. `report_query last_edit` 只能回答最近一次 edit/optimization apply；新的 apply 會覆蓋 cached report。
 3. `exceeding` 包含 PO 與 DFF.D；output-only 題固定使用 `po_exceeding`。
 4. `gate_fanout` 回答 gate output 的直接 load gates；transitive reachable 必須使用 `cone_query`。
 5. `PrimaryInputsOfNet` 是 structural support，不足以單獨證明 Boolean functional dependence；exact yes/no 使用 `func_query depends_on`。
@@ -239,7 +240,7 @@
 
 ## Official Case Smoke Audit
 
-代表性非最佳化 commands 已直接在 test31 到 test40 的官方 Verilog 上執行。這一輪刻意不執行無界 path enumeration、巨大完整 Boolean expression與尚未完成的 optimization。
+代表性非最佳化 commands 已直接在 test31 到 test40 的官方 Verilog 上執行。這一輪刻意不執行無界 path enumeration 與巨大完整 Boolean expression；optimization 的 C++/CLI regression 分別見 mini test/test31 與 test32。
 
 | Case | Session time | Envelope result |
 |---|---:|---|
@@ -255,6 +256,21 @@
 | test40 | 0.138 s | 4/4 complete，無 non-ok status |
 
 此處的 complete 只代表本 smoke session 中選取的 commands；`Conditional`、`Partial`、`Missing`、`Future` 項目仍以逐題表格為準。
+
+### Official Optimization Smoke
+
+使用：
+
+```powershell
+.\scripts\run_tools_regression.ps1 -Profile Quick `
+    -OfficialOptimizationSmoke -OptimizationTimeLimitSeconds 30 `
+    -OfficialCaseTimeoutSeconds 120
+```
+
+| Case | Result | 說明 |
+|---|---|---|
+| test40 | PASS，約 3.6 秒 | 完整前置 NAND/NOT mapping/cleanup 後，n14 depth 2 命中安全 lower-bound proof，回 original |
+| test33 | outer timeout 120 秒 | 前置 edit 完成；n8 解析為 depth 327 的 D-pin cone，core 卡在不可搶占的 global XAG primitive |
 
 ### test35 Function Search 實測
 

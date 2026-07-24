@@ -111,19 +111,19 @@ int Netlist::trimDeadLogic() {
     for (int i = 0; i < NN; ++i)
         if (nets[i].isPO) pushNet(i);
 
-    // --- PO 正確性防線：偵測到完全沒有 PO 標記就放棄，不自動猜 ---
-    if (q.empty()) {
-        std::cerr << "[trimDeadLogic][FATAL] no PO flagged on any net; "
-                     "parser/PO-marking bug. Skipping trim to stay safe.\n";
-        return 0;
-    }
-
     // --- 起點 2：所有 DFF 的 D 輸入（時序終點，必須保留）---
     //     DFF 本身無條件視為有用；其控制腳(CK/RN/SN)與 D 都要保住上游。
     for (int i = 0; i < NG; ++i) {
         if (gates[i].type != GateType::DFF) continue;
         usefulGates.insert(i);
         for (int inNetId : gates[i].inputNetIds) pushNet(inNetId);
+    }
+
+    // 沒有任何 PO 或 DFF input endpoint 時，不猜測可觀察端點。
+    if (q.empty()) {
+        std::cerr << "[trimDeadLogic][WARN] no PO or DFF input endpoint found; "
+                     "skipping trim to stay safe.\n";
+        return 0;
     }
 
     // --- 反向 BFS：標記所有對「PO / DFF.D」有貢獻的組合閘 ---

@@ -459,6 +459,103 @@ void finalizeEditApplyReport(NetlistEditReport& report, const EditApplyRequest& 
 
 } // namespace
 
+RewriteScopeResolution resolveRewriteScope(
+    const Netlist& netlist,
+    TargetScope scope,
+    const std::string& name)
+{
+    RewriteScopeResolution result;
+    result.requestedName = name;
+
+    auto resolveDffDataCone = [&](int dffGateId) -> bool {
+        const int dataNetId = netlist.getGateInputNetId(dffGateId, "D");
+        if (!netlist.isValidNetId(dataNetId) || netlist.getNet(dataNetId).isRemoved) {
+            result.message = "DFF target has no valid D-pin data net.";
+            return false;
+        }
+
+        result.resolvedThroughDffDataPin = true;
+        result.resolvedRootNetName = netlist.getNet(dataNetId).name;
+        result.cone = netlist.getTransitiveFaninCone(result.resolvedRootNetName);
+        result.message = "Resolved the rewrite scope through the target DFF D pin.";
+        return true;
+    };
+
+    switch (scope) {
+        case TargetScope::WHOLE_NETLIST:
+            result.ok = true;
+            result.wholeNetlist = true;
+            result.message = "Resolved the whole-netlist rewrite scope.";
+            return result;
+
+        case TargetScope::NET_FANIN: {
+            const int netId = netlist.getNetId(name);
+            if (!netlist.isValidNetId(netId) || netlist.getNet(netId).isRemoved) {
+                result.message = "Rewrite scope net not found or already removed: " + name + ".";
+                return result;
+            }
+
+            const int driverGateId = netlist.getNetDriverGateId(netId);
+            if (netlist.isValidGateId(driverGateId) &&
+                !netlist.isGateRemoved(driverGateId) &&
+                netlist.getGate(driverGateId).type == GateType::DFF) {
+                result.ok = resolveDffDataCone(driverGateId);
+                return result;
+            }
+
+            result.resolvedRootNetName = name;
+            result.cone = netlist.getTransitiveFaninCone(name);
+            result.ok = true;
+            result.message = "Resolved the net fanin rewrite scope.";
+            return result;
+        }
+
+        case TargetScope::NET_FANOUT:
+            if (netlist.getNetId(name) < 0 ||
+                netlist.getNet(netlist.getNetId(name)).isRemoved) {
+                result.message = "Rewrite scope net not found or already removed: " + name + ".";
+                return result;
+            }
+            result.resolvedRootNetName = name;
+            result.cone = netlist.getTransitiveFanoutCone(name);
+            result.ok = true;
+            result.message = "Resolved the net fanout rewrite scope.";
+            return result;
+
+        case TargetScope::GATE_FANIN: {
+            const int gateId = netlist.getGateId(name);
+            if (!netlist.isValidGateId(gateId) || netlist.isGateRemoved(gateId)) {
+                result.message = "Rewrite scope gate not found or already removed: " + name + ".";
+                return result;
+            }
+            if (netlist.getGate(gateId).type == GateType::DFF) {
+                result.ok = resolveDffDataCone(gateId);
+                return result;
+            }
+
+            result.cone = netlist.getGateTransitiveFaninCone(name);
+            result.ok = true;
+            result.message = "Resolved the gate fanin rewrite scope.";
+            return result;
+        }
+
+        case TargetScope::GATE_FANOUT:
+            if (netlist.getGateId(name) < 0 ||
+                netlist.isGateRemoved(netlist.getGateId(name))) {
+                result.message = "Rewrite scope gate not found or already removed: " + name + ".";
+                return result;
+            }
+            result.cone = netlist.getGateTransitiveFanoutCone(name);
+            result.ok = true;
+            result.message = "Resolved the gate fanout rewrite scope.";
+            return result;
+
+        default:
+            result.message = "Invalid rewrite target scope.";
+            return result;
+    }
+}
+
 NetlistEditReport Netlist::runEditApply(const EditApplyRequest& request) {
     NetlistEditReport report;
     EditRequestValidation requestValidation = validateEditApplyRequest(*this, request);

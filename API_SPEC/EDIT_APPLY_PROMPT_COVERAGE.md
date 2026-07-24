@@ -31,11 +31,12 @@ Technology mapping:
   ReplaceGateType
 ```
 
-目前 public flow 已由 tools CLI expose rename、cleanup、simplification、buffer insertion 與 technology mapping，並有 original/current whole-design `equiv_query`。剩餘主要缺口是：
+目前 public flow 已由 tools CLI expose rename、cleanup、simplification、buffer insertion、technology mapping 與 depth optimization，並有 original/current whole-design `equiv_query`。剩餘主要缺口是：
 
 ```text
-1. depth optimization / restructure with cost function 仍屬未來 OptApply。
-   目前 technology mapping 可維持 basis constraint，但不會自動最佳化 depth。
+1. depth optimization / restructure with cost function 已由
+   `opt_apply critical_path_depth` 覆蓋。固定 basis conversion 仍由
+   `edit_apply convert_basis` 負責。
 
 2. 任意 functional-equivalent pair 已可由 `func_search equivalent_pairs` 搜尋，並由 `edit_apply merge_functionally_equivalent_gates` 完成 cycle-safe merge、詳細 report 與 whole-design SAT rollback。
    structural duplicate 仍可使用成本較低的 `merge_structurally_equivalent_gates`；observability-aware redundancy removal 是不同問題，尚未完整。
@@ -255,22 +256,21 @@ Optimize the depth of the cone of n8/n14 while ensuring the cone remains NAND/NO
 test22, test23, test24, test25, test26, test27, test28, test29, test30, test33, test40
 ```
 
-目前狀態：
+目前 public flow：
 
 ```text
-Future OptApply.
-Technology mapping can enforce a gate basis, but it does not search for best depth or target depth.
+Covered by OptApply::CriticalPathDepth:
+1. global/scoped depth objective
+2. whole/local allowed/banned basis
+3. DFF.Q -> D-pin rewrite scope
+4. targetDepth / no-improvement original retention
+5. structure + basis + whole-design SAT validation
+6. NetlistEditReport.depthChange / depthOptimization
 ```
 
-建議流程：
-
-```text
-1. opt_query: report candidate cone / current depth / constraints
-2. opt_apply: attempt depth optimization
-3. validate basis constraint
-4. validate functional equivalence
-5. return NetlistEditReport with depthChange
-```
+`tools.cpp` 已 expose `opt_query/opt_apply critical_path_depth`；LLM-facing
+command、參數與輸出判讀見 `TOOLS_SPEC/OPTIMIZATION_TOOL.md`，C++ 串接見
+`API_SPEC/OPT_APPLY_USAGE.md`。
 
 ### 4.3 Boolean Equation / Advanced Analysis Follow-ups
 
@@ -294,6 +294,7 @@ Report D input enable/hold structures...
 1. general observability-aware redundancy removal
    official test38 已確認可由 structural duplicate merge 完整處理；但未知 hidden case 若要求「局部功能不同、只因 outputs 不可觀測而可刪除」的任意 redundancy，仍需 observability proof。
 
-2. Objective-driven depth optimization 屬於未來 optimization flow；
-   固定 basis conversion 不等於 best-depth search。
+2. Objective-driven depth optimization 已由 `opt_apply critical_path_depth`
+   負責並完成 tools/LLM command 串接。固定 basis conversion 仍不等於
+   best-depth search，必須 route 到不同 high-level API。
 ```

@@ -377,6 +377,25 @@ validation.equivalenceMethod = LocalRewriteRule
 2. cone scope 轉換後只檢查該 scope 內是否還有違規 gate，不會被 cone 外同類 gate 影響。
 ```
 
+新版 optimizer 另外使用下列內部 helper：
+
+```text
+convertToBasisOnGateSet()
+absorbInverters()
+absorbInvertersOnGateSet()
+```
+
+這些 helper 用於指定 gate-set 的 basis enforcement、NOT(AND/OR/XOR) absorption
+與 strict containment，不新增 `EditCommandKind`，也不直接開放給 tools/LLM。
+對外 gate universe 仍是：
+
+```text
+AND / OR / NAND / NOR / NOT / BUF / XOR / XNOR
+```
+
+本次強化是 scope safety、depth-aware rule selection 與 optimizer integration，
+不是新增 MUX 或其他 gate primitive。
+
 ---
 
 ## 8. 已修正問題
@@ -386,7 +405,7 @@ report 化與 validation 過程中已修正：
 ```text
 1. removed net 需要 tombstone flag，避免重複移除與 addNet name collision。
 2. stricter validateStructure() 檢查 driverGateId / outputNetId 雙向一致。
-3. trimDeadLogic / removeDanglingLogic 改用 markGateRemoved()，避免 stale driver。
+3. trimDeadLogic 刪除 gate 時同步清除 fanin loads 與 output driver；只有 DFF endpoint、沒有 PO 的設計也可安全反向標記。
 4. insertBufferAtDriver / insertBufferBeforeGate 避免 vector reallocation 後繼續使用失效 reference。
 5. mergeNetIntoNet() 轉移 PO 語意後取消舊 net 的 isPO。
 6. removeDanglingLogic() 忽略 removed gates，避免 cleanup fixpoint 卡住。
@@ -395,6 +414,8 @@ report 化與 validation 過程中已修正：
 9. constant candidate matching 使用 `Net.constVal`，不依賴 constant net 名稱。
 10. CollapseDoubleInverter 不再隱含呼叫 buffer cleanup，避免後續 edit 拆除已建立的 fanout tree。
 11. InsertBuffersForSpecificNet 的 fanout report 改為 selected net + generated buffer tree scope，不再被全域其他 high-fanout nets 誤判為 constraint failure。
+12. gate-set basis conversion 使用 strict containment，mapping rule 不得跨出指定 scope。
+13. inverter absorption 沒有可套用 pattern 時回 success/no change，不再誤用 simulation failure。
 ```
 
 ---

@@ -15,6 +15,12 @@ $commands = @(
     "sequential_query enable_hold missing_ff"
     "sequential_query enable_hold all --verify-sat"
     "sequential_query enable_hold all --unknown-option"
+    "read mini test/test28/functional_pattern_circuit.v"
+    "sequential_query enable_hold ff_internal --functional-fallback --functional-find-any --no-resolve-functional-data --max-functional-candidates 64 --max-functional-matches 1 --functional-simulation-patterns 64 --functional-per-dff-time-limit 2 --functional-time-limit 3"
+    "sequential_query enable_hold ff_internal --functional-fallback --max-functional-candidates 1 --functional-time-limit 3"
+    "sequential_query enable_hold ff_xor --functional-fallback --functional-time-limit 0.000000000001"
+    "sequential_query enable_hold ff_xor --max-functional-candidates 1"
+    "sequential_query enable_hold ff_xor --functional-fallback --functional-simulation-patterns 4097"
     "help"
     "quit"
 ) -join "`n"
@@ -57,17 +63,37 @@ Check-Result `
     "specific no-pattern DFF still returns a detailed record"
 Check-Result ($output.Contains("DFF not found: missing_ff")) "missing DFF is an explicit error"
 Check-Result `
+    ($output -match "(?s)status: error.*?complete: false.*?DFF not found: missing_ff") `
+    "missing DFF uses an error envelope instead of partial"
+Check-Result `
     ($output.Contains("--verify-sat requires a specific DFF target")) `
     "all-DFF SAT verification is rejected before expensive execution"
 Check-Result `
     ($output.Contains("Unknown sequential_query option: --unknown-option")) `
     "unknown sequential option is rejected"
 Check-Result `
-    ($output.Contains("sequential_query enable_hold <all|dff_name>")) `
-    "help exposes the sequential high-level command"
+    ($output -match "(?s)command: sequential_query.*?mode: enable_hold.*?status: ok.*?complete: true.*?matched_dff_count: 1.*?functional_candidates_examined: 1.*?functional_match_count: 1.*?dff_name: ff_internal.*?detection_method: FunctionalCofactorSat.*?data_search_attempted: false.*?data_search_complete: false") `
+    "functional FindAny proves a non-canonical hold pattern without named-data search"
 Check-Result `
-    (([regex]::Matches($output, "TOOL_RESULT_BEGIN")).Count -eq 13 -and `
-     ([regex]::Matches($output, "TOOL_RESULT_END")).Count -eq 13) `
+    ($output -match "(?s)status: partial.*?complete: false.*?report_status: PARTIAL.*?dff_name: ff_internal.*?functional_candidate_limit_reached: true.*?functional_unexamined_candidate_count: [1-9][0-9]*") `
+    "functional candidate truncation is exposed as partial"
+Check-Result `
+    ($output -match "(?s)status: timeout.*?complete: false.*?timed_out: true.*?dff_name: ff_xor.*?functional_fallback_timed_out: true") `
+    "functional query-wide timeout is explicit"
+Check-Result `
+    ($output.Contains("Functional search options require --functional-fallback.")) `
+    "functional cost options require explicit opt-in"
+Check-Result `
+    ($output.Contains("--functional-simulation-patterns requires an integer from 1 to 4096.")) `
+    "functional simulation pattern bound is validated"
+Check-Result `
+    ($output.Contains("sequential_query enable_hold <all|dff_name>") -and `
+     $output.Contains("--functional-fallback") -and `
+     $output.Contains("--no-resolve-functional-data")) `
+    "help exposes sequential functional controls"
+Check-Result `
+    (([regex]::Matches($output, "TOOL_RESULT_BEGIN")).Count -eq 19 -and `
+     ([regex]::Matches($output, "TOOL_RESULT_END")).Count -eq 19) `
     "every sequential CLI request has one response envelope"
 
 Write-Output "Summary: $passed passed, $failed failed."

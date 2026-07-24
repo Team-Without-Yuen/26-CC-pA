@@ -31,10 +31,10 @@
 | `DepthQuery / DepthAnalysis` | timing arrival depth、PO/DFF.D depth、global critical path、depth threshold | arbitrary through/avoid path、Boolean function |
 | `FunctionQuery` | 已指定 net/bus 的 Boolean 性質：equivalence、constant、dependence、symmetry、expression | 未知候選搜尋、cross-design equivalence、修改 |
 | `FunctionSearchQuery` | 未知 internal signal 候選搜尋；目前支援 SAT-proven `NAND(a,b)==target` | 修改 netlist、任意 functional duplicate/redundancy removal |
-| `SequentialPatternQuery` | 從 DFF D-input logic 推導 enable/hold 等 register-control pattern | 一般 DFF 列表、clock/reset 直接連線、修改 |
+| `SequentialPatternQuery` | 從 DFF D-input logic 推導 canonical 或 SAT-proven functional enable/hold 等 register-control pattern | 一般 DFF 列表、clock/reset 直接連線、修改 |
 | `WholeDesignEquivalence` | current 與 original/previous snapshot 的 PO+DFF.D 等價證明 | 同一 design 中兩條 internal nets 的比較 |
 | `EditApply` | 執行使用者指定且已有安全規則/certificate 的 transformation | cost-driven 最佳化搜尋、未知功能候選搜尋 |
-| `OptimizationCandidate / OptApply` | 建立最佳化候選；未來依 cost function 搜尋並 transactional apply | 一般 read-only query、固定指定 mapping 的語意 |
+| `OptimizationCandidate / OptApply` | 建立候選並依 depth cost function transactional apply；驗證 basis、target 與 whole-design equivalence | 一般 read-only query、固定指定 mapping 的語意 |
 
 `FunctionSearchQuery` 負責「候選未知、需要從大量 signals/gates 中搜尋」的 Boolean discovery；它不修改 netlist。第一版 `NandEquivalentInputPairs` 已完成，其他 functional pair/redundancy mode 仍不得用 `FunctionQuery` 或 structural merge 假裝覆蓋。
 
@@ -47,8 +47,8 @@
 | `BasicQuery` | `src/analysis/BasicAnalysis.cpp` |
 | `DirectConnectivityQuery` | `src/analysis/ConnectivityAnalysis.cpp` |
 | `FunctionQuery` | `src/analysis/FunctionAnalysis.cpp`（含 equivalence、dependence、symmetry、constant/truth） |
-| `FunctionSearchQuery` | `src/analysis/FunctionAnalysis.cpp`（simulation filter + SAT proof） |
-| `SequentialPatternQuery` | `src/analysis/SequentialPatternAnalysis.cpp` |
+| `FunctionSearchQuery` | `src/analysis/FunctionAnalysis.cpp`（共用 bit-parallel simulation + SAT proof） |
+| `SequentialPatternQuery` | `src/analysis/SequentialPatternAnalysis.cpp`；非 canonical 搜尋使用 `FunctionalPatternEngine.cpp` 與共用 simulation signatures |
 | `GraphQuery`（PathQuery 內部 engine） | `src/analysis/GraphAnalysis.cpp` |
 | `ConeQuery` | `src/analysis/ConeAnalysis.cpp` |
 | `PathQuery` | `src/analysis/PathAnalysis.cpp` |
@@ -56,6 +56,7 @@
 | `WholeDesignEquivalence` | `src/analysis/WholeDesignEquivalence.cpp` |
 | `OptimizationCandidate` | `src/analysis/OptimizationAnalysis.cpp` |
 | `EditApply` | `src/transformation/EditFlow.cpp` + operation owner |
+| `OptApply` | `src/optimization/OptimizationFlow.cpp` + `DepthOptimizer.cpp` |
 
 目前共用 query/report 型別位置：
 
@@ -306,16 +307,16 @@ SequentialPatternReportSet runSequentialPatternQuery(
     const SequentialPatternQuery& query) const;
 ```
 
-第一版只公開 `DffEnableHold`，回答：
+目前只公開 `DffEnableHold`，回答：
 
 ```text
-哪些 DFF 具有 canonical feedback-MUX enable/hold structure？
+哪些 DFF 具有 canonical 或功能等價的 feedback-MUX enable/hold structure？
 Enable/data/Q-feedback 分別是哪條 net？
 Enable 是 active-high 或 active-low？
 符合條件的 unique DFF 數量是多少？
 ```
 
-它不重做 `ListDffs`、clock/reset load、fanin cone 或 SAT encoding，而是重用既有 API。AND-only D-input 目前只回報 semantics-pending candidate，不計入 confirmed `matchedDffCount`。
+它不重做 `ListDffs`、clock/reset load、fanin cone 或 SAT encoding，而是重用既有 API。預設只跑 canonical fast path；C++ caller 可開啟有 candidate/time/completeness 限制的 functional cofactor fallback。AND-only D-input 目前只回報 semantics-pending candidate，不計入 confirmed `matchedDffCount`。
 
 文件：
 
@@ -780,8 +781,8 @@ prompt 出現 `current/original/previous/transformed design` 時必須使用 who
 |---|---|
 | Convert cone n8 to NAND/NOT | `EditApply::ConvertToBasis` |
 | Replace every XOR with NAND implementation | `EditApply::ReplaceGateType` |
-| Minimize depth while remaining NAND/NOT | future `OptApply` |
-| Find best depth / report original if optimal | future `OptApply` |
+| Minimize depth while remaining NAND/NOT | `OptApply::CriticalPathDepth` |
+| Find best depth / report original if optimal | `OptApply::CriticalPathDepth` |
 
 `EditApply` 可以提供 before/after depth，但不能因為 report 有 depth 欄位就宣稱已做最佳化搜尋。
 
@@ -822,7 +823,7 @@ prompt 出現 `current/original/previous/transformed design` 時必須使用 who
 
 ### 10.12 SequentialPatternQuery 的組合責任
 
-SequentialPatternQuery 會重用 DFF pin lookup、Cone 與 Function SAT，但輸出的是 register-control semantics，因此不是重複 API。一般 `List all DFFs` 仍用 BasicQuery；`DFFs driven by clock n0` 仍用 DirectConnectivityQuery；只有 enable/hold/feedback-MUX pattern 使用 SequentialPatternQuery。
+SequentialPatternQuery 會重用 DFF pin lookup、Cone 與 Function SAT，但輸出的是 register-control semantics，因此不是重複 API。`FunctionalPatternEngine` 是其內部可擴充 matcher registry，不形成另一個公開 query family。一般 `List all DFFs` 仍用 BasicQuery；`DFFs driven by clock n0` 仍用 DirectConnectivityQuery；只有 enable/hold/feedback-MUX pattern 使用 SequentialPatternQuery。
 
 ---
 
@@ -842,7 +843,7 @@ SequentialPatternQuery 會重用 DFF pin lookup、Cone 與 Function SAT，但輸
 | cut / articulation / mandatory nodes / separator | public `PathQuery` -> internal `GraphQuery` engine |
 | current vs original/previous design equivalence | `WholeDesignEquivalence` |
 | rename / cleanup / specified rewrite / basis conversion | `EditApply` |
-| minimize / optimize / best / cost function | `OptimizationCandidate` + future `OptApply` |
+| minimize / optimize / best / depth cost function | `OptApply::CriticalPathDepth` |
 
 Routing precedence：
 
@@ -886,6 +887,7 @@ runDepthQuery()
 Sequential pattern mini test: 15 passed, 0 failed.
 Sequential edit-flow mini test: 13 passed, 0 failed.
 Sequential CLI mini test: 12 passed, 0 failed.
+Functional pattern engine mini test: 12 passed, 0 failed.
 NewTestCase/test40 original: 2585 DFF analyzed, 1583 canonical matches.
 NewTestCase/test40 post-edit: 1590 confirmed matches, 1975 candidates, query about 0.050 s.
 Full mapping/edit/PO+DFF.D-equivalence/query flow: about 33.7 s.
@@ -894,15 +896,20 @@ Full mapping/edit/PO+DFF.D-equivalence/query flow: about 33.7 s.
 Windows 目前建議使用：
 
 ```powershell
+make libs
 $sources = Get-ChildItem -Path src -Recurse -Filter *.cpp |
     Where-Object { $_.Name -notin @('MockturtleConverter.cpp', 'DepthOptimizer.cpp') } |
     ForEach-Object { $_.FullName }
-g++ -std=c++20 -I. -Ilib "mini test/test19/test19.cpp" $sources `
-    -L./include/lib/cadical/win/ucrt64 -lcadical -o "mini test/test19/test19.exe"
+g++ -std=c++20 -I. -Iinclude -Iinclude/lib `
+    -Iinclude/lib/cadical/src -Iinclude/lib/abc/src `
+    "mini test/test19/test19.cpp" $sources `
+    -Wl,--start-group ./include/lib/abc/libabc.a `
+    ./include/lib/cadical/build/libcadical.a -Wl,--end-group `
+    -lpthread -lm -o "mini test/test19/test19.exe"
 & ".\mini test\test19\test19.exe"
 ```
 
-目前 wildcard 全編譯會因 mockturtle header 尚未配置而失敗；以上驗證命令只排除該未完成模組及其 `DepthOptimizer.cpp` dependent。
+新版 Makefile 已整合 mockturtle、ABC 與 CaDiCaL；以上 focused 驗證命令仍排除 optimization 模組，以縮短 analysis API 回歸測試時間。
 
 ## 13. 下一步建議
 

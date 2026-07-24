@@ -1,63 +1,91 @@
 # Sequential Pattern Query 使用說明
 
-這份文件只負責說明 `SequentialPatternQuery` 與 `sequential_query` 的使用方式。
-
-設計背景、pattern 定義與 report contract 請看：
-
-```text
-API_SPEC/SEQUENTIAL_PATTERN_API.md
-```
+這份文件主要說明 C++ 高階 API 的呼叫與 report 讀法。設計與證明語意請看 `API_SPEC/SEQUENTIAL_PATTERN_API.md`；公開 CLI grammar、成本控制與輸出欄位請看 `TOOLS_SPEC/SEQUENTIAL_QUERY_TOOL.md`。functional fallback 已由 `tools.cpp` 以 opt-in 方式公開，未指定 `--functional-fallback` 時仍維持 canonical/default 行為。
 
 ---
 
-## 1. Include 與入口
+## 1. 預設快速查詢
 
 ```cpp
 #include "include/core/Netlist.h"
 
-Netlist::SequentialPatternReportSet report =
-    netlist.runSequentialPatternQuery(query);
-```
-
-## 2. 分析所有 DFF
-
-```cpp
 Netlist::SequentialPatternQuery query;
 query.type = Netlist::SequentialPatternQueryType::DffEnableHold;
 query.dffName.clear();
 query.includeAndGatedCandidates = true;
-query.verifyCanonicalMatchesWithSat = false;
 
 const auto report = netlist.runSequentialPatternQuery(query);
 ```
 
-主要讀取欄位：
+預設 `enableFunctionalFallback=false`，只跑 canonical fast path。大型 testcase 的 summary 應先使用這個模式。
 
-```cpp
-report.analyzedDffCount
-report.matchedDffCount
-report.candidateDffCount
-report.reports
-```
-
-`matchedDffCount` 只統計具有 confirmed canonical feedback-MUX pattern 的 unique DFF。`candidateDffCount` 還會包含只有 AND-gated candidate、但官方語意仍未確定的 DFF。
-
-## 3. 分析指定 DFF
+## 2. 指定 DFF
 
 ```cpp
 Netlist::SequentialPatternQuery query;
-query.type = Netlist::SequentialPatternQueryType::DffEnableHold;
 query.dffName = "ff1";
 
 const auto report = netlist.runSequentialPatternQuery(query);
 ```
 
-指定名稱不存在或不是 DFF 時，會回傳：
+不存在或不是 DFF 時：
 
 ```text
 ok = false
 status = DFF_NOT_FOUND
 ```
+
+## 3. 開啟任意功能等價 MUX 搜尋
+
+```cpp
+Netlist::SequentialPatternQuery query;
+query.dffName = "ff1";
+query.enableFunctionalFallback = true;
+query.maxFunctionalCandidates = 64;
+query.maxFunctionalMatchesPerDff = 8;
+query.findAllFunctionalMatches = true;
+query.resolveFunctionalDataNets = true;
+query.maxFunctionalDataCandidatesPerMatch = 16;
+query.enableFunctionalSimulationFilter = true;
+query.functionalSimulationPatternCount = 256;
+query.functionalPerDffTimeLimitSeconds = 0.25;
+query.functionalTimeLimitSeconds = 5.0;
+
+const auto report = netlist.runSequentialPatternQuery(query);
+```
+
+這個細節模式可辨識例如：
+
+```text
+delta = Q XOR DATA
+masked = EN AND delta
+D = Q XOR masked
+```
+
+雖然外觀不是兩層 AND/OR MUX，但功能為 `D = EN ? DATA : Q`。此模式成本較高，建議先指定 DFF，或設定嚴格候選數與總時間預算。
+
+數量題建議使用：
+
+```cpp
+query.findAllFunctionalMatches = false;
+query.resolveFunctionalDataNets = false;
+```
+
+FindAny 在第一個 proven control 後即可完整回答該 DFF 是否存在 enable/hold；略過 named-data resolution 可避免為了回答 count 額外執行大量 SAT。
+
+simulation filter 預設開啟，只負責用實際 counterexample 排除候選，最後的 confirmed match 仍必須來自 SAT。除錯或 A/B 驗證時可設定：
+
+```cpp
+query.enableFunctionalSimulationFilter = false;
+```
+
+engine 先建立 PI / leaf 與 D-input distance 的固定結構順序，再以 simulation evidence 做 stable rerank。只在單側看過 `D != Q` 的 control 會優先；同一 simulation 類別仍保留原結構順序。control=0/1 都被觀察到、且兩側都有 mismatch counterexample 的安全負例會直接從 bounded SAT search 排除，不占 `maxFunctionalCandidates`，也不增加 `functionalCandidatesExamined`。simulation 仍不會建立 positive match，confirmed control 最後必須有 SAT proof。
+
+例如共有 100 個結構候選，其中 96 個由 simulation 安全排除，且 `maxFunctionalCandidates=4`：engine 會完整檢查剩餘 4 個候選，`functionalCandidateLimitReached=false`，若沒有 timeout/unknown/unsupported，則可回傳 `complete=true`。若剩餘未排除候選有 5 個，才會因 limit 留下未檢查候選並回傳 partial。
+
+全設計 FindAny 或計數型探索可先使用 quota 4 到 8，讓有限時間優先覆蓋更多 DFF；這只適合取得 SAT-proven matches 的下界。若問題要求證明不存在或完整列出所有 controls，必須提高 quota、延長時間或使用後續的分階段搜尋，並以 `complete`、`functionalUnexaminedCandidateCount` 與 `functionalInconclusiveCandidateCount` 判斷是否真的完整。
+
+SAT engine 會自動在 one-shot proof 與 reusable per-DFF session 間切換，不需要額外 query 參數。這是內部效能策略；呼叫端仍只依 `confirmed`、`complete`、`timedOut` 與 limit 欄位判讀答案。
 
 ## 4. 讀取 confirmed pattern
 
@@ -68,137 +96,109 @@ for (const auto& dff : report.reports) {
             continue;
         }
 
-        std::cout << dff.dffName << " enable=" << pattern.enableNetName
+        std::cout << dff.dffName
+                  << " control=" << pattern.enableNetName
+                  << " active=" << pattern.activeLevel
+                  << " hold=" << pattern.holdLevel
                   << " data=" << pattern.dataNetName
-                  << " branch=" << pattern.dataBranchNetName
-                  << " feedback=" << pattern.feedbackNetName
-                  << " activeLevel=" << pattern.activeLevel << "\n";
+                  << " data_resolved=" << pattern.dataFunctionResolved
+                  << "\n";
     }
 }
 ```
 
-如果 pattern 等價於：
+`activeLevel=1, holdLevel=0` 表示 active-high；`activeLevel=0, holdLevel=1` 表示 active-low。functional match 的 `dataNetName` 可能為空，此時只能回答 hold/control 已證明，不可虛構 data net。
 
-```text
-D = EN ? DATA : Q
+若需要回答 data net，還必須確認：
+
+```cpp
+pattern.dataSearchAttempted
+pattern.dataSearchComplete
+pattern.dataSearchTimedOut
+pattern.dataFunctionResolved
+pattern.dataCandidatesExamined
 ```
 
-report 會回傳：
+`dataFunctionResolved=false` 且 `dataSearchComplete=true` 表示完整搜尋後沒有精確具名 net；`dataSearchComplete=false` 只表示尚未完整解析，不能回答不存在。
 
-```text
-kind = MuxHold
-enableNetName = EN
-dataNetName = DATA
-feedbackNetName = Q
-activeLevel = 1
-confirmed = true
+## 5. 判斷結果是否完整
+
+```cpp
+if (!report.complete) {
+    // 已回傳的 confirmed matches 可使用，absence 不可當成確定不存在。
+}
+
+for (const auto& dff : report.reports) {
+    if (dff.functionalCandidateLimitReached ||
+        dff.functionalFallbackTimedOut ||
+        !dff.functionalFallbackComplete) {
+        // 說明這顆 DFF 的 functional search 不完整。
+    }
+}
 ```
 
-## 5. Active-high 與 Active-low
+常用統計：
 
-Active-high enable：
-
-```text
-D = EN ? DATA : Q
-activeLevel = 1
+```cpp
+report.matchedDffCount
+report.candidateDffCount
+report.functionalMatchCount
+report.functionalCandidateCount
+report.functionalSearchableCandidateCount
+report.functionalCandidatesExamined
+report.functionalUnexaminedCandidateCount
+report.functionalInconclusiveCandidateCount
+report.functionalSimulationPatternCount
+report.functionalSimulationCandidateCount
+report.functionalSimulationRejectedCandidateCount
+report.functionalSimulationSeconds
+report.functionalSatCheckCount
+report.elapsedSeconds
 ```
 
-Active-low enable：
+`functionalCandidateCount` 是 structural 總數；`functionalSimulationRejectedCandidateCount` 是不占 quota 的 safe Reject；`functionalSearchableCandidateCount` 是兩者相減；`functionalCandidatesExamined` 是實際進入 loop 的 searchable candidates；`functionalUnexaminedCandidateCount` 是尚未進入者；`functionalInconclusiveCandidateCount` 是進入後因 timeout/unknown/unsupported 未完成者。
+
+完整性判讀：
 
 ```text
-D = EN_N ? Q : DATA
-activeLevel = 0
+- 全部未排除候選都完成判定：complete=true，可確定沒有其他 supported match。
+- FindAny 找到第一個 SAT-proven match：complete=true，可確定 existence=true；較早的 inconclusive candidate 仍保留在 counter，但不推翻存在性 proof。
+- FindAll，或尚未找到 proof 的 FindAny：timeout、unsupported、solver unknown、match limit，或仍有未檢查的 searchable candidate 時為 PARTIAL。
+- 只有安全 Reject 未進入 SAT loop：不會造成 candidateLimitReached，也不會單獨造成 PARTIAL。
 ```
 
-LLM 回答時應根據 `activeLevel` 說明在哪一個 enable value 下載入新資料，以及在哪一個 value 下保持 Q。
+若整體時間在某顆 DFF 進入 engine 前已用完，該 DFF 的 candidate counters 仍為 0，但 top-level `timedOut=true`、`complete=false`；因此回答完整性一律先讀 top-level envelope。
 
-## 6. 選擇性 SAT 驗證
+數量題應讀 `matchedDffCount`，因為它依 DFF 去重。`functionalMatchCount` 可能包含同一 DFF 的多個 nested controls。
+
+## 6. Canonical match 額外 SAT 驗證
 
 ```cpp
 query.verifyCanonicalMatchesWithSat = true;
 ```
 
-開啟後，每一個 canonical match 都會透過 `FunctionQuery::ConditionalEquivalence` 檢查 inactive 與 active cofactors。
+這會驗證 inactive `D==Q` 與 active `D==data branch`。它和 functional fallback 不同：前者驗證已找到的 canonical 結構，後者會搜尋未知 control。大量 DFF 不應無限制同時開啟兩者。
 
-```text
-inactive：D == Q
-active：D == data branch
-```
-
-SAT 驗證不是 batch query 的預設行為，因為對數千顆 DFF 分別啟動 solver 可能增加大量執行時間。Canonical structural match 本身已具有精確的代數語意，SAT 欄位主要提供額外證據與 timeout 狀態。
-
-若前一步已執行 technology mapping，API 會把 `NOT(x)`、`NAND(x,x)` 與 `NOR(x,x)` 統一視為反相 literal，也會跨越成對反相 wrapper。呼叫方式不需要改變。
-
-主要讀取欄位：
-
-| 欄位 | 語意 |
-| --- | --- |
-| `holdFunctionallyProven` | inactive cofactor 已證明等於 Q |
-| `loadFunctionallyProven` | active cofactor 已證明等於 data branch |
-| `solverRan` | 是否真的啟動 SAT solver |
-| `solverTimedOut` | 是否超過 SAT time limit |
-| `solverUnknown` | solver 是否回傳 UNKNOWN |
-| `solverStatus` | `PROVEN`、`FAILED`、`TIMEOUT`、`UNKNOWN` 或 `UNSUPPORTED` |
-
-## 7. AND-gated Candidate
-
-在官方定義尚未確認前，以下結構：
+## 7. AND-only candidate
 
 ```text
 D = EN & DATA
 ```
 
-只會回傳：
-
-```text
-kind = AndGatedDataCandidate
-confirmed = false
-semanticsPending = true
-```
-
-這種 DFF 會計入 `candidateDffCount`，但不會計入 `matchedDffCount`。
+目前回傳 `AndGatedDataCandidate`、`confirmed=false`、`semanticsPending=true`。回答時可列為候選，但不能併入 confirmed enable/hold 數量。
 
 ## 8. Prompt 對應
 
-| Prompt | 主要讀取欄位 |
+| Prompt 語意 | 主要欄位 |
 | --- | --- |
-| Report D-input enable/hold structures. | `reports[].patterns` |
-| How many flip-flops have enable/hold structures? | `matchedDffCount` |
-| Which signal enables ff1? | `enableNetName`, `activeLevel` |
-| Which net provides hold feedback? | `feedbackNetName` |
-| Which DFFs contain AND-gated candidates? | `kind`, `semanticsPending` |
+| 哪些 DFF 有 enable/hold？ | `reports[].matched`, `patterns[]` |
+| 有幾顆 DFF 有 enable/hold？ | `matchedDffCount` |
+| ff1 的 enable 與有效電位？ | `enableNetName`, `activeLevel`, `holdLevel` |
+| active 時載入哪條 net？ | `dataFunctionResolved`, `dataNetName` |
+| 是否為非 canonical 功能辨識？ | `detectionMethod=FunctionalCofactorSat` |
+| enable/hold 搜尋是否完整？ | `complete`, `timedOut` 與 per-DFF fallback 欄位 |
+| named data 是否解析完整？ | `dataSearchAttempted`, `dataSearchComplete`, `dataFunctionResolved` |
 
-## 9. tools CLI 使用
+## 9. 不屬於此 API
 
-數量題：
-
-```text
-sequential_query enable_hold all --summary-only
-```
-
-讀取 `matched_dff_count` 作為 confirmed unique DFF 數量；`candidate_dff_count` 包含 AND-only semantics-pending candidates，兩者不可混用。
-
-詳細列舉採固定分頁：
-
-```text
-sequential_query enable_hold all
-sequential_query enable_hold all --offset 50 --limit 50
-sequential_query enable_hold ff1 --verify-sat
-```
-
-all-DFF detail 預設最多 50 筆。`records_truncated:true` 時必須依 `next_record_offset` 取得下一頁；尚未讀完時 envelope 為 `partial`。`--verify-sat` 只接受指定 DFF，避免在大型 testcase 對數千顆 DFF 個別啟動 solver。
-
-## 10. 不屬於這個 API 的問題
-
-| 問題 | 應使用 API |
-| --- | --- |
-| 列出所有 DFF | `BasicQuery` |
-| 列出 clock n0 驅動的 DFF | `DirectConnectivityQuery` |
-| 查 D-input fanin cone | `ConeQuery` |
-| 查 Q-to-D path | `PathQuery` |
-| 查 DFF.D depth | `DepthQuery` |
-| 產生 D-input Boolean expression | `FunctionQuery` |
-| 插入或修改 MUX | `EditApply` |
-| 最佳化 register logic | `OptimizationFlow` |
-
-這個 API 是唯讀分析，不會修改 netlist，也不負責 MUX insertion、technology mapping 或 optimization。
+一般 DFF/clock/reset 直接連線用 Structure Query；fanin cone 用 Cone Query；Q-to-D path 用 Path Query；DFF.D depth 用 Depth Query；插入或修改邏輯用 EditApply；成本導向最佳化用 Optimization Flow。
