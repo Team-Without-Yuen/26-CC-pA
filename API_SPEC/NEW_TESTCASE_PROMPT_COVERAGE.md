@@ -1861,7 +1861,7 @@ test35
 Coverage：
 
 ```text
-OK（high-level C++ API；tools.cpp CLI 尚待串接）
+OK（high-level C++ API 與 `func_search nand_pairs` tools CLI 均已串接）
 ```
 
 目前對應 API：
@@ -1927,7 +1927,7 @@ test40
 Coverage：
 
 ```text
-Canonical API + CLI Covered / General Semantics Pending
+C++ Canonical + Functional API Covered / CLI Functional Mode Covered
 ```
 
 目前處理方式：
@@ -1939,6 +1939,8 @@ sequential_query enable_hold all --summary-only
 
 - 支援 OR/AND、NAND/NAND、AND/OR、NOR/NOR canonical feedback-MUX。
 - 正規化 NOT、NAND(x,x)、NOR(x,x) 與成對反相 wrapper，可分析 basis mapping 後的 D-input logic。
+- C++ API 與 `sequential_query --functional-fallback` 可 opt-in 啟用 SAT cofactor fallback，辨識 XOR restructuring 或 internal selector 等非 canonical、但功能等價的 MUX-hold。
+- fallback 會驗證 control 的 0/1 可達性，並回傳 candidate/time/completeness report；CLI 預設關閉，且公開 candidate、simulation、per-DFF 與 query-wide time budget。
 - 回傳 DFF、D/Q、enable、data、feedback、active level 與 evidence gates。
 - matchedDffCount 依 DFF instance 去重。
 - AND-only D-input 目前只列為 semantics-pending candidate，不計入 confirmed count。
@@ -1949,16 +1951,18 @@ sequential_query enable_hold all --summary-only
 ```text
 mini test/test19: 15/15 passed
 mini test/test20: 13/13 passed
-mini test/test21 CLI: 12/12 passed
+mini test/test21 CLI: 18/18 passed（canonical + opt-in functional）
+mini test/test28 functional pattern: 19/19 passed
 NewTestCase/test40 original design: 2585 DFF analyzed, 1583 canonical matches
 NewTestCase/test40 after NAND/NOT mapping and cleanup: 1590 confirmed matches, 1975 candidates
 post-edit query: about 0.050 seconds; complete pre-query flow: about 33.7 seconds
 CLI summary output: 1101 characters, complete aggregate; detail defaults to 50-record pages
+test40 functional FindAny + simulation-aware ranking + safe-Reject quota + hybrid SAT session benchmark: 12 顆抽樣連續執行皆 12/12 complete。quota 64 的 2 秒執行約開始 43 顆 fallback DFF、找到 27 筆額外 proven matches；quota 4/8 的 2 秒執行約找到 90–92 筆。quota 4 在 10 秒找到 193 筆；20 秒 budget 的執行實際約 13.4 秒走完全部 1002 顆 fallback DFF，找到 263 筆，matched DFF 1583 -> 1846。後者沒有 timeout/unknown，但 760 顆仍有 unexamined searchable candidates，因此仍為 PARTIAL，所有數字只能視為 proven lower bound
 ```
 
 ---
 
-## 5. Future：真正 Optimization 類 Prompt
+## 5. 已完成：真正 Optimization 類 Prompt
 
 ### 5.1 Critical Path / Max Depth Optimization
 
@@ -2001,14 +2005,25 @@ test29, test30
 Coverage：
 
 ```text
-Future
+Covered by C++ OptApply and tools.cpp；heuristic best-effort
 ```
 
 目前狀態：
 
 ```text
-OptimizationCandidate / OptimizationFlow skeleton 已有。
-但真正 depth optimization pass 尚未完整。
+OptApply::CriticalPathDepth 已完成：
+- working-copy candidate + transactional commit
+- Problem A depth metric（NOT/BUF 各算一層）
+- global/scoped depth objective
+- whole-netlist allowed/banned basis enforcement
+- no-improvement / target / invalid candidate rollback
+- mandatory PO + DFF.D whole-design SAT
+- NetlistEditReport.depthChange / depthOptimization
+
+test22 實測 global depth 41 -> 20。
+tools.cpp 已 expose `opt_query/opt_apply critical_path_depth`，並輸出完整
+depth change、constraint、candidate、whole-design SAT 與 rollback 狀態。
+LLM-facing 契約見 `TOOLS_SPEC/OPTIMIZATION_TOOL.md`。
 ```
 
 建議：
@@ -2073,14 +2088,35 @@ test40
 Coverage：
 
 ```text
-Future
+Public command covered；large scoped-cone runtime remains partial
 ```
 
-缺口：
+目前狀態：
 
 ```text
-需要 scope-aware optimization、basis compliance check、whole-design equivalence、accept/rollback。
-目前 API_SPEC 只有 flow 規劃，尚非完整可用 API。
+DFF.Q fanin target 會由 resolveRewriteScope() 轉成 D-pin data cone。
+local allowed/banned basis、scope validation、whole-design SAT 與 rollback 已整合。
+
+test26 實測：
+- requested scope n10
+- resolved D-pin root n1113
+- original cone 195 gates
+- final global depth 58 -> 30
+- final resolved cone 648 gates
+- NOR/NOT compliance PASS
+
+mini test/test30/test31 已覆蓋 malformed scope、DFF.Q scope、basis compliance、
+target rollback 與 whole-design SAT；mini test/test32 另覆蓋 tools help/parser、
+全域改善、scoped hard constraint、report cache、timeout envelope、rollback 與
+保守 lower-bound proof。
+
+Official bounded smoke：
+- test40：完整前置流程後 n14 為 `NOT(NAND(n514,n412))`，NAND/NOT depth 2
+  可證明已最優，約 3.6 秒回 original。
+- test33：n8 解析為 depth 327 的大型 D-pin cone；前置 edit 完成，但 global
+  XAG primitive 在 120 秒 outer timeout 內未完成。
+- `--time-limit` 尚不能中止單次 mockturtle primitive，因此 test33 仍是
+  optimizer-core runtime blocker。
 ```
 
 ---
@@ -2136,11 +2172,14 @@ Future
    - DFF enable / hold structure detection。
 ```
 
-### P3：真正最佳化
+### P3：真正最佳化（public flow 完成，large-cone runtime partial）
 
 ```text
 10. DepthOptimizationApply
-    - max depth / critical path optimization
-    - cone-restricted optimization
-    - basis-constrained optimization
+    - C++ OptApply::CriticalPathDepth 已完成
+    - global/scoped depth + whole/local basis 已完成
+    - NetlistEditReport、whole-design SAT、accept/rollback 已完成
+    - tools.cpp / TOOL_SPEC / mini test32 已完成
+    - test40 official bounded smoke PASS
+    - test33 仍需 cone-isolated resynthesis 或 cooperative timeout
 ```

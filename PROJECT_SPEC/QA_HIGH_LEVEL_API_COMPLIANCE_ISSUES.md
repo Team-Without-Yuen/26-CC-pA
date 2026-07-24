@@ -23,7 +23,7 @@
 | `PathQuery` | startpoint-to-endpoint path analysis | 部分符合 QA |
 | `DepthQuery` | logic depth / critical path / DFF.D endpoint depth | 大致符合 QA |
 | `FunctionQuery` | SAT-based equivalence / constant status | 部分符合 QA |
-| transformation / optimization reports | 修改、最佳化、驗證結果整理 | 尚未形成統一高階 API |
+| transformation / optimization reports | 修改、最佳化、驗證結果整理 | `NetlistEditReport` 已統一；CriticalPathDepth 含 depth/constraint/SAT summary |
 
 目前 tester 狀態：
 
@@ -41,16 +41,16 @@
 |---|---|---|---|---|---|---|---|
 | QAC-001 | fanout load 定義不完整 | `DirectConnectivityQuery`, fanout optimization, constraint checker | fanout load 要包含 primitive gate input、DFF D、DFF CK、DFF RN/SN、primary output connection | 已新增 `FanoutLoadReport` 與 `GlobalFanoutReport`，可分類單一 net loads、查全域 max fanout、PI max fanout、fanout limit violations | fanout buffer insertion / optimization 若仍直接看 `loadGateIds.size()`，可能少算 PO load | P0 | 下一步把 fanout buffer insertion / optimization 改成依賴 `FanoutLoadReport` |
 | QAC-002 | complete path enumeration 缺寫檔模式 | `PathQuery::EnumerateAll`, CLI tools | 若要求列出所有 paths，必須 literal listing；大型結果可寫到 file 並回報 path | `EnumerateAll` 預設自動寫檔，已新增 `outputFilePath` / `pathCount`，CLI 支援 `path_query enumerate ... -out file` 覆蓋檔名；目前仍保留 in-memory enumerate | 大型 testcase path 數量極端爆炸時仍可能需要 streaming DFS，但測試環境 128GB RAM 下第一版可接受 | P0 | 後續若實測 memory 壓力過大，再新增 streaming callback 版 enumerate |
-| QAC-003 | 缺 original vs current design equivalence | `FunctionQuery`, transformation validation | transformation 後要能驗證 current design 和 original loaded netlist 功能等價 | 目前只能比較同一份 netlist 內兩個 net / bus | 修改後無法正式回答「是否和 original equivalent」 | P0 | 建立 original snapshot，新增 whole-design combinational equivalence report |
+| QAC-003 | original vs current design equivalence | `WholeDesignEquivalence`, transformation validation | transformation 後要能驗證 current design 和 original loaded netlist 功能等價 | 已完成 batched SAT，對齊同名 PI、比較 PO 與 DFF.D；OptApply 提交前強制執行 | DFF initial state 尚未分析 | Completed | 維持 DFF boundary/initial-state 限制文件 |
 | QAC-004 | DFF initial state = 0 尚未建模 | `FunctionQuery`, constant analysis | QA 說 DFF initial state is 0，X ignored | 目前 DFF.Q 在 combinational analysis 中視為 pseudo PI | 若 prompt 涉及初始狀態，always 0/1 可能回答不完整 | P1 | 先在文件標註目前只做 combinational function；若要支援 initial-state query，新增 sequential-initial query mode |
 | QAC-005 | 缺 DFF clock/reset fanout classification 高階 API | `DirectConnectivityQuery`, DFF helpers | CK / RN / SN 都可能是 fanout 類問題的一部分 | 底層可查 DFF named pin，但沒有直接 report 某 net 驅動哪些 CK/RN/SN | clock/reset fanout prompt 需要手動組合，容易漏 | P1 | 在 fanout report 中加入 DFF pin role 分類 |
 | QAC-006 | 缺 all register-to-register path 支援 | `PathQuery`, `DepthQuery` | register-to-register path 可由 DFF.Q 到 DFF.D 表示 | `PathQuery` 已支援 `all_dff_q` / `all_dff_d` endpoint，可查 all DFF.Q -> all DFF.D 的 exists、find_any、enumerate、min/max depth；`RegisterPathQuery` 僅保留為便利 wrapper | 目前仍沿用 in-memory enumerate；極大量 path 時未做 streaming | P1 | 後續若遇到 path 數爆炸，再補 streaming / count-only mode |
 | QAC-007 | BasicQuery 對被刪除 gate 的狀態可能不穩 | `BasicQuery`, cleanup / simplification | transformation 後 count 應反映有效 design | 某些 API 可能直接看 `gates.size()`，若有 `GateType::UNKNOWN` tombstone 可能被算入 | cleanup 後 gate count / list gates 可能錯 | P1 | 定義 active gate 規則；BasicQuery count/list 預設排除 `UNKNOWN` |
-| QAC-008 | 缺統一 transformation result report | transformation / optimization | transformation prompt 通常需要回報 before/after、是否達標、是否 equivalent | 現在有零散 report，但沒有統一高階格式 | 不同 transformation 回答格式不一致，LLM 容易漏檢查 | P1 | 建立 `NetlistEditReport` 或統一 `TransformationQueryResult` |
+| QAC-008 | 統一 transformation result report | transformation / optimization | transformation prompt 通常需要回報 before/after、是否達標、是否 equivalent | `NetlistEditReport` 已含 stats/diff/validation/rollback，depth optimization 另有 `depthChange` 與 `depthOptimization` | `edit_apply`、`opt_apply` 與 `report_query` 已輸出公開 report envelope | Completed | tools.cpp 已依 report contract 串接 |
 | QAC-009 | function query 缺 Boolean equation export | `FunctionQuery` | testcase 有可能要求 derive Boolean equation | 目前有 SAT/equivalence/constant status，但沒有輸出 symbolic equation | Boolean expression 類 prompt 無法直接回答 | P2 | 新增 bounded cone expression builder，DFF.Q/PI/constant 當 leaf |
 | QAC-010 | 缺 symmetry / cut / articulation 類高階 query | analysis API | testcase prompt 可能問 symmetry、cut point、關鍵節點 | 目前 path/cone 可組合部分答案，但沒有專用 API | 特殊 analysis prompt 覆蓋不足 | P2 | 後續新增 graph analysis API：dominator / articulation / cut / symmetry |
 | QAC-011 | path query 缺 count-only safe mode | `PathQuery` | 有些 prompt 可能只問 path count | 目前 count 只能 enumerate 後 `paths.size()` | 大型 path count 會爆 | P2 | 新增 DP-based count 或 bounded count，並偵測 combinational DAG / loop guard |
-| QAC-012 | CLI / tools 是否完整包裝所有高階 API 尚未確認 | `tools.cpp`, `tools_high.cpp` | 最終系統要能由自然語言映射到 engine command | 有些 API 已有 CLI，有些仍可能只在 C++ API | LLM agent 可能無法直接呼叫某些功能 | P2 | 對照 `TOOLS_SPEC/README.md` 與實際 tools command，補缺口 |
+| QAC-012 | CLI / tools 是否完整包裝所有公開高階 API | `tools.cpp`, `TOOLS_SPEC` | 最終系統要能由自然語言映射到 engine command | 公開 query/edit/equivalence/optimization 與 sequential functional fallback 均已有 CLI；legacy aliases 只保留相容性 | optimizer core 的 test33 runtime blocker 不屬 parser 缺口 | Completed | 以 `TOOLS_SPEC/README.md`、CLI regressions 與 `run_tools_regression.ps1` 持續稽核 |
 
 ---
 

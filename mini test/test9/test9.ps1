@@ -3,6 +3,10 @@ param(
     [string]$Executable
 )
 
+$outputDirectory = "Testing/test9"
+$outputPath = "$outputDirectory/tools_session_output.v"
+New-Item -ItemType Directory -Path $outputDirectory -Force | Out-Null
+
 $commands = @(
     "structure_query summary"
     "read mini test/test9/tools_session_circuit.v"
@@ -16,7 +20,7 @@ $commands = @(
     "read mini test/test9/does_not_exist.v"
     "structure_query summary"
     "edit_apply replace_type whole OR -allow NOR NOT"
-    "write mini test/test9/tools_session_output.v"
+    "write $outputPath"
     "help"
     "quit"
 ) -join "`n"
@@ -55,7 +59,7 @@ Check-Result ($output.Contains("Failed to read design: mini test/test9/does_not_
 Check-Result ($output.Contains("command: edit_apply")) "edit command uses dispatcher"
 Check-Result ($output.Contains("design_revision: 1")) "successful edit increments revision"
 Check-Result ($output.Contains("Current design written.")) "write uses current design"
-Check-Result (Test-Path -LiteralPath "mini test/test9/tools_session_output.v") "write creates output file"
+Check-Result (Test-Path -LiteralPath $outputPath) "write creates output file"
 Check-Result ($output.Contains("structure_query <mode>") -and
               -not $output.Contains("basic_query <mode>") -and
               -not $output.Contains("conn_query <mode>")) "help exposes only structure_query"

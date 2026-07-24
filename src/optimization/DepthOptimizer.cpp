@@ -9,14 +9,62 @@
 #include <unordered_set>
 #include <unordered_map>
 
-DepthOptimizer::DepthOptimizer(const DepthOptimizerConfig& config) 
-    : config(config) {} // 使用初始化列表進行高效賦值
+namespace {
 
-template<typename Ntk>
-static uint32_t depth_of(const Ntk& ntk) {
-    mockturtle::depth_view dv{ntk};
-    return dv.depth();
+bool samePorts(const std::vector<Port>& lhs, const std::vector<Port>& rhs) {
+    if (lhs.size() != rhs.size()) return false;
+    for (size_t i = 0; i < lhs.size(); ++i) {
+        if (lhs[i].name != rhs[i].name ||
+            lhs[i].msb != rhs[i].msb ||
+            lhs[i].lsb != rhs[i].lsb ||
+            lhs[i].netIds != rhs[i].netIds) {
+            return false;
+        }
+    }
+    return true;
 }
+
+bool sameNetlistGraph(const Netlist& lhs, const Netlist& rhs) {
+    if (lhs.getGateCount() != rhs.getGateCount() ||
+        lhs.getNetCount() != rhs.getNetCount() ||
+        !samePorts(lhs.getPrimaryInputs(), rhs.getPrimaryInputs()) ||
+        !samePorts(lhs.getPrimaryOutputs(), rhs.getPrimaryOutputs())) {
+        return false;
+    }
+
+    for (size_t i = 0; i < lhs.getGateCount(); ++i) {
+        const Gate& a = lhs.getGate(static_cast<int>(i));
+        const Gate& b = rhs.getGate(static_cast<int>(i));
+        if (a.instName != b.instName ||
+            a.type != b.type ||
+            a.inputNetIds != b.inputNetIds ||
+            a.inputPinNames != b.inputPinNames ||
+            a.outputNetId != b.outputNetId) {
+            return false;
+        }
+    }
+
+    for (size_t i = 0; i < lhs.getNetCount(); ++i) {
+        const Net& a = lhs.getNet(static_cast<int>(i));
+        const Net& b = rhs.getNet(static_cast<int>(i));
+        if (a.name != b.name ||
+            a.driverGateId != b.driverGateId ||
+            a.loadGateIds != b.loadGateIds ||
+            a.isPI != b.isPI ||
+            a.isPO != b.isPO ||
+            a.isConst != b.isConst ||
+            a.isRemoved != b.isRemoved ||
+            a.constVal != b.constVal) {
+            return false;
+        }
+    }
+    return true;
+}
+
+} // namespace
+
+DepthOptimizer::DepthOptimizer(const DepthOptimizerConfig& config)
+    : config(config) {} // 使用初始化列表進行高效賦值
 
 bool isGateAllowed(GateType type, 
                    const std::vector<GateType>& allowedTypes, 
@@ -47,12 +95,14 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
                                                                    bool verbose) {
     OptimizationResult result;
     result.passName = "Opt_CP";
+    const Netlist originalSnapshot = netlist.cloneForRollback();
 
     // 紀錄優化前深度與面積
     DepthReport oldGlobalPath = netlist.findGlobalCriticalPath();
     result.oldDepth = oldGlobalPath.depth;
     int oldTotal = 0;
-    for (const auto& pair : netlist.countGatesByType()) oldTotal += pair.second;
+    const auto oldGateTypeCounts = netlist.countGatesByType();
+    for (const auto& pair : oldGateTypeCounts) oldTotal += pair.second;
     result.oldGateCount = oldTotal;
 
     if (verbose) {
@@ -123,7 +173,9 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
 
         mockturtle::xag_network xag = mockturtle::cleanup_dangling(NetlistToXag(netlist));
         mockturtle::xag_network best = xag;
-        uint32_t best_depth = depth_of(xag);
+        Netlist initialProbe = XagToNetlist(xag, netlist);
+        eliminateDoubleInverters(initialProbe);
+        int bestRealDepth = initialProbe.findGlobalCriticalPath().depth;
 
         for (int iter = 0; iter < 10; ++iter) {
             mockturtle::esop_rebalancing<mockturtle::xag_network> reb;
@@ -143,12 +195,22 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
                 xag = mockturtle::cleanup_dangling(xag);
             }
 
-            uint32_t d = depth_of(xag);
-            if (d < best_depth) { best_depth = d; best = xag; } else break;
+            Netlist probe = XagToNetlist(xag, netlist);
+            eliminateDoubleInverters(probe);
+            const int realDepth = probe.findGlobalCriticalPath().depth;
+            if (realDepth < bestRealDepth) {
+                bestRealDepth = realDepth;
+                best = xag;
+            } else {
+                break;
+            }
         }
         netlist = XagToNetlist(best, netlist);
         eliminateDoubleInverters(netlist);
-        if (verbose) std::cout << "  -> XAG best depth (mockturtle metric): " << best_depth << "\n";
+        if (verbose) {
+            std::cout << "  -> XAG best depth (Problem A metric): "
+                      << bestRealDepth << "\n";
+        }
     }
 
     netlist.trimDeadLogic();
@@ -167,24 +229,36 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
 
         const int depthBeforeCone = netlist.findGlobalCriticalPath().depth;
 
-        // 依 ConeQueryType 分派重查，取得「當下最新」的 cone 閘集合
+        // 依 ConeQueryType 分派重查，取得「當下最新」的 rewrite cone 閘集合。
+        // fanin target 若是 DFF.Q，resolveRewriteScope 會改取 D-pin data cone。
         auto refreshConeGates = [&]() -> std::unordered_set<int> {
-            ConeResult cr;
+            TargetScope rewriteScope = TargetScope::NET_FANIN;
             switch (targetConeReport.type) {
                 case ConeQueryType::NetTransitiveFanin:
-                    cr = netlist.getTransitiveFaninCone(targetConeReport.sourceName);      break;
+                    rewriteScope = TargetScope::NET_FANIN;
+                    break;
                 case ConeQueryType::NetTransitiveFanout:
-                    cr = netlist.getTransitiveFanoutCone(targetConeReport.sourceName);     break;
+                    rewriteScope = TargetScope::NET_FANOUT;
+                    break;
                 case ConeQueryType::GateTransitiveFanin:
-                    cr = netlist.getGateTransitiveFaninCone(targetConeReport.sourceName);  break;
+                    rewriteScope = TargetScope::GATE_FANIN;
+                    break;
                 case ConeQueryType::GateTransitiveFanout:
-                    cr = netlist.getGateTransitiveFanoutCone(targetConeReport.sourceName); break;
+                    rewriteScope = TargetScope::GATE_FANOUT;
+                    break;
                 default:
-                    cr = netlist.getTransitiveFaninCone(targetConeReport.sourceName);      break;
+                    rewriteScope = TargetScope::NET_FANIN;
+                    break;
+            }
+
+            const RewriteScopeResolution resolved =
+                resolveRewriteScope(netlist, rewriteScope, targetConeReport.sourceName);
+            if (!resolved.ok) {
+                return {};
             }
 
             std::unordered_set<int> s;
-            for (int g : netlist.getConeGateIds(cr)) {
+            for (int g : netlist.getConeGateIds(resolved.cone)) {
                 if (g < 0 || !netlist.isValidGateId(g)) continue;
                 GateType t = netlist.getGate(g).type;
                 if (t == GateType::UNKNOWN || t == GateType::DFF) continue;
@@ -195,7 +269,7 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
 
         std::unordered_set<int> coneGates = refreshConeGates();
         if (coneGates.empty()) {
-            result.status = OptimizationStatus::ERROR_NOT_EQUIVALENT;
+            result.status = OptimizationStatus::ERROR_INVALID_REQUEST;
             result.message = "Cone gate set empty; cannot enforce local basis.";
             return result;
         }
@@ -207,7 +281,7 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
             netlist, coneGates, allowedTypes, bannedTypes, verbose);
 
         if (coneRep.status != TechMapStatus::SUCCESS) {
-            result.status = OptimizationStatus::ERROR_NOT_EQUIVALENT;
+            result.status = OptimizationStatus::ERROR_CONSTRAINT_UNSATISFIED;
             result.message = "Cone basis enforcement failed: " + coneRep.message;
             return result;
         }
@@ -276,7 +350,7 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
 
         // 合規失敗 = 直接放棄（殘留非法閘等於違規、零分），回報錯誤
         if (rep.status != TechMapStatus::SUCCESS) {
-            result.status = OptimizationStatus::ERROR_NOT_EQUIVALENT;
+            result.status = OptimizationStatus::ERROR_CONSTRAINT_UNSATISFIED;
             result.message = "Basis enforcement failed: " + rep.message;
             return result;
         }
@@ -318,14 +392,20 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
     result.depthImproved = (result.newDepth < result.oldDepth);
 
     int newTotal = 0;
-    for (const auto& pair : netlist.countGatesByType()) newTotal += pair.second;
+    const auto newGateTypeCounts = netlist.countGatesByType();
+    for (const auto& pair : newGateTypeCounts) newTotal += pair.second;
     result.newGateCount = newTotal;
     result.areaDelta = result.newGateCount - result.oldGateCount;
 
-    result.status = OptimizationStatus::SUCCESS;
-    result.changed = true;
-    result.equivalent = true;   // TODO: 實際接等價驗證（miter + SAT 或 2^n 窮舉）
-    result.message = "Completed optimization sequence.";
+    result.changed = !sameNetlistGraph(originalSnapshot, netlist);
+    result.equivalenceChecked = false;
+    result.equivalent = false;
+    result.status = result.changed
+        ? OptimizationStatus::SUCCESS
+        : OptimizationStatus::NO_IMPROVEMENT;
+    result.message = result.changed
+        ? "Generated a depth-optimization candidate; whole-design equivalence is not checked by the core pass."
+        : "Optimization completed without a measurable depth, area, or gate-type change.";
 
     if (verbose) {
         std::cout << "[Success] Depth: " << result.oldDepth << " -> " << result.newDepth << "\n";

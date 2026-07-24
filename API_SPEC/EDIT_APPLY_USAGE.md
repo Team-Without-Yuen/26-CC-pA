@@ -576,6 +576,15 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 
 `ReplaceGateType` 若在指定 scope 內找不到目標 gate type，會回傳 `success = true`、`changed = false`，並在 `mappingDelta.finalGateCountByType` 保留 target / allowed gate 的目前數量。
 
+目前 public mapping 支援的 gate type 為：
+
+```text
+AND / OR / NAND / NOR / NOT / BUF / XOR / XNOR
+```
+
+optimizer 內部新增的 gate-set conversion 與 inverter absorption 不會改變
+`ConvertToBasis` / `ReplaceGateType` 的 request 格式，也不是額外的 public command。
+
 ---
 
 ## 15. MergeFunctionallyEquivalentGates

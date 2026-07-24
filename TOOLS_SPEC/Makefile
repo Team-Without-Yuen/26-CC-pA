@@ -1,16 +1,31 @@
 # Build the LLM-facing tools executable from either the repository root:
-#   mingw32-make -f PROJECT_SPEC/Makefile
+#   make -f TOOLS_SPEC/Makefile
 # or this directory:
-#   cd PROJECT_SPEC
-#   mingw32-make
+#   cd TOOLS_SPEC
+#   make
 
 MAKEFILE_DIR := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
 ROOT_DIR := $(MAKEFILE_DIR)/..
 
 CXX ?= g++
-CADICAL_VARIANT ?= ucrt64
 
 TARGET := $(ROOT_DIR)/tools.exe
+CADICAL_LIB := $(ROOT_DIR)/include/lib/cadical/build/libcadical.a
+ABC_LIB := $(ROOT_DIR)/include/lib/abc/libabc.a
+
+ifeq ($(MSYSTEM),UCRT64)
+  PLATFORM_DEF := -DWIN64 -DWIN32_LEAN_AND_MEAN -DNOMINMAX
+  ABC_DEFS := -DABC_USE_STDINT_H -DNUNLOCKED -DFMT_USE_WINDOWS_H=0
+  SYS_LIBS := -lpthread -lm
+else ifeq ($(MSYSTEM),MINGW64)
+  PLATFORM_DEF := -DWIN64 -DWIN32_LEAN_AND_MEAN -DNOMINMAX
+  ABC_DEFS := -DABC_USE_STDINT_H -DNUNLOCKED -DFMT_USE_WINDOWS_H=0
+  SYS_LIBS := -lpthread -lm
+else
+  PLATFORM_DEF := -DLIN64
+  ABC_DEFS :=
+  SYS_LIBS := -lpthread -lm -ldl
+endif
 
 SOURCES := \
   $(ROOT_DIR)/tools.cpp \
@@ -24,35 +39,48 @@ SOURCES := \
 
 CPPFLAGS := \
   -DFMT_HEADER_ONLY \
-  -DWIN64 \
-  -DLIN64 \
-  -DWIN32_LEAN_AND_MEAN \
-  -DNOMINMAX \
+  $(PLATFORM_DEF) \
+  $(ABC_DEFS) \
   -I$(ROOT_DIR) \
   -I$(ROOT_DIR)/include \
   -I$(ROOT_DIR)/include/lib \
   -I$(ROOT_DIR)/include/lib/nauty \
   -I$(ROOT_DIR)/include/lib/abcsat \
-  -I$(ROOT_DIR)/include/lib/abcesop
+  -I$(ROOT_DIR)/include/lib/abcesop \
+  -I$(ROOT_DIR)/include/lib/cadical/src \
+  -I$(ROOT_DIR)/include/lib/abc/src
 
 CXXFLAGS := \
   -std=c++20 \
   -fpermissive \
-  -w \
-  -Wa,-mbig-obj \
-  -O2
+  -Wall \
+  -Wno-unknown-pragmas \
+  -Wno-narrowing \
+  -Wno-sign-compare \
+  -Wno-unused-parameter \
+  -Wno-unused-variable \
+  -Wno-unused-but-set-variable \
+  -Wno-format \
+  -Wno-misleading-indentation \
+  -Wno-dangling-else \
+  -Wno-class-memaccess \
+  -Wno-int-to-pointer-cast \
+  -O3
 
-LDFLAGS := \
-  -s \
-  -L$(ROOT_DIR)/include/lib/cadical/win/$(CADICAL_VARIANT)
+LDFLAGS := -Wl,--start-group $(ABC_LIB) $(CADICAL_LIB) -Wl,--end-group
+LDLIBS := $(SYS_LIBS)
 
-LDLIBS := -lcadical
-
-.PHONY: all rebuild print-config
+.PHONY: all libs rebuild clean print-config
 
 all: $(TARGET)
 
-$(TARGET): $(SOURCES)
+libs:
+	$(MAKE) -C $(ROOT_DIR) libs
+
+$(CADICAL_LIB) $(ABC_LIB):
+	$(MAKE) -C $(ROOT_DIR) libs
+
+$(TARGET): $(CADICAL_LIB) $(ABC_LIB) $(SOURCES)
 	@echo [BUILD] Compiling tools.exe
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(SOURCES) $(LDFLAGS) $(LDLIBS) -o $@
 	@echo [SUCCESS] Built $(TARGET)
@@ -60,7 +88,12 @@ $(TARGET): $(SOURCES)
 rebuild:
 	$(MAKE) -B -f $(lastword $(MAKEFILE_LIST)) all
 
+clean:
+	rm -f $(TARGET)
+
 print-config:
 	@echo ROOT_DIR=$(ROOT_DIR)
 	@echo TARGET=$(TARGET)
-	@echo CADICAL_VARIANT=$(CADICAL_VARIANT)
+	@echo MSYSTEM=$(MSYSTEM)
+	@echo CADICAL_LIB=$(CADICAL_LIB)
+	@echo ABC_LIB=$(ABC_LIB)

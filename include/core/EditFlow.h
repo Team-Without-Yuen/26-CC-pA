@@ -15,6 +15,26 @@ enum class TargetScope {
     GATE_FANOUT
 };
 
+class Netlist;
+
+// Resolves the graph region that a transformation or optimization may rewrite.
+// Read-only cone queries still stop at DFF boundaries. For a fanin rewrite whose
+// named target is a DFF/Q boundary, this resolver selects the D-pin data cone.
+struct RewriteScopeResolution {
+    bool ok = false;
+    bool wholeNetlist = false;
+    bool resolvedThroughDffDataPin = false;
+    std::string requestedName;
+    std::string resolvedRootNetName;
+    std::string message;
+    ConeResult cone;
+};
+
+RewriteScopeResolution resolveRewriteScope(
+    const Netlist& netlist,
+    TargetScope scope,
+    const std::string& name);
+
 enum class EditCommandKind {
     Unknown,
 

@@ -1,4 +1,5 @@
 #include "include/core/Netlist.h"
+#include "include/core/BitParallelSimulation.h"
 #include "include/core/SatTime.h"
 #include <algorithm>
 #include <cstdint>
@@ -215,8 +216,9 @@ void mergeSolverStatus(FunctionReport& report, const DetailedSatResult& result) 
 }
 
 DetailedSatResult solveCanBeValueDetailed(const Netlist& netlist,
-                                          const std::string& netName,
-                                          int value) {
+                                           const std::string& netName,
+                                           int value,
+                                           double timeLimitSeconds = 30.0) {
     if (value != 0 && value != 1) {
         return makeUnsupportedResult("CanBeValue requires constValue 0 or 1.");
     }
@@ -301,7 +303,7 @@ DetailedSatResult solveCanBeValueDetailed(const Netlist& netlist,
     solver.add(value == 1 ? targetLit : -targetLit);
     solver.add(0);
 
-    TimeLimitTerminator terminator(30.0);
+    TimeLimitTerminator terminator(std::max(0.001, timeLimitSeconds));
     solver.connect_terminator(&terminator);
     const int solverResult = solver.solve();
     solver.disconnect_terminator();
@@ -903,6 +905,20 @@ Netlist::FunctionReport Netlist::runFunctionQuery(const FunctionQuery& query) co
     report.conditionValue = query.conditionValue;
     report.maxExpressionDepth = query.maxExpressionDepth;
 
+    const bool usesConfigurableSatLimit =
+        query.type == FunctionQueryType::Equivalence ||
+        query.type == FunctionQueryType::ConditionalEquivalence ||
+        query.type == FunctionQueryType::CanBeValue ||
+        query.type == FunctionQueryType::ConstantFunction ||
+        query.type == FunctionQueryType::AlwaysZero ||
+        query.type == FunctionQueryType::AlwaysOne ||
+        query.type == FunctionQueryType::TruthStatus;
+    if (usesConfigurableSatLimit && query.timeLimitSeconds <= 0.0) {
+        report.status = "INVALID_ARGUMENT";
+        report.message = "SAT timeLimitSeconds must be positive.";
+        return report;
+    }
+
     auto markSolverFailure = [&report](const std::string& context) {
         report.ok = false;
         report.exists = false;
@@ -937,7 +953,13 @@ Netlist::FunctionReport Netlist::runFunctionQuery(const FunctionQuery& query) co
         }
 
         {
-        const DetailedSatResult eq = solveEquivalenceDetailed(*this, query.netNameA, query.netNameB);
+        const DetailedSatResult eq = solveEquivalenceDetailed(
+            *this,
+            query.netNameA,
+            query.netNameB,
+            "",
+            -1,
+            query.timeLimitSeconds);
         mergeSolverStatus(report, eq);
         if (!eq.conclusive()) {
             markSolverFailure("Equivalence query");
@@ -986,7 +1008,8 @@ Netlist::FunctionReport Netlist::runFunctionQuery(const FunctionQuery& query) co
             query.netNameA,
             query.netNameB,
             query.conditionNetName,
-            query.conditionValue);
+            query.conditionValue,
+            query.timeLimitSeconds);
         mergeSolverStatus(report, eq);
         if (!eq.conclusive()) {
             markSolverFailure("ConditionalEquivalence query");
@@ -1024,8 +1047,11 @@ Netlist::FunctionReport Netlist::runFunctionQuery(const FunctionQuery& query) co
         }
 
         {
-        const DetailedSatResult zero = solveCanBeValueDetailed(*this, query.netNameA, 0);
-        const DetailedSatResult one = solveCanBeValueDetailed(*this, query.netNameA, 1);
+        const double perValueLimit = std::max(0.001, query.timeLimitSeconds / 2.0);
+        const DetailedSatResult zero =
+            solveCanBeValueDetailed(*this, query.netNameA, 0, perValueLimit);
+        const DetailedSatResult one =
+            solveCanBeValueDetailed(*this, query.netNameA, 1, perValueLimit);
         mergeSolverStatus(report, zero);
         mergeSolverStatus(report, one);
         if (!zero.conclusive() || !one.conclusive()) {
@@ -1058,8 +1084,11 @@ Netlist::FunctionReport Netlist::runFunctionQuery(const FunctionQuery& query) co
         }
 
         {
-        const DetailedSatResult zero = solveCanBeValueDetailed(*this, query.netNameA, 0);
-        const DetailedSatResult one = solveCanBeValueDetailed(*this, query.netNameA, 1);
+        const double perValueLimit = std::max(0.001, query.timeLimitSeconds / 2.0);
+        const DetailedSatResult zero =
+            solveCanBeValueDetailed(*this, query.netNameA, 0, perValueLimit);
+        const DetailedSatResult one =
+            solveCanBeValueDetailed(*this, query.netNameA, 1, perValueLimit);
         mergeSolverStatus(report, zero);
         mergeSolverStatus(report, one);
         if (!zero.conclusive() || !one.conclusive()) {
@@ -1090,8 +1119,11 @@ Netlist::FunctionReport Netlist::runFunctionQuery(const FunctionQuery& query) co
         }
 
         {
-        const DetailedSatResult zero = solveCanBeValueDetailed(*this, query.netNameA, 0);
-        const DetailedSatResult one = solveCanBeValueDetailed(*this, query.netNameA, 1);
+        const double perValueLimit = std::max(0.001, query.timeLimitSeconds / 2.0);
+        const DetailedSatResult zero =
+            solveCanBeValueDetailed(*this, query.netNameA, 0, perValueLimit);
+        const DetailedSatResult one =
+            solveCanBeValueDetailed(*this, query.netNameA, 1, perValueLimit);
         mergeSolverStatus(report, zero);
         mergeSolverStatus(report, one);
         if (!zero.conclusive() || !one.conclusive()) {
@@ -1119,8 +1151,11 @@ Netlist::FunctionReport Netlist::runFunctionQuery(const FunctionQuery& query) co
         }
 
         {
-        const DetailedSatResult zero = solveCanBeValueDetailed(*this, query.netNameA, 0);
-        const DetailedSatResult one = solveCanBeValueDetailed(*this, query.netNameA, 1);
+        const double perValueLimit = std::max(0.001, query.timeLimitSeconds / 2.0);
+        const DetailedSatResult zero =
+            solveCanBeValueDetailed(*this, query.netNameA, 0, perValueLimit);
+        const DetailedSatResult one =
+            solveCanBeValueDetailed(*this, query.netNameA, 1, perValueLimit);
         mergeSolverStatus(report, zero);
         mergeSolverStatus(report, one);
         if (!zero.conclusive() || !one.conclusive()) {
@@ -1148,8 +1183,11 @@ Netlist::FunctionReport Netlist::runFunctionQuery(const FunctionQuery& query) co
         }
 
         {
-        const DetailedSatResult zero = solveCanBeValueDetailed(*this, query.netNameA, 0);
-        const DetailedSatResult one = solveCanBeValueDetailed(*this, query.netNameA, 1);
+        const double perValueLimit = std::max(0.001, query.timeLimitSeconds / 2.0);
+        const DetailedSatResult zero =
+            solveCanBeValueDetailed(*this, query.netNameA, 0, perValueLimit);
+        const DetailedSatResult one =
+            solveCanBeValueDetailed(*this, query.netNameA, 1, perValueLimit);
         mergeSolverStatus(report, zero);
         mergeSolverStatus(report, one);
         if (!zero.conclusive() || !one.conclusive()) {
@@ -1364,7 +1402,7 @@ Netlist::FunctionReport Netlist::runFunctionQuery(const FunctionQuery& query) co
 
 namespace {
 
-using SimulationSignature = std::vector<std::uint64_t>;
+using SimulationSignature = BitParallelSimulationSignature;
 
 std::uint64_t splitMix64(std::uint64_t value) {
     value += 0x9e3779b97f4a7c15ULL;
@@ -1457,10 +1495,7 @@ bool evaluateSimulationGate(const Gate& gate,
     return true;
 }
 
-struct SimulationResult {
-    std::vector<SimulationSignature> signatures;
-    std::vector<bool> known;
-};
+using SimulationResult = BitParallelSimulationResult;
 
 SimulationResult simulateNetlist(const Netlist& netlist, size_t patternCount) {
     const size_t wordCount = (patternCount + 63) / 64;
@@ -1470,6 +1505,8 @@ SimulationResult simulateNetlist(const Netlist& netlist, size_t patternCount) {
         : ((std::uint64_t{1} << remainingBits) - 1);
 
     SimulationResult result;
+    result.patternCount = patternCount;
+    result.lastWordMask = lastWordMask;
     result.signatures.resize(netlist.getNetCount());
     result.known.assign(netlist.getNetCount(), false);
 
@@ -2011,6 +2048,12 @@ FunctionSearchReport searchEquivalentGatePairs(
 }
 
 } // namespace
+
+BitParallelSimulationResult simulateNetlistBitParallel(
+    const Netlist& netlist,
+    size_t patternCount) {
+    return simulateNetlist(netlist, patternCount);
+}
 
 Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
     const FunctionSearchQuery& query) const {

@@ -24,7 +24,7 @@ int mergeDuplicateInverters(Netlist& netlist);
 // 把所有「吃 fromNet 當輸入」的閘，改成吃 toNet；並搬移 loadGateIds。
 void redirectNetLoads(Netlist& netlist, int fromNet, int toNet);
 
-    // 把一顆閘標死並從其 fanin 的 loadGateIds 斷開。
+// 把一顆閘標死並從其 fanin 的 loadGateIds 斷開。
 void detachGate(Netlist& netlist, int gid);
 
 #endif // MOCKTURTLE_CONVERTER_H

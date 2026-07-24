@@ -225,6 +225,7 @@ Find equivalent AND gates in the fanin cone of n10.
 - enable condition。
 - hold condition。
 - feedback MUX 或相關 canonical sequential pattern。
+- opt-in SAT cofactor fallback，可辨識 XOR restructuring、internal selector 等非 canonical 但功能等價的 MUX-hold。
 - 指定 DFF 或全設計 DFF 的 pattern summary。
 
 典型 prompt：
@@ -235,13 +236,40 @@ Find the hold condition of register ff1.
 Identify DFFs implemented with a feedback MUX pattern.
 ```
 
-責任邊界：一般 `List all DFFs`，或 `List all flip-flops driven by clock n0`，只是物件與直接 clock connectivity，應使用 `StructureQuery`。只有題目要求 enable、hold、feedback 或 register-control pattern 時才使用 `SequentialPatternQuery`。
+責任邊界：一般 `List all DFFs`，或 `List all flip-flops driven by clock n0`，只是物件與直接 clock connectivity，應使用 `StructureQuery`。只有題目要求 enable、hold、feedback 或 register-control pattern 時才使用 `SequentialPatternQuery`。functional fallback 必須由 `--functional-fallback` 明確啟用，並以 `complete`、`timed_out` 與 candidate counters 判讀結果是否完整。
 
 詳細用法：[`SEQUENTIAL_QUERY_TOOL.md`](SEQUENTIAL_QUERY_TOOL.md)
 
 ---
 
-## 9. EditApply 與 EditReport
+## 9. Depth Optimization
+
+公開 tools：`opt_query`、`opt_apply`
+
+負責 objective/cost-driven 的 critical-path depth 最佳化：
+
+- 全設計 maximum logic depth 最佳化。
+- 指定 fanin cone depth 最佳化。
+- whole design 或 local scope 的 allowed/banned gate-type constraints。
+- target depth、time budget、no-improvement policy。
+- candidate constraint validation、whole-design SAT 與 transactional commit/rollback。
+
+典型 prompt：
+
+```text
+Reduce the critical path depth through restructuring.
+Minimize the maximum logic depth while keeping the design AND/NOT only.
+Optimize the cone of n15 for depth using only AND, OR, and NOT gates.
+Reduce maximum depth to at most 5 without changing functionality.
+```
+
+責任邊界：只量測 current depth 使用 `DepthQuery`；沒有 cost objective、只指定 basis conversion 時使用 `EditApply`。`opt_apply critical_path_depth` 已在 transaction 內強制執行 whole-design SAT。
+
+詳細用法：[`OPTIMIZATION_TOOL.md`](OPTIMIZATION_TOOL.md)
+
+---
+
+## 10. EditApply 與 EditReport
 
 公開 tools：`edit_apply`、`report_query`
 
@@ -280,7 +308,7 @@ test38 的 redundant-gate step 已確認 routing 到 `merge_structurally_equival
 
 ---
 
-## 10. WholeDesignEquivalence
+## 11. WholeDesignEquivalence
 
 公開 tool：`equiv_query`
 
@@ -304,7 +332,7 @@ Make sure nothing changes functionally.
 
 ---
 
-## 11. 常見組合題型
+## 12. 常見組合題型
 
 | 題目要求 | API 組合 |
 |---|---|
@@ -313,6 +341,7 @@ Make sure nothing changes functionally.
 | 修改後回報移除數量 | `EditApply` → `EditReport` |
 | 修改後確認功能不變 | `EditApply` → `WholeDesignEquivalence` |
 | 修改、回報成果並確認功能不變 | `EditApply` → `EditReport` → `WholeDesignEquivalence` |
+| 最佳化 depth 並回報成果 | `Optimization` → `EditReport`；mandatory whole-design SAT 已內建 |
 | 找出未知候選，再對候選做詳細功能分析 | `FunctionSearchQuery` → `FunctionQuery` |
 | 列出某 clock 的 DFF，再分析這些 DFF 的 enable/hold | `StructureQuery` → `SequentialPatternQuery` |
 
@@ -320,7 +349,7 @@ Make sure nothing changes functionally.
 
 ---
 
-## 12. Public Tool 文件索引
+## 13. Public Tool 文件索引
 
 | Public command | 詳細文件 |
 |---|---|
@@ -332,8 +361,27 @@ Make sure nothing changes functionally.
 | `func_query` | [`FUNCTION_QUERY_TOOL.md`](FUNCTION_QUERY_TOOL.md) |
 | `func_search` | [`FUNCTION_SEARCH_TOOL.md`](FUNCTION_SEARCH_TOOL.md) |
 | `sequential_query` | [`SEQUENTIAL_QUERY_TOOL.md`](SEQUENTIAL_QUERY_TOOL.md) |
+| `opt_query`, `opt_apply` | [`OPTIMIZATION_TOOL.md`](OPTIMIZATION_TOOL.md) |
 | `edit_apply` | [`EDIT_APPLY_TOOL.md`](EDIT_APPLY_TOOL.md) |
 | `report_query` | [`REPORT_QUERY_TOOL.md`](REPORT_QUERY_TOOL.md) |
 | `equiv_query` | [`EQUIVALENCE_QUERY_TOOL.md`](EQUIVALENCE_QUERY_TOOL.md) |
 
 `basic_query`、`conn_query`、`reg_path_query` 與 `graph_query` 只為 legacy 相容保留，不是 LLM 應選擇的 public command。新增或修改 tool 文件時遵循 [`TOOL_DOCUMENT_TEMPLATE.md`](TOOL_DOCUMENT_TEMPLATE.md)。
+
+---
+
+## 14. Regression
+
+公開 tools schema 修改後至少執行：
+
+```powershell
+.\scripts\run_tools_regression.ps1 -Profile Tools
+```
+
+準備 checkpoint 或整批交付前執行：
+
+```powershell
+.\scripts\run_tools_regression.ps1 -Profile Full
+```
+
+profile、log 與官方 bounded smoke 參數見專案根目錄的 `COMPILE.md`。

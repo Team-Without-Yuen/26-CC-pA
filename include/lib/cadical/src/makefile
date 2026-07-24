@@ -1,4 +1,4 @@
-CADICALBUILD=/c/_Myfile/cad_contest/code/include/lib/cadical/build
+CADICALBUILD=/c/Users/user/Desktop/CAD/2026-CAD-contest-problem-A/include/lib/cadical/build
 all:
 	$(MAKE) -C "$(CADICALBUILD)"
 clean:
@@ -11,8 +11,8 @@ clean:
 	  fi; \
 	  rm -rf "$(CADICALBUILD)"; \
 	fi
-	rm -f "/c/_Myfile/cad_contest/code/include/lib/cadical/src/makefile"
-	rm -f "/c/_Myfile/cad_contest/code/include/lib/cadical/makefile"
+	rm -f "/c/Users/user/Desktop/CAD/2026-CAD-contest-problem-A/include/lib/cadical/src/makefile"
+	rm -f "/c/Users/user/Desktop/CAD/2026-CAD-contest-problem-A/include/lib/cadical/makefile"
 test:
 	$(MAKE) -C "$(CADICALBUILD)" test
 cadical:

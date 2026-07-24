@@ -889,6 +889,8 @@ std::string sequentialDetectionMethodName(SequentialPatternDetectionMethod metho
             return "StructuralCanonical";
         case SequentialPatternDetectionMethod::StructuralCanonicalWithSat:
             return "StructuralCanonicalWithSat";
+        case SequentialPatternDetectionMethod::FunctionalCofactorSat:
+            return "FunctionalCofactorSat";
         default:
             return "Unknown";
     }
@@ -947,10 +949,35 @@ void printSequentialPatternReport(
     std::cout << "  report_status: " << report.status << "\n";
     std::cout << "  report_message: " << report.message << "\n";
     std::cout << "  exists: " << (report.exists ? "true" : "false") << "\n";
+    std::cout << "  complete: " << (report.complete ? "true" : "false") << "\n";
+    std::cout << "  timed_out: " << (report.timedOut ? "true" : "false") << "\n";
     std::cout << "  total_dff_count: " << report.totalDffCount << "\n";
     std::cout << "  analyzed_dff_count: " << report.analyzedDffCount << "\n";
     std::cout << "  matched_dff_count: " << report.matchedDffCount << "\n";
     std::cout << "  candidate_dff_count: " << report.candidateDffCount << "\n";
+    std::cout << "  functional_candidate_count: "
+              << report.functionalCandidateCount << "\n";
+    std::cout << "  functional_searchable_candidate_count: "
+              << report.functionalSearchableCandidateCount << "\n";
+    std::cout << "  functional_candidates_examined: "
+              << report.functionalCandidatesExamined << "\n";
+    std::cout << "  functional_unexamined_candidate_count: "
+              << report.functionalUnexaminedCandidateCount << "\n";
+    std::cout << "  functional_inconclusive_candidate_count: "
+              << report.functionalInconclusiveCandidateCount << "\n";
+    std::cout << "  functional_simulation_pattern_count: "
+              << report.functionalSimulationPatternCount << "\n";
+    std::cout << "  functional_simulation_candidate_count: "
+              << report.functionalSimulationCandidateCount << "\n";
+    std::cout << "  functional_simulation_rejected_candidate_count: "
+              << report.functionalSimulationRejectedCandidateCount << "\n";
+    std::cout << "  functional_simulation_seconds: "
+              << report.functionalSimulationSeconds << "\n";
+    std::cout << "  functional_sat_check_count: "
+              << report.functionalSatCheckCount << "\n";
+    std::cout << "  functional_match_count: "
+              << report.functionalMatchCount << "\n";
+    std::cout << "  elapsed_seconds: " << report.elapsedSeconds << "\n";
 
     const SequentialPageStats page = getSequentialPageStats(report, options);
     std::cout << "  available_dff_record_count: "
@@ -996,6 +1023,30 @@ void printSequentialPatternReport(
         std::cout << "    q_net_id: " << dff.qNetId << "\n";
         std::cout << "    q_feedback_observed: "
                   << (dff.qFeedbackObserved ? "true" : "false") << "\n";
+        std::cout << "    functional_fallback_attempted: "
+                  << (dff.functionalFallbackAttempted ? "true" : "false") << "\n";
+        std::cout << "    functional_fallback_complete: "
+                  << (dff.functionalFallbackComplete ? "true" : "false") << "\n";
+        std::cout << "    functional_fallback_timed_out: "
+                  << (dff.functionalFallbackTimedOut ? "true" : "false") << "\n";
+        std::cout << "    functional_candidate_limit_reached: "
+                  << (dff.functionalCandidateLimitReached ? "true" : "false") << "\n";
+        std::cout << "    functional_candidate_count: "
+                  << dff.functionalCandidateCount << "\n";
+        std::cout << "    functional_searchable_candidate_count: "
+                  << dff.functionalSearchableCandidateCount << "\n";
+        std::cout << "    functional_candidates_examined: "
+                  << dff.functionalCandidatesExamined << "\n";
+        std::cout << "    functional_unexamined_candidate_count: "
+                  << dff.functionalUnexaminedCandidateCount << "\n";
+        std::cout << "    functional_inconclusive_candidate_count: "
+                  << dff.functionalInconclusiveCandidateCount << "\n";
+        std::cout << "    functional_simulation_candidate_count: "
+                  << dff.functionalSimulationCandidateCount << "\n";
+        std::cout << "    functional_simulation_rejected_candidate_count: "
+                  << dff.functionalSimulationRejectedCandidateCount << "\n";
+        std::cout << "    functional_sat_check_count: "
+                  << dff.functionalSatCheckCount << "\n";
         std::cout << "    pattern_count: " << dff.patterns.size() << "\n";
 
         for (const DffInputPattern& pattern : dff.patterns) {
@@ -1014,6 +1065,7 @@ void printSequentialPatternReport(
             std::cout << "      active_level: " << pattern.activeLevel << "\n";
             std::cout << "      active_level_name: "
                       << activeLevelName(pattern.activeLevel) << "\n";
+            std::cout << "      hold_level: " << pattern.holdLevel << "\n";
             std::cout << "      data_net_name: " << pattern.dataNetName << "\n";
             std::cout << "      data_net_id: " << pattern.dataNetId << "\n";
             std::cout << "      data_branch_net_name: "
@@ -1022,6 +1074,18 @@ void printSequentialPatternReport(
                       << pattern.dataBranchNetId << "\n";
             std::cout << "      data_inverted: "
                       << (pattern.dataInverted ? "true" : "false") << "\n";
+            std::cout << "      data_function_resolved: "
+                      << (pattern.dataFunctionResolved ? "true" : "false") << "\n";
+            std::cout << "      data_search_attempted: "
+                      << (pattern.dataSearchAttempted ? "true" : "false") << "\n";
+            std::cout << "      data_search_complete: "
+                      << (pattern.dataSearchComplete ? "true" : "false") << "\n";
+            std::cout << "      data_search_timed_out: "
+                      << (pattern.dataSearchTimedOut ? "true" : "false") << "\n";
+            std::cout << "      data_candidate_count: "
+                      << pattern.dataCandidateCount << "\n";
+            std::cout << "      data_candidates_examined: "
+                      << pattern.dataCandidatesExamined << "\n";
             std::cout << "      feedback_net_name: "
                       << pattern.feedbackNetName << "\n";
             std::cout << "      feedback_net_id: "
@@ -1081,6 +1145,19 @@ std::string editOperationKindName(NetlistEditOperationKind kind) {
     }
 }
 
+std::string optPassKindName(OptPassKind kind) {
+    switch (kind) {
+        case OptPassKind::CleanupBufferChain: return "cleanup_buffer_chain";
+        case OptPassKind::CollapseDoubleInverter: return "collapse_double_inverter";
+        case OptPassKind::LocalSimplificationFixpoint:
+            return "local_simplification_fixpoint";
+        case OptPassKind::CriticalPathDepth: return "critical_path_depth";
+        case OptPassKind::Unknown:
+        default:
+            return "unknown";
+    }
+}
+
 void printGateTypeMap(const Netlist& netlist,
                       const std::string& title,
                       const std::map<GateType, int>& values) {
@@ -1088,6 +1165,15 @@ void printGateTypeMap(const Netlist& netlist,
     for (const auto& item : values) {
         std::cout << "  " << netlist.gateTypeToString(item.first)
                   << " : " << item.second << "\n";
+    }
+}
+
+void printGateTypeList(const Netlist& netlist,
+                       const std::string& title,
+                       const std::vector<GateType>& values) {
+    std::cout << title << " (" << values.size() << "):\n";
+    for (GateType type : values) {
+        std::cout << "  " << netlist.gateTypeToString(type) << "\n";
     }
 }
 
@@ -1270,10 +1356,84 @@ void printEditReport(const Netlist& netlist, const Netlist::NetlistEditReport& r
         printStringList("    skipped_gate_names", summary.skippedGateNames);
     }
 
+    if (report.depthOptimization) {
+        const auto& summary = *report.depthOptimization;
+        std::cout << "  depth_optimization:\n";
+        std::cout << "    objective_metric: " << summary.objectiveMetric << "\n";
+        std::cout << "    scope: " << summary.scope << "\n";
+        std::cout << "    requested_scope_name: "
+                  << summary.requestedScopeName << "\n";
+        std::cout << "    resolved_root_net_name: "
+                  << summary.resolvedRootNetName << "\n";
+        std::cout << "    core_status: " << summary.coreStatus << "\n";
+        std::cout << "    core_message: " << summary.coreMessage << "\n";
+        printGateTypeList(
+            netlist, "    allowed_gate_types", summary.allowedTypes);
+        printGateTypeList(
+            netlist, "    banned_gate_types", summary.bannedTypes);
+        std::cout << "    resolved_through_dff_data_pin: "
+                  << (summary.resolvedThroughDffDataPin ? "true" : "false")
+                  << "\n";
+        std::cout << "    baseline_constraints_satisfied: "
+                  << (summary.baselineConstraintsSatisfied ? "true" : "false")
+                  << "\n";
+        std::cout << "    final_constraints_satisfied: "
+                  << (summary.finalConstraintsSatisfied ? "true" : "false")
+                  << "\n";
+        std::cout << "    candidate_generated: "
+                  << (summary.candidateGenerated ? "true" : "false") << "\n";
+        std::cout << "    candidate_accepted: "
+                  << (summary.candidateAccepted ? "true" : "false") << "\n";
+        std::cout << "    whole_design_equivalence_checked: "
+                  << (summary.wholeDesignEquivalenceChecked ? "true" : "false")
+                  << "\n";
+        std::cout << "    whole_design_equivalent: "
+                  << (summary.wholeDesignEquivalent ? "true" : "false")
+                  << "\n";
+        std::cout << "    whole_design_timed_out: "
+                  << (summary.wholeDesignTimedOut ? "true" : "false")
+                  << "\n";
+        std::cout << "    compared_output_count: "
+                  << summary.comparedOutputCount << "\n";
+        std::cout << "    compared_dff_d_count: "
+                  << summary.comparedDffDCount << "\n";
+        std::cout << "    time_budget_seconds: "
+                  << summary.timeBudgetSeconds << "\n";
+        std::cout << "    elapsed_seconds: " << summary.elapsedSeconds << "\n";
+    }
+
     printIntList("  changed_gate_ids", report.changedGateIds);
     printIntList("  changed_net_ids", report.changedNetIds);
     printStringList("  changed_gate_names", report.changedGateNames);
     printStringList("  changed_net_names", report.changedNetNames);
+    printStringList("  warnings", report.warnings);
+}
+
+void printOptQueryReport(const Netlist& netlist,
+                         const Netlist::OptQueryReport& report) {
+    std::cout << "  report_ok: " << (report.ok ? "true" : "false") << "\n";
+    std::cout << "  pass_kind: " << optPassKindName(report.passKind) << "\n";
+    std::cout << "  scope_name: " << report.scopeName << "\n";
+    std::cout << "  report_message: " << report.message << "\n";
+    std::cout << "  candidate_count: " << report.candidates.size() << "\n";
+    for (const Netlist::OptCandidate& candidate : report.candidates) {
+        std::cout << "  candidate:\n";
+        std::cout << "    id: " << candidate.id << "\n";
+        std::cout << "    pass_kind: "
+                  << optPassKindName(candidate.passKind) << "\n";
+        std::cout << "    reason: " << candidate.reason << "\n";
+        std::cout << "    estimated_gate_delta: "
+                  << candidate.estimatedGateDelta << "\n";
+        std::cout << "    estimated_net_delta: "
+                  << candidate.estimatedNetDelta << "\n";
+        std::cout << "    requires_equivalence_check: "
+                  << (candidate.requiresEquivalenceCheck ? "true" : "false")
+                  << "\n";
+        printIntList("    gate_ids", candidate.gateIds);
+        printIntList("    net_ids", candidate.netIds);
+        printStringList("    gate_names", candidate.gateNames);
+        printStringList("    net_names", candidate.netNames);
+    }
     printStringList("  warnings", report.warnings);
 }
 
@@ -1330,6 +1490,7 @@ bool buildSequentialPatternQuery(
         query.dffName = target;
     }
 
+    bool functionalOptionsConfigured = false;
     std::string option;
     while (iss >> option) {
         const std::string lowered = toLower(option);
@@ -1344,6 +1505,86 @@ bool buildSequentialPatternQuery(
             query.includeAndGatedCandidates = true;
         } else if (lowered == "--verify-sat" || lowered == "-verify_sat") {
             query.verifyCanonicalMatchesWithSat = true;
+        } else if (lowered == "--functional-fallback" ||
+                   lowered == "-functional_fallback") {
+            query.enableFunctionalFallback = true;
+        } else if (lowered == "--max-functional-candidates" ||
+                   lowered == "-max_functional_candidates") {
+            std::string valueToken;
+            int value = -1;
+            if (!(iss >> valueToken) || !parseStrictInteger(valueToken, value) || value < 1) {
+                error = "--max-functional-candidates requires an integer greater than zero.";
+                return false;
+            }
+            query.maxFunctionalCandidates = static_cast<size_t>(value);
+            functionalOptionsConfigured = true;
+        } else if (lowered == "--max-functional-matches" ||
+                   lowered == "-max_functional_matches") {
+            std::string valueToken;
+            int value = -1;
+            if (!(iss >> valueToken) || !parseStrictInteger(valueToken, value) || value < 1) {
+                error = "--max-functional-matches requires an integer greater than zero.";
+                return false;
+            }
+            query.maxFunctionalMatchesPerDff = static_cast<size_t>(value);
+            functionalOptionsConfigured = true;
+        } else if (lowered == "--functional-find-any" ||
+                   lowered == "-functional_find_any") {
+            query.findAllFunctionalMatches = false;
+            functionalOptionsConfigured = true;
+        } else if (lowered == "--resolve-functional-data" ||
+                   lowered == "-resolve_functional_data") {
+            query.resolveFunctionalDataNets = true;
+            functionalOptionsConfigured = true;
+        } else if (lowered == "--no-resolve-functional-data" ||
+                   lowered == "-no_resolve_functional_data") {
+            query.resolveFunctionalDataNets = false;
+            functionalOptionsConfigured = true;
+        } else if (lowered == "--max-functional-data-candidates" ||
+                   lowered == "-max_functional_data_candidates") {
+            std::string valueToken;
+            int value = -1;
+            if (!(iss >> valueToken) || !parseStrictInteger(valueToken, value) || value < 1) {
+                error = "--max-functional-data-candidates requires an integer greater than zero.";
+                return false;
+            }
+            query.maxFunctionalDataCandidatesPerMatch = static_cast<size_t>(value);
+            functionalOptionsConfigured = true;
+        } else if (lowered == "--no-functional-simulation-filter" ||
+                   lowered == "-no_functional_simulation_filter") {
+            query.enableFunctionalSimulationFilter = false;
+            functionalOptionsConfigured = true;
+        } else if (lowered == "--functional-simulation-patterns" ||
+                   lowered == "-functional_simulation_patterns") {
+            std::string valueToken;
+            int value = -1;
+            if (!(iss >> valueToken) || !parseStrictInteger(valueToken, value) ||
+                value < 1 || value > 4096) {
+                error = "--functional-simulation-patterns requires an integer from 1 to 4096.";
+                return false;
+            }
+            query.functionalSimulationPatternCount = static_cast<size_t>(value);
+            functionalOptionsConfigured = true;
+        } else if (lowered == "--functional-per-dff-time-limit" ||
+                   lowered == "-functional_per_dff_time_limit") {
+            std::string valueToken;
+            double value = 0.0;
+            if (!(iss >> valueToken) || !parseStrictDouble(valueToken, value) || value <= 0.0) {
+                error = "--functional-per-dff-time-limit requires a positive number of seconds.";
+                return false;
+            }
+            query.functionalPerDffTimeLimitSeconds = value;
+            functionalOptionsConfigured = true;
+        } else if (lowered == "--functional-time-limit" ||
+                   lowered == "-functional_time_limit") {
+            std::string valueToken;
+            double value = 0.0;
+            if (!(iss >> valueToken) || !parseStrictDouble(valueToken, value) || value <= 0.0) {
+                error = "--functional-time-limit requires a positive number of seconds.";
+                return false;
+            }
+            query.functionalTimeLimitSeconds = value;
+            functionalOptionsConfigured = true;
         } else if (lowered == "--offset" || lowered == "-offset") {
             std::string valueToken;
             int value = -1;
@@ -1366,6 +1607,10 @@ bool buildSequentialPatternQuery(
         }
     }
 
+    if (functionalOptionsConfigured && !query.enableFunctionalFallback) {
+        error = "Functional search options require --functional-fallback.";
+        return false;
+    }
     if (query.dffName.empty() && query.verifyCanonicalMatchesWithSat) {
         error = "--verify-sat requires a specific DFF target; all-DFF SAT verification "
                 "may exceed the testcase time limit.";
@@ -1921,6 +2166,162 @@ bool parseTechnologyEditApply(const Netlist& netlist,
     return true;
 }
 
+bool isCliOptionToken(const std::string& token) {
+    return !token.empty() && token.front() == '-';
+}
+
+bool appendOptGateTypes(const Netlist& netlist,
+                        const std::string& token,
+                        std::vector<GateType>& types,
+                        std::string& error) {
+    const std::vector<std::string> names = split(token, ',');
+    for (const std::string& name : names) {
+        GateType type = GateType::UNKNOWN;
+        if (name.empty() || !parseGateType(netlist, name, type)) {
+            error = "Invalid combinational gate type: " + token;
+            return false;
+        }
+        if (std::find(types.begin(), types.end(), type) == types.end()) {
+            types.push_back(type);
+        }
+    }
+    return true;
+}
+
+bool parsePublicOptApply(const Netlist& netlist,
+                         std::istringstream& iss,
+                         const std::string& mode,
+                         Netlist::OptApplyRequest& request,
+                         std::string& error) {
+    if (toLower(mode) != "critical_path_depth") {
+        error = "Unknown or non-public opt_apply mode: " + mode;
+        return false;
+    }
+    request.passKind = OptPassKind::CriticalPathDepth;
+
+    std::vector<std::string> args;
+    std::string token;
+    while (iss >> token) {
+        args.push_back(token);
+    }
+
+    for (size_t i = 0; i < args.size();) {
+        const std::string option = toLower(args[i]);
+        if (option == "--scope" || option == "-scope") {
+            if (++i >= args.size() || !parseTargetScope(args[i], request.scope)) {
+                error = "--scope requires whole, net_fanin, net_fanout, gate_fanin, or gate_fanout.";
+                return false;
+            }
+            ++i;
+            if (scopeNeedsName(request.scope) &&
+                i < args.size() &&
+                !isCliOptionToken(args[i])) {
+                request.scopeName = args[i++];
+            }
+        } else if (option == "--name" || option == "-name") {
+            if (++i >= args.size() || isCliOptionToken(args[i])) {
+                error = "--name requires a scope target name.";
+                return false;
+            }
+            request.scopeName = args[i++];
+        } else if (option == "--objective" || option == "-objective") {
+            if (++i >= args.size()) {
+                error = "--objective requires global or cone.";
+                return false;
+            }
+            const std::string objective = toLower(args[i++]);
+            if (objective == "global" || objective == "global_maximum") {
+                request.depthObjective = OptDepthObjective::GlobalMaximum;
+            } else if (objective == "cone" ||
+                       objective == "scoped_fanin" ||
+                       objective == "scoped_fanin_cone") {
+                request.depthObjective = OptDepthObjective::ScopedFaninCone;
+            } else {
+                error = "--objective requires global or cone.";
+                return false;
+            }
+        } else if (option == "--allowed" || option == "--allow" ||
+                   option == "-allowed" || option == "-allow" ||
+                   option == "--banned" || option == "--ban" ||
+                   option == "-banned" || option == "-ban") {
+            const bool allowed =
+                option == "--allowed" || option == "--allow" ||
+                option == "-allowed" || option == "-allow";
+            std::vector<GateType>& destination =
+                allowed ? request.allowedTypes : request.bannedTypes;
+            const size_t firstType = ++i;
+            while (i < args.size() && !isCliOptionToken(args[i])) {
+                if (!appendOptGateTypes(
+                        netlist, args[i], destination, error)) {
+                    return false;
+                }
+                ++i;
+            }
+            if (i == firstType) {
+                error = allowed
+                    ? "--allowed requires at least one gate type."
+                    : "--banned requires at least one gate type.";
+                return false;
+            }
+        } else if (option == "--target-depth" ||
+                   option == "--target_depth" ||
+                   option == "-target_depth") {
+            if (++i >= args.size() ||
+                !parseStrictInteger(args[i], request.targetDepth) ||
+                request.targetDepth < 0) {
+                error = "--target-depth requires a non-negative integer.";
+                return false;
+            }
+            ++i;
+        } else if (option == "--time-limit" ||
+                   option == "--time_limit" ||
+                   option == "-time_limit") {
+            if (++i >= args.size() ||
+                !parseStrictDouble(args[i], request.timeLimitSeconds) ||
+                request.timeLimitSeconds <= 0.0) {
+                error = "--time-limit requires a positive number of seconds.";
+                return false;
+            }
+            ++i;
+        } else if (option == "--allow-no-improvement" ||
+                   option == "--allow_no_improvement") {
+            request.requireDepthImprovement = false;
+            ++i;
+        } else if (option == "--verbose" || option == "-verbose") {
+            request.verbose = true;
+            ++i;
+        } else {
+            error = "Unknown opt_apply option: " + args[i];
+            return false;
+        }
+    }
+
+    if (scopeNeedsName(request.scope) && request.scopeName.empty()) {
+        error = "The selected scope requires --name <net_or_gate>, or the name immediately after --scope.";
+        return false;
+    }
+    if (!scopeNeedsName(request.scope) && !request.scopeName.empty()) {
+        error = "Whole-netlist scope does not accept --name.";
+        return false;
+    }
+    if (request.depthObjective == OptDepthObjective::ScopedFaninCone &&
+        request.scope != TargetScope::NET_FANIN &&
+        request.scope != TargetScope::GATE_FANIN) {
+        error = "Cone depth objective requires net_fanin or gate_fanin scope.";
+        return false;
+    }
+    for (GateType type : request.allowedTypes) {
+        if (std::find(
+                request.bannedTypes.begin(),
+                request.bannedTypes.end(),
+                type) != request.bannedTypes.end()) {
+            error = "A gate type cannot appear in both --allowed and --banned.";
+            return false;
+        }
+    }
+    return true;
+}
+
 bool requireNoTrailingEditArgs(std::istringstream& iss, std::string& error) {
     std::string extra;
     if (iss >> extra) {
@@ -2242,8 +2643,27 @@ void printHelp() {
         << "  sequential_query enable_hold <all|dff_name> [--summary-only]\n"
         << "                   [--confirmed-only] [--include-no-pattern]\n"
         << "                   [--offset n] [--limit n] [--verify-sat]\n"
+        << "                   [--functional-fallback]\n"
+        << "                   [--max-functional-candidates n]\n"
+        << "                   [--max-functional-matches n] [--functional-find-any]\n"
+        << "                   [--resolve-functional-data|--no-resolve-functional-data]\n"
+        << "                   [--max-functional-data-candidates n]\n"
+        << "                   [--no-functional-simulation-filter]\n"
+        << "                   [--functional-simulation-patterns 1..4096]\n"
+        << "                   [--functional-per-dff-time-limit seconds]\n"
+        << "                   [--functional-time-limit seconds]\n"
         << "  all-DFF detail defaults to 50 records; use offset/limit for pagination\n"
         << "  --verify-sat is accepted only for a specific DFF target\n"
+        << "  functional search options require the opt-in --functional-fallback flag\n"
+        << "\nDepth optimization\n"
+        << "  opt_query critical_path_depth\n"
+        << "  opt_apply critical_path_depth [--scope <scope> [scope_name]]\n"
+        << "            [--name <scope_name>] [--objective global|cone]\n"
+        << "            [--allowed <type...>] [--banned <type...>]\n"
+        << "            [--target-depth N] [--time-limit seconds]\n"
+        << "            [--allow-no-improvement] [--verbose]\n"
+        << "  gate-type lists accept spaces or commas, for example NOR NOT or nor,not\n"
+        << "  CriticalPathDepth commits only after constraint checks and whole-design SAT\n"
         << "\nEdit apply\n"
         << "  edit_apply rename_gate <old> <new> | rename_net <old> <new>\n"
         << "  edit_apply cleanup_buffers | collapse_double_inverter | local_simplification_fixpoint\n"
@@ -2894,9 +3314,9 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             ? report.message + " Record page truncated; continue with --offset " +
                   std::to_string(page.nextRecordOffset) + "."
             : report.message;
-        response.complete = report.ok && report.status != "PARTIAL" &&
+        response.complete = report.ok && report.complete &&
                             !solverTimedOut && !solverUnknown && !page.truncated;
-        if (solverTimedOut) {
+        if (report.timedOut || solverTimedOut) {
             response.status = ToolStatus::Timeout;
         } else if (solverUnknown || report.status == "PARTIAL") {
             response.status = ToolStatus::Partial;
@@ -2907,6 +3327,112 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         }
         emitToolResponse(session, response, [&]() {
             printSequentialPatternReport(report, printOptions);
+        });
+        return true;
+    }
+
+    if (command == "opt_query") {
+        if (!requireDesign()) return true;
+        std::string mode;
+        if (!(iss >> mode)) {
+            emitToolError(
+                session,
+                command,
+                "",
+                "Usage: opt_query critical_path_depth");
+            return true;
+        }
+        if (toLower(mode) != "critical_path_depth") {
+            emitToolError(
+                session,
+                command,
+                mode,
+                "Unknown or non-public opt_query mode: " + mode);
+            return true;
+        }
+        std::string extra;
+        if (iss >> extra) {
+            emitToolError(
+                session,
+                command,
+                mode,
+                "Unexpected opt_query argument: " + extra);
+            return true;
+        }
+
+        Netlist::OptQueryRequest request;
+        request.passKind = OptPassKind::CriticalPathDepth;
+        const Netlist::OptQueryReport report =
+            session.current.runOptQuery(request);
+
+        ToolResponse response;
+        response.ok = report.ok;
+        response.status = report.ok ? ToolStatus::Ok : ToolStatus::Error;
+        response.command = command;
+        response.mode = "critical_path_depth";
+        response.message = report.message;
+        response.complete = report.ok;
+        emitToolResponse(session, response, [&]() {
+            printOptQueryReport(session.current, report);
+        });
+        return true;
+    }
+
+    if (command == "opt_apply") {
+        if (!requireDesign()) return true;
+        std::string mode;
+        if (!(iss >> mode)) {
+            emitToolError(
+                session,
+                command,
+                "",
+                "Usage: opt_apply critical_path_depth [options]");
+            return true;
+        }
+
+        Netlist::OptApplyRequest request;
+        request.validateEquivalence = true;
+        request.rollbackOnFailure = true;
+        std::string error;
+        if (!parsePublicOptApply(
+                session.current, iss, mode, request, error)) {
+            emitToolError(session, command, mode, error);
+            return true;
+        }
+
+        session.lastEditBaseline = session.current.cloneForRollback();
+        const Netlist::NetlistEditReport report =
+            session.current.runOptApply(request);
+        session.lastEditReport = report;
+        if (report.success && report.changed) {
+            ++session.designRevision;
+        }
+
+        const bool optimizationTimedOut =
+            report.depthOptimization &&
+            report.depthOptimization->wholeDesignTimedOut;
+        const bool equivalenceComplete =
+            report.validation.equivalenceChecked &&
+            report.validation.functionallyEquivalent;
+
+        ToolResponse response;
+        response.ok = report.success;
+        if (optimizationTimedOut) {
+            response.status = ToolStatus::Timeout;
+        } else if (!report.success) {
+            response.status = ToolStatus::Error;
+        } else if (!equivalenceComplete) {
+            response.status = ToolStatus::Partial;
+        } else {
+            response.status =
+                report.changed ? ToolStatus::Ok : ToolStatus::NoChange;
+        }
+        response.command = command;
+        response.mode = toLower(mode);
+        response.message = report.message;
+        response.complete = report.success && equivalenceComplete;
+        emitToolResponse(session, response, [&]() {
+            printEditReport(session.current, report);
         });
         return true;
     }
@@ -2951,7 +3477,7 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         } else if (mode == "previous_edit") {
             if (!session.lastEditBaseline) {
                 emitToolError(session, command, mode,
-                              "NO_PREVIOUS_EDIT_BASELINE: run edit_apply before this comparison.");
+                              "NO_PREVIOUS_EDIT_BASELINE: run edit_apply or opt_apply before this comparison.");
                 return true;
             }
             baseline = &*session.lastEditBaseline;
@@ -3020,7 +3546,11 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             return true;
         }
         if (!session.lastEditReport) {
-            emitToolError(session, command, mode, "NO_LAST_EDIT_REPORT: run edit_apply first.");
+            emitToolError(
+                session,
+                command,
+                mode,
+                "NO_LAST_EDIT_REPORT: run edit_apply or opt_apply first.");
             return true;
         }
 

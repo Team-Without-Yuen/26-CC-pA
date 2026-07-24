@@ -422,3 +422,23 @@ test37: 約 46k gates
 test35: 約 34k gates
 ```
 
+## 16. 最新官方回覆：Depth、Hidden Structure 與修改等價性
+
+官方確認：
+
+```text
+1. NOT 與 BUF 和其他 gates 一樣，各計一個 logic level。
+2. final evaluation 會使用未公開的 hidden netlist 與 prompts；實作需要處理公開測資未出現的結構。
+3. transformation 與 optimization prompt 都必須維持 functional equivalence。
+```
+
+對目前設計的影響：
+
+```text
+- DepthQuery 必須把 NOT/BUF 都算一層，不能把它們視為零延遲 wrapper。
+- 不能只靠 released testcase 中出現的 canonical MUX 外觀；Sequential Pattern C++ API 因此加入受限的 functional cofactor fallback。
+- DFF primitive 與 named pins 維持題目固定格式；可變部分是 D-input 前的組合實作。
+- low-level rewiring 不應直接暴露成預設 edit 行為；公開 transformation 必須保留 equivalence certificate 或 whole-design validation/rollback。
+```
+
+仍需注意：官方回答 hidden case 可能有 MUX-based structure，不等於已明確允許新的 native `mux` primitive syntax。parser 是否需要接受 native MUX gate，仍應和「只允許既定 primitive」的舊規格分開確認；目前 functional matcher 針對既有 primitive 組成的任意等價結構。

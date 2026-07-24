@@ -444,12 +444,13 @@ public:
                             const std::unordered_set<int>* strictContainment = nullptr);
 
     // 底層的實作引擎
-    TechMapReport mapTechnologyCore(Netlist& netlist, 
-                                const std::map<GateType, int>& targetConstraints, 
-                                const std::map<GateType, int>& allowedConstraints,
-                                const std::unordered_set<int>* scopeGates,
-                                const std::vector<RuleSource>& allowedSources,
-                                bool verbose);
+    TechMapReport mapTechnologyCore(Netlist& netlist,
+                                    const std::map<GateType, int>& targetConstraints,
+                                    const std::map<GateType, int>& allowedConstraints,
+                                    const std::unordered_set<int>* scopeGates,
+                                    const std::vector<RuleSource>& allowedSources,
+                                    bool verbose,
+                                    const std::unordered_set<int>* strictContainment = nullptr);
     // 處理整個 Netlist 的 API
     TechMapReport mapTechnology(Netlist& netlist, 
                                 const std::map<GateType, int>& targetConstraints, 

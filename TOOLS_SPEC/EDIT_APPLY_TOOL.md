@@ -6,7 +6,7 @@
 
 ## 2. 選擇條件
 
-prompt 明確指定 rename、cleanup、constant propagation、buffer insertion、gate replacement、basis conversion，或要求找出並合併 functionally equivalent gates 時使用本 tool。若要求 `minimize`、`best depth`、`best cost` 或自動搜尋最佳 transformation，屬於 optimization，不是 `edit_apply`。
+prompt 明確指定 rename、cleanup、constant propagation、buffer insertion、gate replacement、basis conversion，或要求找出並合併 functionally equivalent gates 時使用本 tool。若要求 `minimize`、`best depth`、`best cost` 或自動搜尋最佳 transformation，改用 `opt_apply critical_path_depth`，不是 `edit_apply`。
 
 ## 3. Rename/Cleanup Modes
 
@@ -129,4 +129,5 @@ Require: report_success=true, rolled_back=false, whole_design_equivalent=true
 
 - structural duplicate merge 與 functional duplicate merge 是不同 mode；後者成本較高且可能 timeout。
 - fixed basis conversion 不會自動找到 minimum depth/best cost implementation。
+- depth/cost optimization 的公開契約見 [`OPTIMIZATION_TOOL.md`](OPTIMIZATION_TOOL.md)。
 - public parser 不提供可能任意改變功能的低階 rewiring commands。

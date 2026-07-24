@@ -362,7 +362,8 @@ UNSUPPORTED
 | `equiv_query` | `checkWholeDesignEquivalence()` | 否 | P0 |
 | `report_query` | session cached report | 否 | P0 |
 | `sequential_query` | `runSequentialPatternQuery()` | 否 | P1 completed |
-| `opt_apply` | future real depth optimization | 是 | P3 |
+| `opt_query` | `runOptQuery()` | 否 | P3 completed |
+| `opt_apply` | `runOptApply()` | 是 | P3 completed |
 
 ---
 
@@ -989,31 +990,39 @@ What happened in the previous transformation?
 | functional duplicate merge | SAT candidate + verified edit flow | 已完成並通過 test29/test30 |
 | test38 redundant gate removal | structural duplicate merge | 已完成；official flow 實測移除 14 gates |
 | general observability-only redundancy | ODC candidate + verified edit flow | 尚無已確認 testcase；不是 tools parser 漏接 |
-| critical/max depth optimization | real OptApply | 未完成，屬 optimization |
-| cone depth optimization with basis constraint | scope-aware OptApply | 未完成，屬 optimization |
+| critical/max depth optimization | `OptApply::CriticalPathDepth` | API/report/CLI/mini test31/test32 已完成 |
+| cone depth optimization with basis constraint | scope-aware `CriticalPathDepth` | test40 official PASS；test33 large D-pin cone 有 core runtime blocker |
 
 ---
 
-## 20. 不應對外 expose 的現有 optimization skeleton
+## 20. Optimization C++ API 與 tools 公開邊界
 
-目前 `runOptQuery()` / `runOptApply()` 只支援：
+目前 `runOptQuery()` / `runOptApply()` 支援：
 
 ```text
 cleanup buffer chain
 collapse double inverter
 local simplification fixpoint
+critical path depth
 ```
 
-而且目前：
+CriticalPathDepth 已完成：
 
 ```text
-scopeName 尚未真正 enforced
-candidateIds 會被接受但實際套用 whole pass
-whole-design equivalence 尚未整合
-沒有真正 depth optimization
+scope / DFF.Q-to-D-pin resolution
+global/scoped depth objective
+allowed/banned basis validation
+targetDepth / no-improvement handling
+whole-design SAT
+transactional commit / rollback
+NetlistEditReport.depthOptimization
 ```
 
-因此在完成真正 optimization contract 前，不應將它 expose 成可回答「minimize critical path depth」的 `opt_apply`。這些 cleanup 功能先由 `edit_apply` 對外提供即可。
+`tools.cpp` 已實作 `opt_query/opt_apply critical_path_depth` 的 parser、help、
+envelope、depth optimization report 與 cached report。公開 command 只呼叫
+`runOptQuery()` / `runOptApply()`，不直接 expose unchecked `DepthOptimizer`。
+詳細 tool 契約見 `TOOLS_SPEC/OPTIMIZATION_TOOL.md`；C++ 用法見
+`API_SPEC/OPT_APPLY_USAGE.md`。
 
 ---
 
@@ -1033,7 +1042,7 @@ whole-design equivalence 尚未整合
 | cut/articulation/mandatory/separator | `path_query` |
 | DFF enable/hold semantics | `sequential_query` |
 | specified rename/cleanup/simplify/buffer/map | `edit_apply` |
-| objective/cost-driven minimize/optimize/best | future `opt_apply` |
+| objective/cost-driven minimize/optimize/best depth | `opt_apply critical_path_depth` |
 | current vs original/pre-edit equivalence | `equiv_query` |
 | previous edit delta/follow-up count | `report_query last_edit` |
 
@@ -1133,6 +1142,14 @@ PathQueryResult validation fields
 sequential_query enable_hold <all|dff_name>
   [--summary-only] [--confirmed-only] [--include-no-pattern]
   [--offset N] [--limit N] [--verify-sat]
+  [--functional-fallback]
+  [--max-functional-candidates N] [--max-functional-matches N]
+  [--functional-find-any]
+  [--resolve-functional-data|--no-resolve-functional-data]
+  [--max-functional-data-candidates N]
+  [--no-functional-simulation-filter]
+  [--functional-simulation-patterns 1..4096]
+  [--functional-per-dff-time-limit SEC] [--functional-time-limit SEC]
 ```
 
 輸入語意：
@@ -1147,6 +1164,10 @@ sequential_query enable_hold <all|dff_name>
 | `--include-no-pattern` | detail 也列無 pattern DFF |
 | `--offset/--limit` | detail 分頁；all 預設上限 50 records |
 | `--verify-sat` | 只允許指定 DFF；all-DFF SAT 會在 parser 階段拒絕 |
+| `--functional-fallback` | opt-in SAT cofactor search；未指定時維持 canonical fast path |
+| functional candidate/match options | 控制每顆 DFF 的 bounded search 與 FindAny/FindAll |
+| functional data options | 控制是否搜尋具名 data net 及每筆 candidate 上限 |
+| functional simulation/time options | 控制 safe-Reject prefilter 與 per-DFF/query-wide budget |
 
 必要輸出：
 
@@ -1156,14 +1177,16 @@ DFF 總數 / 已分析 DFF 數量
 confirmed unique DFF 數量 / candidate DFF 數量
 每顆 DFF：D/Q net、pattern kind、enable/data/feedback、active level
 structural/functional proof status、SAT timeout/unknown、evidence gates
+functional complete/timeout、candidate/simulation/SAT cost counters
 pagination completeness、next offset
 ```
 
 CLI formatter 不得把 `AndGatedDataCandidate` 算入 confirmed matched count；官方回覆前必須輸出 `semantics pending`。
+functional fallback incomplete 時 envelope 必須為 `partial` 或 `timeout`；已找到的 confirmed matches 仍有效，但 absence 不得解讀為不存在。
 
-驗證：`mini test/test21` 12/12；test40 summary 約 0.32 秒、1101 characters，預設 detail 固定 50 records 並明確回 partial。
+驗證：`mini test/test21` 18/18，涵蓋 canonical 相容、functional proof、candidate partial、timeout/error、參數驗證與 envelope；C++ focused reference `mini test/test28` 19/19。test40 canonical summary 預設 detail 固定 50 records 並明確回 partial。
 
-### Batch 7：真正 optimization
+### Batch 7：真正 optimization（已完成）
 
 ```text
 scope-aware depth candidate
@@ -1172,7 +1195,16 @@ basis constraint validation
 whole-design equivalence
 accept/no-improvement/rollback
 NetlistEditReport.depthChange
+NetlistEditReport.depthOptimization
+tools parser/help/report cache
+conservative scoped lower-bound proof
 ```
+
+驗證：`mini test/test31` C++ transaction 11/11；`mini test/test32` CLI
+regression 涵蓋全域/scoped depth、DFF.Q-to-D-pin、basis constraint、
+target rollback、cached report、timeout、depth-0 與 NAND/NOT depth-2 lower
+bound。Official test40 bounded smoke PASS；test33 仍會在不可搶占的 global XAG
+primitive 超過 120 秒。
 
 ---
 
@@ -1236,11 +1268,11 @@ complete / partial / unsupported expectation
 
 ## 25. 目前下一個實作工作項目
 
-Batch 1 到 Batch 5 已完成並有獨立 integration test，test31 到 test40 command coverage audit 也已整理。Typed/scoped constant propagation、batch PI/PO width report、Basic active-design semantics、exact functional dependence、directed cut/articulation 與 symmetry analysis 已完成。下一步處理剩餘特殊分析與最佳化缺口：
+Batch 1 到 Batch 7 的 public command/report 已完成並有獨立 integration test，test31 到 test40 command coverage audit 也已整理。下一步優先處理已由 official smoke 證實的 runtime blocker：
 
 ```text
-1. General observability-aware redundancy analysis（hidden-case hardening；official test38 已覆蓋）。
-2. Constrained depth optimization public flow。
+1. test33 large D-pin cone 的 cone-isolated resynthesis 或 mockturtle cooperative timeout。
+2. General observability-aware redundancy analysis（hidden-case hardening；official test38 已覆蓋）。
 ```
 
 Batch 5 已遵守高階 API 邊界：cone intersection、PO-only filtering 與 direct depth-0 connection analysis 都在 analysis layer 完成，`tools.cpp` 只做參數解析與輸出。

@@ -15,8 +15,10 @@
 
 // 最佳化結果的狀態碼
 enum class OptimizationStatus {
-    SUCCESS,                 // 成功最佳化（例如深度縮減），且等價檢查通過
+    SUCCESS,                 // pass 成功產生候選；是否已驗證等價請看 equivalenceChecked
     NO_IMPROVEMENT,          // 找不到可以最佳化的改法
+    ERROR_INVALID_REQUEST,   // scope、target 或其他 request 內容無效
+    ERROR_CONSTRAINT_UNSATISFIED, // 無法滿足指定的 gate-basis / mapping constraint
     ERROR_NOT_EQUIVALENT,    // 改動後等價檢查失敗 (應 Rollback)
     ERROR_AREA_EXCEEDED      // 最佳化雖達成，但超過了面積限制 (應 Rollback)
 };

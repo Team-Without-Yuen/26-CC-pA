@@ -1,5 +1,6 @@
 #include "include/core/MockturtleConverter.h"
 #include <unordered_map>
+#include <unordered_set>
 #include <iostream>
 #include <vector>
 #include <string>
@@ -39,7 +40,7 @@ std::vector<int> ComputeTopologicalOrder(const Netlist& nl) {
 
     for (int g = 0; g < gateCount; ++g) {
         const auto& gate = nl.getGate(g);
-        if (gate.type == GateType::DFF) continue;
+        if (gate.type == GateType::DFF || gate.type == GateType::UNKNOWN) continue;
 
         std::unordered_set<int> pending;                 // 去重
         for (int netId : gate.inputNetIds)
@@ -65,7 +66,8 @@ std::vector<int> ComputeTopologicalOrder(const Netlist& nl) {
         for (int nextGateId : nl.getNet(outNetId).loadGateIds) {
             if (nextGateId < 0 || nextGateId >= gateCount) continue;
             if (!firedGate.insert(nextGateId).second) continue;   // tied-input:已扣過
-            if (nl.getGate(nextGateId).type == GateType::DFF) continue;
+            const GateType nextType = nl.getGate(nextGateId).type;
+            if (nextType == GateType::DFF || nextType == GateType::UNKNOWN) continue;
             if (--inDegree[nextGateId] == 0) queue.push_back(nextGateId);
         }
     }
@@ -73,7 +75,10 @@ std::vector<int> ComputeTopologicalOrder(const Netlist& nl) {
     // 診斷:偵測未能排序的組合閘 (輸入懸空 / 組合迴路)
     int combCount = 0;
     for (int g = 0; g < gateCount; ++g)
-        if (nl.getGate(g).type != GateType::DFF) ++combCount;
+        if (nl.getGate(g).type != GateType::DFF &&
+            nl.getGate(g).type != GateType::UNKNOWN) {
+            ++combCount;
+        }
     if ((int)topoOrder.size() != combCount)
         std::cerr << "[TopoSort][WARN] " << (combCount - (int)topoOrder.size())
                   << " combinational gate(s) unresolved "

@@ -418,6 +418,8 @@ P3：
 
 ```text
 mini test/tester.cpp 目前覆蓋 depth/path/function 等 Team C 會依賴的 analysis 基礎。
-fanout buffer planning、mapping plan、depth optimization flow 尚未納入 regression tester。
-目前 regression：Summary: 45 passed, 0 failed.
+fanout/edit regression 由 mini test/test2 覆蓋。
+rewrite scope / basis mapping 由 mini test/test30 覆蓋。
+depth optimization transaction / SAT / rollback 由 mini test/test31 覆蓋。
+目前本輪重點 regression：test2 31/31、test29 3/3、test30 7/7、test31 11/11。
 ```
