@@ -8,6 +8,7 @@
 #include <queue>
 #include <unordered_set>
 #include <unordered_map>
+#include <chrono>
 
 namespace {
 
@@ -140,7 +141,16 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
     // ---------------------------------------------------------------------
     // 階段 2：全域深度壓縮 (Global Depth Optimization via mockturtle)
     //   純 AIG → AIG 流；其餘 → XAG 流（含 cone 限制題，先自由壓深度）
+    //   加上 2 分鐘總時間上限：balancing/cut_rewriting/resubstitution 本身沒有
+    //   可中斷機制，只能在每輪 iteration 交界處檢查，超時就停在目前已知最佳解上。
     // ---------------------------------------------------------------------
+    constexpr double kStage2TimeLimitSeconds = 120.0;
+    const auto stage2Start = std::chrono::steady_clock::now();
+    auto stage2TimeUp = [&]() {
+        std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - stage2Start;
+        return elapsed.count() >= kStage2TimeLimitSeconds;
+    };
+
     if (useGlobalAIG) {
         if (verbose) std::cout << "[Step 2] Global AIG optimization...\n";
 
@@ -149,6 +159,11 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
         int best_real = INT_MAX;
 
         for (int i = 0; i < 10; ++i) {
+            if (stage2TimeUp()) {
+                if (verbose) std::cout << "  -> Stage 2 time limit (" << kStage2TimeLimitSeconds
+                                       << "s) reached, stopping early at iteration " << i << ".\n";
+                break;
+            }
             mockturtle::sop_rebalancing<mockturtle::aig_network> reb;
             mockturtle::balancing_params bps; bps.cut_enumeration_ps.cut_size = 6u;
             candA = mockturtle::cleanup_dangling(mockturtle::balancing(candA, {reb}, bps));
@@ -178,6 +193,11 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
         int bestRealDepth = initialProbe.findGlobalCriticalPath().depth;
 
         for (int iter = 0; iter < 10; ++iter) {
+            if (stage2TimeUp()) {
+                if (verbose) std::cout << "  -> Stage 2 time limit (" << kStage2TimeLimitSeconds
+                                       << "s) reached, stopping early at iteration " << iter << ".\n";
+                break;
+            }
             mockturtle::esop_rebalancing<mockturtle::xag_network> reb;
             mockturtle::balancing_params bps; bps.cut_enumeration_ps.cut_size = 6u;
             xag = mockturtle::cleanup_dangling(mockturtle::balancing(xag, {reb}, bps));
@@ -277,6 +297,7 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
             std::cout << "  -> cone size: " << coneGates.size() << " gates\n";
 
         // (a) cone 內基底強制（合規，失敗即放棄
+        if (verbose) std::cout << "[Step a] Executing cone inner base forced\n";
         TechMapReport coneRep = techMapper.convertToBasisOnGateSet(
             netlist, coneGates, allowedTypes, bannedTypes, verbose);
 
@@ -289,13 +310,14 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
         netlist.trimDeadLogic();
 
         // (b) cone 內反相吸收：RHS 限定 cone 允許的閘
+        if (verbose) std::cout << "[Step b] Executing Cone internal reverse absorption\n";
         coneGates = refreshConeGates();                 // (a) 產生新閘，範圍已變
-        techMapper.absorbInvertersOnGateSet(
-            netlist, coneGates, allowedTypes, bannedTypes, verbose);
+        techMapper.absorbInvertersOnGateSet(netlist, coneGates, allowedTypes, bannedTypes, verbose);
         eliminateDoubleInverters(netlist);
         netlist.trimDeadLogic();
 
         // (c) cone 外反相吸收：任意閘合法 
+        if (verbose) std::cout << "[Step c] Executing cone external reverse absorption\n";
         coneGates = refreshConeGates();                 // (b) 又改了結構，重查後才能正確排除
         std::unordered_set<int> outsideGates;
         for (int g = 0; g < (int)netlist.getGateCount(); ++g) {
@@ -307,16 +329,12 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
 
         static const std::vector<GateType> kAllGates = {
             GateType::AND, GateType::OR, GateType::NAND, GateType::NOR,
-            GateType::NOT, GateType::BUF, GateType::XOR, GateType::XNOR };
+            GateType::NOT, GateType::XOR, GateType::XNOR };
 
         techMapper.absorbInvertersOnGateSet(
             netlist, outsideGates, kAllGates, {}, verbose);
         eliminateDoubleInverters(netlist);
         netlist.trimDeadLogic();
-
-        if (verbose)
-            std::cout << "  -> cone depth: " << depthBeforeCone
-                      << " -> " << netlist.findGlobalCriticalPath().depth << "\n";
     }
 
     // ---------------------------------------------------------------------

@@ -427,12 +427,13 @@ public:
     bool isValidSubgraph(Netlist& netlist, const MatchContext& ctx, int rootGateId, bool allowLogicDuplication = false);
     
     // 針對一個rule的替換執行引擎
-    void applyRule(Netlist& netlist, 
-                   const MatchContext& ctx, 
-                   int rootGateId, 
-                   const TechMapRule& rule, 
-                   TechMapReport& report, 
-                   bool allowLogicDuplication = false);
+    void applyRule(Netlist& netlist,
+                   const MatchContext& ctx,
+                   int rootGateId,
+                   const TechMapRule& rule,
+                   TechMapReport& report,
+                   bool allowLogicDuplication = false,
+                   int* outFinalNetId = nullptr);
 
     // 統一的映射執行引擎
     bool executeMappingPass(Netlist& netlist, 
