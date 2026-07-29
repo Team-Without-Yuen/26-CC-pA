@@ -10,57 +10,58 @@ transaction validation、session state 與底層 regression。
 API_SPEC/TOOLS待更新表.md
 ```
 
-## P0-1：DFF.Q fanin scope 必須停在 boundary
+## 已完成：DFF.Q fanin scope 停在 boundary
 
 官方 QA 要求 DFF.Q/register output 的 fanin cone 視為空的 combinational
 boundary，不得自動改取同一 DFF 的 D-input cone。
 
-底層待修改：
+已完成修改：
 
 ```text
-- resolveRewriteScope() 移除 DFF.Q -> D-pin 特例。
-- net_fanin <DFF.Q> 回傳 empty cone、gate count 0、depth 0。
-- scoped edit/optimization 對 empty cone 回 verified no-op。
+- resolveRewriteScope() 的 NET_FANIN 已移除 DFF.Q -> D-pin 特例。
+- cone_query net_fanin <DFF.Q> 回傳 empty cone、gate count 0、depth 0。
+- scoped edit/optimization 對 empty cone 回 no-change / already optimal。
 - gate-basis constraint 在 empty cone 上 vacuously satisfied。
-- 移除或 deprecated resolved_through_dff_data_pin 的 API 語意。
-- 更新 test26/test33 coverage。
-- 更新 mini test/test30/test31/test32。
+- GATE_FANIN <DFF instance> 仍可解析到 D-pin cone，因為 target 是 DFF cell 本身。
 ```
 
-這項修改後，如果 testcase 中的 n8 確認是 DFF.Q，應直接以 boundary depth 0
-回 original/already optimal，不再進入大型 D-pin XAG optimization。
+驗證：
 
-## P0-2：跨 prompt persistent constraints
+```text
+NewTestCase/test26 n10:
+- cone_query net_fanin n10 -> gates 0, nets 1
+- edit_apply convert_basis net_fanin n10 -allow NOR NOT -> no_change
+- opt_apply critical_path_depth --scope net_fanin n10 --objective cone --allowed NOR NOT -> already optimal, depth 0
+```
+
+## 已標記為 LLM 層策略：跨 prompt persistent constraints
 
 同一 testcase 中，先前 prompt 建立的 structural constraints 在後續
-transformation 後仍需成立。不能只依賴 LLM 在後續 prompt 記得重送 constraint；
-final writer 前必須有 deterministic validation。
+transformation 後是否仍需成立，屬於 prompt / testcase 語意判斷。這件事先不在
+底層自動保存 accumulated constraint state，避免 API 依自然語言做過度推論。
 
-底層待設計：
+目前定位：
 
 ```text
-- session 保存 accumulated hard constraints。
-- 成功的 fanout limit、whole/scope gate basis 等 request 註冊 constraint。
-- 每次後續 edit/opt candidate commit 前重驗全部 accumulated constraints。
-- write 前執行 final constraint validation。
-- 違反舊 constraint 時 rollback/reject，並在 report 說明是哪一條失敗。
-- read 新 design 時清空 constraint state。
+- constraint memory 交給 LLM / testcase driver 維護。
+- 若後續 prompt 需要保留前題 hard constraint，LLM 必須在 edit/opt/query 時重送對應條件或額外呼叫驗證工具。
+- 底層 API 只保證單次 request 中明確帶入的 allowed/banned/fanout/equivalence requirement 會被檢查。
+- 後續若要新增 LLM-facing policy 或 tool usage 說明，放在 tools 文件同步階段處理。
 ```
 
-## P1-1：AND-only enable/hold candidate
+## 已完成：AND-only enable/hold candidate 改為 non-match diagnostic
 
 官方 QA 已確認 `D = EN & DATA` 不算 enable/hold；只有含同一 DFF.Q feedback
 的 MUX-hold function 才算 enable/hold。
 
-底層待修改：
+已完成修改：
 
 ```text
-- public sequential_query 預設不輸出 AndGatedDataCandidate 作為 match。
-- matched_dff_count / candidate_dff_count 不得把 AND-only 算成 enable/hold。
-- semanticsPending 說明改成明確 non-match diagnostic，或移除 public record。
-- 更新 SEQUENTIAL_PATTERN_API.md。
-- 更新 SEQUENTIAL_PATTERN_USAGE.md。
-- 更新 test19/test21 coverage。
+- AND-only report kind 改為 DataGatingWithoutHoldFeedback。
+- per-DFF status 改為 DATA_GATING_WITHOUT_HOLD_FEEDBACK。
+- matched_dff_count / candidate_dff_count 都不計入 AND-only data gating。
+- semanticsPending=false，因官方語意已明確，不再標成 pending candidate。
+- functional fallback 仍可辨識 Q69 允許的 Q-free EN/DATA Boolean decomposition。
 ```
 
 ## P1-2：Critical Path Optimization core runtime blocker
@@ -83,11 +84,32 @@ NewTestCase/test40: official bounded smoke PASS，約 3.6 秒
 NewTestCase/test33: 120 秒 process timeout；large D-pin cone core runtime blocker
 ```
 
+## 後期 AIG / Boolean 重構項目
+
+目前決策：
+
+```text
+- Boolean-function 類能力先不做短期擴充。
+- 後期先建立 current named netlist 對應的 AIG functional index，再統一處理 SAT / cofactor / equivalence / symmetry / enable-hold decomposition。
+- current named netlist 仍是唯一正式 design state；AIG 只作為 functional analysis index，不取代 gate/net 名稱、depth、fanout 或 writer 結果。
+- 現階段保留既有可回答能力，但不再新增臨時 heuristic 來補 hidden Boolean pattern。
+```
+
+後期重構範圍：
+
+```text
+- sequential_query enable_hold 的 Q-free EN/DATA Boolean decomposition。
+- func_query boolean_expression 的 canonical / depth-limited / large-output policy。
+- func_query symmetry 的完整 Boolean-level proof 與 cache。
+- func_query equivalence / constant function 的共用 SAT/AIG cache。
+- merge_functionally_equivalent_gates 這類依賴全域 Boolean equivalence 的 cleanup/edit。
+```
+
 ## 已完成但歸屬 API / backend 的事項
 
 ### Sequential Pattern functional fallback
 
-目前狀態：
+目前狀態與定位：
 
 ```text
 C++ API 已完成
@@ -97,6 +119,7 @@ candidate ranking 為 engine 固定策略，不新增 CLI 參數
 simulation-aware stable rerank 為 engine 固定策略，不新增 CLI 參數
 simulation safe Reject 不占 max-functional-candidates quota
 one-shot/reusable hybrid SAT session 為 engine 固定策略，不新增 CLI 參數
+此功能目前不列為短期 default-policy 調整項；後期 AIG 重構後再統一決定 public/default behavior。
 ```
 
 公開 API / engine counter 已包含：
@@ -170,7 +193,7 @@ NetlistEditReport.depthOptimization
 2. structure / Problem A / gate-basis / depth target validation。
 3. mandatory whole-design SAT：同名 PO + DFF.D。
 4. no improvement、target 未達、basis violation、timeout、不等價時保留 original。
-5. DFF.Q fanin rewrite scope 解析到 D-pin data cone。（待依 P0-1 修改）
+5. DFF.Q fanin rewrite scope 停在 sequential boundary，不解析到 D-pin data cone。
 6. XAG candidate 使用 Problem A 實際 depth；NOT/BUF 都算一層。
 7. OptimizationResult.changed / equivalenceChecked / equivalent 使用真實狀態。
 ```

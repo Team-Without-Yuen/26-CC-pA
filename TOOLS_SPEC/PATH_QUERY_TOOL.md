@@ -4,6 +4,10 @@
 
 `path_query` 負責明確 startpoint 與 endpoint 之間的 combinational path、路徑限制、register-to-register path、mandatory nodes 與 separator/cut。對外不使用 legacy `reg_path_query` 或 `graph_query`。
 
+完整性規則：`all paths` 預設不設數量上限；只問數量使用 `-count_only`，要求完整列表使用
+streaming `-out`，正式答案只回總數、完成狀態與檔案位置。時間限制依題目指定。詳見
+[`LLM_NOTES.md`](LLM_NOTES.md)。
+
 ## 2. 選擇條件
 
 prompt 出現 `path from A to B`、`through`、`avoid`、`every path`、`shortest`、`longest between endpoints`、`register-to-register`、`mandatory`、`separator` 或 `cut` 時使用本 tool。
@@ -62,7 +66,15 @@ required/avoided nodes 使用 `gate:<g>`、`net:<n>` 或 bare net；bare token �
 | `-time_limit <seconds>` | enumeration 時間上限 |
 | `-count_only` | 只計數，不保存/顯示每條 path |
 
-對 `enumerate`，只有 envelope `complete:true` 且 data `Complete enumeration: yes` 時，`Total paths` 才是精確完整總數。`timeout` 或其他 incomplete 結果只能回報已找到數量與停止原因。若指定 `-out`，工具會在 DFS 過程中 streaming 寫檔，不會先把所有 paths 保存在記憶體後再一次寫出。
+對 `enumerate`，只有 envelope `complete:true` 且 data `Complete enumeration: yes` 時，
+`Total paths` 才是精確完整總數。若指定 `-out`，工具會在 DFS 過程中 streaming 寫檔，
+不會先把所有 paths 保存在記憶體後再一次寫出。遇到 timeout 時先保留已找到數量、
+停止原因與輸出檔，再依 `LLM_NOTES.md` 的 Competition Answer Policy 產生正式候選答案；
+不得把 partial count 偽裝成精確總數。
+
+`direct_pi_po` 的 `-max_print` 只限制 terminal 顯示，不影響
+`Total direct PI-to-PO connections`。題目要求完整 connection list 時，先執行一次取得總數
+`N`，再執行 `path_query direct_pi_po -max_print N`；不能把預設顯示的前 20 筆當成全部。
 
 ## 6. Prompt Examples
 
@@ -92,6 +104,10 @@ Read: Is separator
 
 ## 7. 限制
 
-- 大型設計的 all-path enumeration 可能指數成長，優先設定 `-time_limit`；只問數量時使用 `-count_only`。完整列舉題目可搭配 `-out` 寫檔。
+- 大型設計的 all-path enumeration 可能指數成長。只問數量時優先使用可完成精確計數的
+  `-count_only`；完整列舉題目使用 `-out` 與 `-max_print 0`，並將 `-time_limit` 設為
+  整體 deadline 前可用的最大安全值。
+- `-max_paths` 僅為 legacy compatibility，不得把它當成完整 enumeration 的限制或完成保證；完成性只看 `complete`、`Complete enumeration` 與 stop fields。
+- bus bit endpoint 必須寫成 `net:n0[0]`、`net:n63[1]`；不要把 bus bit 當成 `pi:` / `po:` endpoint。
 - `max_depth` 是指定 endpoints 間的最長 path；全域 critical path 應使用 `depth_query global_critical`。
 - 空的 mandatory list 可能表示 path 存在但沒有 mandatory internal net；必須同時讀 `Path exists`。

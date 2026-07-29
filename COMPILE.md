@@ -36,7 +36,7 @@
 | 入口 | 用途 | 建置檔 |
 |------|------|--------|
 | `main.cpp` → `NetlistTool.exe` | critical-path optimizer 的整合測試程式 | 根目錄 `Makefile` |
-| `tools.cpp` → `tools.exe` | 給 LLM 使用的 public command CLI | `TOOLS_SPEC/Makefile` |
+| `tools.cpp` → `tools.exe` | 給 LLM 使用的 public command CLI | `scripts/tools.mk` |
 
 兩者共用相同的 `src/`、ABC 與 CaDiCaL library，但不可把
 `NetlistTool.exe` 的實驗性 optimizer 參數當成正式 tools schema。
@@ -52,7 +52,7 @@ make          # 首次會自動編 CaDiCaL + ABC,再編主程式
 若要建置 LLM-facing tools CLI：
 
 ```bash
-make -f TOOLS_SPEC/Makefile
+make -f scripts/tools.mk
 ```
 
 這個 target 會共用相同的 ABC/CaDiCaL build，輸出 `tools.exe`。

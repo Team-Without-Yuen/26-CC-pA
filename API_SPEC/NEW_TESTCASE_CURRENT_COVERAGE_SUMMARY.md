@@ -85,7 +85,7 @@ Batch 5 已直接 expose `gate_on_critical`、`every_through`、`deepest_output`
 | Prompt 片段 | 出現位置 | 缺口 |
 | --- | --- | --- |
 | reduce / optimize / minimize critical path depth through restructuring | `test22` 到 `test30`, `test33`, `test40` | public command/report/rollback/SAT 已串接；大型 mockturtle primitive 尚不可 cooperative cancel |
-| optimize cone depth while maintaining NAND/NOT, NOR/NOT, AND/OR/NOT | `test25` 到 `test28`, `test33`, `test40` | test40 可由 NAND/NOT lower-bound proof 安全回 original；test33 大型 D-pin cone 在 120 秒 outer timeout 內未完成 |
+| optimize cone depth while maintaining NAND/NOT, NOR/NOT, AND/OR/NOT | `test25` 到 `test28`, `test33`, `test40` | DFF.Q target 已改為 boundary depth 0；非 DFF.Q 大型 cone 仍需要 optimizer core hardening |
 | all gate pairs functionally equivalent | `test29`, `test30`, `test35` | 已支援 SAT class search、cycle-safe functional merge、whole-design SAT 與 rollback；test29/test30 已實測 |
 | redundant gates removable without changing functionality | `test38` | 已確認是 structural duplicates；`MergeStructurallyEquivalentGates` 實測移除 14 gates，whole-design SAT 通過 |
 
@@ -96,7 +96,7 @@ Batch 5 已直接 expose `gate_on_critical`、`every_through`、`deepest_output`
 | Priority | 要補的內容 | 原因 |
 | --- | --- | --- |
 | Completed | 串接 depth optimization tools command | parser/help/envelope/report cache 與 mini test32 已完成 |
-| P1 | large scoped-cone optimizer cancellation/resynthesis | test33 的 n8 解析到大型 D-pin cone；目前 core 先進全域 XAG，`--time-limit` 無法中止單次 primitive |
+| P1 | large scoped-cone optimizer cancellation/resynthesis | 針對 hidden 中非 DFF.Q 的大型 cone；目前 core 先進全域 XAG，`--time-limit` 無法中止單次 primitive |
 | P2 | general observability-aware redundancy hardening | official test38 已由 structural merge 完整處理；此項只針對可能的 hidden 任意 ODC redundancy |
 
-目前結論：已知 NewTestCase 的 query、mapping、edit 與 depth optimization prompt 均已有 tools CLI routing。whole-design equivalence 已涵蓋 PO 與 DFF.D，functional duplicate search/merge、test38 structural redundancy、canonical DFF enable/hold 與 symmetry 已完成驗證。depth optimization 的 transaction 與 test40 official flow 已通過，但 test33 large D-pin cone 仍有 optimizer-core runtime blocker；不可再宣稱所有 optimization testcase 均完整覆蓋。
+目前結論：已知 NewTestCase 的 query、mapping、edit 與 depth optimization prompt 均已有 tools CLI routing。whole-design equivalence 已涵蓋 PO 與 DFF.D，functional duplicate search/merge、test38 structural redundancy、canonical DFF enable/hold 與 symmetry 已完成驗證。depth optimization 的 transaction、DFF.Q boundary no-op 與 test40 official flow 已通過；hidden 若出現非 DFF.Q 的大型 scoped cone，仍有 optimizer-core runtime blocker，不可宣稱所有 optimization testcase 均完整覆蓋。

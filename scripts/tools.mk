@@ -1,8 +1,5 @@
-# Build the LLM-facing tools executable from either the repository root:
-#   make -f TOOLS_SPEC/Makefile
-# or this directory:
-#   cd TOOLS_SPEC
-#   make
+# Build the LLM-facing tools executable from the repository root:
+#   make -f scripts/tools.mk
 
 MAKEFILE_DIR := $(patsubst %/,%,$(dir $(lastword $(MAKEFILE_LIST))))
 ROOT_DIR := $(MAKEFILE_DIR)/..
@@ -37,10 +34,6 @@ SOURCES := \
   $(wildcard $(ROOT_DIR)/include/lib/abcsat/*.cpp) \
   $(wildcard $(ROOT_DIR)/include/lib/abcesop/*.cpp)
 
-# tools.exe is compiled in one command, so track headers explicitly as inputs.
-HEADERS := $(shell find $(ROOT_DIR)/include $(ROOT_DIR)/src -type f \
-  \( -name '*.h' -o -name '*.hpp' \) 2>/dev/null)
-
 CPPFLAGS := \
   -DFMT_HEADER_ONLY \
   $(PLATFORM_DEF) \
@@ -74,7 +67,7 @@ CXXFLAGS := \
 LDFLAGS := -Wl,--start-group $(ABC_LIB) $(CADICAL_LIB) -Wl,--end-group
 LDLIBS := $(SYS_LIBS)
 
-.PHONY: all libs rebuild clean check print-config
+.PHONY: all libs rebuild clean print-config
 
 all: $(TARGET)
 
@@ -84,25 +77,20 @@ libs:
 $(CADICAL_LIB) $(ABC_LIB):
 	$(MAKE) -C $(ROOT_DIR) libs
 
-$(TARGET): $(CADICAL_LIB) $(ABC_LIB) $(SOURCES) $(HEADERS)
+$(TARGET): $(CADICAL_LIB) $(ABC_LIB) $(SOURCES)
 	@echo [BUILD] Compiling tools.exe
 	$(CXX) $(CPPFLAGS) $(CXXFLAGS) $(SOURCES) $(LDFLAGS) $(LDLIBS) -o $@
 	@echo [SUCCESS] Built $(TARGET)
 
 rebuild:
-	rm -f $(TARGET)
-	$(MAKE) -f $(lastword $(MAKEFILE_LIST)) all
+	$(MAKE) -B -f $(lastword $(MAKEFILE_LIST)) all
 
 clean:
 	rm -f $(TARGET)
-
-check: all
-	printf 'help\nexit\n' | $(TARGET)
 
 print-config:
 	@echo ROOT_DIR=$(ROOT_DIR)
 	@echo TARGET=$(TARGET)
 	@echo MSYSTEM=$(MSYSTEM)
-	@echo CXX=$(CXX)
 	@echo CADICAL_LIB=$(CADICAL_LIB)
 	@echo ABC_LIB=$(ABC_LIB)

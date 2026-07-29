@@ -270,7 +270,7 @@
 | Case | Result | 說明 |
 |---|---|---|
 | test40 | PASS，約 3.6 秒 | 完整前置 NAND/NOT mapping/cleanup 後，n14 depth 2 命中安全 lower-bound proof，回 original |
-| test33 | outer timeout 120 秒 | 前置 edit 完成；n8 解析為 depth 327 的 D-pin cone，core 卡在不可搶占的 global XAG primitive |
+| test33 | 待重測 | 若 n8 為 DFF.Q，應以 boundary depth 0 回 original；hidden 中非 DFF.Q 大型 cone 仍可能卡在不可搶占的 global XAG primitive |
 
 ### test35 Function Search 實測
 

@@ -4,6 +4,10 @@
 
 `opt_query` 與 `opt_apply` 負責 cost/objective-driven 的 critical-path depth 最佳化。它們與 `depth_query` 的差異是會搜尋並嘗試提交重構後的 design；與 `edit_apply` 的差異是使用者指定的是目標與限制，而不是固定 transformation。
 
+完整性規則：不得自行加入題目未要求的 candidate/result 數量上限；depth target、gate basis 與
+fanout limit 是題目 constraint，不是輸出截斷。時間限制依題目指定。詳見
+[`LLM_NOTES.md`](LLM_NOTES.md)。
+
 公開 tools layer 只開放 `CriticalPathDepth` 高階 transaction，不直接暴露 `DepthOptimizer`、mockturtle 或 unchecked rewrite。候選只有在 scope、gate-type constraint、target depth 與 whole-design SAT 全部通過後才會 commit。
 
 ## 2. 選擇條件
@@ -66,7 +70,7 @@ scope name 可直接放在 `--scope` 後，也可寫成 `--name`：
 --scope net_fanin --name n10
 ```
 
-若 target net 是 DFF.Q，fanin rewrite 會解析到該 DFF 的 D-input data cone，並在 report 輸出 `resolved_through_dff_data_pin:true` 與實際 `resolved_root_net_name`。
+若 `--scope net_fanin <net>` 的 `<net>` 是 DFF.Q，該 fanin 視為 empty combinational cone；流程會保留 original，回傳 verified no-op / already-optimal 類結果，不會穿透到同一顆 DFF 的 D input。這和 `--scope gate_fanin <dff_gate>` 不同：後者是明確以 gate input-side cone 為 scope。
 
 ## 5. Modes
 
@@ -174,5 +178,6 @@ report_query last_edit
 - whole-design equivalence 比較所有 PO 與 DFF.D；DFF initial state 尚未納入。
 - `--time-limit` 目前能限制 transaction 後段與 whole-design SAT，但單次
   mockturtle primitive 尚無 cooperative cancellation；大型 scoped cone 可能超出
-  此時間。測試時使用 `run_tools_regression.ps1` 的 process-level outer timeout。
+  此時間。LLM 必須保留足夠的整體時間預算，避免在 deadline 前啟動無法安全完成的最佳化。
 - `--verbose` 可能產生 optimizer diagnostic output，LLM 一般不應開啟。
+- 若後續 prompt 要求延續前一題的 gate-type 或 fanout constraint，LLM 必須在本次 `opt_apply` 重新傳入對應 `--allowed` / `--banned` 等限制；工具不會自動從自然語言上下文保存 constraint。

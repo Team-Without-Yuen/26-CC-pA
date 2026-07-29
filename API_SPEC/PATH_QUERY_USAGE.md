@@ -223,7 +223,7 @@ Netlist::PathQueryResult result = netlist.runPathQuery(query);
 | `outputFilePath` | 實際輸出檔案路徑 |
 | `completeEnumeration` | 是否完整列舉，未截斷 |
 | `enumerationTimedOut` | `EnumerateAll` 是否因 wall-clock time limit 停止 |
-| `enumerationPathLimitReached` | `EnumerateAll` 是否因 `maxEnumeratedPaths` 停止 |
+| `enumerationPathLimitReached` | Legacy result 欄位；目前不以 `maxEnumeratedPaths` 截斷，因此應維持 false |
 | `countOnly` | 是否只計數、不保存每條 path |
 | `enumerationStopReason` | 若列舉被截斷，記錄停止原因 |
 | `unresolvedStartpoints` / `unresolvedEndpoints` | 無法解析的 endpoint descriptions |
@@ -390,7 +390,7 @@ max-depth 不會逐一列舉所有 DFF pair，因此可用來回答大型 testca
 「maximum combinational depth on any register-to-register path」類問題。
 
 `RegisterPathQuery` 僅保留為 legacy/internal convenience wrapper。對外一律使用 `PathQuery` endpoint resolver：`DffQ("")` 表示所有 DFF.Q，`DffD("")` 表示所有 DFF.D。
-`RegisterPathQuery::EnumerateAll` 也支援與 `PathQuery` 相同的安全欄位：
+`RegisterPathQuery::EnumerateAll` 也保留與 `PathQuery` 相同的相容欄位與時間控制：
 
 ```text
 query.maxEnumeratedPaths

@@ -4,6 +4,9 @@
 
 `depth_query` 負責量測 current design 的 combinational arrival depth、PO/DFF.D endpoint depth、critical path 與 threshold count。它是 read-only analysis，不會降低或最佳化 depth。
 
+完整性規則：all/threshold mode 不自行限制 endpoint 筆數；只問 count 時只回摘要。時間限制
+依題目指定。詳見 [`LLM_NOTES.md`](LLM_NOTES.md)。
+
 ## 2. 選擇條件
 
 prompt 出現 `logic depth`、`level`、`critical path`、`maximum depth`、`deepest output`、`depth greater than N` 或 `gate on critical path` 時使用本 tool。

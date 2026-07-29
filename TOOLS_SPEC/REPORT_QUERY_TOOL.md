@@ -4,6 +4,9 @@
 
 `report_query` 讀取 session 中最近一次 `edit_apply` 或 `opt_apply` 保存的完整 `NetlistEditReport`，用於回答「上一步改了什麼」、「移除了多少」或「最佳化後 depth 如何」等 follow-up prompt。它不重新執行 operation，也不重新計算 report。
 
+完整性規則：不得把 changed-name sample 當成全部；只問數量時讀 delta/count 欄位並回摘要。
+時間限制依題目指定。詳見 [`LLM_NOTES.md`](LLM_NOTES.md)。
+
 ## 2. Command Grammar
 
 ```text

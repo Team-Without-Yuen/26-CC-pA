@@ -1427,8 +1427,8 @@ public:
     // 統一 Sequential Pattern Query API
     //
     // 這一層組合既有 DFF pin、cone 與 function helper，推導 D-input 的 register
-    // control semantics。第一版只辨識 canonical feedback-MUX enable/hold pattern，
-    // 並把 AND-only 結構保留為 semantics-pending candidate。
+    // control semantics。辨識 canonical / functional feedback-MUX enable/hold
+    // pattern；AND-only data gating 只回 non-match diagnostic。
     // =========================================================================
 
     using SequentialPatternQueryType = ::SequentialPatternQueryType;

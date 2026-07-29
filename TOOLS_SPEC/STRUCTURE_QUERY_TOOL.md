@@ -4,6 +4,9 @@
 
 `structure_query` 負責 current active netlist 的基本數量、物件列表、物件資訊、structural issue 與一層直接 connectivity。它不處理 transitive cone、endpoint path、logic depth 或 Boolean property。
 
+完整性規則：list mode 預設取得全部 active objects，不自行限制筆數；只問 count 時只回摘要。
+時間限制依題目指定。詳見 [`LLM_NOTES.md`](LLM_NOTES.md)。
+
 ## 2. 選擇條件
 
 下列 prompt 優先使用本 tool：
@@ -91,3 +94,5 @@ Read: max fanout, Max-fanout nets
 - `const_input_gates` 是結構連線查詢，不證明 output function 為 constant。
 - `gate_fanout` 只回一層 immediate loads，不代表所有 reachable gates。
 - `summary` 的 PI/PO 數量是 port count；bus width 請讀 `list_pi`/`list_po` 的 `Port summaries`。
+- prompt 說 input/output bits 或 signals 時，必須加總 `Port summaries` 的 width，不能直接使用
+  port count。

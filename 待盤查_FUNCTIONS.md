@@ -10,6 +10,93 @@
 
 ## P0：優先盤查
 
+### Boolean / AIG 重構後再處理項目
+
+目前決策：
+
+- Boolean-function 類問題暫時不列為短期修正目標。
+- 後期若要完整支援 hidden testcase 中的任意 Boolean equivalent pattern，應先建立 AIG functional index，再統一處理 SAT / cofactor / equivalence / symmetry / enable-hold decomposition。
+- 現階段只保留既有可回答的部分答案；不為這類問題再補臨時 heuristic，避免局部修補和後期 AIG 架構衝突。
+
+包含項目：
+
+- `sequential_query enable_hold` 的 functional fallback / Q-free EN-DATA decomposition。
+- `func_query boolean_expression` 的大型 expression 控制與 canonical Boolean 表示。
+- `func_query symmetry` 的完整 Boolean-level symmetry。
+- `func_query equivalence` / constant function 類 SAT cache 與共用 functional index。
+- `merge_functionally_equivalent_gates` 等依賴全域 Boolean equivalence 的 edit/cleanup。
+
+### `sequential_query enable_hold`（後期 AIG 重構）
+
+相關 QA：
+
+- Q46：MUX enable/hold 應以 Boolean equivalence 判斷，不限特定 structural pattern。
+- Q47：`D = EN & DATA` 不算 enable/hold；必須是含同一 DFF.Q feedback 的 hold structure。
+- Q69.1：EN/DATA 不一定要是 netlist 中現成 net；Q-free Boolean decomposition 可接受。
+
+相關 testcase：
+
+- `test19`
+- `test21`
+- `test40`，特別是 Q69 提到的 `g1274`
+
+盤查結果：
+
+- 已確認：底層 `FunctionalPatternEngine` 有 functional fallback，可用 SAT 證明 control 在 hold level 時 `D == Q`。
+- 已確認：若 hold cofactor 可證明，但找不到現成 named DATA net，目前仍可回 functional match，狀態類似 `HOLD_PROVEN_DATA_UNRESOLVED`；這符合 Q69.1 的 Q-free decomposition 方向。
+- 已實測：`NewTestCase/test40` 的 `sequential_query enable_hold g1274 --functional-fallback ...` 可找到 enable/hold pattern。
+- 仍有問題：`SequentialPatternQuery::enableFunctionalFallback` 預設是 `false`，LLM 若只呼叫 `sequential_query enable_hold all`，可能漏掉 hidden 中非 canonical / De Morgan / function-level MUX-hold。
+- 已修正：AND-only data gating 改為 `DataGatingWithoutHoldFeedback` non-match diagnostic，不再使用 `semanticsPending=true`，也不計入 `matched_dff_count` / `candidate_dff_count`。
+
+後期處理方向：
+
+- 不在現階段調整 default policy。
+- 等 AIG functional index 建立後，再統一支援 `D = EN ? DATA : Q` 的 Boolean decomposition。
+- 後期 regression 應包含 `test40 g1274`、De Morgan / NAND / NOR restructuring，以及 `EN`、`DATA` 不是實體 net 的情況。
+
+### `cone_query net_fanin <DFF.Q>` / scoped rewrite scope
+
+相關 QA：
+
+- Q21.2：fanin depth 只看 combinational depth，DFF.Q 視為 primary input。
+- Q65：若分析或最佳化 DFF.Q/register output 的 fanin cone，應把它當作 boundary，不得轉到同顆 DFF 的 D-input cone。
+
+盤查結果：
+
+- 已修正：`resolveRewriteScope()` 的 `TargetScope::NET_FANIN` 已移除 DFF.Q -> D pin data cone 特例。
+- 已確認：`cone_query net_fanin <DFF.Q>` 仍停在 sequential boundary。
+- 已確認：scoped edit / scoped optimization 若 scope 是 DFF.Q fanin cone，會視為 empty combinational cone，不再改到 D-input cone。
+
+目前驗證：
+
+- `NewTestCase/test26` 的 `n10` 是 DFF.Q。
+- `cone_query net_fanin n10` 回 `gates: 0`、`nets: 1`。
+- `edit_apply convert_basis net_fanin n10 -allow NOR NOT --validate_equivalence` 回 `no_change`、`changed=false`。
+- `opt_apply critical_path_depth --scope net_fanin n10 --objective cone --allowed NOR NOT --time-limit 5` 回 already optimal、`before_depth=0`、`after_depth=0`、`resolved_through_dff_data_pin=false`。
+
+後續只剩 tools-facing 文件同步：
+
+- 移除或 deprecated `resolved_through_dff_data_pin` 類公開語意。
+- 將 `TOOLS_SPEC` 中 DFF.Q-to-D-pin 舊描述改為 boundary no-op。此項已列入 `API_SPEC/TOOLS待更新表.md`。
+
+### persistent constraints across prompts
+
+相關 QA：
+
+- Q63：多個 transformation request 之間，前面建立的 structural constraints 在後續 transformation 後仍是 hard constraints。
+
+目前決策：
+
+- 先不做底層 automatic persistent constraint state。
+- 「前一題 constraint 是否延續」屬於 prompt/testcase 語意，應由 LLM 或 testcase driver 維護。
+- 工具層只保證單次 request 明確傳入的 constraint 會被驗證；若後續 edit/opt 需要保留前題限制，LLM 必須重送 allowed/banned/fanout 等 constraint，或在修改後額外呼叫 query/equiv 驗證。
+
+後續文件處理：
+
+- 已移出 core/backend 待辦。
+- 已在 `API_SPEC/TOOLS待更新表.md` 標記為 LLM 使用策略文件項目。
+- 之後統一更新 tools-facing 文件時，加入「LLM 必須記住並重送前題 hard constraint」的 policy。
+
 ### `path_query enumerate`
 
 相關 testcase：
@@ -32,10 +119,12 @@
 - 已驗證：`test32 #6 all_dff_q -> all_dff_d` 可完整 count 1,176,523 paths；`count_only` 約 0.4-0.6 秒，streaming `-out` 約 10 秒，輸出檔約 745MB。
 - 已驗證：`test37 #8 all_dff_q -> all_dff_d` 可完整 count 16,548,172 paths；`count_only -time_limit 30` 約 1.2-1.7 秒完成。
 - 已驗證：`test37 #8 all_dff_q -> all_dff_d` streaming `-out -time_limit 30` 會正確回傳 `timeout/complete=false`；30 秒 partial 約 2,936,293 paths，暫存輸出檔約 1.5GB。
+- 新增證據：`run_tools_regression.ps1 -Profile Full` 目前只剩 `mini test/test10` 的 path-limit expected failure；工具輸出為完整列舉 `status=ok / complete=true / Path limit reached: no`，但舊測試仍期待 `-max_paths` 造成 partial/truncated。
 - 仍需注意：若 prompt 要完整列出 `test37` 等級的所有 paths，時間與檔案大小受輸出量下限限制；count 已解決，但 streaming 大輸出不能靠 DP 消除。
 
 建議檢查：
 
+- 決定 `-max_paths` 的正式語意：若保留為 display/printing cap，則更新 `test10` expected；若要恢復 enumeration cap，需重新確認與「完整算完」策略不衝突。
 - 確認 `-time_limit` 是否真的在工具內部生效。
 - 確認 timeout 時會回傳完整 `timeout` envelope，且不依賴外部截斷。
 - 對完整 path list 題目確認 output file policy，避免 LLM 把巨大 `-out` 檔案內容搬進答案 log。
@@ -100,6 +189,31 @@
 
 ## P1：需要盤查
 
+### floating primary output preservation
+
+相關 QA：
+
+- Q69.3：undriven primary outputs must remain undriven in the output netlist。
+
+相關 testcase：
+
+- `test25`：`n13[3:0]` 是 undriven/floating primary output。
+
+盤查結果：
+
+- 已確認：`VerilogWriter` 只宣告 floating PO，不會補 driver。
+- 已確認：`MockturtleConverter` 對 old PO 無 driver 且非 PI 的情況會保留 floating form，不插 BUF/NOT。
+- 已確認：`removeDanglingLogic()` 會把 PO net 當 useful root，不會移除 floating PO。
+- 已實測：`NewTestCase/test25` read/write 後 `n13[3:0]` 仍是 undriven/floating。
+- 已實測：`trim_dead_logic` 後 write/read，`n13[3:0]` 仍是 undriven/floating。
+- 已補 regression：`mini test/test34` 覆蓋 scalar floating PO、bus floating PO、`trim_dead_logic`、`remove_unused_nets`、write/read preservation，以及 CLI response envelope。
+- 已接入 regression runner：`scripts/run_tools_regression.ps1 -Profile Tools/Full` 會執行 `test34`。
+
+建議檢查：
+
+- 目前不需要大改 core。
+- 後續若修改 writer / mockturtle conversion / cleanup / optimization，需重跑 `mini test/test34` 或 Tools profile，避免改壞 floating PO preservation。
+
 ### `cone_query net_fanin / net_fanout`
 
 相關 testcase：
@@ -143,7 +257,7 @@
 - `status=timeout/error/unsupported` 或 `complete=false` 時，不得把 `equivalent=false` 欄位解讀成「已證明不等價」。
 - timeout / skipped endpoint detail 需要後續在工具文件或 printer 中設定輸出上限。
 
-### `func_query boolean_expression`
+### `func_query boolean_expression`（後期 AIG 重構）
 
 相關 testcase：
 
@@ -163,8 +277,8 @@
 
 建議檢查：
 
-- LLM 若遇到大型 expression，應先看 `expression length`，過長時改用 `simplified_expression` 或摘要，不要把超長 expression 全貼入 answer log。
-- 後續 tools/LLM-facing 文件應定義 expression length policy；必要時再考慮 `max_length` 或 file-output。
+- 現階段不擴充完整 Boolean expression engine。
+- 後期 AIG 重構後，再定義 expression length policy、canonical expression、depth-limited expression，以及必要的 file-output / max-length 機制。
 
 ### `path_query max_depth all_dff_q all_dff_d`
 
@@ -225,9 +339,7 @@
 
 ## 建議盤查順序
 
-1. 修 `path_query enumerate` 的內部 timeout / streaming / summary 機制。
-2. 修 `edit_apply` 的 public command report 與等價性保證。
-3. 修 Q65：DFF.Q fanin cone boundary。
-4. 補穩 `equiv_query original`。
-5. 補 register-to-register depth 專用 command 或明確 mapping。
-6. 重跑 `testcase_toolans`，確認不再出現缺 `#RESPONSE`、`Complete: false`、`Functional equivalence: false`。
+1. 同步 tools/LLM-facing 文件：large output、equivalence timeout、edit report 判讀、persistent constraint memory policy。
+2. 處理 `path_query enumerate -max_paths` 的正式語意與 `mini test/test10` expected。
+3. 重跑 `testcase_toolans`，確認不再出現缺 `#RESPONSE`、`Complete: false`、`Functional equivalence: false`。
+4. 後期再做 Boolean / AIG functional index 重構，統一處理 enable-hold、large Boolean expression、symmetry、SAT cache、functional-equivalent merge。

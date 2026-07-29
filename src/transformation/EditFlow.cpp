@@ -495,17 +495,18 @@ RewriteScopeResolution resolveRewriteScope(
                 return result;
             }
 
+            result.resolvedRootNetName = name;
+            result.cone = netlist.getTransitiveFaninCone(name);
+            result.ok = true;
+
             const int driverGateId = netlist.getNetDriverGateId(netId);
             if (netlist.isValidGateId(driverGateId) &&
                 !netlist.isGateRemoved(driverGateId) &&
                 netlist.getGate(driverGateId).type == GateType::DFF) {
-                result.ok = resolveDffDataCone(driverGateId);
+                result.message = "Resolved the net fanin rewrite scope as an empty DFF.Q sequential boundary.";
                 return result;
             }
 
-            result.resolvedRootNetName = name;
-            result.cone = netlist.getTransitiveFaninCone(name);
-            result.ok = true;
             result.message = "Resolved the net fanin rewrite scope.";
             return result;
         }

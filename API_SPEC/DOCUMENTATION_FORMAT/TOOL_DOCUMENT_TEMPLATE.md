@@ -1,4 +1,4 @@
-# <Tool Name>
+# Tool Document Template
 
 ## 1. 責任
 

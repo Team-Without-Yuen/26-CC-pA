@@ -27,7 +27,7 @@ bool loadCircuit(Netlist& netlist) {
     return reader.read("mini test/test7/timeout_guard_circuit.v", netlist);
 }
 
-void testPathEnumerationLimit(TestReport& report, const Netlist& netlist) {
+void testLegacyPathLimitDoesNotTruncate(TestReport& report, const Netlist& netlist) {
     Netlist::PathQuery query;
     query.mode = Netlist::PathQueryMode::EnumerateAll;
     query.startpoints.push_back(Netlist::PathEndpoint(Netlist::PathEndpointType::SpecificNet, "a"));
@@ -38,13 +38,13 @@ void testPathEnumerationLimit(TestReport& report, const Netlist& netlist) {
 
     const Netlist::PathQueryResult result = netlist.runPathQuery(query);
     report.check(result.exists &&
-                 result.pathCount == 1 &&
-                 result.paths.size() == 1 &&
-                 !result.completeEnumeration &&
-                 result.enumerationPathLimitReached &&
+                 result.pathCount == 4 &&
+                 result.paths.size() == 4 &&
+                 result.completeEnumeration &&
+                 !result.enumerationPathLimitReached &&
                  !result.enumerationTimedOut &&
-                 result.enumerationStopReason.find("maxEnumeratedPaths") != std::string::npos,
-                 "path_query enumerate max_paths guard");
+                 result.enumerationStopReason.empty(),
+                 "path_query legacy max_paths does not truncate enumeration");
 }
 
 void testPathEnumerationCountOnly(TestReport& report, const Netlist& netlist) {
@@ -93,7 +93,7 @@ int main() {
 
     report.check(loadCircuit(netlist), "test7 load timeout guard circuit");
     if (report.failed == 0) {
-        testPathEnumerationLimit(report, netlist);
+        testLegacyPathLimitDoesNotTruncate(report, netlist);
         testPathEnumerationCountOnly(report, netlist);
         testWholeDesignBudgetField(report, netlist);
         testTerminatorInitialState(report);

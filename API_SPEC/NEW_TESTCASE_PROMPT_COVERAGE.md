@@ -1943,7 +1943,7 @@ sequential_query enable_hold all --summary-only
 - fallback 會驗證 control 的 0/1 可達性，並回傳 candidate/time/completeness report；CLI 預設關閉，且公開 candidate、simulation、per-DFF 與 query-wide time budget。
 - 回傳 DFF、D/Q、enable、data、feedback、active level 與 evidence gates。
 - matchedDffCount 依 DFF instance 去重。
-- AND-only D-input 目前只列為 semantics-pending candidate，不計入 confirmed count。
+- AND-only D-input 只列為 DataGatingWithoutHoldFeedback non-match diagnostic，不計入 matched/candidate count。
 ```
 
 驗證：
@@ -2094,16 +2094,16 @@ Public command covered；large scoped-cone runtime remains partial
 目前狀態：
 
 ```text
-DFF.Q fanin target 會由 resolveRewriteScope() 轉成 D-pin data cone。
+NET_FANIN 若指定 DFF.Q/register output，會停在 sequential boundary。
+只有 GATE_FANIN 明確指定 DFF instance 時，才可解析到 D-pin data cone。
 local allowed/banned basis、scope validation、whole-design SAT 與 rollback 已整合。
 
 test26 實測：
 - requested scope n10
-- resolved D-pin root n1113
-- original cone 195 gates
-- final global depth 58 -> 30
-- final resolved cone 648 gates
-- NOR/NOT compliance PASS
+- n10 是 DFF.Q boundary
+- cone_query net_fanin n10 -> gates 0, nets 1
+- edit_apply convert_basis net_fanin n10 -allow NOR NOT -> no_change
+- opt_apply critical_path_depth --scope net_fanin n10 --objective cone --allowed NOR NOT -> already optimal, depth 0
 
 mini test/test30/test31 已覆蓋 malformed scope、DFF.Q scope、basis compliance、
 target rollback 與 whole-design SAT；mini test/test32 另覆蓋 tools help/parser、
@@ -2113,8 +2113,8 @@ target rollback 與 whole-design SAT；mini test/test32 另覆蓋 tools help/par
 Official bounded smoke：
 - test40：完整前置流程後 n14 為 `NOT(NAND(n514,n412))`，NAND/NOT depth 2
   可證明已最優，約 3.6 秒回 original。
-- test33：n8 解析為 depth 327 的大型 D-pin cone；前置 edit 完成，但 global
-  XAG primitive 在 120 秒 outer timeout 內未完成。
+- test33：若 target 是 DFF.Q，應回 boundary depth 0；若 hidden target 是非
+  DFF.Q 大型 cone，仍可能需要 cone-isolated optimizer。
 - `--time-limit` 尚不能中止單次 mockturtle primitive，因此 test33 仍是
   optimizer-core runtime blocker。
 ```

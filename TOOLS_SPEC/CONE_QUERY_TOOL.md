@@ -4,6 +4,9 @@
 
 `cone_query` 負責指定 net/gate 的多層 transitive fanin/fanout 集合、cone gate-type breakdown、shared fanin 及最大 output cone。它回答「範圍內有哪些物件」，不證明特定 endpoints 間的 path condition。
 
+完整性規則：要求 cone list 時取得全部 gates/nets，不自行限制筆數；只問數量或 type breakdown
+時只回摘要。時間限制依題目指定。詳見 [`LLM_NOTES.md`](LLM_NOTES.md)。
+
 ## 2. 選擇條件
 
 prompt 出現 `transitive fanin`、`transitive fanout`、`cone`、`reachable`、`can affect`、`shared fanin` 或 `largest cone` 時使用本 tool。
@@ -62,5 +65,9 @@ Read: Cone gates
 ## 7. 限制
 
 - `with_paths` 是 cone 內 local path 摘要，不等於列出所有 paths。
-- cone traversal 以 combinational boundary 規則處理 DFF，不可假設會跨越 sequential state。
+- DFF.Q 是 combinational sequential boundary；`cone_query net_fanin <dff_q_net>` 不會回傳任何 combinational gate（`gates: 0`），也不會穿透到同一顆 DFF 的 D input。report 仍可能保留 query root 本身，因此 `nets` 可為 1。
+- cone traversal 不會跨越 sequential state；DFF 的 D/clock/reset 等 pin 不可由 Q 的 fanin query 反推。
+- 若題目只問數量或 gate-type breakdown，只讀 `gates`、`nets` 或 `Gate type counts`；不要把
+  完整 `Cone gates` / `Cone nets` 複製進答案。題目明確要求列出物件時，必須輸出全部
+  confirmed entries，不得用固定筆數、省略號或摘要取代完整清單。
 - 若題目要求「所有 A-to-B paths 是否都經過某點」，必須改用 `path_query`。

@@ -522,6 +522,51 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
             summary.baselineConstraintsSatisfied = baselineConstraintsSatisfied;
             summary.timeBudgetSeconds = request.timeLimitSeconds;
 
+            if (request.scope != TargetScope::WHOLE_NETLIST &&
+                original.getConeGateCount(originalScope.cone) == 0) {
+                NetlistEditReport originalReport = Netlist::buildEditReport(
+                    original,
+                    original,
+                    "opt_apply:critical_path_depth",
+                    NetlistEditOperationKind::DepthOptimization);
+                originalReport.depthChange =
+                    buildOptimizationDepthChange(original, original, request);
+
+                summary.coreStatus = "NO_IMPROVEMENT";
+                summary.coreMessage =
+                    "The resolved optimization scope contains no combinational gates; "
+                    "the original design was retained.";
+                summary.finalConstraintsSatisfied = true;
+                summary.candidateGenerated = false;
+                summary.candidateAccepted = false;
+                summary.elapsedSeconds = elapsedSeconds();
+                originalReport.depthOptimization = summary;
+                Netlist::certifyEquivalence(
+                    originalReport,
+                    EquivalenceCheckMethod::StructuralIdentity,
+                    "The original design was retained because the resolved optimization scope is empty.");
+
+                const bool targetMet =
+                    request.targetDepth < 0 ||
+                    (originalReport.depthChange.has_value() &&
+                     originalReport.depthChange->meetsTarget);
+                if (!targetMet) {
+                    originalReport.success = false;
+                    originalReport.changed = false;
+                    originalReport.rolledBack = false;
+                    originalReport.message =
+                        "The resolved optimization scope is empty and the original design "
+                        "does not meet targetDepth.";
+                } else {
+                    originalReport.success = true;
+                    originalReport.changed = false;
+                    originalReport.rolledBack = false;
+                    originalReport.message =
+                        "The resolved optimization scope is empty; the original design was retained.";
+                }
+                return originalReport;
+            }
+
             const ScopedDepthLowerBoundProof lowerBound =
                 proveScopedDepthLowerBound(original, request, originalScope);
             if (baselineConstraintsSatisfied && lowerBound.proven) {

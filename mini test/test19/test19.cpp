@@ -90,8 +90,8 @@ int main(int argc, char** argv) {
                 "all eight DFFs are analyzed");
     tests.check(all.matchedDffCount == 6,
                 "six canonical feedback MUX DFFs are counted once");
-    tests.check(all.candidateDffCount == 7,
-                "AND-only DFF is reported as an additional candidate");
+    tests.check(all.candidateDffCount == 6,
+                "AND-only DFF is not counted as an enable/hold candidate");
 
     const DffInputPattern* high = firstConfirmed(findDff(all, "ff_high"));
     tests.check(high != nullptr && high->enableNetName == "en" &&
@@ -127,9 +127,13 @@ int main(int argc, char** argv) {
 
     const DffInputPatternReport* andReport = findDff(all, "ff_and");
     tests.check(andReport != nullptr && !andReport->matched &&
+                    andReport->status == "DATA_GATING_WITHOUT_HOLD_FEEDBACK" &&
                     andReport->patterns.size() == 1 &&
-                    andReport->patterns.front().semanticsPending,
-                "AND-only structure remains a semantics-pending candidate");
+                    andReport->patterns.front().kind ==
+                        DffInputPatternKind::DataGatingWithoutHoldFeedback &&
+                    !andReport->patterns.front().semanticsPending &&
+                    !andReport->patterns.front().confirmed,
+                "AND-only structure is a non-match data-gating diagnostic");
 
     const DffInputPatternReport* plainReport = findDff(all, "ff_plain");
     tests.check(plainReport != nullptr && plainReport->ok &&

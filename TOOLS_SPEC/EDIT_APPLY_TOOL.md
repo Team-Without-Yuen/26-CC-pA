@@ -4,6 +4,9 @@
 
 `edit_apply` 執行使用者已指定的高階 transformation，並建立統一 `NetlistEditReport`。public parser 不開放 unchecked rewiring、driver replacement 或任意 net merge；functional duplicate merge 只能走 SAT search、cycle-safe apply 與 whole-design rollback 的專用 mode。每次 public edit 預設要求 equivalence certificate。
 
+完整性規則：不得因 report records 很多而省略 confirmed changes；若 prompt 只問數量，正式
+答案只回 delta 摘要。時間限制依題目指定。詳見 [`LLM_NOTES.md`](LLM_NOTES.md)。
+
 ## 2. 選擇條件
 
 prompt 明確指定 rename、cleanup、constant propagation、buffer insertion、gate replacement、basis conversion，或要求找出並合併 functionally equivalent gates 時使用本 tool。若要求 `minimize`、`best depth`、`best cost` 或自動搜尋最佳 transformation，改用 `opt_apply critical_path_depth`，不是 `edit_apply`。
@@ -131,3 +134,5 @@ Require: report_success=true, rolled_back=false, whole_design_equivalent=true
 - fixed basis conversion 不會自動找到 minimum depth/best cost implementation。
 - depth/cost optimization 的公開契約見 [`OPTIMIZATION_TOOL.md`](OPTIMIZATION_TOOL.md)。
 - public parser 不提供可能任意改變功能的低階 rewiring commands。
+- 只有 `status:ok|no_change`、`complete:true`、`report_success:true`，且題目要求等價時 `validation.functionally_equivalent:true`，才能回答 edit 已成功完成。timeout/error/partial 或 rollback 不得沿用前一次 edit 的 delta。
+- 若 prompt 要求保留前題 constraint，LLM 必須在新的 `edit_apply` command 重新傳入 basis/fanout 等條件，或在 write 前主動用對應 query 驗證；session 不會自動保存自然語言 constraint。

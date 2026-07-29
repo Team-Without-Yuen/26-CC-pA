@@ -33,10 +33,15 @@ depth optimization。
 depth 使用 Problem A 定義：每顆 combinational gate 都算一層，`NOT`、`BUF`
 與其他 gate 相同；DFF 是 sequential boundary。
 
-一般 read-only cone query 遇到 DFF 不穿越。rewrite/optimization fanin scope
-若指定的 net 是 DFF.Q，`resolveRewriteScope()` 會改取該 DFF 的 D-pin data
-cone。例如 `scopeName="n10"` 且 n10 由 DFF 驅動時，限制套用到 DFF.D
-前方的組合邏輯，不把 DFF 本身當成 NOR/NOT 等 basis constraint 的一部分。
+一般 read-only cone query 遇到 DFF 不穿越。rewrite/optimization 的
+`NET_FANIN` scope 也沿用相同語意：若指定的 net 是 DFF.Q/register output，
+該 net 視為 sequential boundary，fanin cone 是空的 combinational cone。
+例如 `scopeName="n10"` 且 n10 由 DFF 驅動時，scoped basis/depth request
+應回 no-change / already optimal，而不是改取同一顆 DFF 的 D-pin data cone。
+
+只有在 scope 明確指定 `GATE_FANIN <DFF instance>` 時，`resolveRewriteScope()`
+才可解析到該 DFF 的 D-pin data cone，因為這時 target 是 sequential cell
+本身，而不是它的 Q signal。
 
 `runOptApply()` 採 transaction：
 
@@ -144,7 +149,7 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request);
 CriticalPathDepth 內部流程：
 
 1. 驗證 scope、gate type constraint、depth objective、target 與 time limit。
-2. 解析 rewrite scope；DFF.Q fanin 轉成 D-pin data cone。
+2. 解析 rewrite scope；`NET_FANIN <DFF.Q>` 停在 sequential boundary。
 3. 若 scoped objective 命中保守 lower-bound proof，直接以
    `StructuralIdentity` 回 original。
 4. 否則 clone original，在 working copy 呼叫 `DepthOptimizer`。
@@ -172,14 +177,17 @@ CriticalPathDepth 內部流程：
 3. baseline 已符合 hard gate constraint 且 depth 未改善時，回 original。
 4. baseline 不符合 hard gate constraint 時，合規候選可優先於 depth improvement，
    report 會加入 warning。
-5. whole-design checker 比較 PO 與 DFF.D；DFF.Q 視為 boundary leaf，initial state
+5. 非 whole scope 若解析後沒有任何 combinational gate，視為 empty rewrite
+   scope；不進 optimizer、不修改設計，以 `StructuralIdentity` 回 original。
+   若指定 `targetDepth` 且 original 未達標，則回 failure/no-change。
+6. whole-design checker 比較 PO 與 DFF.D；DFF.Q 視為 boundary leaf，initial state
    尚未納入。
-6. time budget 會限制後續 SAT 並在 core 結束後檢查；mockturtle core 尚無可中途
+7. time budget 會限制後續 SAT 並在 core 結束後檢查；mockturtle core 尚無可中途
    cancel 的 callback。
-7. scoped optimization 目前仍可能先做 global AIG/XAG restructuring，再重套局部
+8. scoped optimization 目前仍可能先做 global AIG/XAG restructuring，再重套局部
    basis；不是只允許 cone 內拓樸改動的 ECO isolation mode。
-8. CriticalPathDepth 不接受 unsafe no-rollback 或跳過 equivalence。
-9. scoped lower-bound proof 目前只涵蓋 depth 0，以及 NAND/NOT basis 下
+9. CriticalPathDepth 不接受 unsafe no-rollback 或跳過 equivalence。
+10. scoped lower-bound proof 目前只涵蓋 depth 0，以及 NAND/NOT basis 下
    `NOT(NAND(a,b))` 且 a/b 為不同 independent boundary signals 的 depth 2。
 
 ## 8. 實作與測試狀態
@@ -200,7 +208,7 @@ src/transformation/EditFlow.cpp
 
 ```text
 mini test/test30
-  DFF.Q -> D-pin rewrite scope、局部 NOR/NOT conversion
+  DFF.Q boundary no-op、局部 NOR/NOT conversion
 
 mini test/test31
   global/scoped depth improvement
@@ -219,14 +227,15 @@ testcase/test22
   global depth 41 -> 20
 
 testcase/test26
-  n10 -> D-pin n1113、global depth 58 -> 30、cone NOR/NOT compliance PASS
+  n10 為 DFF.Q boundary；scoped cone depth 0，回 original/already optimal
 
 NewTestCase/test40
   完整前置 mapping/cleanup 後 n14 = NOT(NAND(n514,n412))
   NAND/NOT depth 2 lower bound，回 original，bounded smoke 約 3.6 秒
 
 NewTestCase/test33
-  n8 解析到大型 D-pin cone；mockturtle core 在 120 秒 outer timeout 內未完成
+  若 n8 為 DFF.Q，應視為 boundary depth 0；非 DFF.Q 大型 cone 仍可能受
+  mockturtle core runtime 影響
   目前列為 optimizer-core cancellation/scoped-resynthesis blocker
 ```
 

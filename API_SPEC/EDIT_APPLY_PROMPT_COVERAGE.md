@@ -262,7 +262,7 @@ test22, test23, test24, test25, test26, test27, test28, test29, test30, test33, 
 Covered by OptApply::CriticalPathDepth:
 1. global/scoped depth objective
 2. whole/local allowed/banned basis
-3. DFF.Q -> D-pin rewrite scope
+3. DFF.Q fanin boundary no-op
 4. targetDepth / no-improvement original retention
 5. structure + basis + whole-design SAT validation
 6. NetlistEditReport.depthChange / depthOptimization
