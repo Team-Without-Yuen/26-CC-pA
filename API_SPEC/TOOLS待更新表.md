@@ -1,225 +1,174 @@
-# tools 同步狀態與核心待辦
+# tools.cpp / TOOLS_SPEC 待更新表
 
-這份文件記錄 C++ 高階 API 到 `tools.cpp` / `TOOLS_SPEC` 的同步狀態，以及已經超出 tools parser 範圍、仍需底層核心處理的事項。公開 CLI schema 已同步的功能不得再列為「tools 尚未修改」。
+這份文件只記錄需要修改 `tools.cpp` parser/help/envelope printer 或
+`TOOLS_SPEC/*.md` 的事項。
 
-## Sequential Pattern functional fallback
-
-目前狀態：
+API facade、Netlist/engine、optimizer core、sequential pattern engine 等底層待辦，
+請放在：
 
 ```text
-C++ API 已完成
-tools.cpp parser / help / envelope 已完成
+API_SPEC/API_CORE_BACKEND_TODO.md
+```
+
+已公開且已同步完成的 CLI schema 不再列為 tools.cpp 待修改項。
+
+## 目前已同步完成
+
+以下功能目前不屬於 tools.cpp 待辦，只保留作為同步狀態摘要：
+
+```text
+sequential_query enable_hold functional fallback CLI 已完成
 TOOLS_SPEC/SEQUENTIAL_QUERY_TOOL.md 已同步
-既有 sequential_query 行為維持 canonical/default mode
-functional fallback 維持 opt-in
-candidate ranking 為 engine 固定策略，不新增 CLI 參數
-simulation-aware stable rerank 為 engine 固定策略，不新增 CLI 參數
-simulation safe Reject 不占 max-functional-candidates quota
-one-shot/reusable hybrid SAT session 為 engine 固定策略，不新增 CLI 參數
+tools.cpp parser / help / envelope printer 已同步
+
+opt_query critical_path_depth 已完成
+opt_apply critical_path_depth 已完成
+TOOLS_SPEC/OPTIMIZATION_TOOL.md 已同步
+report_query last_edit / equiv_query previous_edit cache 串接已完成
 ```
 
-`sequential_query enable_hold` 已新增：
+## 待 tools.cpp / TOOLS_SPEC 同步項目
 
-| CLI 參數 | 對應 C++ 欄位 | 語意 |
-| --- | --- | --- |
-| `--functional-fallback` | `enableFunctionalFallback` | canonical 無 confirmed match 時啟用 SAT cofactor search |
-| `--max-functional-candidates N` | `maxFunctionalCandidates` | 每顆 DFF 最多檢查的未被 simulation 安全排除 control candidates；safe Reject 不占 quota |
-| `--max-functional-matches N` | `maxFunctionalMatchesPerDff` | 每顆 DFF 最多回傳的 functional patterns |
-| `--functional-find-any` | `findAllFunctionalMatches=false` | count/existence 題找到第一個 proof 即停止 |
-| `--resolve-functional-data` | `resolveFunctionalDataNets` | 額外尋找 active cofactor 對應的具名 data net |
-| `--no-resolve-functional-data` | `resolveFunctionalDataNets=false` | 計數/存在性題關閉具名 data net 搜尋 |
-| `--max-functional-data-candidates N` | `maxFunctionalDataCandidatesPerMatch` | 每筆 pattern 的 named-data 搜尋上限 |
-| `--no-functional-simulation-filter` | `enableFunctionalSimulationFilter=false` | 除錯或 A/B 驗證時停用安全 simulation prefilter |
-| `--functional-simulation-patterns N` | `functionalSimulationPatternCount` | bit-parallel patterns，限制 1..4096 |
-| `--functional-per-dff-time-limit SEC` | `functionalPerDffTimeLimitSeconds` | 單一 DFF 最多使用的時間切片 |
-| `--functional-time-limit SEC` | `functionalTimeLimitSeconds` | 整次 sequential query 共用時間預算 |
+### T1：DFF.Q fanin boundary 的公開語意同步
 
-公開輸出已包含：
+依官方 QA，DFF.Q/register output 的 fanin cone 應視為 combinational boundary。
+底層行為完成後，tools 層需同步：
 
 ```text
-complete
-timed_out
-functional_candidate_count
-functional_searchable_candidate_count
-functional_candidates_examined
-functional_unexamined_candidate_count
-functional_inconclusive_candidate_count
-functional_simulation_pattern_count
-functional_simulation_candidate_count
-functional_simulation_rejected_candidate_count
-functional_simulation_seconds
-functional_sat_check_count
-functional_match_count
-elapsed_seconds
+- cone_query net_fanin <DFF.Q> 的 help / spec / envelope 範例改為 empty cone。
+- scoped edit/optimization 對 empty cone 的 response 語意改為 verified no-op。
+- 移除或 deprecated resolved_through_dff_data_pin 公開輸出欄位。
+- 更新 TOOLS_SPEC/CONE_QUERY_TOOL.md。
+- 更新 TOOLS_SPEC/OPTIMIZATION_TOOL.md。
+- 更新相關 CLI regression expected output。
 ```
 
-每顆 DFF detail 已包含：
+底層實作細節請見 `API_CORE_BACKEND_TODO.md` 的 P0-1。
+
+### T2：跨 prompt persistent constraints 的 tools 顯示與文件
+
+底層 session constraint state 完成後，tools 層需同步：
 
 ```text
-functional_fallback_attempted
-functional_fallback_complete
-functional_fallback_timed_out
-functional_candidate_limit_reached
-functional_candidate_count
-functional_searchable_candidate_count
-functional_candidates_examined
-functional_unexamined_candidate_count
-functional_inconclusive_candidate_count
-functional_simulation_candidate_count
-functional_simulation_rejected_candidate_count
-functional_sat_check_count
+- edit_apply / opt_apply envelope 顯示本次 commit 前驗證了哪些 accumulated constraints。
+- write envelope 顯示 final constraint validation 結果。
+- report_query last_edit 顯示 constraint validation failure reason。
+- TOOLS_SPEC/EDIT_APPLY_TOOL.md 補 accumulated constraint 判讀規則。
+- TOOLS_SPEC/OPTIMIZATION_TOOL.md 補 constraint-preserving optimization 判讀規則。
+- TOOLS_SPEC/SESSION_AND_IO_TOOL.md 補 write 前 final validation 語意。
 ```
 
-每筆 pattern 已包含：
+底層設計請見 `API_CORE_BACKEND_TODO.md` 的 P0-2。
+
+### T3：AND-only enable/hold candidate 的公開輸出同步
+
+底層 sequential engine 更新後，tools 層需同步：
 
 ```text
-detection_method: structural_canonical | structural_canonical_with_sat | functional_cofactor_sat
-active_level
-hold_level
-data_function_resolved
-data_search_attempted
-data_search_complete
-data_search_timed_out
-data_candidate_count
-data_candidates_examined
-hold_functionally_proven
-load_functionally_proven
+- sequential_query 預設輸出不得把 AND-only data gating 顯示為 enable/hold match。
+- matched_dff_count / candidate_dff_count 的 help 與文件需明確排除 AND-only non-match。
+- 若仍輸出 diagnostic record，欄位名稱需明確標示 non-match，不得使用 confirmed/candidate ambiguity。
+- 更新 TOOLS_SPEC/SEQUENTIAL_QUERY_TOOL.md。
+- 更新 sequential_query CLI regression expected output。
 ```
 
-## Envelope 與回答規則
+底層語意請見 `API_CORE_BACKEND_TODO.md` 的 P1-1。
+
+### T4：官方 QA 已符合項目的文件同步
+
+以下事項目前行為已符合或主要由底層保證；若文件仍有舊描述，tools 文件需同步：
 
 ```text
-- complete=false 時 envelope 必須標示 partial。
-- partial 狀態下，已回傳的 confirmed matches 可回答；未找到不得回答成「確定不存在」。
-- functional_candidate_count 包含 safe Reject；functional_candidates_examined 只計實際進入 bounded SAT/reachability loop 的非 Reject candidates。
-- functional_searchable_candidate_count = functional_candidate_count - functional_simulation_rejected_candidate_count。
-- functional_unexamined_candidate_count 使用 guarded searchable - examined；functional_inconclusive_candidate_count 每個已進入但 timeout/unknown/unsupported 的 control 最多計一次。
-- functional_simulation_rejected_candidate_count 的 candidates 不占 max-functional-candidates，也不得單獨造成 functional_candidate_limit_reached。
-- 所有非 Reject candidates 都已完整檢查時，允許 complete=true；只有 timeout、unsupported、unknown、match limit 或仍有未檢查的非 Reject candidates 才維持 partial。
-- FindAny 找到第一個 SAT-proven match 後，該 DFF existence 可 complete=true；較早 inconclusive candidate 只保留在診斷 counter。
-- query-wide timeout 若發生在某顆 DFF 進入 engine 前，不虛構 candidate counters；LLM 必須先讀 top-level timed_out/complete。
-- 數量題使用 matched_dff_count，不使用 functional_match_count，避免 nested controls 重複計算 DFF。
-- 數量題使用 FindAny 並關閉 named-data resolution；詢問 control/data 細節時才使用 FindAll 或 data resolution。
-- data_function_resolved=false 時不得輸出不存在的 data net。
-- data_search_complete=false 時只能回答尚未完整解析。
-- functional fallback 應為 opt-in；all-DFF summary 不可無條件啟用 SAT search。
+- 名稱查詢只看 current transformed netlist，不維護 original aliases。
+- verified no-op / zero replacement 可接受。
+- cost 必須讀 final constrained candidate metrics。
+- intermediate helper gate 不受 final basis 限制。
+- transformation log 可簡短；generated Verilog 與 final validation 才是評分依據。
 ```
 
-## 文件與測試同步
+### T5：Path enumerate 效能與 endpoint 寫法文件同步
 
-已更新：
+底層 `path_query enumerate` 已改成 streaming output，並新增 reverse reachability pruning 與
+`count_only` memoized path-count DP。
+核心測試完成後，tools/LLM-facing 文件需同步：
 
 ```text
-TOOLS_SPEC/README.md
-TOOLS_SPEC/SEQUENTIAL_QUERY_TOOL.md
-tools.cpp help / parser / enum printer / JSON-like envelope
-mini test/test21 CLI regression 18/18（canonical 相容、functional proof、partial、timeout/error、參數錯誤）
+- 說明 -max_paths / maxEnumeratedPaths 只保留相容，不再截斷完整 enumeration。
+- 說明大型 enumerate 主要由 -time_limit 控制；timeout/partial 不可回答成完整列表。
+- 說明 bus-bit endpoint 應使用 net:n0[0] / net:n63[1]，不要用 pi:n0[0] / po:n63[1]。
+- 補上 count_only 與 -out -max_print 0 的建議使用情境。
+- 說明 count_only 在無 required nodes 時會走 DP count；完整列出 paths 仍受輸出檔大小限制。
+- 說明大型完整 path list 若 timeout，LLM 只能回報 partial count / complete=false / output_file，不可宣稱已列出全部。
+- 記錄 test37 all-DFF streaming 30 秒只寫出約 2.94M paths、暫存檔約 1.5GB，完整列出不適合放進 answer log。
 ```
 
-CLI regression 驗證：預設相容、指定 DFF functional match、candidate limit、timeout、partial envelope、分頁與錯誤參數。C++ focused reference 為 `mini test/test28`。
+### T6：Edit apply report 判讀與 redundant-gate dispatch 文件同步
 
-## Critical Path Optimization V1
-
-目前 C++ public facade 已完成：
+底層代表性 edit command 已重跑確認：常用 rename / buffer insertion /
+constant simplification / double-inverter collapse / technology mapping 目前皆能回
+`functionally_equivalent: true`，無不等價 committed state。tools/LLM-facing 文件需同步：
 
 ```text
-OptPassKind::CriticalPathDepth
-Netlist::runOptQuery()
-Netlist::runOptApply()
-NetlistEditReport.depthChange
-NetlistEditReport.depthOptimization
+- edit 類回答必須檢查 status、complete、report_success、report_changed、functionally_equivalent。
+- status=timeout/error 或 report_success=false 時，不得宣稱 transformation completed。
+- report_query last_edit 在上一個 edit 失敗時只能回答失敗/未套用/rollback，不得拿舊 delta 回答本題。
+- redundant gates prompt 優先使用 merge_structurally_equivalent_gates。
+- merge_functionally_equivalent_gates whole 屬較重 SAT/functional search；只有 prompt 明確要求 functional-equivalent merge 時才使用，且必須處理 timeout。
+- 已測 test38 structural merge 約 0.14 秒、active_gate_count_delta=-15、equivalent=true；同 case functional merge 30 秒 timeout 但 changed=false。
 ```
 
-已完成安全條件：
+### T7：Equivalence query 判讀與 timeout detail 文件同步
+
+新版 `equiv_query original/previous_edit` 代表 testcase 已重跑確認可用。
+tools/LLM-facing 文件需同步：
 
 ```text
-1. working copy 產生候選，通過後才 commit。
-2. structure / Problem A / gate-basis / depth target validation。
-3. mandatory whole-design SAT：同名 PO + DFF.D。
-4. no improvement、target 未達、basis violation、timeout、不等價時保留 original。
-5. DFF.Q fanin rewrite scope 解析到 D-pin data cone。
-6. XAG candidate 使用 Problem A 實際 depth；NOT/BUF 都算一層。
-7. OptimizationResult.changed / equivalenceChecked / equivalent 使用真實狀態。
+- 只有 status=ok、complete=true、equivalent=true 時，才能回答「已證明等價」。
+- status=timeout/error/unsupported 或 complete=false 時，不得把 equivalent=false 解讀成「已證明不等價」。
+- previous_edit 需要先有成功 edit/opt baseline；沒有 baseline 時是 request error。
+- original baseline 由 read 建立；edit 後可用 equiv_query original 驗證 current vs loaded design。
+- timeout envelope 目前可能列出大量 skipped PO / DFF.D names；後續 printer/spec 應限制 detail 或建議 summary-only。
+- 已測 test33/test37/test40 representative original equivalence 均可在 60 秒內 complete=true/equivalent=true。
 ```
 
-驗證：
+### T8：Cone query 大型輸出 policy 同步
+
+已重跑 released cone prompts，runtime 不是 blocker，但 printer 目前會直接輸出完整
+`Cone gates` / `Cone nets`，hidden 大 cone 可能造成 answer log 膨脹。tools/LLM-facing
+文件需同步：
 
 ```text
-mini test/test31: 11 passed
-test22: global depth 41 -> 20
-test26: n10 -> D-pin n1113，global depth 58 -> 30，NOR/NOT compliance PASS
-mini test/test32: tools、timeout、depth-0 / NAND-NOT depth-2 lower bound PASS
-NewTestCase/test40: official bounded smoke PASS，約 3.6 秒
-NewTestCase/test33: 120 秒 process timeout；large D-pin cone core runtime blocker
+- cone_query 目前可穩定回 gate_count、net_count、gate type counts。
+- 若 prompt 只問數量或 type breakdown，LLM 不應把完整 Cone gates / Cone nets 搬進答案。
+- 若 prompt 明確要求 list all gates，才使用完整 list。
+- 後續可考慮在 tools.cpp parser/printer 加 max_print 或 summary_only；在此之前先由 LLM policy 控制。
+- 已測最大 released representative：test18 net_fanin n12，約 3,752 gates / 3,818 nets，envelope 約 65KB。
 ```
 
-Technology mapping 更新：
+### T9：Boolean expression 長輸出 policy 同步
+
+released Boolean-expression prompts 已重跑確認可用，但 full expression printer 目前會直接輸出完整字串。
+tools/LLM-facing 文件需同步：
 
 ```text
-convertToBasisOnGateSet / absorbInvertersOnGateSet 屬於 optimizer internal helper。
-不新增 tools.cpp command，也不擴張 public gate type。
-strict containment、no-op success 與 OptApply regression 已完成。
+- func_query boolean_expression 會回 expression 與 expression length。
+- released representative expression 很短；最大為 test35 n25，expression length=60。
+- hidden 大 cone 可能產生很長 expression；LLM 必須先檢查 expression length。
+- expression 太長時，改用 func_query simplified_expression <net> <max_depth> 或只回摘要。
+- simplified_expression 會標示 expression depth limited=yes，不能把它宣稱為完整 Boolean equation。
+- 後續可考慮在 tools.cpp parser/printer 加 max_length 或 file-output；目前先由 LLM policy 控制。
 ```
 
-### tools.cpp 已串接
+## 不放在本表的事項
 
-已新增公開 commands：
-
-```text
-opt_query critical_path_depth
-opt_apply critical_path_depth [options]
-```
-
-參數對應：
-
-| CLI 參數 | C++ 欄位 | 語意 |
-|---|---|---|
-| `--scope whole` | `scope=WHOLE_NETLIST` | 全設計 |
-| `--scope net_fanin --name n10` | `scope/scopeName` | 指定 net fanin rewrite scope |
-| `--scope gate_fanin --name g10` | `scope/scopeName` | 指定 gate fanin rewrite scope |
-| `--objective global` | `GlobalMaximum` | maximum design depth |
-| `--objective cone` | `ScopedFaninCone` | resolved fanin root depth |
-| `--allowed nor,not` | `allowedTypes` | basis 白名單 |
-| `--banned xor,xnor` | `bannedTypes` | basis 黑名單 |
-| `--target-depth 5` | `targetDepth` | 未達成不提交 |
-| `--time-limit 240` | `timeLimitSeconds` | optimization + SAT 預算 |
-| `--allow-no-improvement` | `requireDepthImprovement=false` | 允許同 depth 的合規候選 |
-| `--verbose` | `verbose=true` | optimizer log |
-
-公開輸出至少包含：
+下列項目不是 tools.cpp 待修改，請不要再混入本文件：
 
 ```text
-success / changed / rolled_back / message
-before_depth / after_depth / target_depth / improved / meets_target
-objective / scope / requested_scope_name / resolved_root_net_name
-resolved_through_dff_data_pin
-baseline_constraints_satisfied / final_constraints_satisfied
-candidate_generated / candidate_accepted
-equivalence_checked / equivalent / equivalence_timed_out
-compared_output_count / compared_dff_d_count
-elapsed_seconds / warnings
-```
-
-正式 C++ 用法見：
-
-```text
-API_SPEC/OPT_APPLY_API.md
-API_SPEC/OPT_APPLY_USAGE.md
-```
-
-公開 tool 契約見：
-
-```text
-TOOLS_SPEC/OPTIMIZATION_TOOL.md
-```
-
-已完成 parser、help、JSON-like envelope、`NetlistEditReport.depthOptimization`
-輸出，以及與 `report_query last_edit` / `equiv_query previous_edit` 共用的
-session cache。CLI regression：`mini test/test32`。
-
-目前不是 tools parser 待更新，而是 optimizer core 待補：
-
-```text
-1. 單次 mockturtle primitive cooperative cancellation。
-2. ScopedFaninCone 不應先做全設計 XAG；需要 cone-isolated resynthesis。
+- Netlist public API facade 設計。
+- optimizer core runtime / cancellation。
+- mockturtle primitive cooperative cancellation。
+- cone-isolated resynthesis。
+- sequential pattern engine candidate ranking / SAT session 策略。
+- accumulated hard constraint 的 session model。
+- 底層 structure validation / rollback transaction 行為。
 ```

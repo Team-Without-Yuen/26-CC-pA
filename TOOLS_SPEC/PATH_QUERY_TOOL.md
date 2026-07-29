@@ -58,11 +58,11 @@ required/avoided nodes 使用 `gate:<g>`、`net:<n>` 或 bare net；bare token �
 | `-avoid <node...>` | path 必須避開的 nodes |
 | `-out <file>` | 將列舉 paths 寫入檔案 |
 | `-max_print <N>` | 最多在 terminal data 顯示 N 條 |
-| `-max_paths <N>` | 最多列舉 N 條後停止 |
+| `-max_paths <N>` | Legacy 相容參數；目前不作為完整列舉的截斷條件 |
 | `-time_limit <seconds>` | enumeration 時間上限 |
 | `-count_only` | 只計數，不保存/顯示每條 path |
 
-對 `enumerate`，只有 envelope `complete:true` 且 data `Complete enumeration: yes` 時，`Total paths` 才是精確完整總數。`partial`、`timeout` 或 path-limit 結果只能回報已找到數量與停止原因。
+對 `enumerate`，只有 envelope `complete:true` 且 data `Complete enumeration: yes` 時，`Total paths` 才是精確完整總數。`timeout` 或其他 incomplete 結果只能回報已找到數量與停止原因。若指定 `-out`，工具會在 DFS 過程中 streaming 寫檔，不會先把所有 paths 保存在記憶體後再一次寫出。
 
 ## 6. Prompt Examples
 
@@ -92,6 +92,6 @@ Read: Is separator
 
 ## 7. 限制
 
-- 大型設計的 all-path enumeration 可能指數成長，優先設定 `-time_limit`、`-max_paths` 或 `-count_only`。
+- 大型設計的 all-path enumeration 可能指數成長，優先設定 `-time_limit`；只問數量時使用 `-count_only`。完整列舉題目可搭配 `-out` 寫檔。
 - `max_depth` 是指定 endpoints 間的最長 path；全域 critical path 應使用 `depth_query global_critical`。
 - 空的 mandatory list 可能表示 path 存在但沒有 mandatory internal net；必須同時讀 `Path exists`。

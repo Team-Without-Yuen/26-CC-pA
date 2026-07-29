@@ -1,0 +1,27 @@
+#RESPONSE 1
+The design has been loaded from testcase/test28/test28.v.
+#END 1
+
+#RESPONSE 2
+The design contains 15581 gates in total: AND=0, OR=970, NOT=1064, NAND=4782, NOR=4373, XOR=110, XNOR=3422, BUF=23, DFF=837.
+#END 2
+
+#RESPONSE 3
+The requested edit was applied. Active gate count delta: 41052. Functional equivalence: true.
+#END 3
+
+#RESPONSE 4
+The requested edit found no applicable change. Functional equivalence was preserved.
+#END 4
+
+#RESPONSE 5
+The requested edit was applied. Active gate count delta: -1502. Functional equivalence: true.
+#END 5
+
+#RESPONSE 6
+Depth optimization completed with whole-design equivalence true. The objective depth changed from 135 to 50.
+#END 6
+
+#RESPONSE 7
+The current design has been written to testcase_toolans/test28/test28_out.v.
+#END 7

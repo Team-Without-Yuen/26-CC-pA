@@ -1,0 +1,88 @@
+#1
+Function: none
+Reason: testcase start marker
+
+#2
+Prompt: Please load the design from the file test08.v located in the directory testcase/test08/.
+
+Call 1:
+Function: read
+Mode: session_io
+Raw command: read testcase/test08/test08.v
+Input parameters:
+  verilog_file: testcase/test08/test08.v
+Result status: ok
+Complete: true
+Elapsed: 0.012
+
+#3
+Prompt: Please count all the gates in this design and report the total count broken down by gate type (AND, OR, NOT, NAND, NOR, XOR, XNOR, BUF, DFF).
+
+Call 1:
+Function: structure_query
+Mode: count_by_type
+Raw command: structure_query count_by_type
+Input parameters:
+  mode: count_by_type
+Result status: ok
+Complete: true
+Elapsed: 0.012
+
+#4
+Prompt: Determine whether a combinational path from n0[0] to n9 exists that does not traverse node n14.
+
+Call 1:
+Function: path_query
+Mode: exists
+Raw command: path_query exists n0[0] n9 -avoid n14
+Input parameters:
+  start_endpoint: n0[0]
+  end_endpoint: n9
+  avoid: n14
+Result status: ok
+Complete: true
+Elapsed: 0.012
+
+#5
+Prompt: Verify whether a path connecting input n0[1] to output n10 exists while avoiding n14.
+
+Call 1:
+Function: path_query
+Mode: exists
+Raw command: path_query exists n0[1] n10 -avoid n14
+Input parameters:
+  start_endpoint: n0[1]
+  end_endpoint: n10
+  avoid: n14
+Result status: ok
+Complete: true
+Elapsed: 0.012
+
+#6
+Prompt: List every path originating at primary input n0[1] and terminating at primary output n10.
+
+Call 1:
+Function: path_query
+Mode: enumerate
+Raw command: path_query enumerate n0[1] n10 -out testcase_toolans/test08/paths_n0_1_to_n10.txt -time_limit 30
+Input parameters:
+  start_endpoint: n0[1]
+  end_endpoint: n10
+  output_file: testcase_toolans/test08/paths_n0_1_to_n10.txt
+  time_limit: 30
+Result status: ok
+Complete: true
+Elapsed: 0.012
+
+#7
+Prompt: Please write the current design to the output file test08_out.v.
+
+Call 1:
+Function: write
+Mode: session_io
+Raw command: write testcase_toolans/test08/test08_out.v
+Input parameters:
+  verilog_file: testcase_toolans/test08/test08_out.v
+Result status: ok
+Complete: true
+Elapsed: 0.012

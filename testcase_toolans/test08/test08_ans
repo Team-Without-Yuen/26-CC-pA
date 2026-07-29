@@ -1,0 +1,23 @@
+#RESPONSE 1
+The design has been loaded from testcase/test08/test08.v.
+#END 1
+
+#RESPONSE 2
+The design contains 93 gates in total: AND=17, OR=17, NOT=16, NAND=0, NOR=24, XOR=4, XNOR=7, BUF=8, DFF=0.
+#END 2
+
+#RESPONSE 3
+Yes. A combinational path from n0[0] to n9 exists that does not traverse node n14.
+#END 3
+
+#RESPONSE 4
+Yes. A path connecting input n0[1] to output n10 exists while avoiding n14.
+#END 4
+
+#RESPONSE 5
+There are 16 paths from primary input n0[1] to primary output n10. The complete path list has been written to testcase_toolans/test08/paths_n0_1_to_n10.txt.
+#END 5
+
+#RESPONSE 6
+The current design has been written to testcase_toolans/test08/test08_out.v.
+#END 6

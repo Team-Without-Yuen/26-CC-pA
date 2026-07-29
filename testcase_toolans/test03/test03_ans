@@ -1,0 +1,11 @@
+#RESPONSE 1
+The design has been loaded from testcase/test03/test03.v.
+#END 1
+
+#RESPONSE 2
+The fanin cone of primary output n15 contains 525 gates.
+#END 2
+
+#RESPONSE 3
+The current design has been written to testcase_toolans/test03/test03_out.v.
+#END 3

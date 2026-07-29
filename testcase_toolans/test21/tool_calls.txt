@@ -1,0 +1,55 @@
+#1
+Function: none
+Reason: testcase start marker
+
+#2
+Prompt: Please load the design from the file test21.v located in the directory testcase/test21/.
+
+Call 1:
+Function: read
+Mode: testcase/test21/test21.v
+Raw command: read testcase/test21/test21.v
+Input parameters:
+  command: read testcase/test21/test21.v
+Result status: ok
+Complete: true
+Elapsed: 0
+
+#3
+Prompt: Please count all the gates in this design and report the total count broken down by gate type (AND, OR, NOT, NAND, NOR, XOR, XNOR, BUF, DFF).
+
+Call 1:
+Function: structure_query
+Mode: count_by_type
+Raw command: structure_query count_by_type
+Input parameters:
+  command: structure_query count_by_type
+Result status: ok
+Complete: true
+Elapsed: 0
+
+#4
+Prompt: Insert buffers wherever needed so that no gate drives more than 4 loads. Make sure nothing changes functionally.
+
+Call 1:
+Function: edit_apply
+Mode: insert_buffers_for_fanout
+Raw command: edit_apply insert_buffers_for_fanout 4
+Input parameters:
+  command: edit_apply insert_buffers_for_fanout 4
+Result status: ok
+Complete: true
+Elapsed: 0
+
+#5
+Prompt: Please write the current design to the output file test21_out.v.
+
+Call 1:
+Function: write
+Mode: testcase_toolans/test21/test21_out.v
+Raw command: write testcase_toolans/test21/test21_out.v
+Input parameters:
+  command: write testcase_toolans/test21/test21_out.v
+Result status: ok
+Complete: true
+Elapsed: 0

@@ -252,15 +252,14 @@ for (int gateId : result.path.gateIds) {
 
 ---
 
-## 7. EnumerateAll 自動寫檔與安全限制
+## 7. EnumerateAll 自動寫檔與時間限制
 
 大型 testcase 若要求完整列出所有 paths，`EnumerateAll` 會預設寫出完整 path list，避免 terminal 輸出過大。
 若沒有指定 `outputFilePath`，預設輸出到 `path_enumeration_output.txt`。
 
-官方時限中 basic operation request 為 60 秒，其他 request 為 300 秒。因此 `EnumerateAll` 目前有預設保護：
+官方時限中 basic operation request 為 60 秒，其他 request 為 300 秒。因此 `EnumerateAll` 目前主要依靠 wall-clock time limit 控制執行時間：
 
 ```text
-query.maxEnumeratedPaths = 100000;
 query.enumerationTimeLimitSeconds = 55.0;
 query.countOnly = false;
 ```
@@ -269,15 +268,15 @@ query.countOnly = false;
 
 | 欄位 | 預設值 | 用途 |
 |---|---:|---|
-| `maxEnumeratedPaths` | `100000` | 最多列舉並保存多少條 path；`0` 表示不限制 |
+| `maxEnumeratedPaths` | legacy | 保留相容欄位；目前不作為 `EnumerateAll` 截斷條件 |
 | `enumerationTimeLimitSeconds` | `55.0` | `EnumerateAll` 的 wall-clock 上限；`<=0` 表示不限制 |
-| `countOnly` | `false` | true 時只更新 `pathCount`，不把每條 path 放進 `result.paths` |
+| `countOnly` | `false` | true 時只更新 `pathCount`，不保存/輸出每條 path |
 
-若列舉被安全限制停止：
+若列舉被時間限制停止：
 
 ```text
 result.completeEnumeration = false
-result.enumerationTimedOut 或 result.enumerationPathLimitReached = true
+result.enumerationTimedOut = true
 result.enumerationStopReason 會說明停止原因
 ```
 
@@ -290,7 +289,6 @@ query.endpoints.push_back(Netlist::PathEndpoint(
     Netlist::PathEndpointType::PrimaryOutput, "n12"));
 query.outputFilePath = "paths_output.txt";  // 可省略；省略時使用預設檔名
 query.maxPrintedPaths = 20;                 // 只影響 CLI / report 顯示，不影響完整檔案
-query.maxEnumeratedPaths = 100000;          // 可依題目調整
 query.enumerationTimeLimitSeconds = 55.0;   // basic operation 建議保守設 55 秒
 
 Netlist::PathQueryResult result = netlist.runPathQuery(query);
@@ -305,7 +303,7 @@ Netlist::PathQueryResult result = netlist.runPathQuery(query);
 | 輸出檔案 | `result.outputFilePath` |
 | 是否完整 enumerate | `result.completeEnumeration` |
 | 是否因時間停止 | `result.enumerationTimedOut` |
-| 是否因數量上限停止 | `result.enumerationPathLimitReached` |
+| 是否因數量上限停止 | `result.enumerationPathLimitReached`，目前應維持 false |
 | 截斷原因 | `result.enumerationStopReason` |
 
 輸出檔格式：
@@ -319,7 +317,22 @@ Path 0
   gates: g1 -> g2
 ```
 
-目前版本若 `countOnly=false`，仍會把列舉到的 `result.paths` 保存在 memory；若 prompt 只問數量，建議設定 `countOnly=true`，可避免大量 path object 佔用記憶體。
+目前版本若 `writePathsToFile=true` 且 `countOnly=false`，會在 DFS 過程中 streaming 寫入檔案，`result.paths` 只保留 terminal 顯示所需的前 `maxPrintedPaths` 條 sample。若 prompt 只問數量，建議設定 `countOnly=true`，可避免輸出大型 path file。
+
+Enumeration 內部會對每個 end net 先做 reverse reachability pruning：從 endpoint 反向標記所有能在 combinational boundary 內抵達 endpoint 的 nets，DFS 只會進入這些可達分支。這不改變 path 定義或輸出格式，但可避免在大型 fanout cone 中反覆探索不可能到達目標 endpoint 的分支。
+
+若 `countOnly=true` 且沒有 required nodes，會啟用 memoized path-count DP：對固定 end net 計算每個 upstream net 到 endpoint 的 path count，並在同一個 query 中跨多個 startpoint 重用結果。若偵測到 combinational cycle，會退回原本 DFS count，以維持 simple-path enumeration 語意。
+
+已驗證案例：
+
+```text
+NewTestCase/test14, net:n0[0] -> net:n63[1]
+count_only: Total paths = 289366, complete = true, 約 0.4 秒
+streaming -out: Total paths = 289366, complete = true, 約 1.7 秒，輸出檔約 226 MB
+
+NewTestCase/test37, all_dff_q -> all_dff_d
+count_only: Total paths = 16548172, complete = true, 約 1.2-1.7 秒
+```
 
 ---
 
@@ -370,6 +383,11 @@ path_query enumerate all_dff_q all_dff_d -out reg_paths.txt -max_print 0
 ```text
 path_query max_depth dff_q:* dff_d:*
 ```
+
+無 `requiredNodes` / `avoidedNodes` 的 `MaxDepth` 會使用 multi-source /
+multi-endpoint DP-style longest-path engine。全域 register-to-register
+max-depth 不會逐一列舉所有 DFF pair，因此可用來回答大型 testcase 的
+「maximum combinational depth on any register-to-register path」類問題。
 
 `RegisterPathQuery` 僅保留為 legacy/internal convenience wrapper。對外一律使用 `PathQuery` endpoint resolver：`DffQ("")` 表示所有 DFF.Q，`DffD("")` 表示所有 DFF.D。
 `RegisterPathQuery::EnumerateAll` 也支援與 `PathQuery` 相同的安全欄位：
@@ -524,7 +542,7 @@ const auto result = netlist.runPathQuery(query);
 1. PathEndpoint 和 PathNode 都會自動解析 ID。
 2. 名稱不存在時回 `ok=false` 並列在 unresolved 欄位；合法的 zero-result 才是 `ok=true, exists=false`。
 3. GateInput 若使用 primitive gate，通常要指定 pinIndex。
-4. EnumerateAll 目前有 `maxEnumeratedPaths` / `enumerationTimeLimitSeconds` / `countOnly` 保護；完整列舉需求若被截斷，需回報 `completeEnumeration=false` 與停止原因。
+4. EnumerateAll 目前以 `enumerationTimeLimitSeconds` / `countOnly` 控制成本；完整列舉需求若被截斷，需回報 `completeEnumeration=false` 與停止原因。
 5. EveryPathThrough / EveryPathAvoids 不採用 vacuous truth；沒有原始路徑時回 false。
 6. 目前 combinationalOnly=false 尚未支援。
 ```

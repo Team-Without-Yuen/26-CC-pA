@@ -1,0 +1,59 @@
+#RESPONSE 1
+The design has been loaded from testcase/test19/test19.v.
+#END 1
+
+#RESPONSE 2
+The design contains 688 gates in total: AND=190, OR=128, NOT=161, NAND=0, NOR=16, XOR=3, XNOR=71, BUF=119, DFF=0.
+#END 2
+
+#RESPONSE 3
+Yes. A qualifying combinational path exists.
+#END 3
+
+#RESPONSE 4
+No. No qualifying combinational path exists.
+#END 4
+
+#RESPONSE 5
+There are 0 paths. The complete path list has been written to testcase_toolans/test19/paths_n4_to_n17_1.txt.
+#END 5
+
+#RESPONSE 7
+The maximum combinational path depth between the specified endpoints is 12.
+#END 7
+
+#RESPONSE 8
+No combinational path exists between the specified endpoints, so no path depth is reported.
+#END 8
+
+#RESPONSE 9
+The maximum combinational path depth between the specified endpoints is 18.
+#END 9
+
+#RESPONSE 10
+Gate g0 directly drives 1 gate(s): g74.
+#END 10
+
+#RESPONSE 11
+Gate g0 directly drives 1 gate(s): g74.
+#END 11
+
+#RESPONSE 12
+The transitive cone for n17[0] contains 82 gates: AND=21, OR=13, NOT=37, NAND=0, NOR=3, XOR=0, XNOR=2, BUF=6, DFF=0.
+#END 12
+
+#RESPONSE 14
+No. The specified signals are not functionally equivalent.
+#END 14
+
+#RESPONSE 15
+No. The specified signals are not functionally equivalent.
+#END 15
+
+#RESPONSE 16
+No. The specified signals are not functionally equivalent.
+#END 16
+
+#RESPONSE 17
+The current design has been written to testcase_toolans/test19/test19_out.v.
+#END 17

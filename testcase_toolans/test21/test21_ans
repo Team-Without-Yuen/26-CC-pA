@@ -1,0 +1,15 @@
+#RESPONSE 1
+The design has been loaded from testcase/test21/test21.v.
+#END 1
+
+#RESPONSE 2
+The design contains 398 gates in total: AND=0, OR=8, NOT=43, NAND=227, NOR=57, XOR=1, XNOR=7, BUF=0, DFF=55.
+#END 2
+
+#RESPONSE 3
+The requested edit was applied. Active gate count delta: 69. Functional equivalence: true.
+#END 3
+
+#RESPONSE 4
+The current design has been written to testcase_toolans/test21/test21_out.v.
+#END 4

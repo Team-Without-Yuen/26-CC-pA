@@ -1,0 +1,15 @@
+#RESPONSE 1
+The design has been loaded from testcase/test22/test22.v.
+#END 1
+
+#RESPONSE 2
+The design contains 1949 gates in total: AND=0, OR=121, NOT=213, NAND=1056, NOR=322, XOR=11, XNOR=24, BUF=0, DFF=202.
+#END 2
+
+#RESPONSE 3
+Depth optimization completed with whole-design equivalence true. The objective depth changed from 41 to 20.
+#END 3
+
+#RESPONSE 4
+The current design has been written to testcase_toolans/test22/test22_out.v.
+#END 4

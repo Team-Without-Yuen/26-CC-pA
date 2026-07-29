@@ -1,0 +1,67 @@
+#RESPONSE 1
+The design has been loaded from testcase/test20/test20.v.
+#END 1
+
+#RESPONSE 2
+The design contains 14371 gates in total: AND=2814, OR=3677, NOT=3440, NAND=0, NOR=949, XOR=150, XNOR=2718, BUF=623, DFF=0.
+#END 2
+
+#RESPONSE 3
+Yes. A qualifying combinational path exists.
+#END 3
+
+#RESPONSE 4
+No. No qualifying combinational path exists.
+#END 4
+
+#RESPONSE 5
+There are 0 paths. The complete path list has been written to testcase_toolans/test20/paths_n14_to_n25_1.txt.
+#END 5
+
+#RESPONSE 6
+There are 1 paths. The complete path list has been written to testcase_toolans/test20/paths_n15_to_n25_0.txt.
+#END 6
+
+#RESPONSE 7
+The maximum combinational path depth between the specified endpoints is 8.
+#END 7
+
+#RESPONSE 8
+No combinational path exists between the specified endpoints, so no path depth is reported.
+#END 8
+
+#RESPONSE 9
+The maximum combinational path depth between the specified endpoints is 9.
+#END 9
+
+#RESPONSE 10
+Gate g0 directly drives 1 gate(s): g59.
+#END 10
+
+#RESPONSE 11
+Gate g0 directly drives 1 gate(s): g59.
+#END 11
+
+#RESPONSE 12
+The transitive cone for n25[0] contains 49 gates: AND=12, OR=0, NOT=20, NAND=0, NOR=0, XOR=0, XNOR=6, BUF=11, DFF=0.
+#END 12
+
+#RESPONSE 14
+No. The specified signals are not functionally equivalent.
+#END 14
+
+#RESPONSE 15
+No. The specified signals are not functionally equivalent.
+#END 15
+
+#RESPONSE 16
+No. The specified signals are not functionally equivalent.
+#END 16
+
+#RESPONSE 17
+The design contains 14371 gates in total: AND=2814, OR=3677, NOT=3440, NAND=0, NOR=949, XOR=150, XNOR=2718, BUF=623, DFF=0.
+#END 17
+
+#RESPONSE 18
+The current design has been written to testcase_toolans/test20/test20_out.v.
+#END 18

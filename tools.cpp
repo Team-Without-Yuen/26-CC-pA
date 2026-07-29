@@ -530,8 +530,8 @@ void printPathResult(const Netlist& netlist,
             std::cout << "Path " << (i + 1) << ":\n";
             printPath(netlist, result.paths[i]);
         }
-        if (pathsToPrint < result.paths.size()) {
-            std::cout << "... omitted " << (result.paths.size() - pathsToPrint)
+        if (!result.countOnly && pathsToPrint < result.pathCount) {
+            std::cout << "... omitted " << (result.pathCount - pathsToPrint)
                       << " paths from terminal output";
             if (result.wrotePathsToFile) {
                 std::cout << "; see " << result.outputFilePath;
@@ -589,8 +589,8 @@ void printRegisterPathReport(const Netlist& netlist,
             std::cout << "Path " << (i + 1) << ":\n";
             printPath(netlist, report.pathResult.paths[i]);
         }
-        if (pathsToPrint < report.pathResult.paths.size()) {
-            std::cout << "... omitted " << (report.pathResult.paths.size() - pathsToPrint)
+        if (!report.pathResult.countOnly && pathsToPrint < report.pathResult.pathCount) {
+            std::cout << "... omitted " << (report.pathResult.pathCount - pathsToPrint)
                       << " paths from terminal output";
             if (report.pathResult.wrotePathsToFile) {
                 std::cout << "; see " << report.pathResult.outputFilePath;
