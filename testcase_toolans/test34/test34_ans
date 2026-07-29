@@ -1,0 +1,43 @@
+#RESPONSE 1
+The design has been loaded from testcase/test34/test34.v.
+#END 1
+
+#RESPONSE 2
+The design contains 24101 gates in total: AND=0, OR=178, NOT=572, NAND=16982, NOR=1749, XOR=37, XNOR=780, BUF=1, DFF=3802.
+#END 2
+
+#RESPONSE 3
+The requested transformation completed. Changed: true. Active gate count delta: 26696. Functional equivalence: true.
+#END 3
+
+#RESPONSE 4
+The reported cone contains 21361 gates: AND=21361, OR=0, NOT=0, NAND=0, NOR=0, XOR=0, XNOR=0, BUF=0, DFF=0.
+#END 4
+
+#RESPONSE 5
+Yes. Equivalence was proved.
+#END 5
+
+#RESPONSE 6
+The Boolean expression is: n30
+#END 6
+
+#RESPONSE 7
+No.
+#END 7
+
+#RESPONSE 8
+The reported maximum logic depth is 115.
+#END 8
+
+#RESPONSE 9
+The reported maximum logic depth is 0.
+#END 9
+
+#RESPONSE 10
+The reported count is 3802.
+#END 10
+
+#RESPONSE 11
+The current design has been written to testcase_toolans/test34/test34_out.v.
+#END 11

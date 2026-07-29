@@ -442,3 +442,64 @@ test35: 約 34k gates
 ```
 
 仍需注意：官方回答 hidden case 可能有 MUX-based structure，不等於已明確允許新的 native `mux` primitive syntax。parser 是否需要接受 native MUX gate，仍應和「只允許既定 primitive」的舊規格分開確認；目前 functional matcher 針對既有 primitive 組成的任意等價結構。
+
+## 17. 2026-07-22 QA 更新（Q46-Q68）
+
+來源：`A_QA_20260722.pdf`。相較 `A_QA_20260703.pdf`，新增 Q46-Q68，並修訂 Q5/Q6 的執行環境說明。
+
+官方確認的分析語意：
+
+```text
+Q46: DFF enable/hold MUX 依 Boolean function 辨識，不限特定 gate pattern。
+Q47: 只計 D = (EN & DATA) | (!EN & Q)；D = EN & DATA 不算 enable/hold。
+Q48: symmetry 只考慮 positive permutation symmetry。
+Q49: 兩個 inputs 都不在 target support 時，視為 vacuously symmetric。
+Q50: DFF.Q 可作為 symmetry pseudo-PI。
+Q51: cut signal 只要切斷至少一組原本連通的 PI-to-PO pair 即成立。
+Q52: source/target 不列入 articulation points。
+Q53: source-target 原本沒有 path 時，回報沒有 articulation point。
+```
+
+官方確認的 transformation / optimization 語意：
+
+```text
+Q54: 所有 modification prompts 都必須維持 functional equivalence。
+Q61: 後續名稱只依 current transformed netlist 解讀，不需保留 original alias。
+Q62: 無法安全套用指定修改時，verified no-op 並保留 original 可接受。
+Q63: 同一 testcase 先前 prompt 建立的 structural constraints 必須持續成立。
+Q64: optimization cost 以套用所有 buffer/mapping/constraint 後的 final netlist 計算。
+Q65: DFF.Q/register output 的 fanin cone 視為 sequential boundary，不轉到同一 DFF 的 D-input cone。
+Q66: current cone 沒有指定 gate 時，回報 0 replacements 並保持等價即可。
+Q67: intermediate transformation 可使用 basis 外 helper gates；final netlist 合規即可。
+Q68: transformation credit 只驗證 generated Verilog；自然語言 response 可只做簡短摘要。
+```
+
+部署與輸出：
+
+```text
+- Docker image submission 與自行啟動 Docker/Podman 不允許。
+- 可打包 Conda、第三方 EDA binaries、shared libraries、scripts 與 dependencies，
+  但必須能由官方 ./cada<team>_<beta|final> -config <path> 命令直接執行。
+- 除指定 LLM API endpoint 外沒有一般網路。
+- log 與 output netlist 放在 executable path 或 prompt 指定 input design path。
+```
+
+對目前實作的符合情況：
+
+```text
+已符合：
+- functional cofactor fallback 可辨識非 canonical MUX-hold。
+- symmetry 是 positive swap，支援 vacuous symmetry 與 DFF.Q pseudo-PI。
+- directed PI-to-PO cut、source/target exclusion 與 NO_PATH report 已完成。
+- public edit/optimization 要求 equivalence，並支援 verified no-op。
+- final basis validation 允許 internal helper representation。
+
+待修改：
+- P0: 移除 optimization/edit scope 的 DFF.Q -> DFF.D 自動解析。
+- P0: 新增跨 prompt persistent constraint state 與 write 前 final validation。
+- P1: AND-only candidate 不再視為 semantics-pending enable/hold；公開預設應排除。
+- P1: 文件與 LLM routing 明確使用 current transformed names，不建立 original aliases。
+- P1: transformation response 可精簡，但 writer artifact 與 final metrics 必須完整。
+```
+
+注意：本節只記錄官方語意與預定修改；加入本節時，DFF.Q rewrite scope 與 persistent constraints 尚未修改。

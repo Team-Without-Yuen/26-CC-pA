@@ -1,0 +1,179 @@
+#1
+Function: none
+Reason: testcase start marker
+
+#2
+Prompt: Please load the design from the file test16.v located in the directory testcase/test16/.
+
+Call 1:
+Function: read
+Mode: testcase/test16/test16.v
+Raw command: read testcase/test16/test16.v
+Input parameters:
+  command: read testcase/test16/test16.v
+Result status: ok
+Complete: true
+Elapsed: 0.025
+
+#3
+Prompt: Please count all the gates in this design and report the total count broken down by gate type (AND, OR, NOT, NAND, NOR, XOR, XNOR, BUF, DFF).
+
+Call 1:
+Function: structure_query
+Mode: count_by_type
+Raw command: structure_query count_by_type
+Input parameters:
+  command: structure_query count_by_type
+Result status: ok
+Complete: true
+Elapsed: 0.025
+
+#4
+Prompt: Determine whether a combinational path from n6 to n33[0] exists that does not traverse node n16010.
+
+Call 1:
+Function: path_query
+Mode: exists
+Raw command: path_query exists n6 n33[0] -avoid n16010
+Input parameters:
+  command: path_query exists n6 n33[0] -avoid n16010
+Result status: ok
+Complete: true
+Elapsed: 0.033
+
+#5
+Prompt: Verify whether a path connecting input n7 to output n33[1] exists while avoiding n15819.
+
+Call 1:
+Function: path_query
+Mode: exists
+Raw command: path_query exists n7 n33[1] -avoid n15819
+Input parameters:
+  command: path_query exists n7 n33[1] -avoid n15819
+Result status: ok
+Complete: true
+Elapsed: 0.041
+
+#6
+Prompt: List every path originating at primary input n7 and terminating at primary output n33[1].
+
+Call 1:
+Function: path_query
+Mode: enumerate
+Raw command: path_query enumerate n7 n33[1] -out testcase_toolans/test16/paths_n7_to_n33_1.txt -time_limit 280
+Input parameters:
+  command: path_query enumerate n7 n33[1] -out testcase_toolans/test16/paths_n7_to_n33_1.txt -time_limit 280
+Result status: ok
+Complete: true
+Elapsed: 0.025
+
+#7
+Prompt: Provide a complete enumeration of paths between n8 and n33[0].
+
+Call 1:
+Function: path_query
+Mode: enumerate
+Raw command: path_query enumerate n8 n33[0] -out testcase_toolans/test16/paths_n8_to_n33_0.txt -time_limit 280
+Input parameters:
+  command: path_query enumerate n8 n33[0] -out testcase_toolans/test16/paths_n8_to_n33_0.txt -time_limit 280
+Result status: ok
+Complete: true
+Elapsed: 0.026
+
+#8
+Prompt: Compute the maximum logic depth from input n6 to output n33[0].
+
+Call 1:
+Function: path_query
+Mode: max_depth
+Raw command: path_query max_depth n6 n33[0]
+Input parameters:
+  command: path_query max_depth n6 n33[0]
+Result status: ok
+Complete: true
+Elapsed: 0.025
+
+#9
+Prompt: Determine the longest combinational path depth from n7 to n33[1].
+
+Call 1:
+Function: path_query
+Mode: max_depth
+Raw command: path_query max_depth n7 n33[1]
+Input parameters:
+  command: path_query max_depth n7 n33[1]
+Result status: ok
+Complete: true
+Elapsed: 0.025
+
+#10
+Prompt: Calculate the critical path depth between n8 and n33[0].
+
+Call 1:
+Function: path_query
+Mode: max_depth
+Raw command: path_query max_depth n8 n33[0]
+Input parameters:
+  command: path_query max_depth n8 n33[0]
+Result status: ok
+Complete: true
+Elapsed: 0.025
+
+#11
+Prompt: Determine the number of gates driven by g0.
+
+Call 1:
+Function: structure_query
+Mode: gate_fanout
+Raw command: structure_query gate_fanout g0
+Input parameters:
+  command: structure_query gate_fanout g0
+Result status: ok
+Complete: true
+Elapsed: 0.025
+
+#12
+Prompt: Enumerate the immediate successors of gate g0.
+
+Call 1:
+Function: structure_query
+Mode: gate_fanout
+Raw command: structure_query gate_fanout g0
+Input parameters:
+  command: structure_query gate_fanout g0
+Result status: ok
+Complete: true
+Elapsed: 0.024
+
+#13
+Prompt: Compute the transitive fanin cone of output n33[0].
+
+Call 1:
+Function: cone_query
+Raw command: cone_query net_fanin n33[0]
+Input parameters:
+  command: cone_query net_fanin n33[0]
+????
+
+#14
+Prompt: Compute the transitive fanout cone of input n6.
+
+Call 1:
+Function: cone_query
+Raw command: cone_query net_fanout n6
+Input parameters:
+  command: cone_query net_fanout n6
+????
+
+#15
+Prompt: Please write the current design to the output file test16_out.v.
+
+Call 1:
+Function: write
+Mode: testcase_toolans/test16/test16_out.v
+Raw command: write testcase_toolans/test16/test16_out.v
+Input parameters:
+  command: write testcase_toolans/test16/test16_out.v
+Result status: ok
+Complete: true
+Elapsed: 0.05

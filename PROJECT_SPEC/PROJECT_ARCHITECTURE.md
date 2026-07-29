@@ -238,14 +238,27 @@ path_query      -> runPathQuery()，必要時使用 Graph dominator engine
 
 ## 8. DFF Boundary Rule
 
-目前 DFF 處理規則：
+官方 Q21、Q30 與 Q65 確認，本專案採單一時間框架的 combinational
+boundary model：
+
+```text
+PI + DFF.Q -> combinational logic -> PO + DFF.D
+```
+
+統一規則：
 
 ```text
 - DFF 仍保存在 gates vector，type = GateType::DFF。
 - DFF.Q/output net 可作為 pseudo primary input。
 - DFF.D/input net 可作為 timing endpoint。
 - combinational path / cone / depth analysis 不會從 DFF input 穿越到 DFF Q。
-- DFF clock/reset pin 可透過 named pin helper 查詢，但目前不做 clock tree / reset tree 專用分析。
+- DFF.Q 的 fanin cone 為空，combinational gate count = 0、depth = 0。
+- DFF.Q 的 fanout 可包含 Q 後方的 combinational logic，直到 PO 或其他 DFF.D boundary。
+- 查詢 DFF.D logic、enable/hold 或 register-to-register path 時，才分析 D-input 前方邏輯。
+- function/SAT/symmetry 將 DFF.Q 當成獨立 pseudo-PI，不推導前一 cycle。
+- whole-design equivalence 在相同 PI/DFF.Q assignment 下比較 PO 與 DFF.D。
+- DFF clock/reset/set pin 可做 direct connectivity 與 fanout-load reporting，
+  但不建立 D-to-Q combinational edge。
 ```
 
 這個規則會影響：
@@ -256,6 +269,17 @@ ConeAnalysis
 DepthAnalysis
 OptimizationAnalysis
 ```
+
+這不表示題目沒有 DFF 相關問題；DFF listing、CK/RN/SN connectivity、
+enable/hold function 與 DFF.Q-to-DFF.D combinational path 仍在支援範圍。
+它們都不需要 multi-cycle simulation 或 sequential equivalence。
+
+特殊規則：官方 constant-function 問題指定 DFF initial state 為 0 並忽略 X；
+這是 constant query 的初始條件，不代表一般 cone/path/depth 可以跨越 DFF。
+
+目前已知不符合項目：optimization/edit 的 `resolveRewriteScope()` 仍可能將
+DFF.Q fanin scope 自動轉成同一 DFF 的 D-pin cone。依 Q65 必須移除此特例；
+修正完成前，LLM-facing optimization 文件仍維持現況並在待辦表標記衝突。
 
 ## 9. Testing
 

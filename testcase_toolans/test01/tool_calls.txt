@@ -1,0 +1,29 @@
+#1
+Function: none
+Reason: testcase start marker
+
+#2
+Prompt: Please load the design from the file test01.v located in the directory testcase/test01/.
+
+Call 1:
+Function: read
+Mode: session_io
+Raw command: read testcase/test01/test01.v
+Input parameters:
+  verilog_file: testcase/test01/test01.v
+Result status: ok
+Complete: true
+Elapsed: 0.134
+
+#3
+Prompt: Please write the current design to the output file test01_out.v.
+
+Call 1:
+Function: write
+Mode: session_io
+Raw command: write testcase_toolans/test01/test01_out.v
+Input parameters:
+  verilog_file: testcase_toolans/test01/test01_out.v
+Result status: ok
+Complete: true
+Elapsed: 0.04

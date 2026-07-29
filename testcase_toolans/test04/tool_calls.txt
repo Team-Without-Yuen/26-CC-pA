@@ -1,0 +1,43 @@
+#1
+Function: none
+Reason: testcase start marker
+
+#2
+Prompt: Please load the design from the file test04.v located in the directory testcase/test04/.
+
+Call 1:
+Function: read
+Mode: session_io
+Raw command: read testcase/test04/test04.v
+Input parameters:
+  verilog_file: testcase/test04/test04.v
+Result status: ok
+Complete: true
+Elapsed: 0.010
+
+#3
+Prompt: Compute the maximum logic depth of the fanin cone of output n3.
+
+Call 1:
+Function: depth_query
+Mode: net
+Raw command: depth_query net n3
+Input parameters:
+  mode: net
+  net: n3
+Result status: ok
+Complete: true
+Elapsed: 0.010
+
+#4
+Prompt: Please write the current design to the output file test04_out.v.
+
+Call 1:
+Function: write
+Mode: session_io
+Raw command: write testcase_toolans/test04/test04_out.v
+Input parameters:
+  verilog_file: testcase_toolans/test04/test04_out.v
+Result status: ok
+Complete: true
+Elapsed: 0.010

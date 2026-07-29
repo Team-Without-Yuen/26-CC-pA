@@ -1,0 +1,192 @@
+#1
+Function: none
+Reason: testcase start marker
+
+#2
+Prompt: Please load the design from the file test17.v located in the directory testcase/test17/.
+
+Call 1:
+Function: read
+Mode: testcase/test17/test17.v
+Raw command: read testcase/test17/test17.v
+Input parameters:
+  command: read testcase/test17/test17.v
+Result status: ok
+Complete: true
+Elapsed: 0.009
+
+#3
+Prompt: Please count all the gates in this design and report the total count broken down by gate type (AND, OR, NOT, NAND, NOR, XOR, XNOR, BUF, DFF).
+
+Call 1:
+Function: structure_query
+Mode: count_by_type
+Raw command: structure_query count_by_type
+Input parameters:
+  command: structure_query count_by_type
+Result status: ok
+Complete: true
+Elapsed: 0.008
+
+#4
+Prompt: Determine whether a combinational path from n7 to n42[0] exists that does not traverse node n1034.
+
+Call 1:
+Function: path_query
+Mode: exists
+Raw command: path_query exists n7 n42[0] -avoid n1034
+Input parameters:
+  command: path_query exists n7 n42[0] -avoid n1034
+Result status: ok
+Complete: true
+Elapsed: 0.01
+
+#5
+Prompt: Verify whether a path connecting input n8 to output n42[1] exists while avoiding n2116.
+
+Call 1:
+Function: path_query
+Mode: exists
+Raw command: path_query exists n8 n42[1] -avoid n2116
+Input parameters:
+  command: path_query exists n8 n42[1] -avoid n2116
+Result status: ok
+Complete: true
+Elapsed: 0.01
+
+#6
+Prompt: List every path originating at primary input n8 and terminating at primary output n42[1].
+
+Call 1:
+Function: path_query
+Mode: enumerate
+Raw command: path_query enumerate n8 n42[1] -out testcase_toolans/test17/paths_n8_to_n42_1.txt -time_limit 280
+Input parameters:
+  command: path_query enumerate n8 n42[1] -out testcase_toolans/test17/paths_n8_to_n42_1.txt -time_limit 280
+Result status: ok
+Complete: true
+Elapsed: 0.012
+
+#7
+Prompt: Provide a complete enumeration of paths between n9 and n42[0].
+
+Call 1:
+Function: path_query
+Mode: enumerate
+Raw command: path_query enumerate n9 n42[0] -out testcase_toolans/test17/paths_n9_to_n42_0.txt -time_limit 280
+Input parameters:
+  command: path_query enumerate n9 n42[0] -out testcase_toolans/test17/paths_n9_to_n42_0.txt -time_limit 280
+Result status: ok
+Complete: true
+Elapsed: 0.012
+
+#8
+Prompt: Compute the maximum logic depth from input n7 to output n42[0].
+
+Call 1:
+Function: path_query
+Mode: max_depth
+Raw command: path_query max_depth n7 n42[0]
+Input parameters:
+  command: path_query max_depth n7 n42[0]
+Result status: ok
+Complete: true
+Elapsed: 0.01
+
+#9
+Prompt: Determine the longest combinational path depth from n8 to n42[1].
+
+Call 1:
+Function: path_query
+Mode: max_depth
+Raw command: path_query max_depth n8 n42[1]
+Input parameters:
+  command: path_query max_depth n8 n42[1]
+Result status: ok
+Complete: true
+Elapsed: 0.009
+
+#10
+Prompt: Calculate the critical path depth between n9 and n42[0].
+
+Call 1:
+Function: path_query
+Mode: max_depth
+Raw command: path_query max_depth n9 n42[0]
+Input parameters:
+  command: path_query max_depth n9 n42[0]
+Result status: ok
+Complete: true
+Elapsed: 0.01
+
+#11
+Prompt: Determine the number of gates driven by g0.
+
+Call 1:
+Function: structure_query
+Mode: gate_fanout
+Raw command: structure_query gate_fanout g0
+Input parameters:
+  command: structure_query gate_fanout g0
+Result status: ok
+Complete: true
+Elapsed: 0.009
+
+#12
+Prompt: Enumerate the immediate successors of gate g0.
+
+Call 1:
+Function: structure_query
+Mode: gate_fanout
+Raw command: structure_query gate_fanout g0
+Input parameters:
+  command: structure_query gate_fanout g0
+Result status: ok
+Complete: true
+Elapsed: 0.009
+
+#13
+Prompt: Compute the transitive fanin cone of output n42[0].
+
+Call 1:
+Function: cone_query
+Raw command: cone_query net_fanin n42[0]
+Input parameters:
+  command: cone_query net_fanin n42[0]
+????
+
+#14
+Prompt: Compute the transitive fanout cone of input n7.
+
+Call 1:
+Function: cone_query
+Raw command: cone_query net_fanout n7
+Input parameters:
+  command: cone_query net_fanout n7
+????
+
+#15
+Prompt: Determine whether signals n2122 and n2116 are functionally equivalent.
+
+Call 1:
+Function: func_query
+Mode: equivalence
+Raw command: func_query equivalence n2122 n2116
+Input parameters:
+  command: func_query equivalence n2122 n2116
+Result status: ok
+Complete: true
+Elapsed: 0.011
+
+#16
+Prompt: Please write the current design to the output file test17_out.v.
+
+Call 1:
+Function: write
+Mode: testcase_toolans/test17/test17_out.v
+Raw command: write testcase_toolans/test17/test17_out.v
+Input parameters:
+  command: write testcase_toolans/test17/test17_out.v
+Result status: ok
+Complete: true
+Elapsed: 0.013

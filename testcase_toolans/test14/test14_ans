@@ -1,0 +1,39 @@
+#RESPONSE 1
+The design has been loaded from testcase/test14/test14.v.
+#END 1
+
+#RESPONSE 2
+The design contains 15245 gates in total: AND=2545, OR=3496, NOT=3729, NAND=2, NOR=1465, XOR=257, XNOR=3445, BUF=306, DFF=0.
+#END 2
+
+#RESPONSE 3
+Yes. A qualifying combinational path exists.
+#END 3
+
+#RESPONSE 4
+Yes. A qualifying combinational path exists.
+#END 4
+
+#RESPONSE 7
+The maximum combinational path depth between the specified endpoints is 5.
+#END 7
+
+#RESPONSE 8
+The maximum combinational path depth between the specified endpoints is 54.
+#END 8
+
+#RESPONSE 9
+The maximum combinational path depth between the specified endpoints is 51.
+#END 9
+
+#RESPONSE 10
+Gate g0 directly drives 1 gate(s): g13209.
+#END 10
+
+#RESPONSE 11
+Gate g0 directly drives 1 gate(s): g13209.
+#END 11
+
+#RESPONSE 12
+The current design has been written to testcase_toolans/test14/test14_out.v.
+#END 12

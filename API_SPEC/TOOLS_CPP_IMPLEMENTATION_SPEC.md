@@ -67,8 +67,8 @@ edit_apply
 | `FunctionQuery::SimplifiedBooleanExpression` | 已實作 | Batch 2 已串接並測試 |
 | `FunctionQuery::PrimaryInputsOfNet` | 已實作 | Batch 2 已串接並測試 |
 | Function SAT timeout / UNKNOWN 欄位 | 已實作 | Batch 2 已輸出完整 solver 狀態 |
-| Path enumerate time/path limit/count-only | 已實作 | Batch 2 已串接並測試 |
-| Register path time/path limit/count-only | 已實作 | Batch 2 已串接並測試 |
+| Path enumerate time-limit/streaming/count-only | 已實作 | Streaming 寫檔已完成並測試 |
+| Register path time-limit/streaming/count-only | 已實作 | 透過 PathQuery endpoint preset 沿用 streaming enumerate |
 | `checkWholeDesignEquivalence()` | 已實作 | Batch 4 已串接並測試 |
 | Rename / cleanup / simplify / buffer EditApply | 已 public | Batch 3 已串接並測試 |
 
@@ -556,7 +556,6 @@ gate_in:<gate>:<index_or_pin>
 
 ```text
 max_printed_paths
-max_enumerated_paths
 time_limit_seconds
 count_only
 output_file
@@ -566,7 +565,6 @@ output_file
 
 ```text
 maxPrintedPaths = 20
-maxEnumeratedPaths = 100000
 enumerationTimeLimitSeconds = 55.0
 countOnly = false
 ```
@@ -577,7 +575,7 @@ enumerate response 必須包含：
 path_count
 complete_enumeration
 timed_out
-path_limit_reached
+path_limit_reached   # legacy field; current streaming enumerate should keep this false
 count_only
 stop_reason
 wrote_paths_to_file
@@ -586,6 +584,12 @@ displayed_paths
 ```
 
 若 `complete_enumeration=false`，response envelope 必須為 `partial` 或 `timeout`，不可回答成「列出的就是所有 paths」。
+
+目前 `EnumerateAll` 使用 streaming file output：指定或預設 output file 時，DFS 每找到一條 path 立即寫檔，`result.paths` 只保留 terminal display sample。`maxEnumeratedPaths`/`-max_paths` 保留為 legacy input，不再截斷完整列舉；實際停止條件以 `time_limit_seconds` 為主。
+
+Core enumeration 另有 reverse reachability pruning：每個 end net 會先沿 driver gate 反向標記 `canReachEnd`，同一個 query 內會快取並重用該 bitmap；DFS 只探索 `canReachEnd=true` 的 downstream net。這個剪枝必須尊重 avoided net/gate，且不得跨過 DFF。
+
+`count_only=true` 且 `requiredNodes` 為空時，core 使用 memoized path-count DP 直接計算固定 endpoint 的 path count。若偵測到 combinational cycle，會 fallback 到 explicit DFS count。CLI parser/envelope 不需要新增欄位；LLM-facing 文件若要描述效能特性，後續統一由 `TOOLS_SPEC` 同步。
 
 ### 11.4 PathQueryResult 錯誤語意（Batch 5 已完成）
 

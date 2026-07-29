@@ -1,0 +1,202 @@
+#1
+Function: none
+Reason: testcase start marker
+
+#2
+Prompt: Please load the design from the file test18.v located in the directory testcase/test18/.
+
+Call 1:
+Function: read
+Mode: testcase/test18/test18.v
+Raw command: read testcase/test18/test18.v
+Input parameters:
+  command: read testcase/test18/test18.v
+Result status: ok
+Complete: true
+Elapsed: 0.011
+
+#3
+Prompt: Please count all the gates in this design and report the total count broken down by gate type (AND, OR, NOT, NAND, NOR, XOR, XNOR, BUF, DFF).
+
+Call 1:
+Function: structure_query
+Mode: count_by_type
+Raw command: structure_query count_by_type
+Input parameters:
+  command: structure_query count_by_type
+Result status: ok
+Complete: true
+Elapsed: 0.016
+
+#4
+Prompt: Determine whether a combinational path from n0[0] to n12 exists that does not traverse node n1038.
+
+Call 1:
+Function: path_query
+Mode: exists
+Raw command: path_query exists n0[0] n12 -avoid n1038
+Input parameters:
+  command: path_query exists n0[0] n12 -avoid n1038
+Result status: ok
+Complete: true
+Elapsed: 0.015
+
+#5
+Prompt: Verify whether a path connecting input n0[1] to output n13 exists while avoiding n1080.
+
+Call 1:
+Function: path_query
+Mode: exists
+Raw command: path_query exists n0[1] n13 -avoid n1080
+Input parameters:
+  command: path_query exists n0[1] n13 -avoid n1080
+Result status: ok
+Complete: true
+Elapsed: 0.018
+
+#6
+Prompt: List every path originating at primary input n0[1] and terminating at primary output n13.
+
+Call 1:
+Function: path_query
+Raw command: path_query enumerate n0[1] n13 -out testcase_toolans/test18/paths_n0_1_to_n13.txt -time_limit 280
+Input parameters:
+  command: path_query enumerate n0[1] n13 -out testcase_toolans/test18/paths_n0_1_to_n13.txt -time_limit 280
+????
+
+#7
+Prompt: Provide a complete enumeration of paths between n0[2] and n12.
+
+Call 1:
+Function: path_query
+Mode: enumerate
+Raw command: path_query enumerate n0[2] n12 -out testcase_toolans/test18/paths_n0_2_to_n12.txt -time_limit 280
+Input parameters:
+  command: path_query enumerate n0[2] n12 -out testcase_toolans/test18/paths_n0_2_to_n12.txt -time_limit 280
+Result status: ok
+Complete: true
+Elapsed: 0.041
+
+#8
+Prompt: Compute the maximum logic depth from input n0[0] to output n12.
+
+Call 1:
+Function: path_query
+Mode: max_depth
+Raw command: path_query max_depth n0[0] n12
+Input parameters:
+  command: path_query max_depth n0[0] n12
+Result status: ok
+Complete: true
+Elapsed: 0.015
+
+#9
+Prompt: Determine the longest combinational path depth from n0[1] to n13.
+
+Call 1:
+Function: path_query
+Mode: max_depth
+Raw command: path_query max_depth n0[1] n13
+Input parameters:
+  command: path_query max_depth n0[1] n13
+Result status: ok
+Complete: true
+Elapsed: 0.015
+
+#10
+Prompt: Determine the number of gates driven by g0.
+
+Call 1:
+Function: structure_query
+Mode: gate_fanout
+Raw command: structure_query gate_fanout g0
+Input parameters:
+  command: structure_query gate_fanout g0
+Result status: ok
+Complete: true
+Elapsed: 0.015
+
+#11
+Prompt: Enumerate the immediate successors of gate g0.
+
+Call 1:
+Function: structure_query
+Mode: gate_fanout
+Raw command: structure_query gate_fanout g0
+Input parameters:
+  command: structure_query gate_fanout g0
+Result status: ok
+Complete: true
+Elapsed: 0.015
+
+#12
+Prompt: Compute the transitive fanin cone of output n12.
+
+Call 1:
+Function: cone_query
+Raw command: cone_query net_fanin n12
+Input parameters:
+  command: cone_query net_fanin n12
+????
+
+#13
+Prompt: Compute the transitive fanout cone of input n0[0].
+
+Call 1:
+Function: cone_query
+Raw command: cone_query net_fanout n0[0]
+Input parameters:
+  command: cone_query net_fanout n0[0]
+????
+
+#14
+Prompt: Determine whether signals n848 and n1080 are functionally equivalent.
+
+Call 1:
+Function: func_query
+Mode: equivalence
+Raw command: func_query equivalence n848 n1080
+Input parameters:
+  command: func_query equivalence n848 n1080
+Result status: ok
+Complete: true
+Elapsed: 0.019
+
+#15
+Prompt: Verify that n1039 and n1046 produce identical logic values for all inputs.
+
+Call 1:
+Function: func_query
+Mode: equivalence
+Raw command: func_query equivalence n1039 n1046
+Input parameters:
+  command: func_query equivalence n1039 n1046
+Result status: ok
+Complete: true
+Elapsed: 0.017
+
+#16
+Prompt: Check functional equivalence between internal signals n1035 and n1029.
+
+Call 1:
+Function: func_query
+Mode: equivalence
+Raw command: func_query equivalence n1035 n1029
+Input parameters:
+  command: func_query equivalence n1035 n1029
+Result status: ok
+Complete: true
+Elapsed: 0.017
+
+#17
+Prompt: Please write the current design to the output file test18_out.v.
+
+Call 1:
+Function: write
+Mode: testcase_toolans/test18/test18_out.v
+Raw command: write testcase_toolans/test18/test18_out.v
+Input parameters:
+  command: write testcase_toolans/test18/test18_out.v
+Result status: ok
+Complete: true
+Elapsed: 0.02

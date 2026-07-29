@@ -1,0 +1,67 @@
+#RESPONSE 1
+The design has been loaded from testcase/test37/test37.v.
+#END 1
+
+#RESPONSE 2
+The design contains 46979 gates in total: AND=0, OR=1999, NOT=3664, NAND=24182, NOR=12400, XOR=233, XNOR=2169, BUF=8, DFF=2324.
+#END 2
+
+#RESPONSE 3
+The reported cone contains 0 gates: AND=0, OR=0, NOT=0, NAND=0, NOR=0, XOR=0, XNOR=0, BUF=0, DFF=0.
+#END 3
+
+#RESPONSE 4
+The requested transformation completed. Changed: true. Active gate count delta: 3. Functional equivalence: true.
+#END 4
+
+#RESPONSE 5
+The reported cone contains 0 gates: AND=0, OR=0, NOT=0, NAND=0, NOR=0, XOR=0, XNOR=0, BUF=0, DFF=0.
+#END 5
+
+#RESPONSE 6
+The requested transformation completed. Changed: false. Active gate count delta: 0. Functional equivalence: true.
+#END 6
+
+#RESPONSE 7
+Yes. Equivalence was proved.
+#END 7
+
+#RESPONSE 8
+The tool did not complete this request successfully, so I cannot provide a complete result for this prompt.
+#END 8
+
+#RESPONSE 9
+The reported cone contains 46982 gates: AND=0, OR=1999, NOT=3664, NAND=24186, NOR=12399, XOR=233, XNOR=2169, BUF=8, DFF=2324.
+#END 9
+
+#RESPONSE 10
+The reported cone contains 0 gates: AND=0, OR=0, NOT=0, NAND=0, NOR=0, XOR=0, XNOR=0, BUF=0, DFF=0.
+#END 10
+
+#RESPONSE 11
+The reported cone contains 2324 gates: AND=0, OR=0, NOT=0, NAND=0, NOR=0, XOR=0, XNOR=0, BUF=0, DFF=0.
+#END 11
+
+#RESPONSE 12
+The Boolean expression is: n8
+#END 12
+
+#RESPONSE 13
+The requested operation was completed.
+#END 13
+
+#RESPONSE 14
+The requested operation was completed.
+#END 14
+
+#RESPONSE 15
+The reported count is 1.
+#END 15
+
+#RESPONSE 16
+The requested operation was completed.
+#END 16
+
+#RESPONSE 17
+The current design has been written to testcase_toolans/test37/test37_out.v.
+#END 17
