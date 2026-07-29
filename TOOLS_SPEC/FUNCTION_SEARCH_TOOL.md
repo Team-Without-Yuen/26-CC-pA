@@ -4,6 +4,10 @@
 
 `func_search` 負責候選名稱未知、必須掃描 current design 才能找到 witness 的 Boolean search。
 
+完整性規則：prompt 要求 all 時不得接受預設 `maxResults` 作為完整答案；應以 candidate count
+推導 pair 上界後重試。時間限制依題目指定。目前沒有 pagination/file output，屬待改善架構。
+詳見 [`LLM_NOTES.md`](LLM_NOTES.md)。
+
 公開支援兩類問題：
 
 ```text
@@ -84,7 +88,10 @@ truncated
 unsupported
 ```
 
-只有 `status: ok` 且 `complete: true` 時，found/no-match 才能當成完整答案。FindAny 的 `all_candidates_examined` 可為 false，因為找到 witness 後存在性問題已回答。
+只有 `status: ok` 且 `complete: true` 時，found/no-match 才是完整證明。FindAny 的
+`all_candidates_examined` 可為 false，因為找到 witness 後存在性問題已回答。FindAll
+不完整時先保留全部已證明 matches；正式競賽答案依 `LLM_NOTES.md` 的 Competition Answer
+Policy 作 best-effort 補答，但不得把未經 SAT 證明的 pair 標成 confirmed match。
 
 `nand_pair` 主要讀：
 
@@ -109,6 +116,19 @@ solver_status = UNSAT
 ```
 
 `equivalent_pair_count` 是 class 可展開的總 pair 數。`truncated:true` 時，`match_count` 只表示實際列出的前 N 組。
+
+要求完整 pair records 時可採兩階段呼叫：
+
+```text
+1. 先執行 --all，讀 candidate_gate_count 或 candidate_signal_count。
+2. 計算 unordered pair 上界：
+   N*(N-1)/2；若 nand_pair 使用 --allow-same，則為 N*(N+1)/2。
+3. 以該上界重送 --max-results。
+4. 只有 truncated:false、timed_out:false、complete:true 時才把 records 當成完整列表。
+```
+
+`equivalent_pairs` 的 `equivalence_classes` 可用來理解等價群組，但 LLM 不應在
+`truncated:true` 時自行假設 envelope 已完整；應提高 `--max-results` 重試。
 
 ## 6. Prompt Examples
 
@@ -136,10 +156,5 @@ Read: scope, gate_type_filter, equivalence_classes
 - DFF 不可作為 equivalent-pair candidate，DFF.Q 只作為 function boundary。
 - timeout、solver unknown、unsupported 與 result limit 都可能使 FindAll 不完整。
 - equivalent output function 不等於 observability redundancy；本 tool 不修改或刪除 gate。
-- 實際 merge 使用 `edit_apply merge_functionally_equivalent_gates <scope>`；該 command 會強制執行 whole-design SAT 與 rollback。
-
-更完整的 C++ 組裝與欄位說明：
-
-```text
-API_SPEC/FUNCTION_SEARCH_USAGE.md
-```
+- 實際 merge 使用 `edit_apply merge_functionally_equivalent_gates <scope>`；該 command 會
+  強制執行 whole-design SAT 與 rollback。

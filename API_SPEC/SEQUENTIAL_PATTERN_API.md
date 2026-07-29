@@ -99,9 +99,9 @@ fallback 只在沒有 confirmed canonical match 時執行，預設關閉。未�
 | `holdFunctionallyProven` | hold cofactor 是否已由 SAT 證明 |
 | `loadFunctionallyProven` | active cofactor 是否已證明等於回傳的 data net |
 | `confirmed` | 是否為可計入 enable/hold 的已證明 match |
-| `semanticsPending` | 是否仍等待題意定義；目前用於 AND-only candidate |
+| `semanticsPending` | 是否仍等待題意定義；官方已確認 AND-only data gating 不使用此欄位 |
 
-`matchedDffCount` 依 DFF instance 去重；同一 DFF 有多筆 pattern 仍只計數一次。`functionalMatchCount` 則計算 functional fallback 找到的 pattern 筆數，兩者不可混用。
+`matchedDffCount` 依 DFF instance 去重；同一 DFF 有多筆 pattern 仍只計數一次。`candidateDffCount` 只計入可能的 enable/hold pattern，不計入 data-gating-only diagnostic。`functionalMatchCount` 則計算 functional fallback 找到的 pattern 筆數，兩者不可混用。
 
 ## 5. 完整性與成本 report
 
@@ -162,12 +162,13 @@ functionalInconclusiveCandidateCount
 直接 `D = EN & DATA` 沒有 Q feedback，目前只回傳：
 
 ```text
-kind = AndGatedDataCandidate
+kind = DataGatingWithoutHoldFeedback
+status = DATA_GATING_WITHOUT_HOLD_FEEDBACK
 confirmed = false
-semanticsPending = true
+semanticsPending = false
 ```
 
-它會計入 `candidateDffCount`，不會計入 `matchedDffCount`。
+它是 non-match diagnostic，不會計入 `matchedDffCount` 或 `candidateDffCount`。真正的 enable/hold match 必須能以 Boolean function 表示成 `D = EN ? DATA : Q`，且 hold cofactor 需對同一顆 DFF 的 Q feedback 成立。依官方 Q69，`EN` 與 `DATA` 不一定要是實體 net；functional fallback 可接受 Q-free Boolean function decomposition，不能只靠固定 MUX 結構或 gate 名稱判斷。
 
 ## 7. 實作位置
 

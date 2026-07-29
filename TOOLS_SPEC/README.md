@@ -2,6 +2,11 @@
 
 這份文件是 `tools.cpp` 的 LLM-facing 唯一入口，負責協助判斷「題目應交給哪個高階 API」。選定 API 後，再閱讀本資料夾對應的 `*_TOOL.md`，取得實際 command、mode、輸入參數、輸出欄位與使用限制。
 
+跨工具的判讀規則、輸出量控制與 session constraint 注意事項見 [`LLM_NOTES.md`](LLM_NOTES.md)。
+
+除 prompt 明確要求前 N 筆外，不得自行設定結果數量上限。時間限制使用題目指定的 budget。
+支援完整 file output 的大型結果應直接寫檔，正式答案只回必要摘要，不搬運檔案內容。
+
 ## 使用流程
 
 ```text
@@ -9,7 +14,8 @@
 2. 選擇一個或多個 public tool families。
 3. 開啟對應的 *_TOOL.md，不自行猜測 mode 或參數。
 4. 先判讀 envelope 的 status 與 complete，再讀 data。
-5. 只有 complete=true 的結果可以直接當成完整答案。
+5. complete=true 的結果可直接作答；不完整結果依 LLM_NOTES 的 Competition Answer Policy
+   改用低成本 query、重試或 best-effort inference，正式答案不得留白或模稜兩可。
 ```
 
 共同回傳格式：
@@ -28,7 +34,67 @@ data:
 TOOL_RESULT_END
 ```
 
-`partial`、`timeout`、`unsupported`、`error` 或 `complete:false` 不得解讀為 `no`、`false`、`0` 或「不存在」。`ok` 只表示 request 是否成功執行，不一定是題目本身的 yes/no 答案。
+`partial`、`timeout`、`unsupported`、`error` 或 `complete:false` 不得直接解讀為
+`no`、`false`、`0` 或「不存在」。`ok` 只表示 request 是否成功執行，不一定是題目本身
+的 yes/no 答案。競賽正式輸出仍須提供明確候選答案；無法取得完整證明時，依
+[`LLM_NOTES.md`](LLM_NOTES.md) 記錄推定依據，不以 `unknown` 或工具錯誤訊息代替答案。
+
+## 全域參數抽取規則
+
+先從 prompt 原文抽出 object names、object kinds、scope、gate types、數值限制與量詞，
+再選 command。不得自行改寫 net、gate、port 或 DFF instance 名稱。
+
+### 名稱與物件種類
+
+| Prompt 中的物件 | Command token |
+|---|---|
+| named net / signal `n10` | 一般 query 使用 `n10`；path endpoint 使用 `net:n10` |
+| bus bit `n10[3]` | 使用完整名稱 `n10[3]`；path endpoint 使用 `net:n10[3]` |
+| gate instance `g5` | gate 參數使用 `g5`；path node 使用 `gate:g5` |
+| primary input/output port | `pi:<name>` / `po:<name>`，或 StructureQuery 的 port mode |
+| DFF instance `ff1` | `dff_q:ff1`、`dff_d:ff1`、`dff_clk:ff1` 或 `dff_reset:ff1` |
+
+若 prompt 沒說物件種類且名稱可能同時像 net/gate/port，先用 `structure_query net_info`、
+`gate_info` 或 `port_info` 確認，不要把 DFF instance name 當成 Q-net name。名稱不存在時，
+先用對應 list mode 找正式名稱，再重送原 query。
+
+gate type token 不分大小寫，使用 `AND OR NOT NAND NOR XOR XNOR BUF DFF`。多個 allowed/banned
+types 以空白或逗號分隔；不得把「NOR and NOT only」解讀為只允許其中一種。
+
+### 數值與量詞
+
+| Prompt 語意 | 參數規則 |
+|---|---|
+| `greater than N` / `more than N` | strict `> N`，直接使用 threshold `N` |
+| `at least N` / `N or more` | integer metric 使用 `> N-1` 的 threshold mode |
+| `at most N` / `no more than N` | constraint limit 設為 `N` |
+| `exactly N-input gates` | 使用 `--inputs N` |
+| `any` / `find one` / `does there exist` | 使用 exists/find-any 類 mode |
+| `all` / `every` / `list each` | 使用完整列舉、pagination 或 `--all` |
+
+### Scope 映射
+
+| Prompt scope | Tool scope |
+|---|---|
+| whole design / entire netlist | `whole` |
+| cone of net `n10` / logic feeding `n10` | `net_fanin n10` |
+| logic reachable from net `n10` | `net_fanout n10` |
+| fanin cone of gate `g5` | `gate_fanin g5` |
+| fanout cone of gate `g5` | `gate_fanout g5` |
+
+### 預設語意
+
+- gate count 指 current design 的 active gates；修改後不得使用 raw storage count。
+- `count all gates` 包含 DFF，並使用 `Gate type counts` 回報各 type。
+- PI/PO count 預設是 port count；prompt 明確說 bits/signals 時，依各 port width 加總。
+- `outputs` 指 PO；`endpoints` 才包含 PO 與 DFF.D。
+- logic depth 中每個 primitive gate都算一層，包含 NOT 與 BUF。
+- direct fanout/load 使用 `StructureQuery`；transitive reachable fanout 使用 `ConeQuery`；
+  指定 start/end 間 path 使用 `PathQuery`。
+- `all paths`、`all pairs`、`all records` 不得以第一個 witness 或 terminal sample 代替。
+- critical path 可能不唯一；`global_critical` 的 path 是一條代表性 maximum-depth path。
+- 未指定 baseline 時，query 回答 current design；`original` 與 `previous_edit` 只能透過
+  `equiv_query` 的對應 mode 明確選擇。
 
 ---
 
@@ -345,7 +411,8 @@ Make sure nothing changes functionally.
 | 找出未知候選，再對候選做詳細功能分析 | `FunctionSearchQuery` → `FunctionQuery` |
 | 列出某 clock 的 DFF，再分析這些 DFF 的 enable/hold | `StructureQuery` → `SequentialPatternQuery` |
 
-選定高階 API 後，LLM 必須進入表中連結的 `*_TOOL.md`，再決定實際 command mode、輸入參數與應讀取的 report 欄位。`API_SPEC/*_USAGE.md` 保留給 `tools.cpp` 或 C++ API 串接者，不是 LLM 的直接 tool contract。
+選定高階 API 後，LLM 必須進入表中連結的 `*_TOOL.md`，再決定實際 command mode、
+輸入參數與應讀取的 report 欄位。
 
 ---
 
@@ -366,22 +433,5 @@ Make sure nothing changes functionally.
 | `report_query` | [`REPORT_QUERY_TOOL.md`](REPORT_QUERY_TOOL.md) |
 | `equiv_query` | [`EQUIVALENCE_QUERY_TOOL.md`](EQUIVALENCE_QUERY_TOOL.md) |
 
-`basic_query`、`conn_query`、`reg_path_query` 與 `graph_query` 只為 legacy 相容保留，不是 LLM 應選擇的 public command。新增或修改 tool 文件時遵循 [`TOOL_DOCUMENT_TEMPLATE.md`](TOOL_DOCUMENT_TEMPLATE.md)。
-
----
-
-## 14. Regression
-
-公開 tools schema 修改後至少執行：
-
-```powershell
-.\scripts\run_tools_regression.ps1 -Profile Tools
-```
-
-準備 checkpoint 或整批交付前執行：
-
-```powershell
-.\scripts\run_tools_regression.ps1 -Profile Full
-```
-
-profile、log 與官方 bounded smoke 參數見專案根目錄的 `COMPILE.md`。
+`basic_query`、`conn_query`、`reg_path_query` 與 `graph_query` 只為 legacy 相容保留，
+不是 LLM 應選擇的 public command。

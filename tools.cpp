@@ -876,8 +876,8 @@ void printGraphReport(const Netlist::GraphReport& report) {
 std::string sequentialPatternKindName(DffInputPatternKind kind) {
     switch (kind) {
         case DffInputPatternKind::MuxHold: return "MuxHold";
-        case DffInputPatternKind::AndGatedDataCandidate:
-            return "AndGatedDataCandidate";
+        case DffInputPatternKind::DataGatingWithoutHoldFeedback:
+            return "DataGatingWithoutHoldFeedback";
         default:
             return "Unknown";
     }
@@ -1371,9 +1371,6 @@ void printEditReport(const Netlist& netlist, const Netlist::NetlistEditReport& r
             netlist, "    allowed_gate_types", summary.allowedTypes);
         printGateTypeList(
             netlist, "    banned_gate_types", summary.bannedTypes);
-        std::cout << "    resolved_through_dff_data_pin: "
-                  << (summary.resolvedThroughDffDataPin ? "true" : "false")
-                  << "\n";
         std::cout << "    baseline_constraints_satisfied: "
                   << (summary.baselineConstraintsSatisfied ? "true" : "false")
                   << "\n";
@@ -2607,6 +2604,7 @@ void printHelp() {
         << "  path_query <mode> <start_endpoint> <end_endpoint> [-req node...] [-avoid node...]\n"
         << "  path_query direct_pi_po [-max_print n]\n"
         << "             [-out file] [-max_print n] [-max_paths n] [-time_limit seconds] [-count_only]\n"
+        << "             -max_paths is accepted for legacy compatibility and does not truncate enumeration\n"
         << "  mode: exists | find_any | enumerate | min_depth | max_depth\n"
         << "        every_through | every_avoids | mandatory_nodes | is_separator\n"
         << "        pi_po_cut <internal_net> | direct_pi_po\n"

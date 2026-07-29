@@ -13,12 +13,12 @@ $commands = @(
     "depth_query global_critical"
     "equiv_query previous_edit 30"
     "read mini test/test32/opt_cli_circuit.v"
-    "opt_apply critical_path_depth --scope net_fanin q --objective global --allowed NOR,NOT --time-limit 30"
+    "opt_apply critical_path_depth --scope gate_fanin ff0 --objective global --allowed NOR,NOT --time-limit 30"
     "report_query last_edit"
     "depth_query global_critical"
     "equiv_query previous_edit 30"
     "read mini test/test32/opt_cli_circuit.v"
-    "opt_apply critical_path_depth --scope net_fanin q --objective cone --allowed NOR NOT --target-depth 0 --time-limit 30"
+    "opt_apply critical_path_depth --scope gate_fanin ff0 --objective cone --allowed NOR NOT --target-depth 0 --time-limit 30"
     "depth_query global_critical"
     "report_query last_edit"
     "opt_apply critical_path_depth --scope net_fanout q --objective cone"
@@ -138,14 +138,13 @@ if ($responses.Count -ge 28) {
          $constrainedAccepted -match "before_depth: 7" -and
          $constrainedAccepted -match "after_depth: 9" -and
          $constrainedAccepted -match "improved: false" -and
-         $constrainedAccepted -match "resolved_through_dff_data_pin: true" -and
          $constrainedAccepted -match "baseline_constraints_satisfied: false" -and
          $constrainedAccepted -match "final_constraints_satisfied: true" -and
          $constrainedAccepted -match "candidate_accepted: true" -and
          $constrainedAccepted -match "whole_design_equivalent: true" -and
          $constrainedAccepted -match "allowed_gate_types \(2\):(?s).*NOR(?s).*NOT" -and
          $constrainedAccepted -match "original design violated a hard gate constraint") `
-        "scoped NOR/NOT flow resolves DFF.Q and reports the hard-constraint tradeoff"
+        "DFF gate_fanin NOR/NOT flow reports the hard-constraint tradeoff without exposing legacy resolution detail"
 
     Check-Result `
         ($cachedConstrained -match "operation_kind: DepthOptimization" -and
@@ -228,10 +227,10 @@ if ($responses.Count -ge 28) {
          $dffOptimal -match "before_depth: 0" -and
          $dffOptimal -match "after_depth: 0" -and
          $dffOptimal -match "core_status: NO_IMPROVEMENT" -and
-         $dffOptimal -match "absolute lower bound" -and
+         $dffOptimal -match "resolved optimization scope is empty" -and
          $dffOptimal -match "equivalence_method: StructuralIdentity" -and
          $dffOptimal -match "complete: true") `
-        "resolved D-pin depth zero returns original without invoking the optimizer"
+        "DFF.Q net_fanin boundary depth zero returns original without invoking the optimizer"
 
     Check-Result `
         ($andDepth -match "Worst endpoint: and_y depth=2") `

@@ -316,7 +316,7 @@ Enable 是 active-high 或 active-low？
 符合條件的 unique DFF 數量是多少？
 ```
 
-它不重做 `ListDffs`、clock/reset load、fanin cone 或 SAT encoding，而是重用既有 API。預設只跑 canonical fast path；C++ caller 可開啟有 candidate/time/completeness 限制的 functional cofactor fallback。AND-only D-input 目前只回報 semantics-pending candidate，不計入 confirmed `matchedDffCount`。
+它不重做 `ListDffs`、clock/reset load、fanin cone 或 SAT encoding，而是重用既有 API。預設只跑 canonical fast path；C++ caller 可開啟有 candidate/time/completeness 限制的 functional cofactor fallback。AND-only D-input 只回報 `DataGatingWithoutHoldFeedback` non-match diagnostic，不計入 `matchedDffCount` 或 `candidateDffCount`。
 
 文件：
 

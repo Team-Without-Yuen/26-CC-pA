@@ -1162,9 +1162,9 @@ sequential_query enable_hold <all|dff_name>
 |---|---|
 | `all` | 分析所有 active DFF |
 | `<dff_name>` | 只分析指定 DFF instance |
-| default | 包含 AND-only semantics-pending candidates；all detail 只列有 pattern 的 DFF |
+| default | 包含 AND-only data-gating non-match diagnostics；all detail 只列有 pattern/diagnostic 的 DFF |
 | `--summary-only` | 只回完整 aggregate，回答 count prompt |
-| `--confirmed-only` | 排除 AND-only candidates |
+| `--confirmed-only` | 排除 AND-only data-gating diagnostics |
 | `--include-no-pattern` | detail 也列無 pattern DFF |
 | `--offset/--limit` | detail 分頁；all 預設上限 50 records |
 | `--verify-sat` | 只允許指定 DFF；all-DFF SAT 會在 parser 階段拒絕 |
@@ -1185,7 +1185,7 @@ functional complete/timeout、candidate/simulation/SAT cost counters
 pagination completeness、next offset
 ```
 
-CLI formatter 不得把 `AndGatedDataCandidate` 算入 confirmed matched count；官方回覆前必須輸出 `semantics pending`。
+CLI formatter 不得把 `DataGatingWithoutHoldFeedback` 算入 confirmed matched count 或 candidate count；它只能作為 non-match diagnostic 輸出。
 functional fallback incomplete 時 envelope 必須為 `partial` 或 `timeout`；已找到的 confirmed matches 仍有效，但 absence 不得解讀為不存在。
 
 驗證：`mini test/test21` 18/18，涵蓋 canonical 相容、functional proof、candidate partial、timeout/error、參數驗證與 envelope；C++ focused reference `mini test/test28` 19/19。test40 canonical summary 預設 detail 固定 50 records 並明確回 partial。

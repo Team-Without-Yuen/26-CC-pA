@@ -169,7 +169,7 @@ report.elapsedSeconds
 
 若整體時間在某顆 DFF 進入 engine 前已用完，該 DFF 的 candidate counters 仍為 0，但 top-level `timedOut=true`、`complete=false`；因此回答完整性一律先讀 top-level envelope。
 
-數量題應讀 `matchedDffCount`，因為它依 DFF 去重。`functionalMatchCount` 可能包含同一 DFF 的多個 nested controls。
+數量題應讀 `matchedDffCount`，因為它依 DFF 去重。`candidateDffCount` 只代表可能的 enable/hold pattern，不包含 data-gating-only diagnostic。`functionalMatchCount` 可能包含同一 DFF 的多個 nested controls。
 
 ## 6. Canonical match 額外 SAT 驗證
 
@@ -179,13 +179,21 @@ query.verifyCanonicalMatchesWithSat = true;
 
 這會驗證 inactive `D==Q` 與 active `D==data branch`。它和 functional fallback 不同：前者驗證已找到的 canonical 結構，後者會搜尋未知 control。大量 DFF 不應無限制同時開啟兩者。
 
-## 7. AND-only candidate
+## 7. AND-only data gating diagnostic
 
 ```text
 D = EN & DATA
 ```
 
-目前回傳 `AndGatedDataCandidate`、`confirmed=false`、`semanticsPending=true`。回答時可列為候選，但不能併入 confirmed enable/hold 數量。
+官方已確認這不算 enable/hold，因為沒有同一顆 DFF 的 Q feedback。工具會回傳 `DataGatingWithoutHoldFeedback`、`confirmed=false`、`semanticsPending=false` 與 `status=DATA_GATING_WITHOUT_HOLD_FEEDBACK`。回答時只能說這是 data-gating non-match diagnostic，不能列為 enable/hold candidate，也不能併入 `matchedDffCount` 或 `candidateDffCount`。
+
+真正的 match 應以 Boolean function 判斷，功能上需能表示成：
+
+```text
+D = EN ? DATA : Q
+```
+
+依官方 Q69，`EN` 和 `DATA` 不一定要是實體 net，也可以是 Q-free Boolean function。因此遇到非 canonical 結構時，應使用 functional fallback，而不是只靠固定 MUX gate pattern 或 gate 名稱。
 
 ## 8. Prompt 對應
 

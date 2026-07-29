@@ -186,11 +186,15 @@ NetlistEditReport report = netlist.runOptApply(request);
 若 `n10` 是 DFF.Q：
 
 ```text
-depthOptimization.resolvedThroughDffDataPin == true
-depthOptimization.resolvedRootNetName == D-pin net name
+depthOptimization.resolvedThroughDffDataPin == false
+depthOptimization.resolvedRootNetName == "n10"
+depthChange.beforeDepth == 0
+depthChange.afterDepth == 0
 ```
 
-cost 仍讀 global `depthChange`；basis compliance 只檢查 resolved D-pin cone。
+`NET_FANIN <DFF.Q>` 是 empty combinational cone；basis compliance vacuously
+satisfied，depth objective 會回 original / already optimal。若要分析 DFF
+instance 的 D-input data cone，應明確使用 `GATE_FANIN <DFF instance>`。
 
 ### 5.4 最小化 n8 fanin cone depth
 
@@ -282,7 +286,7 @@ unchecked candidate，沒有 transaction commit contract。
 global maximum depth
 scoped fanin cone depth
 whole/local allowed/banned basis
-DFF.Q -> D-pin rewrite scope
+DFF.Q boundary no-op
 targetDepth acceptance
 no-improvement original retention
 structure / Problem A validation
@@ -307,5 +311,5 @@ NewTestCase/test40: official sequence + n14 proven-optimal no-change PASS
 mockturtle core mid-pass cancellation
 global optimum proof
 strict cone-isolated ECO rewrite
-NewTestCase/test33 large D-pin cone completion within bounded runtime
+non-DFF.Q large scoped cone completion within bounded runtime
 ```

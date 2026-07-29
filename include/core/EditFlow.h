@@ -18,8 +18,10 @@ enum class TargetScope {
 class Netlist;
 
 // Resolves the graph region that a transformation or optimization may rewrite.
-// Read-only cone queries still stop at DFF boundaries. For a fanin rewrite whose
-// named target is a DFF/Q boundary, this resolver selects the D-pin data cone.
+// Net-fanin scopes follow read-only cone-query semantics: a DFF/Q net is a
+// sequential boundary and resolves to an empty combinational cone. Gate-fanin
+// scopes that explicitly name a DFF instance may still select the D-pin data
+// cone because the target is the sequential cell, not its Q signal.
 struct RewriteScopeResolution {
     bool ok = false;
     bool wholeNetlist = false;

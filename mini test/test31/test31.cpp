@@ -110,12 +110,34 @@ int main(int argc, char** argv) {
         constrained.runOptApply(constrainedRequest);
     tests.check(
         constrainedReport.success &&
-        constrainedReport.validation.functionallyEquivalent &&
+        !constrainedReport.changed &&
         constrainedReport.depthOptimization.has_value() &&
-        constrainedReport.depthOptimization->resolvedThroughDffDataPin &&
-        constrainedReport.depthOptimization->resolvedRootNetName == "d" &&
-        constrainedReport.depthOptimization->finalConstraintsSatisfied,
-        "DFF.Q constrained optimization resolves D-pin cone and proves equivalence");
+        !constrainedReport.depthOptimization->resolvedThroughDffDataPin &&
+        constrainedReport.depthOptimization->resolvedRootNetName == "q" &&
+        constrainedReport.depthOptimization->finalConstraintsSatisfied &&
+        constrainedReport.depthChange.has_value() &&
+        constrainedReport.depthChange->beforeDepth == originalDepth &&
+        constrainedReport.depthChange->afterDepth == originalDepth,
+        "DFF.Q net-fanin constrained global optimization is a boundary no-op");
+
+    Netlist dffGateConstrained;
+    tests.check(
+        loadCircuit(circuitPath, dffGateConstrained),
+        "DFF gate constrained circuit loads");
+    OptApplyRequest dffGateRequest = globalRequest;
+    dffGateRequest.scope = TargetScope::GATE_FANIN;
+    dffGateRequest.scopeName = "ff0";
+    dffGateRequest.allowedTypes = {GateType::NOR, GateType::NOT};
+    const NetlistEditReport dffGateReport =
+        dffGateConstrained.runOptApply(dffGateRequest);
+    tests.check(
+        dffGateReport.success &&
+        dffGateReport.validation.functionallyEquivalent &&
+        dffGateReport.depthOptimization.has_value() &&
+        dffGateReport.depthOptimization->resolvedThroughDffDataPin &&
+        dffGateReport.depthOptimization->resolvedRootNetName == "d" &&
+        dffGateReport.depthOptimization->finalConstraintsSatisfied,
+        "explicit DFF gate-fanin constrained optimization resolves D-pin cone");
 
     Netlist scopedDepth;
     tests.check(
@@ -129,11 +151,12 @@ int main(int argc, char** argv) {
         scopedDepth.runOptApply(scopedDepthRequest);
     tests.check(
         scopedDepthReport.success &&
+        !scopedDepthReport.changed &&
         scopedDepthReport.depthChange.has_value() &&
         scopedDepthReport.depthChange->endpointName == "q" &&
-        scopedDepthReport.depthChange->improved &&
-        scopedDepthReport.validation.functionallyEquivalent,
-        "scoped cone depth can be optimized without gate-basis constraints");
+        scopedDepthReport.depthChange->beforeDepth == 0 &&
+        scopedDepthReport.depthChange->afterDepth == 0,
+        "DFF.Q net-fanin scoped cone depth is already at boundary depth zero");
 
     std::cout << "Summary: " << tests.passed
               << " passed, " << tests.failed << " failed.\n";

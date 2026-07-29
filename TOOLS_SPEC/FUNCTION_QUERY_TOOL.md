@@ -4,6 +4,9 @@
 
 `func_query` 負責題目已指定 target signals 的 Boolean property，包括 equivalence、conditional equivalence、constant、truth status、functional dependence、symmetry、expression 與 support。SAT 類結果必須先確認 solver 完成。
 
+完整性規則：不自行限制 expression、support 或 target records；時間限制依題目指定。大型
+Boolean expression 目前沒有 file output，屬已知輸出風險。詳見 [`LLM_NOTES.md`](LLM_NOTES.md)。
+
 ## 2. 選擇條件
 
 已知要分析的 net/bus 名稱，且 prompt 出現 `functionally equivalent`、`when condition`、`always 0/1`、`can be`、`depends on`、`symmetric`、`Boolean expression` 或 `support inputs` 時使用本 tool。
@@ -50,7 +53,10 @@ answer
 equivalent
 ```
 
-只有 envelope `complete:true` 時才能使用 `answer`、`equivalent`、`depends on input` 或 `symmetric` 作為最終 yes/no。`timeout`、`partial`、`unsupported` 不能解讀為 `no`。
+只有 envelope `complete:true` 時，`answer`、`equivalent`、`depends on input` 或 `symmetric`
+才是已證明的 yes/no。`timeout`、`partial`、`unsupported` 不能直接解讀為 `no`；競賽正式
+答案仍應依 `LLM_NOTES.md` 的 Competition Answer Policy 選擇最可能的單一 yes/no，
+但不得將該推定描述成 SAT proof。
 
 `answer` 是 mode-specific 主要布林答案；回答 equivalence 時優先讀 `equivalent`，dependence 讀 `depends on input`，symmetry 讀 `symmetric`，不要混用其他預設布林欄位。
 

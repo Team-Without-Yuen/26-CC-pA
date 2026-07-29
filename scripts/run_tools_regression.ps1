@@ -280,7 +280,7 @@ function Invoke-PowerShellRegression {
 function Test-Environment {
     $requiredPaths = @(
         $bashExecutable,
-        (Join-Path $ProjectRoot "TOOLS_SPEC\Makefile"),
+        (Join-Path $ProjectRoot "scripts\tools.mk"),
         (Join-Path $ProjectRoot "include\lib\abc\libabc.a"),
         (Join-Path $ProjectRoot "include\lib\cadical\build\libcadical.a")
     )
@@ -534,7 +534,7 @@ try {
         $script:buildPassed = Invoke-ProcessStep `
             -Name "build_tools" `
             -FilePath $bashExecutable `
-            -ArgumentList @("-lc", "make -f TOOLS_SPEC/Makefile -j4") `
+            -ArgumentList @("-lc", "make -f scripts/tools.mk -j4") `
             -TimeoutSeconds 300 `
             -Environment @{
                 MSYSTEM = "UCRT64"
@@ -546,11 +546,11 @@ try {
         $testNumbers = if ($Profile -eq "Quick") {
             @("32")
         } elseif ($Profile -eq "Tools") {
-            @("9", "21", "27", "32")
+            @("9", "21", "27", "32", "34")
         } else {
             @(
                 "9", "10", "11", "12", "13", "14", "15", "16", "17", "18",
-                "21", "22", "24", "25", "26", "27", "32"
+                "21", "22", "24", "25", "26", "27", "32", "34"
             )
         }
 

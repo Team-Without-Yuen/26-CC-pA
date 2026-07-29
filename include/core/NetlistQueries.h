@@ -378,7 +378,7 @@ enum class SequentialPatternQueryType {
 
 enum class DffInputPatternKind {
     MuxHold,
-    AndGatedDataCandidate
+    DataGatingWithoutHoldFeedback
 };
 
 enum class SequentialPatternDetectionMethod {
@@ -433,7 +433,7 @@ struct DffInputPattern {
     bool holdFunctionallyProven = false;
     bool loadFunctionallyProven = false;
     bool confirmed = false;
-    bool semanticsPending = false;   // 目前 AND-only candidate 的官方定義尚待確認
+    bool semanticsPending = false;
 
     bool solverRan = false;
     bool solverTimedOut = false;
@@ -487,7 +487,7 @@ struct SequentialPatternReportSet {
     size_t totalDffCount = 0;
     size_t analyzedDffCount = 0;
     size_t matchedDffCount = 0;      // 依 DFF instance 去重
-    size_t candidateDffCount = 0;    // 包含 semanticsPending candidate 的 DFF 數量
+    size_t candidateDffCount = 0;    // 不含 data-gating-only non-match diagnostics
     size_t functionalCandidateCount = 0;           // sum of per-DFF structural candidates
     size_t functionalSearchableCandidateCount = 0; // sum of per-DFF searchable candidates
     size_t functionalCandidatesExamined = 0;       // sum of per-DFF examined candidates

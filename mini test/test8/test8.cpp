@@ -43,7 +43,7 @@ void testRegisterPathCountOnly(TestReport& report, const Netlist& netlist) {
                  "register_path_query count_only forwards to path_query");
 }
 
-void testRegisterPathLimit(TestReport& report, const Netlist& netlist) {
+void testLegacyRegisterPathLimitDoesNotTruncate(TestReport& report, const Netlist& netlist) {
     Netlist::RegisterPathQuery query;
     query.mode = Netlist::RegisterPathQueryMode::EnumerateAll;
     query.countOnly = true;
@@ -54,12 +54,12 @@ void testRegisterPathLimit(TestReport& report, const Netlist& netlist) {
     report.check(result.ok &&
                  result.exists &&
                  result.pathResult.countOnly &&
-                 result.pathResult.pathCount == 1 &&
+                 result.pathResult.pathCount == 3 &&
                  result.pathResult.paths.empty() &&
-                 !result.pathResult.completeEnumeration &&
-                 result.pathResult.enumerationPathLimitReached &&
-                 result.pathResult.enumerationStopReason.find("maxEnumeratedPaths") != std::string::npos,
-                 "register_path_query max_paths guard");
+                 result.pathResult.completeEnumeration &&
+                 !result.pathResult.enumerationPathLimitReached &&
+                 result.pathResult.enumerationStopReason.empty(),
+                 "register_path_query legacy max_paths does not truncate enumeration");
 }
 
 } // namespace
@@ -71,7 +71,7 @@ int main() {
     report.check(loadCircuit(netlist), "test8 load register timeout circuit");
     if (report.failed == 0) {
         testRegisterPathCountOnly(report, netlist);
-        testRegisterPathLimit(report, netlist);
+        testLegacyRegisterPathLimitDoesNotTruncate(report, netlist);
     }
 
     std::cout << "Summary: " << report.passed << " passed, "

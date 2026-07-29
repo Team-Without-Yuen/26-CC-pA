@@ -299,10 +299,12 @@ bool detectCanonicalMux(const Netlist& netlist,
 
 DffInputPattern makeAndCandidate(const Netlist& netlist, int dNetId) {
     DffInputPattern pattern;
-    pattern.kind = DffInputPatternKind::AndGatedDataCandidate;
+    pattern.kind = DffInputPatternKind::DataGatingWithoutHoldFeedback;
     pattern.detectionMethod = SequentialPatternDetectionMethod::StructuralCanonical;
-    pattern.semanticsPending = true;
-    pattern.message = "Direct AND-gated D input found; official enable/hold semantics are pending.";
+    pattern.semanticsPending = false;
+    pattern.message =
+        "Direct AND-gated D input found, but no same-DFF Q feedback is present; "
+        "this is data gating, not an enable/hold pattern.";
 
     const LiteralRef normalizedRoot = normalizeLiteral(netlist, dNetId);
     const int rootNetId = normalizedRoot.baseNetId;
@@ -647,7 +649,19 @@ Netlist::SequentialPatternReportSet Netlist::runSequentialPatternQuery(
             report.patterns.begin(),
             report.patterns.end(),
             [](const DffInputPattern& pattern) { return pattern.confirmed; });
-        const bool hasCandidate = !report.patterns.empty();
+        const bool hasCandidate = std::any_of(
+            report.patterns.begin(),
+            report.patterns.end(),
+            [](const DffInputPattern& pattern) {
+                return pattern.kind == DffInputPatternKind::MuxHold;
+            });
+        const bool hasDiagnostic = std::any_of(
+            report.patterns.begin(),
+            report.patterns.end(),
+            [](const DffInputPattern& pattern) {
+                return pattern.kind ==
+                    DffInputPatternKind::DataGatingWithoutHoldFeedback;
+            });
         if (report.matched) {
             ++result.matchedDffCount;
         }
@@ -660,14 +674,20 @@ Netlist::SequentialPatternReportSet Netlist::runSequentialPatternQuery(
             ? "PARTIAL"
             : (report.matched
                 ? "ENABLE_HOLD_FOUND"
-                : (hasCandidate ? "CANDIDATE_FOUND" : "NO_PATTERN"));
+                : (hasCandidate
+                    ? "CANDIDATE_FOUND"
+                    : (hasDiagnostic
+                        ? "DATA_GATING_WITHOUT_HOLD_FEEDBACK"
+                        : "NO_PATTERN")));
         report.message = !report.functionalFallbackComplete
             ? "Functional fallback was incomplete; returned confirmed matches remain valid, but absence is inconclusive."
             : (report.matched
                 ? "Confirmed DFF enable/hold pattern found."
                 : (hasCandidate
-                    ? "Only semantics-pending D-input candidates were found."
-                    : "No supported DFF enable/hold pattern was found."));
+                    ? "Unconfirmed enable/hold candidates were found."
+                    : (hasDiagnostic
+                        ? "D input has data gating but no same-DFF Q feedback, so it is not an enable/hold pattern."
+                        : "No supported DFF enable/hold pattern was found.")));
         result.reports.push_back(std::move(report));
     }
 

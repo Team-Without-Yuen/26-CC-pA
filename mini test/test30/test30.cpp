@@ -56,14 +56,27 @@ int main(int argc, char** argv) {
         resolveRewriteScope(netlist, TargetScope::NET_FANIN, "q");
     report.check(
         qScope.ok &&
-        qScope.resolvedThroughDffDataPin &&
-        qScope.resolvedRootNetName == "d" &&
+        !qScope.resolvedThroughDffDataPin &&
+        qScope.resolvedRootNetName == "q" &&
         qScope.cone.rootNetIds.size() == 1 &&
-        qScope.cone.rootNetIds.front() == netlist.getNetId("d"),
-        "DFF.Q fanin rewrite resolves to the D-pin data cone");
+        qScope.cone.rootNetIds.front() == netlist.getNetId("q"),
+        "DFF.Q net fanin rewrite stops at the sequential boundary");
     report.check(
-        netlist.getConeGateCount(qScope.cone) == 3,
-        "resolved DFF data cone contains all three combinational gates");
+        netlist.getConeGateCount(qScope.cone) == 0,
+        "DFF.Q net fanin cone contains no combinational gates");
+
+    const RewriteScopeResolution ffScope =
+        resolveRewriteScope(netlist, TargetScope::GATE_FANIN, "ff0");
+    report.check(
+        ffScope.ok &&
+        ffScope.resolvedThroughDffDataPin &&
+        ffScope.resolvedRootNetName == "d" &&
+        ffScope.cone.rootNetIds.size() == 1 &&
+        ffScope.cone.rootNetIds.front() == netlist.getNetId("d"),
+        "explicit DFF gate fanin rewrite resolves to the D-pin data cone");
+    report.check(
+        netlist.getConeGateCount(ffScope.cone) == 3,
+        "explicit DFF gate fanin cone contains the D-input combinational logic");
 
     const RewriteScopeResolution yScope =
         resolveRewriteScope(netlist, TargetScope::NET_FANIN, "y");
@@ -90,12 +103,30 @@ int main(int argc, char** argv) {
         resolveRewriteScope(netlist, TargetScope::NET_FANIN, "q");
     report.check(
         mapping.status == TechMapStatus::SUCCESS &&
+        !mapping.changed &&
         mappedScope.ok &&
+        netlist.getConeGateCount(mappedScope.cone) == 0 &&
         coneContainsOnly(
             netlist,
             mappedScope.cone,
             {GateType::NOR, GateType::NOT}),
-        "basis conversion applies to a DFF.Q data cone");
+        "basis conversion over a DFF.Q net fanin cone is a safe no-op");
+
+    const TechMapReport dffGateMapping = mapper.convertToBasis(
+        netlist,
+        TargetScope::GATE_FANIN,
+        "ff0",
+        {GateType::NOR, GateType::NOT});
+    const RewriteScopeResolution mappedGateScope =
+        resolveRewriteScope(netlist, TargetScope::GATE_FANIN, "ff0");
+    report.check(
+        dffGateMapping.status == TechMapStatus::SUCCESS &&
+        mappedGateScope.ok &&
+        coneContainsOnly(
+            netlist,
+            mappedGateScope.cone,
+            {GateType::NOR, GateType::NOT}),
+        "basis conversion over an explicit DFF gate fanin cone rewrites the D-input logic");
     report.check(
         netlist.getGate(netlist.getGateId("ff0")).type == GateType::DFF &&
         netlist.validateStructure(),

@@ -155,7 +155,7 @@ struct PathQuery {
     bool writePathsToFile = true;           // EnumerateAll 使用；預設自動將完整路徑列表寫入檔案
     std::string outputFilePath;             // EnumerateAll 寫檔路徑；空字串時使用預設檔名
     size_t maxPrintedPaths = 20;            // CLI / report 顯示用；不限制 result.paths 的完整內容
-    size_t maxEnumeratedPaths = 100000;     // EnumerateAll 安全上限；0 表示不限制
+    size_t maxEnumeratedPaths = 100000;     // Legacy compatibility；目前不限制 EnumerateAll
     double enumerationTimeLimitSeconds = 55.0; // EnumerateAll wall-clock 上限；<=0 表示不限制
     bool countOnly = false;                 // EnumerateAll 只計數，不保存每條 path
 };
@@ -186,7 +186,7 @@ struct PathQueryResult {
     std::string outputFilePath;             // 實際輸出檔案路徑
     bool completeEnumeration = true;        // true 表示沒有截斷 enumerate 結果
     bool enumerationTimedOut = false;       // true 表示因 time limit 停止
-    bool enumerationPathLimitReached = false; // true 表示因 maxEnumeratedPaths 停止
+    bool enumerationPathLimitReached = false; // Legacy result field；目前應維持 false
     bool countOnly = false;                 // true 表示 paths 可能為空，只保留 pathCount
     std::string enumerationStopReason;      // 截斷原因，完整列舉時為空
     std::vector<std::string> unresolvedStartpoints; // 無法解析的 start endpoint descriptions
@@ -216,7 +216,7 @@ struct RegisterPathQuery {
     bool combinationalOnly = true;          // true 時 DFF 是 sequential boundary
     std::string outputFilePath;             // EnumerateAll 寫檔路徑；空字串時使用預設檔名
     size_t maxPrintedPaths = 20;            // CLI / report 顯示用；不限制完整結果
-    size_t maxEnumeratedPaths = 100000;     // EnumerateAll 安全上限；0 表示不限制
+    size_t maxEnumeratedPaths = 100000;     // Legacy compatibility；目前不限制 EnumerateAll
     double enumerationTimeLimitSeconds = 55.0; // EnumerateAll wall-clock 上限；<=0 表示不限制
     bool countOnly = false;                 // EnumerateAll 只計數，不保存每條 path
 };

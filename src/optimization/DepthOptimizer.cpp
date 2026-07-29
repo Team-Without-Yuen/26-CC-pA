@@ -250,7 +250,9 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
         const int depthBeforeCone = netlist.findGlobalCriticalPath().depth;
 
         // 依 ConeQueryType 分派重查，取得「當下最新」的 rewrite cone 閘集合。
-        // fanin target 若是 DFF.Q，resolveRewriteScope 會改取 D-pin data cone。
+        // NET_FANIN scopes keep DFF.Q as a sequential boundary. If the caller
+        // explicitly targets a DFF gate fanin, resolveRewriteScope may select
+        // the D-pin data cone.
         auto refreshConeGates = [&]() -> std::unordered_set<int> {
             TargetScope rewriteScope = TargetScope::NET_FANIN;
             switch (targetConeReport.type) {

@@ -4,6 +4,9 @@
 
 `read` 建立目前設計與 original snapshot；`write` 輸出 current design；`help` 顯示 public grammar；`quit`/`exit` 結束 session。所有 query、edit、report 與 equivalence command 都依賴同一個 session。
 
+完整性規則：除 prompt 明確限制筆數外，不自行截斷結果；支援 file output 時寫入完整檔案，
+正式答案只回必要摘要。時間限制依題目指定。詳見 [`LLM_NOTES.md`](LLM_NOTES.md)。
+
 ## 2. Commands
 
 ```text
@@ -45,9 +48,9 @@ exit
 ## 5. Prompt Examples
 
 ```text
-Prompt: Load testcase31 and report its basic size.
+Prompt: Load the input design and report its basic size.
 Commands:
-  read NewTestCase/test31/test31.v
+  read input.v
   structure_query summary
 ```
 
@@ -60,3 +63,8 @@ Command:
 ## 6. 限制
 
 `write` 不會自動執行 equivalence。題目要求功能不變時，先使用 `equiv_query` 確認，再輸出設計。
+
+跨 prompt 的 hard constraint 由 LLM 從對話上下文維護，不會由 session 自動推論或保存。
+若後續 prompt 說 `preserve previous constraints` 或 `maintain existing constraint`，應先查看
+前題工具呼叫，並在新的 edit/optimization command 重新傳入限制；final write 前再以對應
+query/report 驗證。
