@@ -458,12 +458,13 @@ bool TechMapper::isValidSubgraph(Netlist& netlist, const MatchContext& ctx, int 
 }
 
 // 統一的替換執行引擎
-void TechMapper::applyRule(Netlist& netlist, 
-                           const MatchContext& ctx, 
-                           int rootGateId, 
-                           const TechMapRule& rule, 
-                           TechMapReport& report, 
-                           bool allowLogicDuplication) { 
+void TechMapper::applyRule(Netlist& netlist,
+                           const MatchContext& ctx,
+                           int rootGateId,
+                           const TechMapRule& rule,
+                           TechMapReport& report,
+                           bool allowLogicDuplication,
+                           int* outFinalNetId) {
 
     /*std::cout << "\n[Debug Apply] Applying rule " << rule.name << " to Root Gate " << rootGateId << "\n";
     std::cout << "  -> RHS Root Node Type: " << (int)rule.replacementPattern->nodeType << "\n";*/
@@ -610,95 +611,124 @@ void TechMapper::applyRule(Netlist& netlist,
     };
 
     // 啟動遞迴引擎，開始建造 Replacement Pattern (RHS)
-    buildNode(rule.replacementPattern, true);
+    // 回傳值是這個 root 訊號替換後「真正存活」的 net id：
+    // 一般情況等於 origOutNetId，但 cone-to-wire/const bypass 時，
+    // origOutNetId 會被 mergeNets 短接掉，真正承接下游負載的是這個回傳值。
+    int finalNetId = buildNode(rule.replacementPattern, true);
+    if (outFinalNetId != nullptr) *outFinalNetId = finalNetId;
 }
 
 // 統一的映射執行引擎
-bool TechMapper::executeMappingPass(Netlist& netlist, 
-                                    const std::unordered_set<int>* scopeGates, 
-                                    const std::vector<TechMapRule>& validRules, 
-                                    TechMapReport& report, 
+bool TechMapper::executeMappingPass(Netlist& netlist,
+                                    const std::unordered_set<int>* scopeGates,
+                                    const std::vector<TechMapRule>& validRules,
+                                    TechMapReport& report,
                                     bool verbose,
                                     bool allowLogicDuplication,
                                     const std::unordered_set<int>* strictContainment) {
     if (validRules.empty()) return false;
     bool actualChangesMade = false;
-    bool isChanged;
 
-    // 迴圈直到電路無法再被這些規則優化為止 (達到局部最佳解)
-    do {
-        isChanged = false;
+    // 候選 root 的合法範圍：scopeGates 給定就固定死在這個集合裡（cone 題不可擴張，
+    // 新生成的 Gate id 本來就不在 scopeGates 內，天然被排除）；nullptr 代表全電路皆可。
+    auto inCandidateScope = [&](int gateId) {
+        return scopeGates == nullptr || scopeGates->count(gateId) > 0;
+    };
 
-        // 收集本次 Iteration 要掃描的候選 Gate ID
-        // (必須在迴圈內收集，因為替換會產生新的 Gate ID，它們也可能成為下一波優化的目標)
-        std::vector<int> candidates;
-        if (scopeGates != nullptr) {
-            for (int gateId : *scopeGates) {
-                if (gateId >= 0 && gateId < (int)netlist.getGateCount() && netlist.getGate(gateId).type != GateType::UNKNOWN) {
-                    candidates.push_back(gateId);
+    // Worklist：待檢查的候選 root gate id，取代「每套用一次就整個重掃全部候選」的 O(N^2) 作法。
+    // 一個 Gate 的可匹配性只會因為以下三種情況而改變，其餘未受影響的 Gate 不需要重新檢查：
+    //   1) 它本身是這次替換新生成的 Gate。
+    //   2) 它是 root 訊號替換後的下游負載（root 的 driver 結構變了)。
+    //   3) 它是子圖邊界輸入線的 driver（該線的 fanout 剛好因為內部閘被拔除而變少，
+    //      可能因此滿足其他規則的 fanout-containment 檢查)。
+    std::queue<int> worklist;
+    std::unordered_set<int> queued;
+
+    auto enqueue = [&](int gateId) {
+        if (gateId < 0 || gateId >= (int)netlist.getGateCount()) return;
+        if (!inCandidateScope(gateId)) return;
+        if (netlist.getGate(gateId).type == GateType::UNKNOWN) return;
+        if (queued.insert(gateId).second) worklist.push(gateId);
+    };
+
+    if (scopeGates != nullptr) {
+        for (int gateId : *scopeGates) enqueue(gateId);
+    } else {
+        for (size_t i = 0; i < netlist.getGateCount(); ++i) enqueue((int)i);
+    }
+
+    while (!worklist.empty()) {
+        int rootId = worklist.front();
+        worklist.pop();
+        queued.erase(rootId);
+
+        // 安全防護：這個 Gate 可能已經在稍早的規則套用中被拔掉了
+        if (netlist.getGate(rootId).type == GateType::UNKNOWN) continue;
+
+        // 依序嘗試每一條合法的 Rule (已經按 Cost 優化程度排過序了)
+        for (const auto& rule : validRules) {
+            MatchContext ctx;
+
+            // 形狀比對 (尋找 LHS)
+            if (!matchRootGate(netlist, rootId, rule, ctx)) continue;
+
+            // 合法性驗證 (檢查 Fan-out)
+            if (!isValidSubgraph(netlist, ctx, rootId, allowLogicDuplication)) continue;
+
+            // 嚴格範圍檢查：匹配到的整個子圖必須落在指定範圍內。
+            // 否則替換會動到範圍外的閘（cone 題會破壞受限基底）。
+            if (strictContainment != nullptr) {
+                bool escaped = false;
+                for (int gid : ctx.matchedGates) {
+                    if (strictContainment->count(gid) == 0) { escaped = true; break; }
+                }
+                if (escaped) continue;   // 跨界，換下一條規則
+            }
+
+            // 由於 Duplication 可能導致有些 Gate 被保留，
+            // 將 report 傳入 applyRule，在真正拔除時才 +1，數字才會精準！
+            if (verbose) {
+                for (int matchedGateId : ctx.matchedGates) {
+                    const Gate& g = netlist.getGate(matchedGateId);
+                    report.modifiedGateNames.push_back(g.instName);
                 }
             }
-        } else {
-            for (size_t i = 0; i < netlist.getGateCount(); ++i) {
-                if (netlist.getGate(i).type != GateType::UNKNOWN) {
-                    candidates.push_back(i);
-                }
+
+            // 替換前先記下受影響範圍的邊界資訊，套用後才知道該把哪些 Gate 丟回 worklist 重新檢查。
+            const std::vector<int> boundaryLeafNetIds = [&] {
+                std::vector<int> ids;
+                ids.reserve(ctx.boundLeaves.size());
+                for (const auto& kv : ctx.boundLeaves) ids.push_back(kv.second);
+                return ids;
+            }();
+            const size_t gateCountBefore = netlist.getGateCount();
+
+            // 執行圖形替換 (套用 RHS)，把 report 與 allowLogicDuplication 都傳進去
+            int finalOutNetId = -1;
+            applyRule(netlist, ctx, rootId, rule, report, allowLogicDuplication, &finalOutNetId);
+
+            actualChangesMade = true;
+
+            // 1) 新生成的 Gate：全域掃描時才可能成為新的候選 root（scope 限定時會被 inCandidateScope 濾掉）
+            for (size_t g = gateCountBefore; g < netlist.getGateCount(); ++g) enqueue((int)g);
+
+            // 2) root 訊號替換後真正存活的 net（一般等於原本的輸出線，
+            //    cone-to-wire/const bypass 時則是 mergeNets 短接後的目的線）的下游負載
+            if (finalOutNetId >= 0 && finalOutNetId < (int)netlist.getNetCount()) {
+                for (int loadId : netlist.getNet(finalOutNetId).loadGateIds) enqueue(loadId);
             }
-        }
 
-        // 遍歷所有候選節點
-        for (int rootId : candidates) {
-            // 安全防護：如果這個 Gate 已經在剛才的規則套用中被拔掉了，跳過它
-            if (netlist.getGate(rootId).type == GateType::UNKNOWN) continue;
-
-            // 依序嘗試每一條合法的 Rule (已經按 Cost 優化程度排過序了)
-            for (const auto& rule : validRules) {
-                MatchContext ctx;
-                
-                // 形狀比對 (尋找 LHS)
-                if (matchRootGate(netlist, rootId, rule, ctx)) {
-                    // 合法性驗證 (檢查 Fanout)
-                    if (isValidSubgraph(netlist, ctx, rootId, allowLogicDuplication)) {
-                        
-                        // 嚴格範圍檢查：匹配到的整個子圖必須落在指定範圍內。
-                        // 否則替換會動到範圍外的閘（cone 題會破壞受限基底）。
-                        if (strictContainment != nullptr) {
-                            bool escaped = false;
-                            for (int gid : ctx.matchedGates) {
-                                if (strictContainment->count(gid) == 0) { escaped = true; break; }
-                            }
-                            if (escaped) continue;   // 跨界，換下一條規則
-                        }
-
-                        // 由於 Duplication 可能導致有些 Gate 被保留，
-                        // 將 report 傳入 applyRule，在真正拔除時才 +1，數字才會精準！
-                        if (verbose) {
-                            for (int matchedGateId : ctx.matchedGates) {
-                                const Gate& g = netlist.getGate(matchedGateId);
-                                report.modifiedGateNames.push_back(g.instName);
-                            }
-                        }
-                        
-                        // 執行圖形替換 (套用 RHS)，把 report 與 allowLogicDuplication 都傳進去
-                        applyRule(netlist, ctx, rootId, rule, report, allowLogicDuplication); 
-                        
-                        isChanged = true;
-                        actualChangesMade = true;
-                        break; // 已經成功套用了一條規則並改變了圖形，跳出 rule 迴圈，換下一個 Root 檢查
-                    } /*else {
-                        if (verbose) std::cout << "[Debug] Matched shape at Gate " << rootId 
-                                               << ", but isValidSubgraph REJECTED it!\n";
-                    }*/
-                } /*else {
-                    if (verbose) std::cout << "[Debug] matchRootGate failed for " << netlist.getGate(rootId).instName << "\n";
-                }*/
+            // 3) 子圖邊界輸入線的 driver：fanout 剛變少，可能因此符合其他規則的 containment 檢查
+            for (int leafNetId : boundaryLeafNetIds) {
+                if (leafNetId < 0 || leafNetId >= (int)netlist.getNetCount()) continue;
+                int driverId = netlist.getNet(leafNetId).driverGateId;
+                if (driverId >= 0) enqueue(driverId);
             }
-            // 如果圖形已變更，強烈建議立刻中斷 candidates 的遍歷，重新回到 do-while 頂部收集最新名單。
-            // 這樣可以避免剛長出來的新結構被舊的、髒掉的 candidate 索引干擾。
-            if (isChanged) break; 
+
+            break; // 這個 root 已經套用過一條規則，換下一個 worklist 項目
         }
-    } while (isChanged);
-    
+    }
+
     return actualChangesMade;
 }
 
@@ -2418,7 +2448,7 @@ std::vector<TechMapRule> TechMapper::getInverterAbsorptionRules(
         if (rule.replacementDepth >= rule.targetDepth) continue;
 
         // (4) 面积不增（addedGateCount - removedGateCount <= 0）
-        if (rule.getCostDelta() > 0) continue;
+        if (rule.getCostDelta() >= 0) continue;
 
         // (2) RHS 只能用允许且非禁的闸：逐一检查 RHS 用到的每种闸
         bool rhsOk = true;
@@ -2592,7 +2622,6 @@ TechMapReport TechMapper::convertToBasisOnGateSet(Netlist& netlist,
 
         if (verbose)
             std::cout << "[Cone Basis] eliminating type " << (int)targetType << " in cone...\n";
-
         // 直接把 coneGates 當 scope 傳給 core，不重算 cone
         TechMapReport stepReport = mapTechnologyCore(
             netlist, targetConstraints, allowedConstraints,
