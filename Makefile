@@ -11,7 +11,7 @@ AR  = ar
 CADICAL_DIR = include/lib/cadical
 ABC_DIR     = include/lib/abc
 
-TARGET = NetlistTool
+TARGET = tools
 
 # =============================================================
 # 1. 環境偵測
@@ -73,7 +73,7 @@ CFLAGS   = -O3 -Wall $(PLATFORM_DEF) $(ABC_DEFS) \
 # =============================================================
 # 3. 原始碼與目的檔
 # =============================================================
-SRCS_CPP = main.cpp \
+SRCS_CPP = tools.cpp \
            $(wildcard src/core/*.cpp) \
            $(wildcard src/io/*.cpp) \
            $(wildcard src/analysis/*.cpp) \

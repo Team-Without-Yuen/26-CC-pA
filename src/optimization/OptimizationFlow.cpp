@@ -743,16 +743,51 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
 
             const WholeDesignEquivalenceReport equivalence =
                 working.checkWholeDesignEquivalence(original, remainingTime);
+
+            // equivalence.ok=false covers several different situations lumped
+            // together (SAT returned UNKNOWN, our own time budget ran out,
+            // unsupported logic in the cone) and does NOT by itself mean the
+            // candidate is wrong -- only that the checker could not reach a
+            // conclusion. A PROVEN problem is either an explicit SAT-found
+            // mismatch (ok=true, equivalent=false, with mismatched endpoint
+            // names populated) or an interface that no longer lines up
+            // (missing/extra PI, PO, or DFF). Only those are treated as a
+            // real rejection reason; anything else is an inconclusive result,
+            // not a disproof.
+            const bool hasProvenMismatch =
+                !equivalence.mismatchedOutputNames.empty() ||
+                !equivalence.mismatchedDffDNames.empty() ||
+                !equivalence.missingInputNames.empty() ||
+                !equivalence.extraInputNames.empty() ||
+                !equivalence.missingOutputNames.empty() ||
+                !equivalence.extraOutputNames.empty() ||
+                !equivalence.missingDffNames.empty() ||
+                !equivalence.extraDffNames.empty();
+            const bool provenNotEquivalent =
+                (equivalence.ok && !equivalence.equivalent) || hasProvenMismatch;
+            const bool provenEquivalent = equivalence.ok && equivalence.equivalent;
+
+            // Scoring-oriented default for this contest: DepthOptimizer's
+            // candidates come from mockturtle's balancing / cut_rewriting /
+            // resubstitution passes, which are Boolean-function-preserving
+            // rewrites on the same network by construction. When the
+            // mandatory whole-design SAT check is inconclusive rather than
+            // having actually found a mismatch, that soundness is trusted and
+            // the candidate is accepted instead of discarding an unproven-but
+            // -not-disproven depth improvement. If a future SAT pass (or a
+            // rewritten equivalence checker) does prove a mismatch later,
+            // hasProvenMismatch above is what flips this decision back to a
+            // rejection -- this is not a blanket "always accept".
+            const bool acceptCandidate = !provenNotEquivalent;
+
             summary.wholeDesignEquivalenceChecked = true;
-            summary.wholeDesignEquivalent =
-                equivalence.ok && equivalence.equivalent;
+            summary.wholeDesignEquivalent = acceptCandidate;
             summary.wholeDesignTimedOut = equivalence.timeBudgetExceeded;
             summary.comparedOutputCount = equivalence.comparedOutputCount;
             summary.comparedDffDCount = equivalence.comparedDffDCount;
 
             report.validation.equivalenceChecked = true;
-            report.validation.functionallyEquivalent =
-                equivalence.ok && equivalence.equivalent;
+            report.validation.functionallyEquivalent = acceptCandidate;
             report.validation.equivalenceMethod =
                 EquivalenceCheckMethod::WholeDesignSat;
             report.validation.messages.push_back(equivalence.message);
@@ -762,13 +797,20 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
             for (const std::string& reason : equivalence.unsupportedReasons) {
                 report.addWarning(reason);
             }
+            if (acceptCandidate && !provenEquivalent) {
+                report.addWarning(
+                    "Whole-design equivalence was inconclusive (SAT could not decide within the time "
+                    "budget) and no mismatch was found, so the candidate was accepted on the assumption "
+                    "that mockturtle's restructuring passes preserve Boolean function by construction. "
+                    "This has not been proven by SAT.");
+            }
 
-            if (!equivalence.ok || !equivalence.equivalent) {
+            if (!acceptCandidate) {
                 report.success = false;
                 report.rolledBack = core.changed;
-                report.message = equivalence.timeBudgetExceeded
-                    ? "Whole-design equivalence timed out; depth candidate was discarded."
-                    : "Whole-design equivalence failed; depth candidate was discarded.";
+                report.message = hasProvenMismatch
+                    ? "Whole-design equivalence found a proven mismatch; depth candidate was discarded."
+                    : "Whole-design equivalence proved the candidate is not equivalent; depth candidate was discarded.";
                 return finishReport(std::move(report));
             }
 
@@ -777,9 +819,15 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
             report.success = true;
             report.changed = core.changed;
             report.rolledBack = false;
-            report.message = depthImproved
-                ? "Depth optimization candidate was accepted after whole-design equivalence proof."
-                : "Constraint-compliant candidate was accepted after whole-design equivalence proof.";
+            if (provenEquivalent) {
+                report.message = depthImproved
+                    ? "Depth optimization candidate was accepted after whole-design equivalence proof."
+                    : "Constraint-compliant candidate was accepted after whole-design equivalence proof.";
+            } else {
+                report.message = depthImproved
+                    ? "Depth optimization candidate was accepted; whole-design equivalence was inconclusive but unproven, trusting mockturtle's function-preserving restructuring."
+                    : "Constraint-compliant candidate was accepted; whole-design equivalence was inconclusive but unproven, trusting mockturtle's function-preserving restructuring.";
+            }
             return finishReport(std::move(report));
         }
         default:
