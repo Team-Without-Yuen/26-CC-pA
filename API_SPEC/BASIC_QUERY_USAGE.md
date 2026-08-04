@@ -26,7 +26,7 @@ query.type + optional filter fields -> runBasicQuery() -> BasicReport
 ```text
 1. 建立 Netlist::BasicQuery query
 2. 設定 query.type
-3. 視 query.type 設定 query.name / query.gateType / query.constValue
+3. 視 query.type 設定 query.name / query.gateType / query.constValue / query.inputCount
 4. 視需求設定 query.includeIds / query.includeNames
 5. 呼叫 netlist.runBasicQuery(query)
 6. 從 report.ok / report.message / report.* 欄位讀結果
@@ -71,7 +71,7 @@ if (report.ok) {
 | `PortInfo` | 查單一 PI/PO port | `name` = port name | `exists`, `objectName`, `portWidth`, `isBus`, `isPrimaryInput`, `isPrimaryOutput`, `netNames`, `netIds` |
 | `CountByGateType` | 統計 gate type 數量 | `gateType` 可選 | `gateTypeCounts`, `gateCount`, `typeName` |
 | `GatesByType` | 列出指定 gate type | `gateType` | `gateIds`, `gateNames`, `gateCount`, `typeName` |
-| `GatesWithConstantInput` | 找 constant input gates | `gateType` 可選，`constValue` 可選 | `gateIds`, `gateNames`, `gateCount`, `typeName` |
+| `GatesWithConstantInput` | 找 constant input gates | `gateType`、`constValue`、`inputCount` 可選 | `gateIds`, `gateNames`, `gateCount`, `typeName` |
 | `StructuralIssues` | 找結構問題 | 無 | `undrivenNets`, `noLoadNets`, `floatingNets`, `unconnectedGates` |
 
 ---
@@ -86,6 +86,7 @@ if (report.ok) {
 | `name` | `std::string` | `""` | `GateInfo`, `NetInfo`, `PortInfo` 使用 |
 | `gateType` | `GateType` | `UNKNOWN` | `CountByGateType`, `GatesByType`, `GatesWithConstantInput` 使用 |
 | `constValue` | `int` | `-1` | `GatesWithConstantInput` 使用；`-1` 不限制、`0` 找 `1'b0`、`1` 找 `1'b1` |
+| `inputCount` | `int` | `-1` | `GatesWithConstantInput` 使用；`-1` 不限制，非負數限制 gate input 數量 |
 | `includeIds` | `bool` | `true` | 是否填入 `gateIds` / `netIds` |
 | `includeNames` | `bool` | `true` | 是否填入 `gateNames` / `netNames` / `portNames`；不控制 structured `ports` |
 
@@ -410,6 +411,7 @@ Netlist::BasicQuery query;
 query.type = Netlist::BasicQueryType::GatesWithConstantInput;
 query.gateType = GateType::UNKNOWN;
 query.constValue = -1;
+query.inputCount = -1;
 
 Netlist::BasicReport report = netlist.runBasicQuery(query);
 ```
@@ -423,6 +425,10 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 | `constValue = -1` | 不限制 constant value |
 | `constValue = 0` | 只找接到 `1'b0` 的 input |
 | `constValue = 1` | 只找接到 `1'b1` 的 input |
+| `inputCount = -1` | 不限制 gate input 數量 |
+| `inputCount = 2` | 只找 two-input gates |
+
+`constValue` 只能是 `-1/0/1`，`inputCount` 只能是 `-1` 或非負數。非法值會回傳 `ok=false`，呼叫端不可把它解讀為「找到 0 個 gate」。
 
 讀取：
 

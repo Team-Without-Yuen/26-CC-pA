@@ -18,6 +18,7 @@
 | BASIC-000 | merge 後 baseline 與 Jul performance rewrite | P0 | Verified | 不需修改 | source build；test14/15/16/34 通過 |
 | BASIC-001 | PortInfo bit ordering 隨 include flags 改變，且缺少 direction | P1 | Verified | 是 | 5 個 direct API cases、CLI smoke 與既有 regressions 通過 |
 | BASIC-002 | PI/PO structured metadata 被錯綁到 `includeNames` | P1 | Verified | 是 | basic-only 22/22；test15 12/12 |
+| BASIC-003 | constant-input 非法 filter 回傳成功，且 helper 未完整驗證 net ID | P1 | Verified | 是 | basic-only 25/25；test14 16/16 |
 
 ## 3. 問題與修改紀錄
 
@@ -128,3 +129,32 @@ CLI printer 的 `id: -1` 與 direction 顯示仍屬 tools layer，已另外登�
 | `mini test/test1/tester.exe ... --basic-only` | 22/22；PI/PO metadata-only cases 通過 |
 | `TOOLS_SPEC/Makefile` UCRT64 source build | 成功 |
 | `mini test/test15` | 12/12；既有 port CLI 行為未退步 |
+
+## BASIC-003：constant-input filter validation 與 net safety
+
+- 狀態：`Verified`
+- 優先級：P1
+- 類型：Input Validation / Bounds Safety / Documentation
+
+### 問題
+
+`GatesWithConstantInput` 只定義 `constValue=-1/0/1` 與 `inputCount>=-1`，但原本沒有驗證。
+例如 `constValue=2` 或 `inputCount=-2` 會回傳 `ok=true`、`gateCount=0`，呼叫端無法分辨
+「合法查詢沒有結果」與「輸入本身錯誤」。此外，低階 helper 只排除負 net ID，沒有排除
+正的 invalid ID 或 removed net。API/usage 文件也漏列已存在的 `inputCount` 參數。
+
+### 修改內容
+
+| 檔案 | 修改 |
+|---|---|
+| `src/analysis/BasicAnalysis.cpp` | 高階 query 驗證 `constValue` 與 `inputCount`；低階 helper 只解參考 active input net。 |
+| `mini test/test1/tester.cpp` | 新增合法 input-count filter，以及兩組非法 filter regression。 |
+| `API_SPEC/BASIC_QUERY_API.md`、`API_SPEC/BASIC_QUERY_USAGE.md` | 補齊 `inputCount`、合法值與失敗語意。 |
+
+### 驗證
+
+| 驗證 | 結果 |
+|---|---|
+| `mini test/test1/tester.exe ... --basic-only` | 25/25；合法 arity 與兩組非法 filter cases 通過 |
+| `TOOLS_SPEC/Makefile` UCRT64 source build | 成功 |
+| `mini test/test14` | 16/16；constant query/edit/equivalence 未退步 |

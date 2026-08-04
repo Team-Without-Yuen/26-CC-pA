@@ -338,7 +338,9 @@ std::vector<int> Netlist::findGatesWithConstInput(
 
         bool matched = false;
         for (int netId : gate.inputNetIds) {
-            if (netId < 0) continue;
+            if (!isActiveNet(*this, netId)) {
+                continue;
+            }
             const Net& net = getNet(netId);
             if (!net.isConst) {
                 continue;
@@ -667,6 +669,14 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
     }
 
     case BasicQueryType::GatesWithConstantInput: {
+        if (query.constValue < -1 || query.constValue > 1) {
+            report.message = "GatesWithConstantInput constValue must be -1, 0, or 1";
+            return report;
+        }
+        if (query.inputCount < -1) {
+            report.message = "GatesWithConstantInput inputCount must be -1 or non-negative";
+            return report;
+        }
         report.ok = true;
         report.message = "List gates with constant input";
         // [Perf #3] Compute id list once; derive names + count from it.

@@ -245,17 +245,20 @@ expandNetToBits(name) 偏一般名稱展開，未來可用於 prompt 中傳入 b
 ```cpp
 std::vector<int> findGatesWithConstInput(
     GateType type = GateType::UNKNOWN,
-    int constValue = -1
+    int constValue = -1,
+    int inputCount = -1
 ) const;
 
 std::vector<std::string> getGateNamesWithConstInput(
     GateType type = GateType::UNKNOWN,
-    int constValue = -1
+    int constValue = -1,
+    int inputCount = -1
 ) const;
 
 int countGatesWithConstInput(
     GateType type = GateType::UNKNOWN,
-    int constValue = -1
+    int constValue = -1,
+    int inputCount = -1
 ) const;
 ```
 
@@ -264,8 +267,11 @@ int countGatesWithConstInput(
 ```text
 找出 input 接到 1'b0 / 1'b1 的 gates。
 限制 gate type，例如只找 NAND gates。
+限制 gate input 數量，例如只找 two-input gates。
 統計 constant input 使用情況。
 ```
+
+高階 `GatesWithConstantInput` 只接受 `constValue=-1/0/1`，且 `inputCount` 必須為 `-1` 或非負數。非法 filter 回傳 `ok=false`，不會偽裝成成功的空結果。低階 helper 會略過 invalid 或 removed input net ID。
 
 注意：
 
@@ -401,6 +407,7 @@ struct BasicQuery {
     std::string name;
     GateType gateType = GateType::UNKNOWN;
     int constValue = -1;
+    int inputCount = -1;
     bool includeIds = true;
     bool includeNames = true;
 };

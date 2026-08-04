@@ -213,6 +213,26 @@ void testBasicQuery(TestReport& report, const Netlist& netlist) {
                  constInput.gateCount == 1 &&
                  containsString(constInput.gateNames, "g_nand"),
                  "runBasicQuery GatesWithConstantInput");
+
+    constInputQuery.inputCount = 2;
+    const Netlist::BasicReport constInputByArity =
+        netlist.runBasicQuery(constInputQuery);
+    report.check(constInputByArity.ok && constInputByArity.gateCount == 1 &&
+                     containsString(constInputByArity.gateNames, "g_nand"),
+                 "runBasicQuery GatesWithConstantInput input-count filter");
+
+    constInputQuery.constValue = 2;
+    const Netlist::BasicReport invalidConstValue =
+        netlist.runBasicQuery(constInputQuery);
+    report.check(!invalidConstValue.ok && invalidConstValue.gateCount == 0,
+                 "runBasicQuery rejects invalid constant-input value");
+
+    constInputQuery.constValue = 1;
+    constInputQuery.inputCount = -2;
+    const Netlist::BasicReport invalidInputCount =
+        netlist.runBasicQuery(constInputQuery);
+    report.check(!invalidInputCount.ok && invalidInputCount.gateCount == 0,
+                 "runBasicQuery rejects invalid constant-input arity");
 }
 
 // 測試 Direct Connectivity Query：driver、loads、gate input/output、fanin/fanout。
