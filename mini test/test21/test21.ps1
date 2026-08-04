@@ -26,6 +26,10 @@ $commands = @(
 ) -join "`n"
 
 $output = $commands | & $Executable 2>&1 | Out-String
+$responses = @(
+    [regex]::Matches($output, "(?s)TOOL_RESULT_BEGIN.*?TOOL_RESULT_END") |
+        ForEach-Object { $_.Value }
+)
 $passed = 0
 $failed = 0
 
@@ -40,12 +44,40 @@ function Check-Result {
     }
 }
 
+function Get-OutputFile {
+    param([string]$Response)
+    $match = [regex]::Match($Response, "(?m)^  output_file: (.+)\r?$")
+    if (!$match.Success) { return $null }
+    return $match.Groups[1].Value.Trim()
+}
+
+$confirmedAll = if ($responses.Count -gt 2) { $responses[2] } else { "" }
+$confirmedAllFile = Get-OutputFile $confirmedAll
+$confirmedAllFileExists = [bool](
+    $confirmedAllFile -and (Test-Path -LiteralPath $confirmedAllFile))
+$confirmedAllArtifact = if ($confirmedAllFileExists) {
+    Get-Content -LiteralPath $confirmedAllFile -Raw
+} else {
+    ""
+}
+$confirmedAllRecordCount =
+    ([regex]::Matches($confirmedAllArtifact, "(?m)^  dff_record:\r?$")).Count
+
 Check-Result `
     ($output -match "(?s)command: sequential_query.*?matched_dff_count: 2.*?candidate_dff_count: 2.*?reported_dff_count: 0.*?omitted_no_pattern_count: 1") `
     "summary-only reports aggregate confirmed counts and excludes data-gating diagnostics from candidates"
 Check-Result `
-    ($output -match "(?s)candidate_dff_count: 2.*?reported_dff_count: 2.*?dff_name: ff_high.*?dff_name: ff_low") `
-    "confirmed-only excludes AND-only diagnostics and no-pattern DFFs"
+    ($confirmedAll -match "candidate_dff_count: 2" -and
+     $confirmedAll -match "available_dff_record_count: 2" -and
+     $confirmedAll -match "reported_dff_count: 0" -and
+     $confirmedAll -match "wrote_records_to_file: true" -and
+     $confirmedAll -match "artifact_record_count: 2" -and
+     $confirmedAllFileExists -and
+     $confirmedAllRecordCount -eq 2 -and
+     $confirmedAllArtifact -match "dff_name: ff_high" -and
+     $confirmedAllArtifact -match "dff_name: ff_low" -and
+     $confirmedAllArtifact -notmatch "dff_name: ff_and") `
+    "confirmed-only writes complete matched DFF details to an artifact"
 Check-Result `
     ($output -match "(?s)available_dff_record_count: 3.*?reported_dff_count: 1.*?record_limit: 1.*?records_truncated: true.*?next_record_offset: 1") `
     "all-DFF detail pagination is explicit and bounded"
@@ -89,7 +121,8 @@ Check-Result `
 Check-Result `
     ($output.Contains("sequential_query enable_hold <all|dff_name>") -and `
      $output.Contains("--functional-fallback") -and `
-     $output.Contains("--no-resolve-functional-data")) `
+     $output.Contains("--no-resolve-functional-data") -and `
+     $output.Contains("all-DFF detail writes all records to a unique file")) `
     "help exposes sequential functional controls"
 Check-Result `
     (([regex]::Matches($output, "TOOL_RESULT_BEGIN")).Count -eq 19 -and `

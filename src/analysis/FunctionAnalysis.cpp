@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <unordered_set>
 #include <functional>
+#include <fstream>
 #include <map>
 #include <queue>
 #include <chrono>
@@ -1805,6 +1806,82 @@ FunctionSearchEquivalenceClass makeEquivalenceClassReport(
     return result;
 }
 
+bool openFunctionSearchOutput(const FunctionSearchQuery& query,
+                              FunctionSearchReport& report,
+                              std::ofstream& output) {
+    if (!query.writeMatchesToFile) {
+        return true;
+    }
+    report.outputFilePath = query.outputFilePath.empty()
+        ? "function_search_output.txt"
+        : query.outputFilePath;
+    output.open(report.outputFilePath, std::ios::out | std::ios::trunc);
+    if (!output) {
+        report.status = "OUTPUT_ERROR";
+        report.message = "Failed to open Function Search output file: " +
+                         report.outputFilePath;
+        return false;
+    }
+    report.wroteMatchesToFile = true;
+    output << "Function search matches\n\n";
+    return true;
+}
+
+bool writeFunctionSearchMatchRecord(std::ostream& output,
+                                    const FunctionSearchMatch& match,
+                                    size_t index) {
+    output << "Match " << index << "\n";
+    if (match.gateIdA >= 0 || match.gateIdB >= 0) {
+        output << "  gate_a: " << match.gateNameA
+               << " (id=" << match.gateIdA << ")\n";
+        output << "  gate_b: " << match.gateNameB
+               << " (id=" << match.gateIdB << ")\n";
+    }
+    output << "  net_a: " << match.netNameA
+           << " (id=" << match.netIdA << ")\n";
+    output << "  net_b: " << match.netNameB
+           << " (id=" << match.netIdB << ")\n";
+    output << "  proof_method: " << match.proofMethod << "\n";
+    output << "  solver_status: " << match.solverStatus << "\n\n";
+    return static_cast<bool>(output);
+}
+
+bool writeFunctionSearchClassRecord(
+    std::ostream& output,
+    const FunctionSearchEquivalenceClass& equivalentClass,
+    size_t index) {
+    output << "Equivalence class " << index << "\n";
+    output << "  proof_method: " << equivalentClass.proofMethod << "\n";
+    output << "  member_count: " << equivalentClass.gateIds.size() << "\n";
+    for (size_t member = 0; member < equivalentClass.gateIds.size(); ++member) {
+        output << "  member " << (member + 1) << ": "
+               << equivalentClass.gateNames[member]
+               << " (gate_id=" << equivalentClass.gateIds[member]
+               << ", net=" << equivalentClass.netNames[member]
+               << ", net_id=" << equivalentClass.netIds[member] << ")\n";
+    }
+    output << "\n";
+    return static_cast<bool>(output);
+}
+
+void finalizeFunctionSearchOutput(std::ofstream& output,
+                                  FunctionSearchReport& report) {
+    if (!output.is_open()) {
+        return;
+    }
+    output << "Total matches: " << report.matchCount << "\n";
+    output << "Complete: " << (report.complete ? "yes" : "no") << "\n";
+    output << "Status: " << report.status << "\n";
+    output.flush();
+    if (!output) {
+        report.ok = false;
+        report.complete = false;
+        report.status = "OUTPUT_ERROR";
+        report.message = "Failed to finalize Function Search output file: " +
+                         report.outputFilePath;
+    }
+}
+
 FunctionSearchReport searchEquivalentGatePairs(
     const Netlist& netlist,
     const FunctionSearchQuery& query) {
@@ -1816,12 +1893,14 @@ FunctionSearchReport searchEquivalentGatePairs(
     report.simulationPatternCount = query.simulationPatternCount;
 
     const auto startedAt = std::chrono::steady_clock::now();
+    std::ofstream matchOutput;
     auto elapsedSeconds = [&]() {
         return std::chrono::duration<double>(
             std::chrono::steady_clock::now() - startedAt).count();
     };
     auto finish = [&]() -> FunctionSearchReport {
         report.elapsedSeconds = elapsedSeconds();
+        finalizeFunctionSearchOutput(matchOutput, report);
         return report;
     };
 
@@ -1836,12 +1915,11 @@ FunctionSearchReport searchEquivalentGatePairs(
         query.gateTypeFilter == GateType::XOR ||
         query.gateTypeFilter == GateType::XNOR;
     if (query.simulationPatternCount == 0 || query.simulationPatternCount > 4096 ||
-        query.timeLimitSeconds <= 0.0 || query.maxResults == 0 ||
-        !validGateTypeFilter) {
+        query.timeLimitSeconds <= 0.0 || !validGateTypeFilter) {
         report.status = "INVALID_ARGUMENT";
         report.message = "Equivalent gate-pair search requires 1..4096 simulation patterns, "
-                         "positive timeLimitSeconds, maxResults greater than zero, and a "
-                         "supported optional combinational gate-type filter.";
+                         "positive timeLimitSeconds, and a supported optional "
+                         "combinational gate-type filter.";
         return finish();
     }
 
@@ -1850,6 +1928,9 @@ FunctionSearchReport searchEquivalentGatePairs(
     if (!collectFunctionSearchScopeGates(netlist, query, scopeGateIds, scopeError)) {
         report.status = "SCOPE_NOT_FOUND";
         report.message = "Function Search scope could not be resolved: " + scopeError;
+        return finish();
+    }
+    if (!openFunctionSearchOutput(query, report, matchOutput)) {
         return finish();
     }
 
@@ -1961,8 +2042,10 @@ FunctionSearchReport searchEquivalentGatePairs(
                 equivalentClass.push_back(candidateGateId);
                 matched = true;
                 if (query.mode == FunctionSearchMode::FindAny) {
-                    report.matches.push_back(makeEquivalentGatePairMatch(
-                        netlist, representativeGateId, candidateGateId));
+                    const FunctionSearchMatch match = makeEquivalentGatePairMatch(
+                        netlist, representativeGateId, candidateGateId);
+                    report.matches.push_back(match);
+                    report.matchCount = 1;
                     report.equivalenceClasses.push_back(makeEquivalenceClassReport(
                         netlist, equivalentClass));
                     report.equivalenceClassCount = 1;
@@ -2001,17 +2084,45 @@ FunctionSearchReport searchEquivalentGatePairs(
         report.equivalentPairCount +=
             equivalentClass.size() * (equivalentClass.size() - 1) / 2;
     }
+    report.matchCount = report.equivalentPairCount;
+
+    if (matchOutput.is_open()) {
+        for (size_t index = 0; index < report.equivalenceClasses.size(); ++index) {
+            if (!writeFunctionSearchClassRecord(
+                    matchOutput, report.equivalenceClasses[index], index + 1)) {
+                report.status = "OUTPUT_ERROR";
+                report.message = "Failed to write Function Search equivalence classes to: " +
+                                 report.outputFilePath;
+                return finish();
+            }
+        }
+    }
 
     if (query.expandEquivalentPairs) {
+        size_t emittedPairCount = 0;
         for (const std::vector<int>& equivalentClass : provenClasses) {
             for (size_t i = 0; i < equivalentClass.size(); ++i) {
                 for (size_t j = i + 1; j < equivalentClass.size(); ++j) {
-                    if (report.matches.size() >= query.maxResults) {
+                    if (query.maxResults > 0 &&
+                        emittedPairCount >= query.maxResults) {
                         report.truncated = true;
                         break;
                     }
-                    report.matches.push_back(makeEquivalentGatePairMatch(
-                        netlist, equivalentClass[i], equivalentClass[j]));
+                    const FunctionSearchMatch match = makeEquivalentGatePairMatch(
+                        netlist, equivalentClass[i], equivalentClass[j]);
+                    ++emittedPairCount;
+                    if (matchOutput.is_open() &&
+                        !writeFunctionSearchMatchRecord(
+                            matchOutput, match, emittedPairCount)) {
+                        report.status = "OUTPUT_ERROR";
+                        report.message = "Failed to write Function Search matches to: " +
+                                         report.outputFilePath;
+                        return finish();
+                    }
+                    if (query.maxStoredMatches > 0 &&
+                        report.matches.size() < query.maxStoredMatches) {
+                        report.matches.push_back(match);
+                    }
                 }
                 if (report.truncated) break;
             }
@@ -2065,12 +2176,14 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
     report.targetNetName = query.targetNetName;
     report.simulationPatternCount = query.simulationPatternCount;
     const auto startedAt = std::chrono::steady_clock::now();
+    std::ofstream matchOutput;
     auto elapsedSeconds = [&]() {
         return std::chrono::duration<double>(
             std::chrono::steady_clock::now() - startedAt).count();
     };
     auto finish = [&]() -> FunctionSearchReport {
         report.elapsedSeconds = elapsedSeconds();
+        finalizeFunctionSearchOutput(matchOutput, report);
         return report;
     };
 
@@ -2084,11 +2197,10 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
         return finish();
     }
     if (query.targetNetName.empty() || query.simulationPatternCount == 0 ||
-        query.simulationPatternCount > 4096 || query.timeLimitSeconds <= 0.0 ||
-        query.maxResults == 0) {
+        query.simulationPatternCount > 4096 || query.timeLimitSeconds <= 0.0) {
         report.status = "INVALID_ARGUMENT";
         report.message = "Function search requires a target, 1..4096 simulation patterns, "
-                         "positive timeLimitSeconds, and maxResults greater than zero.";
+                         "and positive timeLimitSeconds.";
         return finish();
     }
 
@@ -2107,6 +2219,9 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
     if (!isValidNetId(report.targetNetId) || getNet(report.targetNetId).isRemoved) {
         report.status = "TARGET_NOT_FOUND";
         report.message = "Target net is missing or removed: " + query.targetNetName;
+        return finish();
+    }
+    if (!openFunctionSearchOutput(query, report, matchOutput)) {
         return finish();
     }
 
@@ -2204,7 +2319,8 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
             }
 
             if (query.mode == FunctionSearchMode::FindAll &&
-                report.matches.size() >= query.maxResults) {
+                query.maxResults > 0 &&
+                report.matchCount >= query.maxResults) {
                 report.truncated = true;
                 stopped = true;
                 break;
@@ -2218,7 +2334,20 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
             match.provenEquivalent = true;
             match.proofMethod = "SAT_UNSAT_MITER";
             match.solverStatus = proof.solverStatus;
-            report.matches.push_back(std::move(match));
+            ++report.matchCount;
+            if (matchOutput.is_open() &&
+                !writeFunctionSearchMatchRecord(
+                    matchOutput, match, report.matchCount)) {
+                report.status = "OUTPUT_ERROR";
+                report.message = "Failed to write Function Search matches to: " +
+                                 report.outputFilePath;
+                return finish();
+            }
+            if (query.mode == FunctionSearchMode::FindAny ||
+                (query.maxStoredMatches > 0 &&
+                 report.matches.size() < query.maxStoredMatches)) {
+                report.matches.push_back(match);
+            }
             report.found = true;
 
             if (query.mode == FunctionSearchMode::FindAny) {

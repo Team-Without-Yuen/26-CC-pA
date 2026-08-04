@@ -209,7 +209,7 @@
 | 9 POs with widths | `structure_query list_po` | ordered name/width/range summaries | `Ready` |
 | 10 list XOR gates | `structure_query gates_by_type XOR` | names/count | `Ready` |
 | 11 max register-to-register depth | `path_query max_depth all_dff_q all_dff_d` | representative DFF pair + depth/path | `Ready` |
-| 12 report DFF enable/hold structures | 先用 `sequential_query enable_hold all`；需要非 canonical functional search 時 opt-in `--functional-fallback` 並依 next offset 分頁 | DFF names、pattern、D-input logic、functional/pagination completeness | `Ready (Canonical + Bounded Functional)` |
+| 12 report DFF enable/hold structures | `sequential_query enable_hold all --confirmed-only` 自動完整寫入 artifact；需要非 canonical functional search 時才 opt-in `--functional-fallback` | DFF names、pattern、D-input logic、artifact path、functional completeness | `Ready (Canonical + Bounded Functional)` |
 | 13 count DFFs with enable/hold | canonical：`sequential_query enable_hold all --summary-only`；functional lower bound：再加 `--functional-fallback --functional-find-any --no-resolve-functional-data` 與明確 budget | `matched_dff_count` unique confirmed DFF count；只有 `complete:true` 才是完整數量 | `Ready (Canonical + Bounded Functional)` |
 | 14 `g0` type and pins | `structure_query gate_info g0` | type + pin connections | `Ready` |
 | 15 output with largest fanin cone | `cone_query largest_output` | selected output + gate count | `Ready` |

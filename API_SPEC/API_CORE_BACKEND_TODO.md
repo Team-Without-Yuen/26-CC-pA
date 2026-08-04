@@ -84,6 +84,42 @@ NewTestCase/test40: official bounded smoke PASS，約 3.6 秒
 NewTestCase/test33: 120 秒 process timeout；large D-pin cone core runtime blocker
 ```
 
+## Out of Scope：VerilogReader 靜默略過未知 primitive
+
+`VerilogReader::read()` 目前只在第一個 token 可轉成既有 `GateType` 時呼叫
+`parseGateInstance()`；MUX 或其他未知 primitive 會被直接略過，read 仍回成功，且沒有
+unsupported diagnostic。
+
+實證：
+
+```text
+Blup/function_search_runs/unsupported_probe/unknown_primitive_probe.v
+
+mux g_mux (y, select, data0, data1);
+read -> ok:true, gate_count:0
+func_search equivalent_pairs whole --all
+  -> complete:true, NO_MATCH, unsupported:false
+func_search nand_pair y --all --include-boundary-signals
+  -> complete:true, NO_MATCH, unsupported:false
+```
+
+若任意 Verilog primitive 可出現在輸入，這會讓下游 API 在失真的 named netlist 上產生看似
+完整的答案。不過官方 testcase netlist 只會使用題目規定的 gate types；prompt 中的 MUX 等
+語意會由合法 gates 組成的 Boolean function 表示，不會以 direct `mux` primitive 出現在
+netlist。因此此項不列為競賽實作待辦，也不修改 Function Search。
+
+一般 robustness 的可能修正方向：
+
+```text
+1. reader 遇到未知 primitive 時不得靜默忽略。
+2. 若該 primitive 可保留，建立可辨識的 unsupported cell/net connectivity，讓 analysis 回 partial/unsupported。
+3. 若無法安全保留，read 應回失敗並列出 instance/type/line diagnostic。
+4. 若官方確認 direct MUX/cell 會出現，應正式擴充 GateType、reader、writer、graph、simulation 與 SAT encoding。
+5. 新增 read -> structure -> write round-trip regression，禁止 gate instance 靜默遺失。
+```
+
+目前決議：`Out of Scope / No Action`。若官方日後變更 netlist gate-type contract，再重新開啟。
+
 ## 後期 AIG / Boolean 重構項目
 
 目前決策：

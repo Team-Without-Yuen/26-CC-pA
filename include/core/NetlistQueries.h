@@ -303,10 +303,13 @@ struct FunctionSearchQuery {
     bool internalSignalsOnly = true;
     bool allowSameSignalPair = false;
 
-    size_t maxResults = 256;
+    size_t maxResults = 0; // 0 = 不限制完整搜尋；正值只供明確 result limit
+    size_t maxStoredMatches = 256; // report.matches 最多保留的 samples；0 = 不保留
     size_t simulationPatternCount = 256;
     double timeLimitSeconds = 30.0;
     bool expandEquivalentPairs = true; // false 時只回傳 SAT-proven equivalenceClasses
+    bool writeMatchesToFile = false; // FindAll 可將完整 records 以 streaming 寫檔
+    std::string outputFilePath;       // 空字串時使用 backend 相容預設檔名
 };
 
 struct FunctionSearchMatch {
@@ -361,10 +364,14 @@ struct FunctionSearchReport {
     size_t unsupportedSignalCount = 0;
     size_t equivalenceClassCount = 0;
     size_t equivalentPairCount = 0;
+    size_t matchCount = 0; // 完整找到的 match 數；不等於 samples vector 大小
     size_t simulationPatternCount = 0;
     double elapsedSeconds = 0.0;
 
-    std::vector<FunctionSearchMatch> matches;
+    bool wroteMatchesToFile = false;
+    std::string outputFilePath;
+
+    std::vector<FunctionSearchMatch> matches; // 只保存 query.maxStoredMatches 筆 samples
     std::vector<FunctionSearchEquivalenceClass> equivalenceClasses;
 };
 

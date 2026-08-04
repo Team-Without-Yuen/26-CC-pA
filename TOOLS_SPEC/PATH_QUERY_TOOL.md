@@ -4,9 +4,10 @@
 
 `path_query` 負責明確 startpoint 與 endpoint 之間的 combinational path、路徑限制、register-to-register path、mandatory nodes 與 separator/cut。對外不使用 legacy `reg_path_query` 或 `graph_query`。
 
-完整性規則：`all paths` 預設不設數量上限；只問數量使用 `-count_only`，要求完整列表使用
-streaming `-out`，正式答案只回總數、完成狀態與檔案位置。時間限制依題目指定。詳見
-[`LLM_NOTES.md`](LLM_NOTES.md)。
+完整性規則：`all paths` 預設不設數量上限。只問數量時使用 `-count_only`；要求完整列表時
+直接呼叫 `enumerate`，CLI 會自動以 streaming 寫入不覆寫既有結果的唯一檔名，正式答案只回
+總數、完成狀態與檔案位置。除非 prompt 明確要求，LLM 不主動傳入輸出或截斷控制參數。
+詳見 [`LLM_NOTES.md`](LLM_NOTES.md)。
 
 ## 2. 選擇條件
 
@@ -52,7 +53,7 @@ required/avoided nodes 使用 `gate:<g>`、`net:<n>` 或 bare net；bare token �
 | `mandatory_nodes` | `<start> <end>` | 所有 path 都經過的 internal nets | `Path exists`, `Mandatory internal nets` |
 | `is_separator` | `<start> <end> <candidate_net>` | candidate 是否切斷指定 endpoints | `Is separator`, witness fields |
 | `pi_po_cut` | `<candidate_net>` | candidate 是否為 PI-to-PO directed cut | `Is separator`, witness fields |
-| `direct_pi_po` | `[-max_print N]` | 所有 depth-0 PI-to-PO direct connections | `Total direct PI-to-PO connections` |
+| `direct_pi_po` | 無必要 option | 所有 depth-0 PI-to-PO direct connections | 完整 connection list 與總數 |
 
 ## 5. Enumeration Options
 
@@ -60,21 +61,21 @@ required/avoided nodes 使用 `gate:<g>`、`net:<n>` 或 bare net；bare token �
 |---|---|
 | `-req <node...>` | path 必須經過的 nodes；遇到下一個 option 結束 |
 | `-avoid <node...>` | path 必須避開的 nodes |
-| `-out <file>` | 將列舉 paths 寫入檔案 |
+| `-out <file>` | 明確指定輸出檔；未指定時 CLI 自動產生唯一檔名 |
 | `-max_print <N>` | 最多在 terminal data 顯示 N 條 |
 | `-max_paths <N>` | Legacy 相容參數；目前不作為完整列舉的截斷條件 |
 | `-time_limit <seconds>` | enumeration 時間上限 |
 | `-count_only` | 只計數，不保存/顯示每條 path |
 
 對 `enumerate`，只有 envelope `complete:true` 且 data `Complete enumeration: yes` 時，
-`Total paths` 才是精確完整總數。若指定 `-out`，工具會在 DFS 過程中 streaming 寫檔，
+`Total paths` 才是精確完整總數。非 `-count_only` 查詢會在 DFS 過程中自動 streaming 寫檔，
+檔名以目前 design 名稱與序號組成，且不覆寫工作目錄內的既有檔案。
 不會先把所有 paths 保存在記憶體後再一次寫出。遇到 timeout 時先保留已找到數量、
 停止原因與輸出檔，再依 `LLM_NOTES.md` 的 Competition Answer Policy 產生正式候選答案；
 不得把 partial count 偽裝成精確總數。
 
-`direct_pi_po` 的 `-max_print` 只限制 terminal 顯示，不影響
-`Total direct PI-to-PO connections`。題目要求完整 connection list 時，先執行一次取得總數
-`N`，再執行 `path_query direct_pi_po -max_print N`；不能把預設顯示的前 20 筆當成全部。
+`direct_pi_po` 預設直接顯示所有 depth-0 connections，不需要先取得總數後重跑。
+只有 prompt 明確限制顯示筆數時才使用 `-max_print`。
 
 ## 6. Prompt Examples
 
@@ -86,7 +87,7 @@ Read: Yes/No；先確認 complete=true
 
 ```text
 Prompt: Count all register-to-register paths.
-Command: path_query enumerate all_dff_q all_dff_d -count_only -time_limit 30
+Command: path_query enumerate all_dff_q all_dff_d -count_only
 Read: Total paths；只有 Complete enumeration=yes 才是完整答案
 ```
 
@@ -104,9 +105,10 @@ Read: Is separator
 
 ## 7. 限制
 
-- 大型設計的 all-path enumeration 可能指數成長。只問數量時優先使用可完成精確計數的
-  `-count_only`；完整列舉題目使用 `-out` 與 `-max_print 0`，並將 `-time_limit` 設為
-  整體 deadline 前可用的最大安全值。
+- 大型設計的 all-path enumeration 可能產生大型檔案。只問數量時使用 `-count_only`；完整
+  列舉時直接使用 `enumerate`，由工具自動完整寫檔並在 terminal 回傳摘要與路徑。
+- `-out`、`-max_print`、`-max_paths`、`-time_limit` 都是特殊控制參數；除非 prompt 明確要求
+  對應控制，LLM 不主動使用。
 - `-max_paths` 僅為 legacy compatibility，不得把它當成完整 enumeration 的限制或完成保證；完成性只看 `complete`、`Complete enumeration` 與 stop fields。
 - bus bit endpoint 必須寫成 `net:n0[0]`、`net:n63[1]`；不要把 bus bit 當成 `pi:` / `po:` endpoint。
 - `max_depth` 是指定 endpoints 間的最長 path；全域 critical path 應使用 `depth_query global_critical`。

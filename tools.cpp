@@ -1,8 +1,11 @@
 #include <algorithm>
 #include <cctype>
 #include <cmath>
+#include <filesystem>
+#include <fstream>
 #include <functional>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <optional>
 #include <sstream>
@@ -34,6 +37,9 @@ struct ToolSession {
     VerilogWriter writer;
     std::string loadedFilePath;
     size_t designRevision = 0;
+    size_t pathArtifactSequence = 0;
+    size_t functionSearchArtifactSequence = 0;
+    size_t sequentialArtifactSequence = 0;
     bool designLoaded = false;
 };
 
@@ -151,6 +157,98 @@ std::string readRestPath(std::istringstream& iss) {
         path = path.substr(1, path.size() - 2);
     }
     return path;
+}
+
+// 建立不覆寫既有檔案的 Path Query artifact 名稱；輸出位置為目前工作目錄。
+std::string makeAutomaticPathOutputPath(ToolSession& session) {
+    namespace fs = std::filesystem;
+
+    std::string designStem = session.loadedFilePath.empty()
+        ? "design"
+        : fs::path(session.loadedFilePath).stem().string();
+    for (char& ch : designStem) {
+        const unsigned char value = static_cast<unsigned char>(ch);
+        if (!std::isalnum(value) && ch != '_' && ch != '-') {
+            ch = '_';
+        }
+    }
+    if (designStem.empty()) {
+        designStem = "design";
+    }
+
+    while (true) {
+        ++session.pathArtifactSequence;
+        const std::string candidate = designStem + "_path_query_" +
+                                      std::to_string(session.pathArtifactSequence) +
+                                      ".txt";
+        std::error_code error;
+        const bool exists = fs::exists(candidate, error);
+        if (error || !exists) {
+            return candidate;
+        }
+    }
+}
+
+// 建立不覆寫既有檔案的 Function Search artifact 名稱。
+std::string makeAutomaticFunctionSearchOutputPath(ToolSession& session) {
+    namespace fs = std::filesystem;
+
+    std::string designStem = session.loadedFilePath.empty()
+        ? "design"
+        : fs::path(session.loadedFilePath).stem().string();
+    for (char& ch : designStem) {
+        const unsigned char value = static_cast<unsigned char>(ch);
+        if (!std::isalnum(value) && ch != '_' && ch != '-') {
+            ch = '_';
+        }
+    }
+    if (designStem.empty()) {
+        designStem = "design";
+    }
+
+    while (true) {
+        ++session.functionSearchArtifactSequence;
+        const std::string candidate = designStem + "_function_search_" +
+                                      std::to_string(
+                                          session.functionSearchArtifactSequence) +
+                                      ".txt";
+        std::error_code error;
+        const bool exists = fs::exists(candidate, error);
+        if (error || !exists) {
+            return candidate;
+        }
+    }
+}
+
+// 建立不覆寫既有檔案的 Sequential Pattern artifact 名稱。
+std::string makeAutomaticSequentialOutputPath(ToolSession& session) {
+    namespace fs = std::filesystem;
+
+    std::string designStem = session.loadedFilePath.empty()
+        ? "design"
+        : fs::path(session.loadedFilePath).stem().string();
+    for (char& ch : designStem) {
+        const unsigned char value = static_cast<unsigned char>(ch);
+        if (!std::isalnum(value) && ch != '_' && ch != '-') {
+            ch = '_';
+        }
+    }
+    if (designStem.empty()) {
+        designStem = "design";
+    }
+
+    while (true) {
+        ++session.sequentialArtifactSequence;
+        const std::string candidate = designStem + "_sequential_query_" +
+                                      std::to_string(
+                                          session.sequentialArtifactSequence) +
+                                      ".txt";
+        std::error_code error;
+        const bool exists = fs::exists(candidate, error);
+        if (error || !exists) {
+            return candidate;
+        }
+    }
 }
 
 // 印出 string 陣列；所有高階 query report 的 name list 都共用這個輸出。
@@ -795,9 +893,19 @@ void printFunctionSearchReport(const Netlist& netlist,
     std::cout << "  simulation_pattern_count: "
               << report.simulationPatternCount << "\n";
     std::cout << "  elapsed_seconds: " << report.elapsedSeconds << "\n";
-    std::cout << "  match_count: " << report.matches.size() << "\n";
-    std::cout << "  matches:\n";
-    for (size_t index = 0; index < report.matches.size(); ++index) {
+    std::cout << "  match_count: " << report.matchCount << "\n";
+    std::cout << "  stored_match_count: " << report.matches.size() << "\n";
+    std::cout << "  wrote_matches_to_file: "
+              << (report.wroteMatchesToFile ? "true" : "false") << "\n";
+    if (report.wroteMatchesToFile) {
+        std::cout << "  output_file: " << report.outputFilePath << "\n";
+    }
+    if (!report.wroteMatchesToFile) {
+        std::cout << "  matches:\n";
+    }
+    for (size_t index = 0;
+         !report.wroteMatchesToFile && index < report.matches.size();
+         ++index) {
         const Netlist::FunctionSearchMatch& match = report.matches[index];
         std::cout << "    match " << (index + 1) << ":\n";
         if (match.gateIdA >= 0 || match.gateIdB >= 0) {
@@ -815,8 +923,12 @@ void printFunctionSearchReport(const Netlist& netlist,
         std::cout << "      proof_method: " << match.proofMethod << "\n";
         std::cout << "      solver_status: " << match.solverStatus << "\n";
     }
-    std::cout << "  equivalence_classes:\n";
-    for (size_t index = 0; index < report.equivalenceClasses.size(); ++index) {
+    if (!report.wroteMatchesToFile) {
+        std::cout << "  equivalence_classes:\n";
+    }
+    for (size_t index = 0;
+         !report.wroteMatchesToFile && index < report.equivalenceClasses.size();
+         ++index) {
         const Netlist::FunctionSearchEquivalenceClass& equivalentClass =
             report.equivalenceClasses[index];
         std::cout << "    class " << (index + 1) << ":\n";
@@ -905,6 +1017,7 @@ std::string activeLevelName(int activeLevel) {
 struct SequentialPrintOptions {
     bool summaryOnly = false;
     bool includeNoPattern = false;
+    bool recordWindowExplicit = false;
     size_t recordOffset = 0;
     size_t recordLimit = 50;
 };
@@ -1117,6 +1230,51 @@ void printSequentialPatternReport(
             }
         }
     }
+}
+
+class ScopedCoutBufferRedirect {
+public:
+    explicit ScopedCoutBufferRedirect(std::streambuf* destination)
+        : originalBuffer_(std::cout.rdbuf()), originalState_(std::cout.rdstate()) {
+        std::cout.flush();
+        std::cout.rdbuf(destination);
+        std::cout.clear();
+    }
+
+    ~ScopedCoutBufferRedirect() {
+        std::cout.flush();
+        std::cout.rdbuf(originalBuffer_);
+        std::cout.clear(originalState_);
+    }
+
+    ScopedCoutBufferRedirect(const ScopedCoutBufferRedirect&) = delete;
+    ScopedCoutBufferRedirect& operator=(const ScopedCoutBufferRedirect&) = delete;
+
+private:
+    std::streambuf* originalBuffer_;
+    std::ios::iostate originalState_;
+};
+
+bool writeSequentialPatternArtifact(
+    const std::string& outputPath,
+    const Netlist::SequentialPatternReportSet& report,
+    const SequentialPrintOptions& sourceOptions) {
+    std::ofstream output(outputPath, std::ios::out | std::ios::trunc);
+    if (!output) {
+        return false;
+    }
+
+    SequentialPrintOptions artifactOptions = sourceOptions;
+    artifactOptions.summaryOnly = false;
+    artifactOptions.recordWindowExplicit = false;
+    artifactOptions.recordOffset = 0;
+    artifactOptions.recordLimit = std::numeric_limits<size_t>::max();
+    {
+        ScopedCoutBufferRedirect redirect(output.rdbuf());
+        printSequentialPatternReport(report, artifactOptions);
+    }
+    output.flush();
+    return static_cast<bool>(output);
 }
 
 std::string equivalenceMethodName(EquivalenceCheckMethod method) {
@@ -1590,6 +1748,7 @@ bool buildSequentialPatternQuery(
                 return false;
             }
             printOptions.recordOffset = static_cast<size_t>(value);
+            printOptions.recordWindowExplicit = true;
         } else if (lowered == "--limit" || lowered == "-limit") {
             std::string valueToken;
             int value = -1;
@@ -1598,6 +1757,7 @@ bool buildSequentialPatternQuery(
                 return false;
             }
             printOptions.recordLimit = static_cast<size_t>(value);
+            printOptions.recordWindowExplicit = true;
         } else {
             error = "Unknown sequential_query option: " + option;
             return false;
@@ -1613,8 +1773,7 @@ bool buildSequentialPatternQuery(
                 "may exceed the testcase time limit.";
         return false;
     }
-    if (printOptions.summaryOnly &&
-        (printOptions.recordOffset != 0 || printOptions.recordLimit != 50)) {
+    if (printOptions.summaryOnly && printOptions.recordWindowExplicit) {
         error = "--summary-only cannot be combined with --offset or --limit.";
         return false;
     }
@@ -2602,9 +2761,11 @@ void printHelp() {
         << "        shared_fanin <net_a> <net_b>\n"
         << "\nPath query\n"
         << "  path_query <mode> <start_endpoint> <end_endpoint> [-req node...] [-avoid node...]\n"
-        << "  path_query direct_pi_po [-max_print n]\n"
-        << "             [-out file] [-max_print n] [-max_paths n] [-time_limit seconds] [-count_only]\n"
-        << "             -max_paths is accepted for legacy compatibility and does not truncate enumeration\n"
+        << "  path_query enumerate <start_endpoint> <end_endpoint> [-count_only]\n"
+        << "  path_query direct_pi_po\n"
+        << "  enumerate automatically writes the complete list to a unique file and returns a summary\n"
+        << "  use -out, -max_print, -max_paths, or -time_limit only when the prompt explicitly requests that control\n"
+        << "  -max_paths is legacy-only and does not truncate enumeration\n"
         << "  mode: exists | find_any | enumerate | min_depth | max_depth\n"
         << "        every_through | every_avoids | mandatory_nodes | is_separator\n"
         << "        pi_po_cut <internal_net> | direct_pi_po\n"
@@ -2636,6 +2797,8 @@ void printHelp() {
         << "              [--patterns 1..4096] [--time-limit seconds]\n"
         << "  scope: whole | net_fanin <net> | net_fanout <net>\n"
         << "         gate_fanin <gate> | gate_fanout <gate>\n"
+        << "  --all performs a complete search, writes all matches to a unique file,\n"
+        << "  and returns only a summary; use --max-results only when requested\n"
         << "  default mode finds one SAT-proven pair; --all requests complete enumeration\n"
         << "\nSequential pattern query\n"
         << "  sequential_query enable_hold <all|dff_name> [--summary-only]\n"
@@ -2650,7 +2813,8 @@ void printHelp() {
         << "                   [--functional-simulation-patterns 1..4096]\n"
         << "                   [--functional-per-dff-time-limit seconds]\n"
         << "                   [--functional-time-limit seconds]\n"
-        << "  all-DFF detail defaults to 50 records; use offset/limit for pagination\n"
+        << "  all-DFF detail writes all records to a unique file and returns a summary\n"
+        << "  use offset/limit only when a prompt explicitly requests a record window\n"
         << "  --verify-sat is accepted only for a specific DFF target\n"
         << "  functional search options require the opt-in --functional-fallback flag\n"
         << "\nDepth optimization\n"
@@ -2945,6 +3109,13 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             emitToolError(session, command, modeText, "Unknown path_query mode: " + modeText);
             return true;
         }
+        if (query.mode == Netlist::PathQueryMode::EnumerateAll) {
+            // 完整列表由 backend 自動寫檔；terminal 預設只保留摘要。
+            query.maxPrintedPaths = 0;
+        } else if (query.mode == Netlist::PathQueryMode::DirectPiPoConnections) {
+            // 此 mode 不自動寫檔，因此預設完整顯示所有 direct connections。
+            query.maxPrintedPaths = std::numeric_limits<size_t>::max();
+        }
         const std::string loweredMode = toLower(modeText);
         const bool piPoCutMode = loweredMode == "pi_po_cut";
         if (piPoCutMode) {
@@ -3027,6 +3198,12 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             }
             if (listMode == 1) query.requiredNodes.push_back(parsePathNode(token));
             else if (listMode == 2) query.avoidedNodes.push_back(parsePathNode(token));
+        }
+
+        if (query.mode == Netlist::PathQueryMode::EnumerateAll &&
+            !query.countOnly && query.outputFilePath.empty()) {
+            query.writePathsToFile = true;
+            query.outputFilePath = makeAutomaticPathOutputPath(session);
         }
 
         const Netlist::PathQueryResult result = session.current.runPathQuery(query);
@@ -3220,6 +3397,13 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             return true;
         }
 
+        if (query.mode == Netlist::FunctionSearchMode::FindAll) {
+            query.writeMatchesToFile = true;
+            query.maxStoredMatches = 0;
+            query.outputFilePath =
+                makeAutomaticFunctionSearchOutputPath(session);
+        }
+
         const Netlist::FunctionSearchReport report =
             session.current.runFunctionSearchQuery(query);
         ToolResponse response;
@@ -3293,8 +3477,29 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
 
         const Netlist::SequentialPatternReportSet report =
             session.current.runSequentialPatternQuery(query);
+        const bool writeAutomaticArtifact =
+            query.dffName.empty() && !printOptions.summaryOnly &&
+            !printOptions.recordWindowExplicit;
+        SequentialPrintOptions envelopeOptions = printOptions;
+        bool wroteRecordsToFile = false;
+        std::string outputFilePath;
+        size_t artifactRecordCount = 0;
+        if (writeAutomaticArtifact) {
+            outputFilePath = makeAutomaticSequentialOutputPath(session);
+            SequentialPrintOptions artifactOptions = printOptions;
+            artifactOptions.summaryOnly = false;
+            artifactOptions.recordOffset = 0;
+            artifactOptions.recordLimit = std::numeric_limits<size_t>::max();
+            artifactRecordCount =
+                getSequentialPageStats(report, artifactOptions).reportedRecordCount;
+            wroteRecordsToFile = writeSequentialPatternArtifact(
+                outputFilePath, report, artifactOptions);
+            envelopeOptions.summaryOnly = true;
+            envelopeOptions.recordOffset = 0;
+            envelopeOptions.recordLimit = 50;
+        }
         const SequentialPageStats page =
-            getSequentialPageStats(report, printOptions);
+            getSequentialPageStats(report, envelopeOptions);
         bool solverTimedOut = false;
         bool solverUnknown = false;
         for (const DffInputPatternReport& dff : report.reports) {
@@ -3305,16 +3510,31 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         }
 
         ToolResponse response;
-        response.ok = report.ok;
+        response.ok = report.ok &&
+                      (!writeAutomaticArtifact || wroteRecordsToFile);
         response.command = command;
         response.mode = toLower(mode);
-        response.message = page.truncated
-            ? report.message + " Record page truncated; continue with --offset " +
-                  std::to_string(page.nextRecordOffset) + "."
-            : report.message;
+        if (writeAutomaticArtifact && !wroteRecordsToFile) {
+            response.message =
+                "Failed to write Sequential Pattern output file: " +
+                outputFilePath;
+        } else if (writeAutomaticArtifact) {
+            response.message = report.message +
+                               " Complete detail records were written to " +
+                               outputFilePath + ".";
+        } else if (page.truncated) {
+            response.message =
+                report.message + " Record page truncated; continue with --offset " +
+                std::to_string(page.nextRecordOffset) + ".";
+        } else {
+            response.message = report.message;
+        }
         response.complete = report.ok && report.complete &&
-                            !solverTimedOut && !solverUnknown && !page.truncated;
-        if (report.timedOut || solverTimedOut) {
+                            !solverTimedOut && !solverUnknown && !page.truncated &&
+                            (!writeAutomaticArtifact || wroteRecordsToFile);
+        if (writeAutomaticArtifact && !wroteRecordsToFile) {
+            response.status = ToolStatus::Error;
+        } else if (report.timedOut || solverTimedOut) {
             response.status = ToolStatus::Timeout;
         } else if (solverUnknown || report.status == "PARTIAL") {
             response.status = ToolStatus::Partial;
@@ -3324,7 +3544,14 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             response.status = report.ok ? ToolStatus::Ok : ToolStatus::Error;
         }
         emitToolResponse(session, response, [&]() {
-            printSequentialPatternReport(report, printOptions);
+            printSequentialPatternReport(report, envelopeOptions);
+            std::cout << "  wrote_records_to_file: "
+                      << (wroteRecordsToFile ? "true" : "false") << "\n";
+            std::cout << "  artifact_record_count: "
+                      << (wroteRecordsToFile ? artifactRecordCount : 0) << "\n";
+            if (writeAutomaticArtifact) {
+                std::cout << "  output_file: " << outputFilePath << "\n";
+            }
         });
         return true;
     }

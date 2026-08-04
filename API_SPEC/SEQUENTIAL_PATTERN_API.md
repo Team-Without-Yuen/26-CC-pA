@@ -186,11 +186,15 @@ src/analysis/FunctionAnalysis.cpp
 ```text
 mini test/test19：canonical pattern 15/15
 mini test/test20：edit/mapping/equivalence flow 13/13
-mini test/test21：canonical 相容、functional proof、partial/timeout/error、參數與 envelope 18/18
+mini test/test21：canonical 相容、all-DFF artifact、explicit pagination、functional proof、partial/timeout/error、參數與 envelope 18/18
 mini test/test28：functional fallback、simulation on/off、simulation-aware ranking、safe-Reject quota、cost invariant、FindAny-after-inconclusive、internal selector、負例、FindAny/FindAll、data bound、limit/timeout 19/19
 ```
 
 NewTestCase/test40 的既有正式數字仍是 canonical/default 模式結果。目前只做過短時間、允許 partial 的 functional benchmark，尚未完成全候選搜尋，因此不能把額外 matches 當成最終完整計數。
+
+Canonical CLI 實測：test40 共 2585 顆 DFF，1583 顆 confirmed enable/hold。all-DFF detail
+artifact 含 1583/1583 records；terminal envelope 約 1292 characters，連續執行使用不同檔名且
+不覆寫。這是 tools printer 層行為，不改變本 C++ report contract。
 
 受控 benchmark（O0 test build、原始 test40、FindAny、不解析 named data）：canonical 約 0.020 秒。加入 simulation prefilter、simulation-aware stable ranking、safe-Reject quota 與 hybrid SAT session 後，12 顆 unmatched 抽樣連續執行皆為 12/12 complete；每顆都在第一個候選、一次 SAT proof 找到 match，總 wall time 約 0.25–0.30 秒。
 

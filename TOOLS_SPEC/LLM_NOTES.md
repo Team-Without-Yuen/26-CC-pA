@@ -110,7 +110,7 @@ scope、輸出模式或時間配置；仍無法完成才使用 best-effort infer
   的重試方式處理；不能因為達到預設上限就宣稱已找到全部。
 - 先選 summary/count-only mode；只有題目明確要求列出全部物件或路徑時才要求 list。
 - `path_query enumerate` 的完整性只看 `complete:true` 與 `Complete enumeration: yes`。`-max_paths` 是 legacy compatibility 參數，不會保證或限制完整列舉。
-- all-path count 使用 `-count_only -time_limit <seconds>`；完整 path list 使用 `-out <file> -max_print 0`。不要用顯示筆數上限代替完整計算，也不要在答案中使用省略號冒充完整列表。
+- all-path count 只加 `-count_only`；完整 path list 直接使用 `enumerate`，由 CLI 自動寫入唯一 artifact。除非 prompt 明確指定，不能主動加入 `-out`、`-max_print`、`-max_paths` 或 `-time_limit`，也不要在答案中使用省略號冒充完整列表。
 - 有 pagination 的 list query 必須持續讀取直到 `records_truncated:false` 或沒有 next offset。
   若因總時限無法完成，正式答案仍依 Competition Answer Policy，根據 partial count、
   stop reason 與已取得 records 提交最可能答案。
@@ -122,16 +122,15 @@ scope、輸出模式或時間配置；仍無法完成才使用 best-effort infer
 |---|---|
 | Structure/Cone/Depth name list | printer 會全量輸出；只問數量時不要把清單搬入答案 |
 | direct PI-to-PO connections | 先讀 `Total direct PI-to-PO connections`，要求完整列表時再以該總數重送 `-max_print` |
-| all paths count | `path_query enumerate ... -count_only -time_limit <budget>` |
-| all paths list | `path_query enumerate ... -out <file> -max_print 0 -time_limit <budget>` |
-| sequential DFF detail | 依 `next_record_offset` 重送 `--offset`，直到 `records_truncated:false` |
-| FunctionSearch FindAll | 先讀 candidate count；若 `truncated:true`，以候選數推導 pair 上界後提高 `--max-results` 重試 |
+| all paths count | `path_query enumerate ... -count_only` |
+| all paths list | `path_query enumerate ...`；工具自動完整寫入唯一 artifact |
+| sequential DFF detail | all-DFF 預設自動完整寫入 artifact；答案回 `artifact_record_count`、完整性與 `output_file` |
+| FunctionSearch FindAll | 使用 `--all`；工具自動完整寫入唯一 artifact，答案回 `match_count`、完整性與 `output_file` |
 | Boolean expression | 目前直接輸出完整 expression；大型 cone 需預留足夠輸出時間 |
 
-FunctionSearch 的 unordered pair 上界：不允許同一 signal 配對時為 `N*(N-1)/2`；允許
-`--allow-same` 時為 `N*(N+1)/2`。`equivalent_pairs` 使用 `candidate_gate_count`，
-`nand_pair` 使用 `candidate_signal_count`。只有重試後 `truncated:false` 且 search complete，
-才能宣稱已列出全部 pair records。
+FunctionSearch 不再要求 LLM 推算 unordered pair 上界。Prompt 未明確限制數量時不得加入
+`--max-results`；`--all` 的完整 records 從 `output_file` 取得，只有 `complete:true`、
+`truncated:false` 且未 timeout/unsupported 時才能宣稱完整。
 
 ## 6. Sequential Boundaries
 

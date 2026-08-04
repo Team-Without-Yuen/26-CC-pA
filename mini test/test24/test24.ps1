@@ -35,6 +35,22 @@ function Check-Result {
     }
 }
 
+function Get-OutputFile {
+    param([string]$Response)
+    $match = [regex]::Match($Response, "(?m)^  output_file: (.+)$")
+    if (!$match.Success) { return $null }
+    return $match.Groups[1].Value.Trim()
+}
+
+function Get-IntegerField {
+    param([string]$Response, [string]$Field)
+    $match = [regex]::Match(
+        $Response,
+        "(?m)^  " + [regex]::Escape($Field) + ": ([0-9]+)\r?$")
+    if (!$match.Success) { return $null }
+    return [int64]$match.Groups[1].Value
+}
+
 Check-Result ($responses.Count -eq 10) "every Function Search command returns one envelope"
 if ($responses.Count -ge 10) {
     $findAny = $responses[1]
@@ -45,6 +61,21 @@ if ($responses.Count -ge 10) {
     $invalid = $responses[6]
     $timeout = $responses[7]
     $help = $responses[8]
+    $findAllFile = Get-OutputFile $findAll
+    $limitedFile = Get-OutputFile $limited
+    $findAllMatchCount = Get-IntegerField $findAll "match_count"
+    $findAllFileExists = [bool]($findAllFile -and (Test-Path -LiteralPath $findAllFile))
+    $findAllFileMatchCount = if ($findAllFileExists) {
+        @(Select-String -LiteralPath $findAllFile -Pattern '^Match [0-9]+$').Count
+    } else {
+        -1
+    }
+    $limitedFileExists = [bool]($limitedFile -and (Test-Path -LiteralPath $limitedFile))
+    $limitedFileMatchCount = if ($limitedFileExists) {
+        @(Select-String -LiteralPath $limitedFile -Pattern '^Match [0-9]+$').Count
+    } else {
+        -1
+    }
 
     Check-Result `
         ($findAny -match "status: ok" -and
@@ -59,15 +90,22 @@ if ($responses.Count -ge 10) {
         ($findAll -match "status: ok" -and
          $findAll -match "report_status: MATCHES_FOUND" -and
          $findAll -match "all_candidates_examined: true" -and
-         $findAll -match "truncated: false") `
-        "FindAll reports a complete candidate search"
+         $findAll -match "truncated: false" -and
+         $findAllMatchCount -gt 0 -and
+         $findAll -match "stored_match_count: 0" -and
+         $findAll -match "wrote_matches_to_file: true" -and
+         $findAllFileExists -and
+         $findAllFileMatchCount -eq $findAllMatchCount) `
+        "FindAll writes every SAT-proven match to a complete artifact"
 
     Check-Result `
         ($limited -match "status: partial" -and
          $limited -match "complete: false" -and
          $limited -match "report_status: RESULT_LIMIT_REACHED" -and
          $limited -match "truncated: true" -and
-         $limited -match "match_count: 1") `
+         $limited -match "match_count: 1" -and
+         $limitedFileExists -and
+         $limitedFileMatchCount -eq 1) `
         "result limit is reported as partial instead of complete"
 
     Check-Result `
