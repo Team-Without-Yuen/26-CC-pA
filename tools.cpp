@@ -676,6 +676,15 @@ void printFunctionReport(const Netlist::FunctionReport& report) {
     if (!report.supportPrimaryInputs.empty()) {
         printStringList("Support primary inputs", report.supportPrimaryInputs);
     }
+    if (!report.supportRealPrimaryInputs.empty()) {
+        printStringList("  - real primary inputs", report.supportRealPrimaryInputs);
+    }
+    if (!report.supportDffPseudoInputs.empty()) {
+        printStringList("  - DFF.Q pseudo primary inputs", report.supportDffPseudoInputs);
+    }
+    if (!report.supportUndrivenLeaves.empty()) {
+        printStringList("  - undriven leaves (no driver, not a primary input)", report.supportUndrivenLeaves);
+    }
     if (report.status == "FUNCTIONALLY_DEPENDENT" ||
         report.status == "FUNCTIONALLY_INDEPENDENT") {
         std::cout << "  input in structural support: "

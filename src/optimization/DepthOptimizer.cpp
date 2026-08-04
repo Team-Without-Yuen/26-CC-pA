@@ -923,37 +923,62 @@ CutScore DepthOptimizer::evaluateDepthCut(Netlist& netlist,
 
 // 全 netlist 的 NOT(NOT x) → x 消除。DepthOptimizer 专用，直接砍關鍵路徑深度。
 // 回傳消除的 NOT 對數。
+//
+// 用 worklist 取代「只要這一輪有任何 collapse 就整個 gate 陣列重掃一次」的作法：
+// 後者對長串 NOT chain（例如 mockturtle basis enforcement/absorption 疊出來的
+// 一長串 NOT）在 gate id 順序與邏輯鏈方向不一致時，會是 O(gate 數 * chain 長度)；
+// 這個函式在單一 executeCriticalPathOptimization() 呼叫中會被呼叫十幾次，足以
+// 在百萬閘電路上造成明顯的 timeout 風險。這裡只保留「第二顆 NOT」被拔除、
+// 「第一顆 NOT」留給後續 cleanup pass 的既有語意；唯一會因為一次 collapse 而
+// 改變資格的候選，是 outNet 原本的下游負載——它們的 input 被 redirect 到
+// srcNet，若它們本身也是 NOT gate，「自己的 driver 是不是 NOT」這個判斷條件
+// 就可能因此改變，需要重新入列檢查。
 int DepthOptimizer::eliminateDoubleInverters(Netlist& netlist) {
     int removed = 0;
-    bool changed = true;
-    while (changed) {
-        changed = false;
-        for (int g = 0; g < (int)netlist.getGateCount(); ++g) {
-            Gate& gate = netlist.getGateMutable(g);
-            if (gate.type != GateType::NOT) continue;
-            if (gate.inputNetIds.empty() || gate.inputNetIds[0] < 0) continue;
 
-            int midNet = gate.inputNetIds[0];
-            
-            // 讀取驅動 midNet 的閘 (drv)
-            int drv = netlist.getNet(midNet).driverGateId;
-            if (drv < 0 || drv >= (int)netlist.getGateCount()) continue;
-            if (netlist.getGate(drv).type != GateType::NOT) continue;          // 上游也是 NOT
-            if (netlist.getGate(drv).inputNetIds.empty()) continue;
+    std::queue<int> worklist;
+    std::unordered_set<int> queued;
+    auto enqueue = [&](int gateId) {
+        if (gateId < 0 || gateId >= (int)netlist.getGateCount()) return;
+        if (netlist.getGate(gateId).type != GateType::NOT) return;
+        if (queued.insert(gateId).second) worklist.push(gateId);
+    };
+    for (int g = 0; g < (int)netlist.getGateCount(); ++g) enqueue(g);
 
-            int srcNet = netlist.getGate(drv).inputNetIds[0];                  // 第一顆 NOT 的輸入
-            int outNet = gate.outputNetId;                                     // 第二顆 NOT 的輸出
-            if (srcNet < 0 || outNet < 0) continue;
+    while (!worklist.empty()) {
+        const int g = worklist.front();
+        worklist.pop();
+        queued.erase(g);
 
-            // PO 保護：outNet 是 PO 就不動（避免 PO 失去 driver / 語意錯亂）
-            if (netlist.getNet(outNet).isPO) continue;
+        Gate& gate = netlist.getGateMutable(g);
+        if (gate.type != GateType::NOT) continue;
+        if (gate.inputNetIds.empty() || gate.inputNetIds[0] < 0) continue;
 
-            // 把 outNet 的所有負載改吃 srcNet（= NOT(NOT x) = x）
-            redirectNetLoads(netlist, outNet, srcNet);   // 呼叫 Optimizer 內部的 helper
-            detachGate(netlist, g);                       // 刪掉第二顆 NOT（第一顆留給後續的清理 pass 或邏輯最佳化）
-            ++removed;
-            changed = true;
-        }
+        int midNet = gate.inputNetIds[0];
+
+        // 讀取驅動 midNet 的閘 (drv)
+        int drv = netlist.getNet(midNet).driverGateId;
+        if (drv < 0 || drv >= (int)netlist.getGateCount()) continue;
+        if (netlist.getGate(drv).type != GateType::NOT) continue;          // 上游也是 NOT
+        if (netlist.getGate(drv).inputNetIds.empty()) continue;
+
+        int srcNet = netlist.getGate(drv).inputNetIds[0];                  // 第一顆 NOT 的輸入
+        int outNet = gate.outputNetId;                                     // 第二顆 NOT 的輸出
+        if (srcNet < 0 || outNet < 0) continue;
+
+        // PO 保護：outNet 是 PO 就不動（避免 PO 失去 driver / 語意錯亂）
+        if (netlist.getNet(outNet).isPO) continue;
+
+        // redirectNetLoads 會清空 outNet.loadGateIds，要在那之前先記下這批
+        // gate id，才能在 redirect 完成後重新檢查它們是否新符合 collapse 條件。
+        const std::vector<int> rewiredLoads = netlist.getNet(outNet).loadGateIds;
+
+        // 把 outNet 的所有負載改吃 srcNet（= NOT(NOT x) = x）
+        redirectNetLoads(netlist, outNet, srcNet);   // 呼叫 Optimizer 內部的 helper
+        detachGate(netlist, g);                       // 刪掉第二顆 NOT（第一顆留給後續的清理 pass 或邏輯最佳化）
+        ++removed;
+
+        for (int loadGateId : rewiredLoads) enqueue(loadGateId);
     }
     return removed;
 }

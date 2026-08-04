@@ -265,7 +265,13 @@ struct FunctionReport {
     size_t expressionLength = 0;   // expression.size()，方便 LLM 決定是否摘要
     int maxExpressionDepth = -1;   // SimplifiedBooleanExpression 實際使用的 depth limit
     bool expressionDepthLimited = false; // true 表示這次輸出使用 depth-limited expansion
-    std::vector<std::string> supportPrimaryInputs; // fanin cone PI / DFF.Q pseudo-PI leaves
+    std::vector<std::string> supportPrimaryInputs; // fanin cone PI / DFF.Q pseudo-PI leaves（三桶聯集，不分類）
+    // supportPrimaryInputs 的分類版本：同一次 BFS 分出的三個互斥子集，聯集等於
+    // supportPrimaryInputs。BooleanExpression / SimplifiedBooleanExpression /
+    // PrimaryInputsOfNet 都會填。
+    std::vector<std::string> supportRealPrimaryInputs; // 真正宣告的 top-level primary input
+    std::vector<std::string> supportDffPseudoInputs;   // DFF.Q pseudo primary input（跨 sequential boundary）
+    std::vector<std::string> supportUndrivenLeaves;    // 沒有 driver 也不是 PI 的懸空 fanin leaf
 };
 
 // =========================================================================

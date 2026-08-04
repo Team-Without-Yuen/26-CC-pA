@@ -47,15 +47,29 @@ int Netlist::addNet(const std::string& name) {
     // Determine the net is a constant
     bool isConstant = (name == "1'b0" || name == "1'b1");
 
-    // Check if the net already exists and not a constant
-    if (!isConstant && netNameToId.find(name) != netNameToId.end()) {
-        int existingId = netNameToId[name];
+    // Check if the net already exists. Constant nets must be deduplicated by
+    // name exactly like every other net: callers such as TechMapper's rule
+    // application look the constant up with getNetId(name) first and only
+    // call addNet(name) as a fallback when it is missing. Previously constant
+    // nets were never registered in netNameToId, so that lookup always missed
+    // and every rule application that needed a tied-off constant leaf created
+    // a brand-new "1'b0"/"1'b1" net. Those leaked nets can never be swept by
+    // removeUnusedNets() (it explicitly protects isConst nets), so nets.size()
+    // grew without bound on any workload that repeatedly technology-maps a
+    // large design, which in turn slows down every O(net count) pass.
+    auto it = netNameToId.find(name);
+    if (it != netNameToId.end()) {
+        int existingId = it->second;
         if (existingId >= 0 && existingId < (int)nets.size() && nets[existingId].isRemoved) {
             nets[existingId] = Net(existingId, name);
+            if (isConstant) {
+                nets[existingId].isConst = true;
+                nets[existingId].constVal = (name == "1'b1") ? 1 : 0;
+            }
         }
         return existingId;
     }
-    
+
     // Create a new net and assign it a unique ID based on the vector size
     int newId = nets.size();
     nets.emplace_back(newId, name);
@@ -63,9 +77,8 @@ int Netlist::addNet(const std::string& name) {
         // If it is a constant, mark it
         nets[newId].isConst = true;
         nets[newId].constVal = (name == "1'b1") ? 1 : 0;
-    } else {
-        netNameToId[name] = newId;
     }
+    netNameToId[name] = newId;
 
     return newId;
 }

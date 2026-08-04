@@ -1228,8 +1228,11 @@ public:
     // 4. expression 格式：AND(a, b)、OR(a, NOT(b))、NAND(x, y) 等。
     // =========================================================================
 
-    // 回傳指定 net 的完整 Boolean expression（對大電路可能很長）
-    std::string getBooleanExpression(const std::string& netName) const;
+    // 回傳指定 net 的完整 Boolean expression（對大電路可能很長）。
+    // 內部有 depth cap 與輸出字串大小上限（見 Booleanexpression.cpp），一旦觸發，
+    // 深於上限的節點會直接以 net name 表示；wasTruncated（若非 nullptr）會被
+    // 設成 true，讓呼叫端知道這不是完整、忠實的展開。
+    std::string getBooleanExpression(const std::string& netName, bool* wasTruncated = nullptr) const;
 
     // 用 net ID 版本
     std::string getBooleanExpressionOfNet(int netId) const;
@@ -1241,7 +1244,26 @@ public:
 
     // 回傳 netName fanin cone 中所有 PI net 的名稱（排序去重）
     // 用於回答「n12 depends on which primary inputs」
+    // 注意：這是 getPrimaryInputSupportBreakdown() 三個桶（real PI / DFF.Q
+    // pseudo-PI / undriven leaf）的聯集，不區分種類；要分開來看請改用
+    // getPrimaryInputSupportBreakdown()。
     std::vector<std::string> getPrimaryInputsOfNet(const std::string& netName) const;
+
+    // getPrimaryInputsOfNet() 只回傳一個攤平、不分類的 leaf 名單，呼叫端沒辦法
+    // 分辨「這是真正的 top-level primary input」還是「這其實是某顆 DFF 的 Q」還是
+    // 「這條線根本沒有 driver、只是剛好不是 PI」——這三種在 Problem A 語意下代表
+    // 完全不同的事情（真正外部輸入 / 跨 clock cycle 的暫存狀態 / 電路本身可能有
+    // 缺陷的懸空訊號）。這個 struct 把同一次 fanin BFS 的結果分成三桶，讓呼叫端
+    // 不用另外再查一次 BasicQuery 就能分辨。
+    struct PrimaryInputSupport {
+        std::vector<std::string> all;               // 三桶的聯集，內容等同 getPrimaryInputsOfNet()
+        std::vector<std::string> realPrimaryInputs;  // 真正宣告的 top-level primary input
+        std::vector<std::string> dffPseudoInputs;    // DFF.Q pseudo primary input（跨 sequential boundary）
+        std::vector<std::string> undrivenLeaves;     // 沒有 driver 且不是 PI（懸空/floating fanin）
+    };
+
+    // 跟 getPrimaryInputsOfNet() 走同一次 BFS，但把 leaf 分成三類回傳。
+    PrimaryInputSupport getPrimaryInputSupportBreakdown(const std::string& netName) const;
 
 
     // =========================================================================
