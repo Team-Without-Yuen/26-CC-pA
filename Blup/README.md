@@ -6,6 +6,10 @@
 2. Function Search API
 3. Sequential Pattern Query API
 
+合併階段也會依序盤查其他成員的 API；目前新增：
+
+4. Basic Query API
+
 ## 工作原則
 
 - 優先維持既有 public API 與 CLI 參數，不因內部修正任意改動輸入格式。
@@ -22,6 +26,7 @@ Path Query、Function Search 與 Sequential Pattern Query 的本階段盤查均�
 - `PATH_QUERY_ISSUES_AND_CHANGES.md`：Path Query 問題、修正與效能證據。
 - `FUNCTION_SEARCH_ISSUES_AND_CHANGES.md`：Function Search 問題、修正與測試證據。
 - `SEQUENTIAL_PATTERN_ISSUES_AND_CHANGES.md`：Sequential Pattern 問題、修正與測試證據。
+- `BASIC_QUERY_ISSUES_AND_CHANGES.md`：Basic Query merge review、問題與 regression。
 - `OFFICIAL_QUESTIONS.md`：尚待官方回答的精確 path count 上限。
 
 目前只保留兩類後續工作：已明確標記的 CLI/數值規格問題，以及後期以 AIG functional index

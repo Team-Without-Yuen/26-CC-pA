@@ -12,6 +12,12 @@ API_SPEC/API_CORE_BACKEND_TODO.md
 
 已公開且已同步完成的 CLI schema 不再列為 tools.cpp 待修改項。
 
+## 合併後待同步項目
+
+| ID | API 來源 | tools 層問題 | 預定處理 |
+|---|---|---|---|
+| BASIC-TOOLS-001 | Basic Query `PortInfo` | 通用 Basic printer 對 port 輸出沒有意義的 `id: -1`，且尚未顯示 port direction flags | 後續統一更新 `tools.cpp`/`TOOLS_SPEC` 時，只在 `objectId >= 0` 時印 ID，並輸出 input/output direction |
+
 ## 短期盤查：完整輸出與 best-effort 作答
 
 競賽策略已改為「優先取得完整答案；完整計算失敗時仍提交明確候選答案」。文件層已在

@@ -38,6 +38,19 @@ bool containsInt(const std::vector<int>& values, int target) {
     return std::find(values.begin(), values.end(), target) != values.end();
 }
 
+std::vector<std::string> netIdsToNames(const Netlist& netlist,
+                                       const std::vector<int>& netIds) {
+    std::vector<std::string> names;
+    names.reserve(netIds.size());
+    for (int netId : netIds) {
+        if (!netlist.isValidNetId(netId)) {
+            return {};
+        }
+        names.push_back(netlist.getNet(netId).name);
+    }
+    return names;
+}
+
 // 建立 net 類型的 path condition node。
 Netlist::PathNode netNode(const std::string& name) {
     return Netlist::PathNode(Netlist::PathNodeType::Net, name);
@@ -98,6 +111,45 @@ void testBasicQuery(TestReport& report, const Netlist& netlist) {
                  netlist.isBusPort("bus") &&
                  containsString(netlist.getPortBitNames("bus"), "bus[0]"),
                  "basic bus port helpers");
+
+    const std::vector<std::string> expectedBusBits = {"bus[1]", "bus[0]"};
+    Netlist::BasicQuery portInfoQuery;
+    portInfoQuery.type = Netlist::BasicQueryType::PortInfo;
+    portInfoQuery.name = "bus";
+    const Netlist::BasicReport portInfo = netlist.runBasicQuery(portInfoQuery);
+    report.check(portInfo.ok && portInfo.exists && portInfo.isBus &&
+                     portInfo.isPrimaryInput && !portInfo.isPrimaryOutput &&
+                     portInfo.portWidth == 2 &&
+                     portInfo.netNames == expectedBusBits &&
+                     netIdsToNames(netlist, portInfo.netIds) == expectedBusBits,
+                 "runBasicQuery PortInfo preserves declaration-order name/id alignment");
+
+    portInfoQuery.includeIds = false;
+    const Netlist::BasicReport portNamesOnly = netlist.runBasicQuery(portInfoQuery);
+    report.check(portNamesOnly.netIds.empty() &&
+                     portNamesOnly.netNames == expectedBusBits,
+                 "runBasicQuery PortInfo names-only ordering");
+
+    portInfoQuery.includeIds = true;
+    portInfoQuery.includeNames = false;
+    const Netlist::BasicReport portIdsOnly = netlist.runBasicQuery(portInfoQuery);
+    report.check(portIdsOnly.netNames.empty() && portIdsOnly.portNames.empty() &&
+                     netIdsToNames(netlist, portIdsOnly.netIds) == expectedBusBits,
+                 "runBasicQuery PortInfo ids-only ordering");
+
+    portInfoQuery.includeIds = false;
+    const Netlist::BasicReport portMetadataOnly = netlist.runBasicQuery(portInfoQuery);
+    report.check(portMetadataOnly.ok && portMetadataOnly.netIds.empty() &&
+                     portMetadataOnly.netNames.empty() &&
+                     portMetadataOnly.portNames.empty() &&
+                     portMetadataOnly.isPrimaryInput,
+                 "runBasicQuery PortInfo metadata-only query");
+
+    portInfoQuery.name = "missing_port";
+    const Netlist::BasicReport missingPort = netlist.runBasicQuery(portInfoQuery);
+    report.check(!missingPort.ok && !missingPort.exists &&
+                     missingPort.portWidth == -1,
+                 "runBasicQuery PortInfo missing port");
 
     Netlist::BasicQuery summaryQuery;
     summaryQuery.type = Netlist::BasicQueryType::Summary;

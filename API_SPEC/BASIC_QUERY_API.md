@@ -379,13 +379,15 @@ BasicReport runBasicQuery(const BasicQuery& query) const;
 | `ListCombinationalGates` | 列出所有組合邏輯 gates | `gateIds`、`gateNames` |
 | `GateInfo` | 查單一 gate | `objectId`、`typeName`、predicate flags、`formattedInfo` |
 | `NetInfo` | 查單一 net | `objectId`、`typeName`、PI/PO/constant flags |
-| `PortInfo` | 查單一 port | `portWidth`、`isBus`、bit net names |
+| `PortInfo` | 查單一 port | `portWidth`、`isBus`、direction flags、bit net names/IDs |
 | `CountByGateType` | 統計 gate type | `gateTypeCounts`、`gateCount` |
 | `GatesByType` | 列出指定 gate type | `gateIds`、`gateNames` |
 | `GatesWithConstantInput` | 找 constant input gates | `gateIds`、`gateNames`、`gateCount` |
 | `StructuralIssues` | 回報結構問題 | `undrivenNets`、`noLoadNets`、`floatingNets`、`unconnectedGates` |
 
 `ports` 是依 declaration 順序排列的 `PortSummary`，每筆包含 `name`、`width`、`msb`、`lsb`、`isBus`、`isInput`、`isOutput`。因此「列出所有 PI/PO 並附 bit width」只需要一次 `ListPrimaryInputs` 或 `ListPrimaryOutputs`。
+
+`PortInfo` 的 `netNames` 與 `netIds` 都依該 port 的 Verilog declaration order 回傳，且兩者使用相同的 active-net filter，因此同一個 index 必定描述同一個 bit。`includeIds` / `includeNames` 只控制欄位是否填入，不會改變另一個欄位的排序。方向由 `isPrimaryInput` / `isPrimaryOutput` 表示。
 
 `Summary`、`ListGates`、`ListNets`、`CountByGateType` 與 structural issue helpers 都以 current active design 為準。`GateInfo` / `NetInfo` 查詢已移除的 tombstone 會回報 not found，不會將 `UNKNOWN` 暴露成題目中的 gate type。
 

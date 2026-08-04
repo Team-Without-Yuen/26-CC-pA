@@ -587,40 +587,52 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
         return report;
     }
 
-    case BasicQueryType::PortInfo:
+    case BasicQueryType::PortInfo: {
         report.objectName = query.name;
-        report.portWidth = getPortWidth(query.name);
-        if (report.portWidth < 0) {
+        const Port* port = nullptr;
+        for (const Port& input : primaryInputs) {
+            if (input.name == query.name) {
+                port = &input;
+                report.isPrimaryInput = true;
+                break;
+            }
+        }
+        for (const Port& output : primaryOutputs) {
+            if (output.name == query.name) {
+                if (port == nullptr) {
+                    port = &output;
+                }
+                report.isPrimaryOutput = true;
+                break;
+            }
+        }
+        if (port == nullptr) {
             report.message = "Port not found: " + query.name;
             return report;
         }
+
         report.ok = true;
         report.exists = true;
         report.message = "Port info";
-        report.isBus = isBusPort(query.name);
+        report.portWidth = static_cast<int>(port->netIds.size());
+        report.isBus = port->isBus();
         report.typeName = report.isBus ? "BUS_PORT" : "SCALAR_PORT";
-        // [Bug #1] Fix: compute netIds first, then derive netNames from netIds so both
-        // use the same bit ordering.
-        // Before: netIds used expandNetToBits() (ascending bit-index order, lsb→msb),
-        //         netNames used getPortBitNames() (port-declaration order, msb→lsb).
-        //         For "input [1:0] bus": netIds[0]=bus[0] but netNames[0]="bus[1]" → mismatch.
-        if (query.includeIds) {
-            report.netIds = expandNetToBits(query.name);
-        }
         if (query.includeNames) {
             report.portNames.push_back(query.name);
-            if (query.includeIds && !report.netIds.empty()) {
-                // Derive names from netIds to guarantee index alignment.
-                for (int netId : report.netIds) {
-                    if (isValidNetId(netId))
-                        report.netNames.push_back(nets[netId].name);
-                }
-            } else {
-                // ids not requested: fall back to port-declaration order.
-                report.netNames = getPortBitNames(query.name);
+        }
+        for (int netId : port->netIds) {
+            if (!isActiveNet(*this, netId)) {
+                continue;
+            }
+            if (query.includeIds) {
+                report.netIds.push_back(netId);
+            }
+            if (query.includeNames) {
+                report.netNames.push_back(nets[netId].name);
             }
         }
         return report;
+    }
 
     case BasicQueryType::CountByGateType:
         report.ok = true;

@@ -68,7 +68,7 @@ if (report.ok) {
 | `ListCombinationalGates` | 列出所有組合邏輯 gate | 無 | `gateIds`, `gateNames`, `gateCount` |
 | `GateInfo` | 查單一 gate 基本資訊 | `name` = gate instance name | `exists`, `objectId`, `objectName`, `typeName`, `isDff`, `isCombinational`, `formattedInfo` |
 | `NetInfo` | 查單一 net 基本資訊 | `name` = net name | `exists`, `objectId`, `objectName`, `typeName`, `isPrimaryInput`, `isPrimaryOutput`, `isConstant` |
-| `PortInfo` | 查單一 PI/PO port | `name` = port name | `exists`, `objectName`, `portWidth`, `isBus`, `netNames`, `netIds` |
+| `PortInfo` | 查單一 PI/PO port | `name` = port name | `exists`, `objectName`, `portWidth`, `isBus`, `isPrimaryInput`, `isPrimaryOutput`, `netNames`, `netIds` |
 | `CountByGateType` | 統計 gate type 數量 | `gateType` 可選 | `gateTypeCounts`, `gateCount`, `typeName` |
 | `GatesByType` | 列出指定 gate type | `gateType` | `gateIds`, `gateNames`, `gateCount`, `typeName` |
 | `GatesWithConstantInput` | 找 constant input gates | `gateType` 可選，`constValue` 可選 | `gateIds`, `gateNames`, `gateCount`, `typeName` |
@@ -139,8 +139,8 @@ if (report.ok) {
 | `formattedInfo` | 人類可讀的格式化資訊，目前主要由 `GateInfo` 使用 |
 | `isDff` | gate 是否 DFF |
 | `isCombinational` | gate 是否 combinational gate |
-| `isPrimaryInput` | net 是否 PI |
-| `isPrimaryOutput` | net 是否 PO |
+| `isPrimaryInput` | `NetInfo` 的 net 是否 PI，或 `PortInfo` 的 port 是否 input |
+| `isPrimaryOutput` | `NetInfo` 的 net 是否 PO，或 `PortInfo` 的 port 是否 output |
 | `isConstant` | net 是否 constant |
 | `isBus` | port 是否 bus |
 | `portWidth` | port bit width |
@@ -317,7 +317,7 @@ constant net 可能是 parser 內部建立的 net。
 用途：
 
 ```text
-查 PI/PO port 是否存在、是否 bus、bit width、展開後的 bit net names。
+查 PI/PO port 是否存在、方向、是否 bus、bit width，以及展開後的 bit net names/IDs。
 ```
 
 寫法：
@@ -336,10 +336,13 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 |---|---|
 | port 是否存在 | `report.ok && report.exists` |
 | port name | `report.objectName` |
+| port 是否 input/output | `report.isPrimaryInput`, `report.isPrimaryOutput` |
 | 是否 bus | `report.isBus` |
 | bit width | `report.portWidth` |
 | bit net names | `report.netNames` |
 | bit net IDs | `report.netIds` |
+
+`netNames` 與 `netIds` 都依 Verilog port declaration order 排列，且相同 index 對應同一個 bit。例如 `input [3:0] data_in` 會依序回傳 `data_in[3]` 到 `data_in[0]`。關閉 `includeIds` 或 `includeNames` 只會讓對應 vector 保持空白，不會改變另一個 vector 的順序。
 
 ---
 
