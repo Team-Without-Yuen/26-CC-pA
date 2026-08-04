@@ -184,78 +184,98 @@ NetlistEditReport Netlist::trimDeadLogicWithReport() {
 //  找出所有 NOT → NOT 的連續對，把兩個 NOT 刪掉，直接把前面的 net 接到後面
 //  例如：A → NOT1 → B → NOT2 → C  →  A → C
 //  回傳移除的 inverter pair 數量
+//
+//  用 worklist 取代「每 collapse 一對就整個重掃全部 gate」的作法：後者對 K 個
+//  可 collapse 的 pair 要付 O(gates 數 * K)，在 SafeCleanupFixpoint /
+//  LocalSimplificationFixpoint 的巢狀 fixpoint 迴圈裡會被重複放大，對大電路
+//  是明確的 timeout 風險。一次 collapse 唯一可能新增的候選，是 inNet 的
+//  driver（若也是 NOT）：collapse 後 inNet 的 loadGateIds 少了 g1、多了原本
+//  outNet 的 loads，driver 的 fanout 形狀因此改變，才需要重新檢查。
 // ─────────────────────────────────────────────────────────────────────────────
 int Netlist::collapseBackToBackInverters() {
     int collapsed = 0;
-    bool changed = true;
 
-    while (changed) {
-        changed = false;
+    std::queue<int> worklist;
+    std::unordered_set<int> queued;
+    auto enqueue = [&](int gateId) {
+        if (gateId < 0 || gateId >= (int)gates.size()) return;
+        if (gates[gateId].type != GateType::NOT) return;
+        if (queued.insert(gateId).second) worklist.push(gateId);
+    };
 
-        for (int i = 0; i < (int)gates.size(); i++) {
-            Gate& g1 = gates[i];
+    for (int i = 0; i < (int)gates.size(); i++) enqueue(i);
 
-            if (g1.type != GateType::NOT) continue;
-            if (g1.outputNetId < 0) continue;
-            if (g1.inputNetIds.empty()) continue;
+    while (!worklist.empty()) {
+        const int i = worklist.front();
+        worklist.pop();
+        queued.erase(i);
 
-            Net& midNet = nets[g1.outputNetId];
-            if (midNet.loadGateIds.size() != 1) continue;
-            if (midNet.isPO) continue;
+        Gate& g1 = gates[i];
 
-            int g2id = midNet.loadGateIds[0];
-            if (g2id < 0) continue;
+        if (g1.type != GateType::NOT) continue;
+        if (g1.outputNetId < 0) continue;
+        if (g1.inputNetIds.empty() || g1.inputNetIds[0] < 0) continue;
 
-            Gate& g2 = gates[g2id];
-            if (g2.type != GateType::NOT) continue;
+        Net& midNet = nets[g1.outputNetId];
+        if (midNet.loadGateIds.size() != 1) continue;
+        if (midNet.isPO) continue;
 
-            if (g2.outputNetId < 0) continue;
-            if (nets[g2.outputNetId].isPO) continue;
+        int g2id = midNet.loadGateIds[0];
+        if (g2id < 0) continue;
 
-            int inNetId  = g1.inputNetIds[0];
-            int outNetId = g2.outputNetId;
+        Gate& g2 = gates[g2id];
+        if (g2.type != GateType::NOT) continue;
 
-            Net& inNet = nets[inNetId];
-            Net& outNet = nets[outNetId];
+        if (g2.outputNetId < 0) continue;
+        if (nets[g2.outputNetId].isPO) continue;
 
-            // redirect fanout
-            for (int loadGateId : outNet.loadGateIds) {
-                Gate& lg = gates[loadGateId];
+        int inNetId  = g1.inputNetIds[0];
+        int outNetId = g2.outputNetId;
 
-                for (int& pin : lg.inputNetIds) {
-                    if (pin == outNetId) pin = inNetId;
-                }
+        Net& inNet = nets[inNetId];
+        Net& outNet = nets[outNetId];
+        const int inNetDriverGateId = inNet.driverGateId;
 
-                inNet.loadGateIds.push_back(loadGateId);
+        // redirect fanout
+        for (int loadGateId : outNet.loadGateIds) {
+            Gate& lg = gates[loadGateId];
+
+            for (int& pin : lg.inputNetIds) {
+                if (pin == outNetId) pin = inNetId;
             }
 
-            // remove g1 from inNet fanout
-            inNet.loadGateIds.erase(
-                std::remove(inNet.loadGateIds.begin(),
-                            inNet.loadGateIds.end(),
-                            g1.id),
-                inNet.loadGateIds.end()
-            );
-
-            // mark dead (NO structural cleanup here)
-            g1.type = GateType::UNKNOWN;
-            g1.inputNetIds.clear();
-            g1.outputNetId = -1;
-
-            g2.type = GateType::UNKNOWN;
-            g2.inputNetIds.clear();
-            g2.outputNetId = -1;
-
-            midNet.loadGateIds.clear();
-            midNet.driverGateId = -1;
-
-            outNet.driverGateId = -1;
-            outNet.loadGateIds.clear();
-
-            collapsed++;
-            changed = true;
-            break;
+            inNet.loadGateIds.push_back(loadGateId);
         }
+
+        // remove g1 from inNet fanout
+        inNet.loadGateIds.erase(
+            std::remove(inNet.loadGateIds.begin(),
+                        inNet.loadGateIds.end(),
+                        g1.id),
+            inNet.loadGateIds.end()
+        );
+
+        // mark dead (NO structural cleanup here)
+        g1.type = GateType::UNKNOWN;
+        g1.inputNetIds.clear();
+        g1.outputNetId = -1;
+
+        g2.type = GateType::UNKNOWN;
+        g2.inputNetIds.clear();
+        g2.outputNetId = -1;
+
+        midNet.loadGateIds.clear();
+        midNet.driverGateId = -1;
+
+        outNet.driverGateId = -1;
+        outNet.loadGateIds.clear();
+
+        collapsed++;
+
+        // inNet's load list just changed shape; if its driver is itself a NOT
+        // gate it may now newly qualify as the next g1 (e.g. a NOT chain
+        // collapsing inward one pair at a time).
+        enqueue(inNetDriverGateId);
     }
     return collapsed;
 }
@@ -813,13 +833,31 @@ bool Netlist::isConst1Net(int netId) const {
     return nets[netId].isConst && (nets[netId].constVal == 1);
 }
 
+// Every constant net in this codebase is created through addNet("1'b0"/"1'b1"),
+// so the canonical net is normally reachable in O(1) through the name index.
+// simplifyGateWithConstant()/simplifySameInputGate() call these twice per
+// candidate gate, so an O(net count) scan here turns SimplifyConstants /
+// LocalSimplificationFixpoint / SafeCleanupFixpoint into an O(candidates *
+// net count) pass on large designs. Fall back to the linear scan only if the
+// canonical name was ever renamed away (e.g. via RenameNet), so correctness
+// never depends on the naming convention holding.
 int Netlist::getConst0NetId() const {
+    const int fastId = getNetId("1'b0");
+    if (fastId >= 0 && fastId < (int)nets.size() &&
+        nets[fastId].isConst && nets[fastId].constVal == 0) {
+        return fastId;
+    }
     for (int i = 0; i < (int)nets.size(); i++)
         if (nets[i].isConst && nets[i].constVal == 0) return i;
     return -1;
 }
 
 int Netlist::getConst1NetId() const {
+    const int fastId = getNetId("1'b1");
+    if (fastId >= 0 && fastId < (int)nets.size() &&
+        nets[fastId].isConst && nets[fastId].constVal == 1) {
+        return fastId;
+    }
     for (int i = 0; i < (int)nets.size(); i++)
         if (nets[i].isConst && nets[i].constVal == 1) return i;
     return -1;

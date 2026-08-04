@@ -18,9 +18,18 @@ struct FanoutSinkPin {
 
 // 收集指定 net 實際驅動的每一個 gate input pin。
 // 這裡的單位是 pin，不是 gate；同一顆 DFF 的 RN/SN 都接同一條 net 時會回傳兩筆。
-std::vector<FanoutSinkPin> collectFanoutSinkPins(const std::vector<Gate>& gates, int netId) {
+// 候選 gate 來自 net.loadGateIds（已由 connect/disconnect 維護），而不是整個
+// gates 陣列；否則每呼叫一次就是 O(總 gate 數)，在 fanout buffer insertion 的
+// 外層迴圈中對每一條 net 都會重付一次，整體會退化成 O(net 數 * gate 數)。
+std::vector<FanoutSinkPin> collectFanoutSinkPins(const std::vector<Gate>& gates,
+                                                  const std::vector<Net>& nets,
+                                                  int netId) {
     std::vector<FanoutSinkPin> sinks;
-    for (const Gate& gate : gates) {
+    if (netId < 0 || netId >= (int)nets.size()) return sinks;
+
+    for (int gateId : nets[netId].loadGateIds) {
+        if (gateId < 0 || gateId >= (int)gates.size()) continue;
+        const Gate& gate = gates[gateId];
         for (int pinIndex = 0; pinIndex < (int)gate.inputNetIds.size(); ++pinIndex) {
             if (gate.inputNetIds[pinIndex] == netId) {
                 sinks.push_back({gate.id, pinIndex});
@@ -38,7 +47,7 @@ int getQaFanoutLoadCount(const std::vector<Gate>& gates,
     if (netId < 0 || netId >= (int)nets.size()) {
         return 0;
     }
-    int total = (int)collectFanoutSinkPins(gates, netId).size();
+    int total = (int)collectFanoutSinkPins(gates, nets, netId).size();
     if (nets[netId].isPO) {
         ++total;
     }
@@ -528,7 +537,7 @@ BufferInsertionReport Netlist::insertBuffersForFanout(int maxFanout) {
             // 只保留能安全留在 source net 上的 sink pins。
             // 若 source net 是 PO，要額外替 PO connection 保留一個 load 名額。
             int keepCount = computeKeepSinkCount(maxFanout, nets[netIdx]);
-            std::vector<FanoutSinkPin> sinkPins = collectFanoutSinkPins(gates, netIdx);
+            std::vector<FanoutSinkPin> sinkPins = collectFanoutSinkPins(gates, nets, netIdx);
 
             // 把超載的負載擷取出來
             std::vector<FanoutSinkPin> keptSinks(
@@ -676,7 +685,7 @@ BufferInsertionReport Netlist::insertBuffersForSpecificNet(const std::string& wi
             // 留下可安全保留在 source net 上的 sink pins。
             // 剩下的 1 個名額留給即將接上來的 Buffer；若 source net 是 PO，也要預留 PO 名額。
             int keepCount = computeKeepSinkCount(maxFanout, nets[netIdx]);
-            std::vector<FanoutSinkPin> sinkPins = collectFanoutSinkPins(gates, netIdx);
+            std::vector<FanoutSinkPin> sinkPins = collectFanoutSinkPins(gates, nets, netIdx);
 
             std::vector<FanoutSinkPin> keptSinks(
                 sinkPins.begin(),
@@ -879,7 +888,7 @@ BufferInsertionReport Netlist::insertBuffersForDffControl(int maxFanout, bool pr
         while (getQaFanoutLoadCount(gates, nets, netIdx) > maxFanout) {
             
             int keepCount = computeKeepSinkCount(maxFanout, nets[netIdx]);
-            std::vector<FanoutSinkPin> sinkPins = collectFanoutSinkPins(gates, netIdx);
+            std::vector<FanoutSinkPin> sinkPins = collectFanoutSinkPins(gates, nets, netIdx);
 
             std::vector<FanoutSinkPin> keptSinks(
                 sinkPins.begin(),
@@ -974,7 +983,7 @@ BufferInsertionReport Netlist::insertBuffersOnEachLoad(const std::string& wireNa
         if (net.isConst) continue; 
 
         // 取得該條線的所有 sink pins；同一顆 gate 多個 input pin 接同一條 net 時會保留多筆。
-        std::vector<FanoutSinkPin> sinkPins = collectFanoutSinkPins(gates, netId);
+        std::vector<FanoutSinkPin> sinkPins = collectFanoutSinkPins(gates, nets, netId);
 
         // 清空原本 net 的 load 名單，準備全部換成 Buffer
         nets[netId].loadGateIds.clear();

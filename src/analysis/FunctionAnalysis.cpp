@@ -1339,16 +1339,30 @@ Netlist::FunctionReport Netlist::runFunctionQuery(const FunctionQuery& query) co
             return report;
         }
 
+        {
+        bool expressionTruncated = false;
         report.ok = true;
         report.exists = true;
         report.netIdA = getNetId(query.netNameA);
-        report.expression = getBooleanExpression(query.netNameA);
+        report.expression = getBooleanExpression(query.netNameA, &expressionTruncated);
         report.expressionLength = report.expression.size();
         report.maxExpressionDepth = -1;
-        report.expressionDepthLimited = false;
-        report.supportPrimaryInputs = getPrimaryInputsOfNet(query.netNameA);
-        report.message = "Boolean expression generated";
+        // getBooleanExpression() 內部仍有一個 depth/size 安全上限（見
+        // Booleanexpression.cpp），避免 reconvergent fanout 電路讓字串長度指數
+        // 爆炸。expressionTruncated 反映這次是否真的觸發了該上限；如實回報，
+        // 不能一律回 false，否則呼叫端會誤以為拿到的是完整、忠實的展開。
+        report.expressionDepthLimited = expressionTruncated;
+        const PrimaryInputSupport support = getPrimaryInputSupportBreakdown(query.netNameA);
+        report.supportPrimaryInputs = support.all;
+        report.supportRealPrimaryInputs = support.realPrimaryInputs;
+        report.supportDffPseudoInputs = support.dffPseudoInputs;
+        report.supportUndrivenLeaves = support.undrivenLeaves;
+        report.message = expressionTruncated
+            ? "Boolean expression generated, but an internal expansion safety limit was reached; "
+              "some deep sub-expressions are shown as net names instead of being fully expanded."
+            : "Boolean expression generated";
         report.status = "BOOLEAN_EXPRESSION";
+        }
         return report;
 
     case FunctionQueryType::SimplifiedBooleanExpression:
@@ -1363,6 +1377,7 @@ Netlist::FunctionReport Netlist::runFunctionQuery(const FunctionQuery& query) co
             return report;
         }
 
+        {
         report.ok = true;
         report.exists = true;
         report.netIdA = getNetId(query.netNameA);
@@ -1370,9 +1385,14 @@ Netlist::FunctionReport Netlist::runFunctionQuery(const FunctionQuery& query) co
         report.expressionLength = report.expression.size();
         report.maxExpressionDepth = query.maxExpressionDepth;
         report.expressionDepthLimited = true;
-        report.supportPrimaryInputs = getPrimaryInputsOfNet(query.netNameA);
+        const PrimaryInputSupport support = getPrimaryInputSupportBreakdown(query.netNameA);
+        report.supportPrimaryInputs = support.all;
+        report.supportRealPrimaryInputs = support.realPrimaryInputs;
+        report.supportDffPseudoInputs = support.dffPseudoInputs;
+        report.supportUndrivenLeaves = support.undrivenLeaves;
         report.message = "Depth-limited Boolean expression generated";
         report.status = "SIMPLIFIED_BOOLEAN_EXPRESSION";
+        }
         return report;
 
     case FunctionQueryType::PrimaryInputsOfNet:
@@ -1387,12 +1407,18 @@ Netlist::FunctionReport Netlist::runFunctionQuery(const FunctionQuery& query) co
             return report;
         }
 
+        {
         report.ok = true;
         report.exists = true;
         report.netIdA = getNetId(query.netNameA);
-        report.supportPrimaryInputs = getPrimaryInputsOfNet(query.netNameA);
+        const PrimaryInputSupport support = getPrimaryInputSupportBreakdown(query.netNameA);
+        report.supportPrimaryInputs = support.all;
+        report.supportRealPrimaryInputs = support.realPrimaryInputs;
+        report.supportDffPseudoInputs = support.dffPseudoInputs;
+        report.supportUndrivenLeaves = support.undrivenLeaves;
         report.message = "Primary input support collected";
         report.status = "PRIMARY_INPUT_SUPPORT";
+        }
         return report;
     }
 
