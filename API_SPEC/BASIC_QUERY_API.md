@@ -387,6 +387,8 @@ BasicReport runBasicQuery(const BasicQuery& query) const;
 
 `ports` 是依 declaration 順序排列的 `PortSummary`，每筆包含 `name`、`width`、`msb`、`lsb`、`isBus`、`isInput`、`isOutput`。因此「列出所有 PI/PO 並附 bit width」只需要一次 `ListPrimaryInputs` 或 `ListPrimaryOutputs`。
 
+`ListPrimaryInputs` / `ListPrimaryOutputs` 會固定填入 structured `ports`；`includeNames=false` 只省略重複的 flat `portNames`，不會移除 width、range 與 direction metadata。
+
 `PortInfo` 的 `netNames` 與 `netIds` 都依該 port 的 Verilog declaration order 回傳，且兩者使用相同的 active-net filter，因此同一個 index 必定描述同一個 bit。`includeIds` / `includeNames` 只控制欄位是否填入，不會改變另一個欄位的排序。方向由 `isPrimaryInput` / `isPrimaryOutput` 表示。
 
 `Summary`、`ListGates`、`ListNets`、`CountByGateType` 與 structural issue helpers 都以 current active design 為準。`GateInfo` / `NetInfo` 查詢已移除的 tombstone 會回報 not found，不會將 `UNKNOWN` 暴露成題目中的 gate type。

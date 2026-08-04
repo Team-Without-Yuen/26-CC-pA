@@ -46,7 +46,7 @@ struct BasicQuery {
     int constValue = -1;                    // constant input filter：-1 不限制，0 表示 1'b0，1 表示 1'b1
     int inputCount = -1;                    // gate input-count filter：-1 表示不限制
     bool includeIds = true;                 // 回傳 report 時是否填 gateIds/netIds
-    bool includeNames = true;               // 回傳 report 時是否填 gateNames/netNames/portNames
+    bool includeNames = true;               // 是否填 gateNames/netNames/portNames；不控制 structured ports
 };
 
 struct PortSummary {
@@ -77,8 +77,8 @@ struct BasicReport {
     bool exists = false;                    // 指定 name 是否存在
     bool isDff = false;                     // GateInfo 使用
     bool isCombinational = false;           // GateInfo 使用
-    bool isPrimaryInput = false;            // NetInfo 使用
-    bool isPrimaryOutput = false;           // NetInfo 使用
+    bool isPrimaryInput = false;            // NetInfo/PortInfo 使用
+    bool isPrimaryOutput = false;           // NetInfo/PortInfo 使用
     bool isConstant = false;                // NetInfo 使用
     bool isBus = false;                     // PortInfo 使用
     int portWidth = -1;                     // PortInfo 使用

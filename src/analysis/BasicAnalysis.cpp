@@ -458,16 +458,16 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
         report.primaryInputCount = getPrimaryInputs().size();
         if (query.includeNames) {
             report.portNames = getPrimaryInputNames();
-            for (const Port& port : primaryInputs) {
-                PortSummary summary;
-                summary.name = port.name;
-                summary.width = static_cast<int>(port.netIds.size());
-                summary.msb = port.msb;
-                summary.lsb = port.lsb;
-                summary.isBus = port.isBus();
-                summary.isInput = true;
-                report.ports.push_back(summary);
-            }
+        }
+        for (const Port& port : primaryInputs) {
+            PortSummary summary;
+            summary.name = port.name;
+            summary.width = static_cast<int>(port.netIds.size());
+            summary.msb = port.msb;
+            summary.lsb = port.lsb;
+            summary.isBus = port.isBus();
+            summary.isInput = true;
+            report.ports.push_back(summary);
         }
         return report;
 
@@ -477,16 +477,16 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
         report.primaryOutputCount = getPrimaryOutputs().size();
         if (query.includeNames) {
             report.portNames = getPrimaryOutputNames();
-            for (const Port& port : primaryOutputs) {
-                PortSummary summary;
-                summary.name = port.name;
-                summary.width = static_cast<int>(port.netIds.size());
-                summary.msb = port.msb;
-                summary.lsb = port.lsb;
-                summary.isBus = port.isBus();
-                summary.isOutput = true;
-                report.ports.push_back(summary);
-            }
+        }
+        for (const Port& port : primaryOutputs) {
+            PortSummary summary;
+            summary.name = port.name;
+            summary.width = static_cast<int>(port.netIds.size());
+            summary.msb = port.msb;
+            summary.lsb = port.lsb;
+            summary.isBus = port.isBus();
+            summary.isOutput = true;
+            report.ports.push_back(summary);
         }
         return report;
 

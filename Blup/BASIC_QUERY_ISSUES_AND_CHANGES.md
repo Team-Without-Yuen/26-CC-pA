@@ -17,6 +17,7 @@
 |---|---|---:|---|---|---|
 | BASIC-000 | merge 後 baseline 與 Jul performance rewrite | P0 | Verified | 不需修改 | source build；test14/15/16/34 通過 |
 | BASIC-001 | PortInfo bit ordering 隨 include flags 改變，且缺少 direction | P1 | Verified | 是 | 5 個 direct API cases、CLI smoke 與既有 regressions 通過 |
+| BASIC-002 | PI/PO structured metadata 被錯綁到 `includeNames` | P1 | Verified | 是 | basic-only 22/22；test15 12/12 |
 
 ## 3. 問題與修改紀錄
 
@@ -98,3 +99,32 @@ binary 為準。
 | PortInfo CLI smoke | `[3:0] data_in` 依序輸出 `data_in[3]`、`[2]`、`[1]`、`[0]` |
 
 CLI printer 的 `id: -1` 與 direction 顯示仍屬 tools layer，已另外登記為 `BASIC-TOOLS-001`。
+
+## BASIC-002：PI/PO structured metadata 與 includeNames 耦合
+
+- 狀態：`Verified`
+- 優先級：P1
+- 類型：Report Contract / Port Metadata
+
+### 問題
+
+`BasicQuery::includeNames` 的 public contract 只控制 `gateNames`、`netNames` 與 `portNames`，但
+`ListPrimaryInputs` / `ListPrimaryOutputs` 原本把 structured `ports` 也放在同一個條件內。
+因此呼叫端只要關閉重複的 flat names，就會連 width、range、bus 與 direction 一起失去。
+
+### 修改內容
+
+| 檔案 | 修改 |
+|---|---|
+| `src/analysis/BasicAnalysis.cpp` | PI/PO queries 固定建立 declaration-order `PortSummary`；只有 `portNames` 受 `includeNames` 控制。 |
+| `include/core/NetlistQueries.h` | 明定 `includeNames` 不控制 structured `ports`，並補正 PortInfo direction flag 註解。 |
+| `mini test/test1/tester.cpp` | 新增 PI/PO `includeNames=false` metadata-only regression。 |
+| `API_SPEC/BASIC_QUERY_API.md`、`API_SPEC/BASIC_QUERY_USAGE.md` | 同步 structured metadata contract。 |
+
+### 驗證
+
+| 驗證 | 結果 |
+|---|---|
+| `mini test/test1/tester.exe ... --basic-only` | 22/22；PI/PO metadata-only cases 通過 |
+| `TOOLS_SPEC/Makefile` UCRT64 source build | 成功 |
+| `mini test/test15` | 12/12；既有 port CLI 行為未退步 |

@@ -87,7 +87,7 @@ if (report.ok) {
 | `gateType` | `GateType` | `UNKNOWN` | `CountByGateType`, `GatesByType`, `GatesWithConstantInput` 使用 |
 | `constValue` | `int` | `-1` | `GatesWithConstantInput` 使用；`-1` 不限制、`0` 找 `1'b0`、`1` 找 `1'b1` |
 | `includeIds` | `bool` | `true` | 是否填入 `gateIds` / `netIds` |
-| `includeNames` | `bool` | `true` | 是否填入 `gateNames` / `netNames` / `portNames` |
+| `includeNames` | `bool` | `true` | 是否填入 `gateNames` / `netNames` / `portNames`；不控制 structured `ports` |
 
 `gateType` 的常見值：
 
@@ -225,6 +225,8 @@ query.type = Netlist::BasicQueryType::ListDffs;
 Netlist::BasicReport report = netlist.runBasicQuery(query);
 std::vector<std::string> dffNames = report.gateNames;
 ```
+
+`ListPrimaryInputs` / `ListPrimaryOutputs` 的 `ports` 一律包含 declaration-order metadata。若設定 `includeNames=false`，只有重複的 `portNames` 會省略，`ports` 仍可用來取得各 port 的 name、width、range 與 direction。
 
 ---
 

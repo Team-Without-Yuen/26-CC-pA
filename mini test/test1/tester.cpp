@@ -151,6 +151,30 @@ void testBasicQuery(TestReport& report, const Netlist& netlist) {
                      missingPort.portWidth == -1,
                  "runBasicQuery PortInfo missing port");
 
+    Netlist::BasicQuery listPortsQuery;
+    listPortsQuery.type = Netlist::BasicQueryType::ListPrimaryInputs;
+    listPortsQuery.includeNames = false;
+    const Netlist::BasicReport inputMetadata = netlist.runBasicQuery(listPortsQuery);
+    const auto busSummary = std::find_if(
+        inputMetadata.ports.begin(), inputMetadata.ports.end(),
+        [](const PortSummary& port) { return port.name == "bus"; });
+    report.check(inputMetadata.ok && inputMetadata.portNames.empty() &&
+                     inputMetadata.ports.size() == inputMetadata.primaryInputCount &&
+                     busSummary != inputMetadata.ports.end() && busSummary->width == 2 &&
+                     busSummary->msb == 1 && busSummary->lsb == 0 &&
+                     busSummary->isBus && busSummary->isInput && !busSummary->isOutput,
+                 "runBasicQuery ListPrimaryInputs preserves structured metadata");
+
+    listPortsQuery.type = Netlist::BasicQueryType::ListPrimaryOutputs;
+    const Netlist::BasicReport outputMetadata = netlist.runBasicQuery(listPortsQuery);
+    report.check(outputMetadata.ok && outputMetadata.portNames.empty() &&
+                     outputMetadata.ports.size() == outputMetadata.primaryOutputCount &&
+                     std::all_of(outputMetadata.ports.begin(), outputMetadata.ports.end(),
+                         [](const PortSummary& port) {
+                             return !port.isInput && port.isOutput;
+                         }),
+                 "runBasicQuery ListPrimaryOutputs preserves structured metadata");
+
     Netlist::BasicQuery summaryQuery;
     summaryQuery.type = Netlist::BasicQueryType::Summary;
     const Netlist::BasicReport summary = netlist.runBasicQuery(summaryQuery);
@@ -1421,10 +1445,11 @@ void testEditApplyFlow(TestReport& report, const Netlist& original) {
 
 } // namespace
 
-// 執行 mini Verilog 整合測試；可用 argv[1] 指定其他 Verilog 檔。
+// 執行 mini Verilog 整合測試；argv[1] 可指定 Verilog，argv[2] 可用 --basic-only。
 int main(int argc, char* argv[]) {
     const std::string verilogPath =
         (argc >= 2) ? argv[1] : "mini test/mini_circuit.v";
+    const bool basicOnly = argc >= 3 && std::string(argv[2]) == "--basic-only";
 
     TestReport report;
     Netlist netlist;
@@ -1436,6 +1461,12 @@ int main(int argc, char* argv[]) {
     }
 
     testBasicQuery(report, netlist);
+    if (basicOnly) {
+        std::cout << "\nSummary: " << report.passed << " passed, "
+                  << report.failed << " failed.\n";
+        return report.failed == 0 ? 0 : 1;
+    }
+
     testDirectConnectivityQuery(report, netlist);
     testFunctionQuery(report, netlist);
     testConeQuery(report, netlist);
