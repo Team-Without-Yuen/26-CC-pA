@@ -96,6 +96,8 @@ struct BasicReport {
     std::vector<std::string> noLoadNets;        // structural issue：無 load 的 nets
     std::vector<std::string> floatingNets;      // structural issue：undriven/no-load union
     std::vector<std::string> unconnectedGates;  // structural issue：有未連接 pin 的 gates
+    std::vector<std::string> floatingPrimaryInputNets;    // PI bit nets with no active load
+    std::vector<std::string> unconnectedPrimaryOutputNets; // PO bit nets with no active driver
 };
 
 // =========================================================================

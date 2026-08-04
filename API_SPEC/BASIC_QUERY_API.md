@@ -302,8 +302,8 @@ std::vector<std::string> getUnconnectedGateNames() const;
 
 | API | 定義 |
 |---|---|
-| `getUndrivenNetNames()` | 非 PI、非 constant，且沒有合法 driver 的 net |
-| `getNoLoadNetNames()` | 非 PO、非 constant，且沒有 load gate 的 net |
+| `getUndrivenNetNames()` | 非 PI、非 constant，且沒有雙向一致 active driver 的 net |
+| `getNoLoadNetNames()` | 非 PO、非 constant，且沒有雙向一致 active load 的 net |
 | `getFloatingNetNames()` | undriven 與 no-load 的 union，不重複 |
 | `getUnconnectedGateNames()` | gate 的 input 或 output 存在非法 / disconnected net ID |
 
@@ -312,6 +312,8 @@ std::vector<std::string> getUnconnectedGateNames() const;
 ```text
 DFF input 若被 disconnect，可能以 -1 留在 inputNetIds 裡。
 因此 getUnconnectedGateNames() 需要把 -1 視為值得回報的結構狀態。
+StructuralIssues 另回傳 floatingPrimaryInputNets 與 unconnectedPrimaryOutputNets，
+兩者都是依 declaration/bit net 順序產生的具名 net，不是 base port name。
 ```
 
 ---
@@ -432,6 +434,8 @@ struct BasicReport {
     std::vector<std::string> noLoadNets;
     std::vector<std::string> floatingNets;
     std::vector<std::string> unconnectedGates;
+    std::vector<std::string> floatingPrimaryInputNets;
+    std::vector<std::string> unconnectedPrimaryOutputNets;
 };
 ```
 

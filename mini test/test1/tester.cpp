@@ -233,6 +233,32 @@ void testBasicQuery(TestReport& report, const Netlist& netlist) {
         netlist.runBasicQuery(constInputQuery);
     report.check(!invalidInputCount.ok && invalidInputCount.gateCount == 0,
                  "runBasicQuery rejects invalid constant-input arity");
+
+    Netlist structuralNetlist;
+    structuralNetlist.addPrimaryInput("used_in");
+    structuralNetlist.addPrimaryInput("floating_in");
+    structuralNetlist.addPrimaryOutput("driven_out");
+    structuralNetlist.addPrimaryOutput("open_out");
+    const int bufferId = structuralNetlist.addGate("g_drive", GateType::BUF);
+    structuralNetlist.connectGateInput(
+        bufferId, structuralNetlist.getNetId("used_in"));
+    structuralNetlist.connectGateOutput(
+        bufferId, structuralNetlist.getNetId("driven_out"));
+
+    Netlist::BasicQuery structuralQuery;
+    structuralQuery.type = Netlist::BasicQueryType::StructuralIssues;
+    const Netlist::BasicReport structural =
+        structuralNetlist.runBasicQuery(structuralQuery);
+    report.check(structural.ok &&
+                     structural.floatingPrimaryInputNets ==
+                         std::vector<std::string>{"floating_in"} &&
+                     structural.unconnectedPrimaryOutputNets ==
+                         std::vector<std::string>{"open_out"} &&
+                     containsString(structural.noLoadNets, "floating_in") &&
+                     containsString(structural.undrivenNets, "open_out") &&
+                     containsString(structural.floatingNets, "floating_in") &&
+                     containsString(structural.floatingNets, "open_out"),
+                 "runBasicQuery classifies floating PI and unconnected PO");
 }
 
 // 測試 Direct Connectivity Query：driver、loads、gate input/output、fanin/fanout。

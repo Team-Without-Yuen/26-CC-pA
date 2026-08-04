@@ -165,6 +165,8 @@ if (report.ok) {
 | `noLoadNets` | 非 PO、非 constant，且沒有 load gate 的 nets |
 | `floatingNets` | `undrivenNets` 和 `noLoadNets` 的 union |
 | `unconnectedGates` | input 或 output 有無效 / unconnected net ID 的 gates |
+| `floatingPrimaryInputNets` | 沒有雙向一致 active load 的 PI bit nets |
+| `unconnectedPrimaryOutputNets` | 沒有雙向一致 active driver 的 PO bit nets |
 
 ---
 
@@ -465,15 +467,19 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 | 無 load nets | `report.noLoadNets` |
 | floating nets | `report.floatingNets` |
 | 有 unconnected pin 的 gates | `report.unconnectedGates` |
+| floating primary-input bit nets | `report.floatingPrimaryInputNets` |
+| unconnected primary-output bit nets | `report.unconnectedPrimaryOutputNets` |
 
 目前定義：
 
 | 類型 | 定義 |
 |---|---|
-| undriven net | 非 PI、非 constant，且沒有合法 driver |
-| no-load net | 非 PO、非 constant，且沒有 load gate |
+| undriven net | 非 PI、非 constant，且沒有雙向一致 active driver |
+| no-load net | 非 PO、非 constant，且沒有雙向一致 active load |
 | floating net | undriven 與 no-load 的 union |
 | unconnected gate | input 或 output 存在無效 / unconnected net ID |
+
+PI/PO 專用欄位回傳 bit-net names。例如未驅動的 `output [1:0] y` 會回傳 `y[1]`、`y[0]`，不會只回傳 base port name `y`；因此可直接用 vector size 回答 signal 數量。
 
 ---
 

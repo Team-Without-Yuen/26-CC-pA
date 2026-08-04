@@ -47,6 +47,28 @@ bool isActiveNet(const Netlist& netlist, int netId) {
     return netlist.isValidNetId(netId) && !netlist.getNet(netId).isRemoved;
 }
 
+bool hasConsistentActiveDriver(const Netlist& netlist, const Net& net) {
+    if (!isActiveGate(netlist, net.driverGateId)) {
+        return false;
+    }
+    return netlist.getGate(net.driverGateId).outputNetId == net.id;
+}
+
+bool hasConsistentActiveLoad(const Netlist& netlist, const Net& net) {
+    for (int loadGateId : net.loadGateIds) {
+        if (!isActiveGate(netlist, loadGateId)) {
+            continue;
+        }
+        const Gate& loadGate = netlist.getGate(loadGateId);
+        for (int inputNetId : loadGate.inputNetIds) {
+            if (inputNetId == net.id) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 size_t getActiveGateCount(const Netlist& netlist) {
     size_t count = 0;
     for (size_t i = 0; i < netlist.getGateCount(); ++i) {
@@ -211,7 +233,7 @@ std::vector<std::string> Netlist::getUndrivenNetNames() const {
         if (net.isRemoved || net.isPI || net.isConst) {
             continue;
         }
-        if (!isActiveGate(*this, net.driverGateId)) {
+        if (!hasConsistentActiveDriver(*this, net)) {
             names.push_back(net.name);
         }
     }
@@ -225,14 +247,7 @@ std::vector<std::string> Netlist::getNoLoadNetNames() const {
         if (net.isRemoved || net.isPO || net.isConst) {
             continue;
         }
-        bool hasActiveLoad = false;
-        for (int loadGateId : net.loadGateIds) {
-            if (isActiveGate(*this, loadGateId)) {
-                hasActiveLoad = true;
-                break;
-            }
-        }
-        if (!hasActiveLoad) {
+        if (!hasConsistentActiveLoad(*this, net)) {
             names.push_back(net.name);
         }
     }
@@ -700,6 +715,18 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
         report.noLoadNets = getNoLoadNetNames();
         report.floatingNets = getFloatingNetNames();
         report.unconnectedGates = getUnconnectedGateNames();
+        for (const std::string& netName : report.noLoadNets) {
+            const int netId = getNetId(netName);
+            if (isActiveNet(*this, netId) && isPrimaryInputNet(netId)) {
+                report.floatingPrimaryInputNets.push_back(netName);
+            }
+        }
+        for (const std::string& netName : report.undrivenNets) {
+            const int netId = getNetId(netName);
+            if (isActiveNet(*this, netId) && isPrimaryOutputNet(netId)) {
+                report.unconnectedPrimaryOutputNets.push_back(netName);
+            }
+        }
         return report;
     }
 

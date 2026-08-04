@@ -19,6 +19,7 @@
 | BASIC-001 | PortInfo bit ordering 隨 include flags 改變，且缺少 direction | P1 | Verified | 是 | 5 個 direct API cases、CLI smoke 與既有 regressions 通過 |
 | BASIC-002 | PI/PO structured metadata 被錯綁到 `includeNames` | P1 | Verified | 是 | basic-only 22/22；test15 12/12 |
 | BASIC-003 | constant-input 非法 filter 回傳成功，且 helper 未完整驗證 net ID | P1 | Verified | 是 | basic-only 25/25；test14 16/16 |
+| BASIC-004 | structural report 無法直接區分 floating PI 與 unconnected PO | P0 | Verified | 是 | basic-only 26/26；test34 6/6 |
 
 ## 3. 問題與修改紀錄
 
@@ -158,3 +159,35 @@ CLI printer 的 `id: -1` 與 direction 顯示仍屬 tools layer，已另外登�
 | `mini test/test1/tester.exe ... --basic-only` | 25/25；合法 arity 與兩組非法 filter cases 通過 |
 | `TOOLS_SPEC/Makefile` UCRT64 source build | 成功 |
 | `mini test/test14` | 16/16；constant query/edit/equivalence 未退步 |
+
+## BASIC-004：floating PI / unconnected PO 精確分類
+
+- 狀態：`Verified`
+- 優先級：P0
+- 類型：Prompt Coverage / Structural Correctness / Report Extension
+
+### 問題
+
+官方 test37 直接詢問 `floating inputs` 與 `unconnected output ports`。原 report 只有 general
+`undrivenNets`、`noLoadNets`、`floatingNets` 與 `unconnectedGates`，呼叫端必須另外查 PI/PO
+再做交集。此外，原 driver/load 判定只確認 cached ID 指向 active gate，沒有確認 gate 端仍指回
+同一條 net；edit 後若雙向資料不一致，可能把 stale edge 誤判為有效連線。
+
+### 修改內容
+
+| 檔案 | 修改 |
+|---|---|
+| `src/analysis/BasicAnalysis.cpp` | driver/load 判斷要求 net 與 gate 雙向一致；StructuralIssues 填入兩個 PI/PO 專用分類。 |
+| `include/core/NetlistQueries.h` | `BasicReport` 新增 `floatingPrimaryInputNets`、`unconnectedPrimaryOutputNets`。 |
+| `mini test/test1/tester.cpp` | 建立 used/floating PI 與 driven/open PO 的小型 netlist regression。 |
+| `API_SPEC/BASIC_QUERY_API.md`、`API_SPEC/BASIC_QUERY_USAGE.md` | 定義新欄位、bit-net 語意與雙向一致性。 |
+| `API_SPEC/NEW_TESTCASE_PROMPT_COVERAGE.md` | test37 改為直接讀取精確分類。 |
+| `API_SPEC/TOOLS待更新表.md` | 登記 CLI printer/schema 待同步，不在本階段修改 tools。 |
+
+### 驗證
+
+| 驗證 | 結果 |
+|---|---|
+| `mini test/test1/tester.exe ... --basic-only` | 26/26；精確 PI/PO 分類與 general union 通過 |
+| `TOOLS_SPEC/Makefile` UCRT64 source build | 成功 |
+| `mini test/test34` | 6/6；floating PO、writer reload 與 cleanup 未退步 |

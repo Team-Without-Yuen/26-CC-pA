@@ -17,6 +17,7 @@ API_SPEC/API_CORE_BACKEND_TODO.md
 | ID | API 來源 | tools 層問題 | 預定處理 |
 |---|---|---|---|
 | BASIC-TOOLS-001 | Basic Query `PortInfo` | 通用 Basic printer 對 port 輸出沒有意義的 `id: -1`，且尚未顯示 port direction flags | 後續統一更新 `tools.cpp`/`TOOLS_SPEC` 時，只在 `objectId >= 0` 時印 ID，並輸出 input/output direction |
+| BASIC-TOOLS-002 | Basic Query `StructuralIssues` | backend 已新增 `floatingPrimaryInputNets` 與 `unconnectedPrimaryOutputNets`，CLI printer/schema 尚未輸出 | 後續同步 printer 與 `TOOLS_SPEC`，保留既有 general structural lists 並增加兩個精確分類 |
 
 ## 短期盤查：完整輸出與 best-effort 作答
 
