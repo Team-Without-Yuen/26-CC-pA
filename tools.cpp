@@ -392,12 +392,19 @@ void printBasicReport(const Netlist& netlist, const Netlist::BasicReport& report
     }
     if (!report.objectName.empty()) {
         std::cout << "  object: " << report.objectName << "\n";
-        std::cout << "  id: " << report.objectId << "\n";
+        if (report.objectId >= 0) {
+            std::cout << "  id: " << report.objectId << "\n";
+        }
         if (!report.typeName.empty()) {
             std::cout << "  type: " << report.typeName << "\n";
         }
         if (report.portWidth >= 0) {
             std::cout << "  width: " << report.portWidth << "\n";
+            std::cout << "  is_bus: " << (report.isBus ? "true" : "false") << "\n";
+            std::cout << "  is_primary_input: "
+                      << (report.isPrimaryInput ? "true" : "false") << "\n";
+            std::cout << "  is_primary_output: "
+                      << (report.isPrimaryOutput ? "true" : "false") << "\n";
         }
         if (!report.formattedInfo.empty()) {
             std::cout << report.formattedInfo << "\n";
@@ -443,6 +450,16 @@ void printBasicReport(const Netlist& netlist, const Netlist::BasicReport& report
     }
     if (!report.unconnectedGates.empty()) {
         printStringList("Unconnected gates", report.unconnectedGates);
+    }
+    if (!report.floatingPrimaryInputNets.empty()) {
+        printStringList(
+            "Floating primary-input nets",
+            report.floatingPrimaryInputNets);
+    }
+    if (!report.unconnectedPrimaryOutputNets.empty()) {
+        printStringList(
+            "Unconnected primary-output nets",
+            report.unconnectedPrimaryOutputNets);
     }
 }
 
@@ -2834,7 +2851,8 @@ void printHelp() {
         << "            [--target-depth N] [--time-limit seconds]\n"
         << "            [--allow-no-improvement] [--verbose]\n"
         << "  gate-type lists accept spaces or commas, for example NOR NOT or nor,not\n"
-        << "  CriticalPathDepth commits only after constraint checks and whole-design SAT\n"
+        << "  CriticalPathDepth commits only after constraints and equivalence validation\n"
+        << "  graph-identity no-op uses StructuralIdentity; changed candidates use whole-design SAT\n"
         << "\nEdit apply\n"
         << "  edit_apply rename_gate <old> <new> | rename_net <old> <new>\n"
         << "  edit_apply cleanup_buffers | collapse_double_inverter | local_simplification_fixpoint\n"
@@ -3644,7 +3662,8 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
 
         const bool optimizationTimedOut =
             report.depthOptimization &&
-            report.depthOptimization->wholeDesignTimedOut;
+            (report.depthOptimization->wholeDesignTimedOut ||
+             report.depthOptimization->coreStatus == "TIMEOUT");
         const bool equivalenceComplete =
             report.validation.equivalenceChecked &&
             report.validation.functionallyEquivalent;

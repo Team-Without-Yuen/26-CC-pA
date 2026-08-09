@@ -22,6 +22,10 @@ $commands = @(
     "edit_apply replace_type whole OR -allow NOR NOT"
     "write $outputPath"
     "help"
+    "read mini test/test9/structure_edge_circuit.v"
+    "structure_query port_info unused"
+    "structure_query port_info y"
+    "structure_query structural_issues"
     "quit"
 ) -join "`n"
 
@@ -64,8 +68,15 @@ Check-Result ($output.Contains("structure_query <mode>") -and
               -not $output.Contains("basic_query <mode>") -and
               -not $output.Contains("conn_query <mode>")) "help exposes only structure_query"
 Check-Result (([regex]::Matches($output, "design_revision: 0")).Count -ge 11) "read-only commands keep revision zero"
-Check-Result (([regex]::Matches($output, "TOOL_RESULT_BEGIN")).Count -eq 15) "every command returns one response envelope"
-Check-Result (([regex]::Matches($output, "TOOL_RESULT_END")).Count -eq 15) "every response envelope is closed"
+Check-Result (([regex]::Matches($output, "TOOL_RESULT_BEGIN")).Count -eq 19) "every command returns one response envelope"
+Check-Result (([regex]::Matches($output, "TOOL_RESULT_END")).Count -eq 19) "every response envelope is closed"
+Check-Result (-not $output.Contains("id: -1")) "port_info omits meaningless negative object ID"
+Check-Result ($output.Contains("object: unused") -and
+              $output.Contains("is_primary_input: true")) "port_info prints input direction"
+Check-Result ($output.Contains("object: y") -and
+              $output.Contains("is_primary_output: true")) "port_info prints output direction"
+Check-Result ($output.Contains("Floating primary-input nets (1):") -and
+              $output.Contains("Unconnected primary-output nets (1):")) "structural issues print precise PI/PO classifications"
 
 Write-Output "Summary: $passed passed, $failed failed."
 if ($failed -ne 0) {

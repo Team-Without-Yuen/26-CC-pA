@@ -416,6 +416,16 @@ report 化與 validation 過程中已修正：
 11. InsertBuffersForSpecificNet 的 fanout report 改為 selected net + generated buffer tree scope，不再被全域其他 high-fanout nets 誤判為 constraint failure。
 12. gate-set basis conversion 使用 strict containment，mapping rule 不得跨出指定 scope。
 13. inverter absorption 沒有可套用 pattern 時回 success/no change，不再誤用 simulation failure。
+14. fanout buffer insertion 先將 pin-level `loadGateIds` 去重成候選 gate，再展開實際 matching pins；同一 gate 多個 inputs 接同一 net 時不再重複計數或產生 stale edge。
+15. RenameNet 拒絕重新命名 constant net，也拒絕把一般 net 改成 `1'b0` / `1'b1`，避免破壞 Verilog literal 與錯誤宣告 StructuralIdentity。
+16. bulk constant simplification 會延後維護 `loadGateIds`，完成後依 active gate input pins 線性重建；高 fanout circuit 不再因逐 gate vector erase 形成平方級耗時。
+17. constant lookup 僅使用 canonical `1'b0` / `1'b1` name index；`addNet()` 去重與 constant rename 防護共同保證 O(1) lookup。
+18. `replaceAllLoadsOfNet()` 保留 pin-level load multiplicity，同一 gate 有多個 input pins 接同一 net 時不會被 gate-level unique 壓縮。
+19. double-inverter finder、單對 bypass 與 bulk worklist 共用 safe-collapse predicate；會先驗證 active/tombstone、ID range、NOT arity、driver/load/input 雙向一致與 PO guard，拒絕 stale candidate 後才 mutation。
+20. structural merge 使用 canonical-key + affected-load worklist；canonical key 命中時會重新核對 current key，避免 cascade rewiring 使用 stale hash，且不再隱含執行 dangling/dead cleanup。
+21. structural merge 保留不同具名 PO 的各自 driver；PO 與 internal duplicate 衝突時選 PO driver 為 canonical，避免破壞 output net 名稱。
+22. `validateStructure()` 以 expected/actual pin-level adjacency 一次比對，完整檢查 multiplicity，不再對每個 input pin 重掃 high-fanout load list。
+23. internal `redirectAllLoads()` 復用 pin-level `replaceAllLoadsOfNet()`；legacy `allowDuplicateLoads` 參數保留相容性，但不得再把多個實際 pins 壓成單一 load ID，report changed gate 清單則依 gate 去重。
 ```
 
 ---
@@ -462,7 +472,33 @@ runEditApply unsupported command
 目前驗證結果：
 
 ```text
-Summary: 115 passed, 0 failed.
+Summary: 142 passed, 0 failed.
 ```
+
+`mini test/test2` 的 Edit Apply regression 為 39 passed、0 failed；另有
+`fanout_tied_pin_regression.cpp` 覆蓋同一 gate 兩個 input pins 接同一 source 的案例，
+確認 fanout=2、只插入兩顆 dedicated BUF、沒有 rollback 且 structure validation 通過；
+同一 suite 亦覆蓋 canonical constant direct dedup、repeated technology mapping，
+constant rename 的 low-level/high-level rejection、Writer literal preservation，及
+replace-all-loads pin-level multiplicity。
+
+`constant_simplification_scalability.cpp` 以 1,000,000 個 constant-input gates
+實測 public `runEditApply(SimplifyConstants)`：0.96 秒完成、化簡數量完整、無 rollback，
+且 mutation 後 structure validation 通過；依賴的 depth traversal 另通過 test5 11/11。
+
+`double_inverter_scalability.cpp` 以 1,000,000 個串接 NOT 實測 public
+`runEditApply(CollapseDoubleInverter)`：0.741 秒 collapse 500,000 pairs、無 rollback，
+且 structure validation 通過；test2 另覆蓋 PO/stale/tombstone/invalid-ID safe rejection。
+
+`structural_merge_scalability.cpp` 的 public `MergeStructurallyEquivalentGates` 實測：
+1,000,000 個同組 gates 於 0.615 秒 merge 999,999 gates；500,000 層 cascade
+（共 1,000,000 gates）於 1.141 秒 merge 500,000 gates。兩者皆無 rollback 且
+structure validation 通過；test2 另覆蓋 dangling scope、named PO、tied pins 與
+invalid-load rejection。DFF initial-state 合併語意仍列為 Deferred Boolean。
+
+非 Boolean public Edit Apply 共 22 個 commands，均已有正向 regression；internal
+low-level primitive、legacy structural alias 與代表性 invalid request 另有拒絕測試。
+`rollbackOnFailure=false` 僅保留 request 相容性，public wrapper 在 validation failure
+時仍固定 rollback，不提供保留無效設計的對外模式。
 
 另外 `mini test/test26` 的 functional search/merge C++ API regression 為 27 passed、0 failed，並覆蓋 whole-design verification failure rollback；官方 test29/test30 實測分別成功合併 7/1 顆 gate，並通過 whole-design SAT。

@@ -17,7 +17,8 @@
 | PATH-002 | API 文件過期或互相矛盾 | P1 | Verified | 是 | contract/欄位/CLI 核對通過 |
 | PATH-003 | Path count 超過 64-bit 時誤報精確完成 | P1 | Awaiting Official | 否 | overflow probe 已重現 |
 | PATH-004 | Combinational cycle 下的 max-depth 正確性 | P1 | Won't Fix | 不適用 | 題目保證 combinational graph 為 DAG |
-| PATH-005 | Partial path file 缺少完成性資訊 | P2 | Won't Fix | 不處理 | timeout 結果不具正式得分價值 |
+| PATH-005 | Partial path file 缺少完成性資訊 | P2 | Verified | 是 | V3 footer 與 timeout regression 通過 |
+| PATH-006 | test37 完整列舉在 55 秒內 timeout | P0 | Verified | 是 | 16,548,172 records；17.81 秒；670.1 MB |
 
 狀態語意：
 
@@ -251,7 +252,7 @@ netlist，再重新開啟此項。
 
 ## PATH-005：Partial path file 缺少完成性資訊
 
-- 狀態：`Won't Fix`
+- 狀態：`Verified`
 - 優先級：P2
 - 類型：Report
 - Boolean 相關：否
@@ -262,22 +263,23 @@ timeout 時 CLI envelope 會回 `complete:false` 與 stop reason，但 path file
 
 ### 原因
 
-path file finalization 目前只回填 count，沒有寫 completion、timeout 或 stop reason metadata。
+舊 path file finalization 只回填 count，沒有寫 completion 或 timeout metadata。
 
 ### 處理決議
 
-不處理。內部 timeout 時 report envelope 已提供 `complete:false`、timeout 與 stop reason；正式
-答案已不是完整結果。若遭外部 deadline 強制終止，path file 也未必有機會完成 finalization，
-增加 file metadata 無法恢復完整答案或提高得分，只對離線除錯有幫助。因此維持現有格式，
-把時間優先投入避免 timeout 的演算法與 testcase regression。
+配合 PATH-006 的 compact artifact 一併修正。V3 footer 明確寫入 `Written paths`、`Complete` 與
+`Timed out`；header 若能先由 count-only DP 得到 exact total，另寫 `Expected paths`。
 
 ### 修改內容
 
-正式程式碼：無。尚未修改 `src/analysis/PathAnalysis.cpp` 的 path-file header/finalization。
+- `src/analysis/PathAnalysis.cpp`：`CompactPathArtifactWriter::finish()` 寫入完成性 footer。
+- `mini test/test33/test33.ps1`：驗證完整與 timeout envelope；V3 完整檔驗證 written/complete。
+- `mini test/test35/test35.ps1`：解碼四條 delta records 並逐條重建 start-to-end path。
 
 ### 驗證狀態
 
-已由靜態程式碼確認 envelope 具備 completion/timeout fields；不建立專門的 file-format probe。
+test33 10/10、test35 7/7 通過；test37 完整 artifact footer 為
+`Written paths: 16548172`、`Complete: yes`、`Timed out: no`。
 
 ## 4. 官方 Testcase Coverage
 
@@ -310,15 +312,66 @@ path file finalization 目前只回填 count，沒有寫 completion、timeout �
 | test36 | `pi_po_cut n10239` | not cut | 約 0.06 秒 |
 | test38 | direct PI-to-PO、mandatory | 0、`NO_PATH` | 約 0.06 秒 |
 | test40 | all DFF.Q -> all DFF.D max depth | 105 | 約 0.09 秒 |
+| test37 | all DFF.Q -> all DFF.D count-only | 16,548,172，complete | 約 1.32 秒 |
+| test37 | 同 endpoints full streaming | 4,542,463 / 16,548,172，timeout | 約 55.02 秒；約 2.46 GB |
+| test37 | 同 endpoints，輸出至 `NUL` 診斷 | 13,926,858 / 16,548,172，timeout | 約 55.21 秒；排除磁碟寫入後仍未完成 |
+| test37 | V3 delta + unconstrained DAG fast path | 16,548,172 / 16,548,172，complete | 約 17.81 秒；670.1 MB |
 
 舊版 `test12` 曾兩次在 280 秒 timeout，`test14` 也未完成；加入 reverse reachability pruning 與 count-only DP 後皆已在上述時間內完成。大型完整列表目前主要成本是輸出資料量。
+
+test37 的對照測試進一步確認：正常 sidecar 只完成 exact total 的約 27.4%，而 `NUL`
+診斷可完成約 84.2%。因此第一瓶頸是每條 path 的 net/gate 名稱格式化與文字 I/O，第二瓶頸才是
+DFS 的 per-path vector/record 成本。現有輸出格式若完整寫完，容量估計接近 9 GB；修正時必須維持
+「列出全部路徑」的完整語意，不能把 count-only 或 partial artifact 偽裝成完整答案。
+
+## PATH-006：test37 完整列舉在 55 秒內 timeout
+
+- 狀態：`Verified`
+- 優先級：P0
+- 類型：Algorithm / Performance / Artifact
+- Boolean 相關：否
+
+### 問題與根因
+
+test37 有 16,548,172 條 register-to-register paths。舊版逐條重複寫 net/gate 名稱，55 秒只完成
+4,542,463 條；輸出至 `NUL` 也只完成 13,926,858 條。根因包含大量重複文字、每條 path 的
+名稱 lookup/stream formatting，以及 unconstrained DAG 仍執行空 constraint copy、hash cycle guard
+與高頻 clock check。
+
+### 修改內容
+
+| 檔案 | 位置 | 修改 |
+|---|---|---|
+| `src/analysis/PathAnalysis.cpp` | `CompactPathArtifactWriter` | 新增 32 MB buffered `COMPACT_PATH_V3` writer；dictionary 只寫一次，path IDs 使用 base36 與相鄰 path prefix/suffix delta |
+| `src/analysis/PathAnalysis.cpp` | `runPathQuery(EnumerateAll)` | 無 required nodes 時先重用 count-only DP 取得 expected total，完成後核對 written count |
+| `src/analysis/PathAnalysis.cpp` | `enumerateUnconstrainedPathsDepthFirst()` | 官方 DAG 且無 required/avoided constraints 時使用 fast path，保留 reverse reachability pruning，移除空 vector/hash cycle 成本，時間每 16,384 work units 檢查 |
+| `mini test/test35/*` | dedicated regression | 四條路徑 circuit；解碼 dictionary/delta 並驗證每條 record 可重建到 output |
+| `mini test/test33/test33.ps1` | streaming assertions | 改驗證 V3 exact count、written count 與 complete footer |
+
+V3 header 後續再補強為 self-describing contract：明確定義
+`S=[start_net_id, gate_id_1, ..., gate_id_N]`，指出 prefix/suffix count 包含 start-net token，並內附
+`[0,0,2,6,7]` 經 `P 1 2 2 3` 還原為 `[0,0,3,6,7]` 的實例。dictionary 與 record IDs 亦統一為
+base36，避免單獨把 artifact 交給 LLM 時混用進位制或將 prefix 誤認為 gate count。
+
+query parameters、`PathQueryResult` 欄位、CLI command 與 output path contract 均未修改。
+
+### 驗證狀態
+
+- 單檔 `PathAnalysis.cpp` compile probe：通過。
+- `TOOLS_SPEC/Makefile` 全量 build：成功；僅既有第三方 warnings。
+- 既有 path CLI regressions test9/test10/test13/test18：共 68 項通過。
+- test33：10/10；test35：7/7。
+- test37 wall time：17.81 秒。
+- artifact：702,649,546 bytes（670.1 MB）。
+- `rg` 獨立掃描 record count：16,548,172，與 expected 完全一致。
+- footer：`Written paths: 16548172`、`Complete: yes`、`Timed out: no`。
 
 ## 6. 後續處理順序
 
 1. 等待官方回覆後處理 `PATH-003`。
 2. `PATH-001` 維持延後，除非 LLM 實測出現 silent wrong answer。
 3. `PATH-004` 因題目保證 DAG，不處理 cycle-specific longest path。
-4. `PATH-005` 不修改 partial-file 格式，持續以避免 timeout 為優先。
+4. `PATH-005`、`PATH-006` 已完成；後續只需依待更新表同步 `TOOLS_SPEC` 的 V3 解碼說明。
 
 ## 7. Boolean 延後項目
 

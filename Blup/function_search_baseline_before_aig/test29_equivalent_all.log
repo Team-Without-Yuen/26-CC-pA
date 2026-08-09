@@ -1,0 +1,63 @@
+eda> TOOL_RESULT_BEGIN
+ok: true
+status: ok
+command: read
+message: Design loaded and original snapshot created.
+design_revision: 0
+complete: true
+data:
+  loaded_file: ../../NewTestCase/test29/test29.v
+  gate_count: 2584
+  net_count: 2645
+  primary_input_count: 8
+  primary_output_count: 7
+  original_snapshot_available: true
+TOOL_RESULT_END
+eda> TOOL_RESULT_BEGIN
+ok: true
+status: ok
+command: func_search
+mode: equivalent_pairs
+message: All eligible gate outputs were classified into SAT-proven equivalence classes.
+design_revision: 0
+complete: true
+data:
+  report_status: MATCHES_FOUND
+  search_type: EQUIVALENT_GATE_PAIRS
+  target_net: 
+  target_net_id: -1
+  scope: WHOLE_DESIGN
+  scope_name: 
+  gate_type_filter: ANY
+  found: true
+  complete: true
+  all_candidates_examined: true
+  timed_out: false
+  truncated: false
+  unsupported: false
+  candidate_signal_count: 2324
+  candidate_gate_count: 2324
+  simulation_eligible_signal_count: 2324
+  simulation_bucket_count: 2141
+  candidate_pairs_considered: 2990
+  candidate_pairs_rejected_by_simulation: 2696336
+  sat_checks: 2990
+  sat_unknown_count: 0
+  unsupported_signal_count: 0
+  equivalence_class_count: 7
+  equivalent_pair_count: 7
+  simulation_pattern_count: 256
+  elapsed_seconds: 2.57479
+  match_count: 7
+  stored_match_count: 0
+  wrote_matches_to_file: true
+  output_file: test29_function_search_1.txt
+TOOL_RESULT_END
+eda> TOOL_RESULT_BEGIN
+ok: true
+status: ok
+command: exit
+message: Session closed.
+design_revision: 0
+complete: true
+TOOL_RESULT_END

@@ -163,6 +163,8 @@ public:
                                                        bool verbose = false);
 
 private:
+    friend struct DepthOptimizerTestAccess;
+
     DepthOptimizerConfig config; // 用來儲存引擎的設定值
 
     // 輔助函式：給定 Root 與 Cut 邊界，從 Netlist 走訪並建立 PatternNode (AST)，同時收集 TargetCone

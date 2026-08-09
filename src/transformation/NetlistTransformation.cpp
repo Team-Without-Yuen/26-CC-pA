@@ -27,9 +27,16 @@ std::vector<FanoutSinkPin> collectFanoutSinkPins(const std::vector<Gate>& gates,
     std::vector<FanoutSinkPin> sinks;
     if (netId < 0 || netId >= (int)nets.size()) return sinks;
 
+    // loadGateIds is pin-level: the same gate ID appears once per connected
+    // input pin. Visit each candidate gate once, then recover every matching
+    // pin from inputNetIds. Without this deduplication, a gate with K inputs
+    // tied to this net is expanded K times and incorrectly produces K*K sinks.
+    std::unordered_set<int> visitedGateIds;
     for (int gateId : nets[netId].loadGateIds) {
         if (gateId < 0 || gateId >= (int)gates.size()) continue;
+        if (!visitedGateIds.insert(gateId).second) continue;
         const Gate& gate = gates[gateId];
+        if (gate.type == GateType::UNKNOWN) continue;
         for (int pinIndex = 0; pinIndex < (int)gate.inputNetIds.size(); ++pinIndex) {
             if (gate.inputNetIds[pinIndex] == netId) {
                 sinks.push_back({gate.id, pinIndex});
@@ -233,13 +240,21 @@ bool Netlist::renameNet(const std::string& oldName, const std::string& newName) 
         return false; // 找不到該 Net
     }
 
+    const int netId = it->second;
+    if (netId < 0 || netId >= (int)nets.size() ||
+        nets[netId].isRemoved || nets[netId].isConst) {
+        return false;
+    }
+    if (newName == "1'b0" || newName == "1'b1") {
+        return false;
+    }
+
     // 檢查新名字是否衝突
     if (netNameToId.count(newName) > 0) {
         return false; // 命名衝突，拒絕修改
     }
 
     // 正式修改
-    int netId = it->second;
     nets[netId].name = newName;
 
     // 更新 Hash Map

@@ -103,7 +103,9 @@ int main(int argc, char** argv) {
         resolveRewriteScope(netlist, TargetScope::NET_FANIN, "q");
     report.check(
         mapping.status == TechMapStatus::SUCCESS &&
-        !mapping.changed &&
+        mapping.modifiedGateNames.empty() &&
+        mapping.addedCountByType.empty() &&
+        mapping.removedCountByType.empty() &&
         mappedScope.ok &&
         netlist.getConeGateCount(mappedScope.cone) == 0 &&
         coneContainsOnly(

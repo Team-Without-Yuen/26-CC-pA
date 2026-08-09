@@ -1,0 +1,7 @@
+Total paths:                    1
+
+Path 0
+  depth: 1
+  nets: n31[0] -> n6476
+  gates: g4863
+

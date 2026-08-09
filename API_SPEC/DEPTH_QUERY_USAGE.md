@@ -78,7 +78,7 @@ size_t endpointCount = report.count;
 | `threshold` | `int` | `-1` | `EndpointsExceedingDepth` / `PrimaryOutputsExceedingDepth` 使用 |
 | `includeCriticalPath` | `bool` | `true` | 是否保留 `criticalPath` |
 
-`includeCriticalPath = false` 適合只需要數量或 endpoint metadata 的問題，可避免回傳完整 path。
+`includeCriticalPath = false` 適合只需要數量或 endpoint metadata 的問題；backend 會略過 path reconstruction，而不只是建立後再清空。
 
 ---
 
@@ -333,7 +333,7 @@ Netlist::DepthReportSet report = netlist.runDepthQuery(query);
 | Report the critical path to n10. | `SpecificNet` | `netName = "n10"`, `includeCriticalPath = true` | `worst.criticalPath` |
 | What is the maximum output depth? | `PrimaryOutputs` | 無 | `worst` |
 | How many outputs have a logic depth greater than 4? | `PrimaryOutputsExceedingDepth` | `threshold = 4` | `count` |
-| What is the maximum logic depth from any primary input to any DFF D-pin? | `DffD` | 無 | `worst.depth` |
+| What is the maximum logic depth from any primary input to any DFF D-pin? | `PathQuery::MaxDepth` | `all_pi -> all_dff_d` | Path Query 的 maximum depth |
 | What is the global critical path? | `GlobalCriticalPath` | 無 | `worst`, `worst.criticalPath` |
 | Find endpoints exceeding target depth 4. | `EndpointsExceedingDepth` | `threshold = 4` | `reports`, `count` |
 | Determine whether gate g0 lies on any maximum-depth path of the design. | `GateOnCriticalPath` | `gateName = "g0"` | `gateOnCriticalPath`, `exists` |
@@ -374,12 +374,9 @@ DeepestOutputCone
 ```text
 mini test/tester.cpp 已覆蓋 computeNetLevels / computeGateLevels /
 findCriticalPathToNet / runDepthQuery(SpecificNet, DffD, GlobalCriticalPath)。
-mini test/test5/test5.cpp 已覆蓋 GateOnCriticalPath / DeepestOutputCone。
+mini test/test5/test5.cpp 已覆蓋 GateOnCriticalPath / DeepestOutputCone、
+includeCriticalPath=false、tombstone/stale edge 與 30000-level deep-chain regression。
 ```
 
-後續建議補測：
-
-```text
-runDepthQuery(EndpointsExceedingDepth)
-getPrimaryOutputsWithDepthGreaterThan()
-```
+`EndpointsExceedingDepth` 與 `PrimaryOutputsExceedingDepth` 也已納入
+`includeCriticalPath=false` matrix regression；官方 testcase 另由 tools 層持續驗證。

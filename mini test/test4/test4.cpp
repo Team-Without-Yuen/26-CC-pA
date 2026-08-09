@@ -48,7 +48,10 @@ void testBooleanExpression(TestReport& report, const Netlist& netlist) {
                  containsString(result.supportPrimaryInputs, "a") &&
                  containsString(result.supportPrimaryInputs, "b") &&
                  containsString(result.supportPrimaryInputs, "c") &&
-                 result.supportPrimaryInputs.size() == 3,
+                 result.supportPrimaryInputs.size() == 3 &&
+                 result.supportRealPrimaryInputs == result.supportPrimaryInputs &&
+                 result.supportDffPseudoInputs.empty() &&
+                 result.supportUndrivenLeaves.empty(),
                  "function_query boolean_expression y");
 }
 
@@ -98,7 +101,10 @@ void testDffBoundarySupport(TestReport& report, const Netlist& netlist) {
                  expr.expression == "OR(q, a)" &&
                  containsString(expr.supportPrimaryInputs, "a") &&
                  containsString(expr.supportPrimaryInputs, "q") &&
-                 expr.supportPrimaryInputs.size() == 2,
+                 expr.supportPrimaryInputs.size() == 2 &&
+                 expr.supportRealPrimaryInputs == std::vector<std::string>{"a"} &&
+                 expr.supportDffPseudoInputs == std::vector<std::string>{"q"} &&
+                 expr.supportUndrivenLeaves.empty(),
                  "function_query boolean_expression dff_q_boundary");
 
     query.type = Netlist::FunctionQueryType::PrimaryInputsOfNet;
@@ -108,8 +114,52 @@ void testDffBoundarySupport(TestReport& report, const Netlist& netlist) {
                  support.status == "PRIMARY_INPUT_SUPPORT" &&
                  containsString(support.supportPrimaryInputs, "a") &&
                  containsString(support.supportPrimaryInputs, "q") &&
-                 support.supportPrimaryInputs.size() == 2,
+                 support.supportPrimaryInputs.size() == 2 &&
+                 support.supportRealPrimaryInputs == std::vector<std::string>{"a"} &&
+                 support.supportDffPseudoInputs == std::vector<std::string>{"q"} &&
+                 support.supportUndrivenLeaves.empty(),
                  "function_query primary_inputs_of_net dff_q_boundary");
+}
+
+void testUndrivenSupportBreakdown(TestReport& report, const Netlist& netlist) {
+    Netlist::FunctionQuery query;
+    query.type = Netlist::FunctionQueryType::PrimaryInputsOfNet;
+    query.netNameA = "floating_expr";
+
+    const Netlist::FunctionReport result = netlist.runFunctionQuery(query);
+    report.check(result.ok &&
+                 result.exists &&
+                 result.supportPrimaryInputs ==
+                     std::vector<std::string>({"a", "floating_leaf"}) &&
+                 result.supportRealPrimaryInputs ==
+                     std::vector<std::string>({"a"}) &&
+                 result.supportDffPseudoInputs.empty() &&
+                 result.supportUndrivenLeaves ==
+                     std::vector<std::string>({"floating_leaf"}),
+                 "function_query support breakdown undriven leaf");
+}
+
+void testRemovedGateCreatesUndrivenBoundary(TestReport& report, const Netlist& original) {
+    Netlist netlist = original;
+    const int removedGateId = netlist.getGateId("g_and");
+    const bool removed = netlist.removeGateAndDetachPins(removedGateId);
+
+    Netlist::FunctionQuery query;
+    query.type = Netlist::FunctionQueryType::PrimaryInputsOfNet;
+    query.netNameA = "y";
+    const Netlist::FunctionReport result = netlist.runFunctionQuery(query);
+
+    report.check(removed &&
+                 netlist.isGateRemoved(removedGateId) &&
+                 result.ok &&
+                 result.supportPrimaryInputs ==
+                     std::vector<std::string>({"c", "n_and"}) &&
+                 result.supportRealPrimaryInputs ==
+                     std::vector<std::string>({"c"}) &&
+                 result.supportDffPseudoInputs.empty() &&
+                 result.supportUndrivenLeaves ==
+                     std::vector<std::string>({"n_and"}),
+                 "function_query removed gate becomes undriven boundary");
 }
 
 void testSatFunctionQueries(TestReport& report, const Netlist& netlist) {
@@ -210,6 +260,8 @@ int main() {
         testGateTypeExpressions(report, netlist);
         testSimplifiedExpression(report, netlist);
         testDffBoundarySupport(report, netlist);
+        testUndrivenSupportBreakdown(report, netlist);
+        testRemovedGateCreatesUndrivenBoundary(report, netlist);
         testSatFunctionQueries(report, netlist);
         testInvalidQueries(report, netlist);
     }

@@ -1,0 +1,5 @@
+branch=blup
+commit=3a32cd3ee8b73f1a5b8bcdd96aec9c7de3c794d4
+tools_sha256=C8F393B44F0407A530A2B5FFFDB56B99B2625BBA05B8C7674F2122E3E3746CAE
+tools_timestamp=2026-08-10T02:02:12.2144401+08:00
+commands=test29 equivalent all; test30 equivalent all; test35 NAND FindAny; test35 NAND FindAll 55s

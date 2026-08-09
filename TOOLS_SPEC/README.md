@@ -39,6 +39,105 @@ TOOL_RESULT_END
 的 yes/no 答案。競賽正式輸出仍須提供明確候選答案；無法取得完整證明時，依
 [`LLM_NOTES.md`](LLM_NOTES.md) 記錄推定依據，不以 `unknown` 或工具錯誤訊息代替答案。
 
+## Prompt Routing 優先規則
+
+選擇 tool/mode 時必須讀完整句子，不能只依第一個 `count`、`cone` 或 `optimize`
+關鍵字決定 command。遇到多個可能規則時，依下列優先順序判斷：
+
+```text
+明確 scope / endpoint / hard constraint / cost function
+    > scoped query 或 transformation
+    > whole-design generic query
+```
+
+### Scoped query 優先於 global query
+
+`in the cone of n8`、`between A and B`、`driven by n0` 等文字會限制答案範圍，
+不得因 prompt 同時出現 `how many NAND gates` 就改查全設計。
+
+```text
+How many NAND gates are in the cone of n8?
+-> cone_query net_fanin n8
+   讀 cone gate-type breakdown 的 NAND count
+
+How many NAND gates are in the whole design?
+-> structure_query count_by_type NAND
+```
+
+### Prompt constraint 必須原樣保留
+
+gate type、constant value、input count、scope、through/avoid node、fanout limit 與
+target depth 都是 command 參數。prompt 指定 `constant 0` 或 `constant 1` 時，不得
+放寬成 `any`；指定 `only NAND and NOT` 時，兩種 gate type 都必須傳入。
+
+```text
+Simplify AND gates with a constant 0 input.
+-> edit_apply simplify_constants AND 0
+
+Simplify OR gates with any constant input.
+-> edit_apply simplify_constants OR any
+```
+
+### Cost function 決定 optimization objective
+
+`cone` 可能只是 rewrite scope 或 gate-basis constraint，不代表 objective 必然是 cone。
+
+```text
+Cost is the maximum logic depth of the final design.
+-> --objective global
+
+Cost is the depth of the cone of n8.
+-> --objective cone
+```
+
+例如：
+
+```text
+Optimize the design while the cone of n11 uses NAND/NOT only;
+cost is the maximum depth of the final design.
+-> opt_apply critical_path_depth --scope net_fanin n11
+   --objective global --allowed NAND NOT
+```
+
+### Endpoint 與英文語意詞
+
+`input`、`output`、`gate`、`signal`、`wire`、`node` 是物件種類或語意詞，不是
+物件名稱。`cone of output n14` 的 net name 是 `n14`，不是 `output`。
+
+```text
+path from primary input n2 to primary output n25
+-> path_query exists pi:n2 po:n25
+
+path from n2 to n30 that avoids n4552
+-> path_query exists net:n2 net:n30 -avoid net:n4552
+```
+
+### Query、指定修改與最佳化
+
+```text
+count / list / inspect                         -> query tool
+convert/restructure using a specified basis   -> edit_apply
+minimize/reduce/best with a cost function      -> opt_apply
+```
+
+`restructure the cone using only NAND and NOT` 若沒有最小化目標，是 fixed-basis
+conversion；使用 `edit_apply convert_basis`。只有 prompt 明確要求降低或最小化 cost
+時才使用 `opt_apply`。
+
+### 一題需要多個 command
+
+若題目要求的資料沒有單一 public mode，可組合多個 query，但每個 command 都必須保持
+原 scope。例如「列出所有連到 signal n10 的 gates」需同時取得 driver 與 loads：
+
+```text
+structure_query net_driver n10
+structure_query net_loads n10
+```
+
+送出 command 後必須核對回傳的 mode、resolved object/scope、objective 與 constraints。
+若 `output` 被回報為不存在的 net，或回傳 scope 與 prompt 不同，代表參數擷取錯誤，
+應修正 command 後重試，不能把工具 error 當成題目答案。
+
 ## 全域參數抽取規則
 
 先從 prompt 原文抽出 object names、object kinds、scope、gate types、數值限制與量詞，
@@ -329,7 +428,7 @@ Optimize the cone of n15 for depth using only AND, OR, and NOT gates.
 Reduce maximum depth to at most 5 without changing functionality.
 ```
 
-責任邊界：只量測 current depth 使用 `DepthQuery`；沒有 cost objective、只指定 basis conversion 時使用 `EditApply`。`opt_apply critical_path_depth` 已在 transaction 內強制執行 whole-design SAT。
+責任邊界：只量測 current depth 使用 `DepthQuery`；沒有 cost objective、只指定 basis conversion 時使用 `EditApply`。`opt_apply critical_path_depth` 在 transaction 內強制驗證等價：graph identity 使用 `StructuralIdentity`，其餘候選執行 whole-design SAT。
 
 詳細用法：[`OPTIMIZATION_TOOL.md`](OPTIMIZATION_TOOL.md)
 

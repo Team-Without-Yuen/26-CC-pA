@@ -80,6 +80,10 @@ bool isActiveNetId(const Netlist& netlist, int netId) {
     return netlist.isValidNetId(netId) && !netlist.getNet(netId).isRemoved;
 }
 
+bool isCanonicalConstantLiteral(const std::string& name) {
+    return name == "1'b0" || name == "1'b1";
+}
+
 EditRequestValidation okValidation() {
     return {};
 }
@@ -241,8 +245,17 @@ EditRequestValidation validateEditApplyRequest(const Netlist& netlist, const Edi
         case EditCommandKind::RenameNet:
             if (request.oldName.empty()) return failedValidation("Missing required argument: oldName.");
             if (request.newName.empty()) return failedValidation("Missing required argument: newName.");
-            if (!isActiveNetId(netlist, netlist.getNetId(request.oldName))) {
-                return failedValidation("Net not found or already removed: " + request.oldName + ".");
+            {
+                const int oldNetId = netlist.getNetId(request.oldName);
+                if (!isActiveNetId(netlist, oldNetId)) {
+                    return failedValidation("Net not found or already removed: " + request.oldName + ".");
+                }
+                if (netlist.getNet(oldNetId).isConst) {
+                    return failedValidation("Constant literals cannot be renamed.");
+                }
+            }
+            if (isCanonicalConstantLiteral(request.newName)) {
+                return failedValidation("A net cannot be renamed to a constant literal.");
             }
             if (request.oldName != request.newName && netlist.getNetId(request.newName) >= 0) {
                 return failedValidation("Net rename target already exists: " + request.newName + ".");

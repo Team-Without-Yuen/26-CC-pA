@@ -1,0 +1,19 @@
+Function search matches
+
+Equivalence class 1
+  proof_method: SAT_EQUIVALENCE_CLASS
+  member_count: 2
+  member 1: g756 (gate_id=756, net=n171, net_id=725)
+  member 2: g786 (gate_id=786, net=n139, net_id=808)
+
+Match 1
+  gate_a: g756 (id=756)
+  gate_b: g786 (id=786)
+  net_a: n171 (id=725)
+  net_b: n139 (id=808)
+  proof_method: SAT_EQUIVALENCE_CLASS
+  solver_status: UNSAT
+
+Total matches: 1
+Complete: yes
+Status: MATCHES_FOUND

@@ -1,0 +1,72 @@
+eda> TOOL_RESULT_BEGIN
+ok: true
+status: ok
+command: read
+message: Design loaded and original snapshot created.
+design_revision: 0
+complete: true
+data:
+  loaded_file: ../../NewTestCase/test35/test35.v
+  gate_count: 34853
+  net_count: 35077
+  primary_input_count: 25
+  primary_output_count: 23
+  original_snapshot_available: true
+TOOL_RESULT_END
+eda> TOOL_RESULT_BEGIN
+ok: true
+status: ok
+command: func_search
+mode: nand_pair
+message: Found a SAT-proven internal signal pair.
+design_revision: 0
+complete: true
+data:
+  report_status: MATCH_FOUND
+  search_type: NAND_EQUIVALENT_INPUT_PAIRS
+  target_net: n25
+  target_net_id: 223
+  scope: WHOLE_DESIGN
+  scope_name: 
+  gate_type_filter: ANY
+  found: true
+  complete: true
+  all_candidates_examined: false
+  timed_out: false
+  truncated: false
+  unsupported: false
+  candidate_signal_count: 34639
+  candidate_gate_count: 0
+  simulation_eligible_signal_count: 11832
+  simulation_bucket_count: 0
+  candidate_pairs_considered: 16458851
+  candidate_pairs_rejected_by_simulation: 16457366
+  sat_checks: 1485
+  sat_unknown_count: 0
+  unsupported_signal_count: 0
+  equivalence_class_count: 0
+  equivalent_pair_count: 0
+  simulation_pattern_count: 256
+  elapsed_seconds: 7.69897
+  match_count: 1
+  stored_match_count: 1
+  wrote_matches_to_file: false
+  matches:
+    match 1:
+      net_a: n26080
+      net_a_id: 4504
+      net_b: n6359
+      net_b_id: 9661
+      proven_equivalent: true
+      proof_method: SAT_UNSAT_MITER
+      solver_status: UNSAT
+  equivalence_classes:
+TOOL_RESULT_END
+eda> TOOL_RESULT_BEGIN
+ok: true
+status: ok
+command: exit
+message: Session closed.
+design_revision: 0
+complete: true
+TOOL_RESULT_END

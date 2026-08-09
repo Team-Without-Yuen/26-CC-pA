@@ -16,8 +16,7 @@ API_SPEC/API_CORE_BACKEND_TODO.md
 
 | ID | API 來源 | tools 層問題 | 預定處理 |
 |---|---|---|---|
-| BASIC-TOOLS-001 | Basic Query `PortInfo` | 通用 Basic printer 對 port 輸出沒有意義的 `id: -1`，且尚未顯示 port direction flags | 後續統一更新 `tools.cpp`/`TOOLS_SPEC` 時，只在 `objectId >= 0` 時印 ID，並輸出 input/output direction |
-| BASIC-TOOLS-002 | Basic Query `StructuralIssues` | backend 已新增 `floatingPrimaryInputNets` 與 `unconnectedPrimaryOutputNets`，CLI printer/schema 尚未輸出 | 後續同步 printer 與 `TOOLS_SPEC`，保留既有 general structural lists 並增加兩個精確分類 |
+| - | - | 目前沒有已確認但尚未同步的 API schema 項目 | 新發現請先登記後再修改 tools 層 |
 
 ## 短期盤查：完整輸出與 best-effort 作答
 
@@ -66,6 +65,14 @@ driver 策略，不應在 tool envelope 內把 partial 改標為 complete。
 | `depth_query all_po/all_dff_d/exceeding` | 大量 endpoint/depth records | terminal 全量輸出 | count 題只簡答；list 題全量輸出 | 可考慮 `-out` |
 | `func_query boolean_expression` | expression 可能極長 | terminal 全量輸出 | 目前無 file output | 後期 Boolean/AIG 重構處理 |
 | `func_query support_pi` | 大型 support list | terminal 全量輸出 | list 題全量輸出 | 低優先，可共用 `-out` |
+
+### T14 Path compact artifact 待同步
+
+- API backend 已將完整 `path_query enumerate` artifact 改為 `COMPACT_PATH_V3`。
+- `tools.cpp` parser、command grammar、envelope 欄位與 output path 均不需修改。
+- 後續更新 `TOOLS_SPEC/PATH_QUERY_TOOL.md`：補充 dictionary、base36、prefix/suffix delta、
+  reconstruction 與 `Expected paths == Written paths && Complete: yes` 判讀規則。
+- 完整 test37：16,548,172 records，約 17.81 秒、670.1 MB，footer complete。
 | `edit_apply` / `report_query last_edit` | changed names、merge records、validation messages | terminal 全量輸出 | delta 題只簡答；detail 題全量輸出 | 可考慮 report file output |
 | `equiv_query` | matched/skipped boundary names | terminal 全量輸出 | yes/no 題只簡答；mismatch detail 全量輸出 | 可考慮只印 mismatch 或 `-out` |
 
@@ -102,9 +109,24 @@ P2: Boolean expression，留待 AIG/Boolean 重構。
 - T10 Sequential Pattern all-DFF detail：未指定 summary/offset/limit 時自動完整寫入
   不覆寫的 artifact；single-DFF 與明確 pagination 維持原行為。test21 18/18，test40
   1583/1583 records，envelope 由約 3.23 MB 降至 1292 characters。
+- T11 Basic PortInfo：不再輸出無意義的 `id:-1`，新增 `is_bus`、
+  `is_primary_input`、`is_primary_output`；test9 驗證 input/output port direction。
+- T12 Basic StructuralIssues：CLI 新增 `Floating primary-input nets` 與
+  `Unconnected primary-output nets` 精確 bit-net 分類，同時保留既有 general lists。
+- T13 Depth routing：`gate_on_critical` 文件修正為「任一 global maximum-depth path」；
+  PI-only startpoint prompt 明確改走 `path_query max_depth all_pi ...`。
+- T14 OptApply timeout/envelope：graph-identity no-op 文件改為 `StructuralIdentity`；
+  pre-core `coreStatus=TIMEOUT` 現在正確映射 `status:timeout`，並與 SAT timeout 分開判讀。
 ```
 
-驗證：`scripts/run_tools_regression.ps1 -Profile Full`，24/24 PASS。
+驗證：
+
+```text
+mini test/test9: 24/24 PASS
+mini test/test32: 27/27 PASS
+scripts/run_tools_regression.ps1 -Profile Full: 24/24 PASS
+log: Testing/tools-regression/20260809-231609
+```
 
 ## 後期 AIG / Boolean 重構前暫不推進
 

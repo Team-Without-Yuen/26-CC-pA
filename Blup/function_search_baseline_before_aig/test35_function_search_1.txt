@@ -1,0 +1,3077 @@
+Function search matches
+
+Match 1
+  net_a: n26080 (id=4504)
+  net_b: n6359 (id=9661)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 2
+  net_a: n26022 (id=4604)
+  net_b: n6359 (id=9661)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 3
+  net_a: n25679 (id=5192)
+  net_b: n6359 (id=9661)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 4
+  net_a: n25615 (id=5306)
+  net_b: n6359 (id=9661)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 5
+  net_a: n990 (id=6243)
+  net_b: n6359 (id=9661)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 6
+  net_a: n987 (id=6577)
+  net_b: n6359 (id=9661)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 7
+  net_a: n29732 (id=8493)
+  net_b: n6359 (id=9661)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 8
+  net_a: n23993 (id=8497)
+  net_b: n6359 (id=9661)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 9
+  net_a: n23933 (id=8498)
+  net_b: n6359 (id=9661)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 10
+  net_a: n23992 (id=8500)
+  net_b: n6359 (id=9661)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 11
+  net_a: n23957 (id=8501)
+  net_b: n6359 (id=9661)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 12
+  net_a: n30191 (id=8869)
+  net_b: n6359 (id=9661)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 13
+  net_a: n29459 (id=8890)
+  net_b: n6359 (id=9661)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 14
+  net_a: n23311 (id=9308)
+  net_b: n6359 (id=9661)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 15
+  net_a: n23299 (id=9314)
+  net_b: n6359 (id=9661)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 16
+  net_a: n23247 (id=9350)
+  net_b: n6359 (id=9661)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 17
+  net_a: n29749 (id=9645)
+  net_b: n6359 (id=9661)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 18
+  net_a: n6359 (id=9661)
+  net_b: n10496 (id=10483)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 19
+  net_a: n6359 (id=9661)
+  net_b: n10492 (id=10486)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 20
+  net_a: n6359 (id=9661)
+  net_b: n22998 (id=14871)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 21
+  net_a: n6359 (id=9661)
+  net_b: n22991 (id=14873)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 22
+  net_a: n6359 (id=9661)
+  net_b: n22989 (id=14907)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 23
+  net_a: n6359 (id=9661)
+  net_b: n22996 (id=14909)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 24
+  net_a: n6359 (id=9661)
+  net_b: n23039 (id=14912)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 25
+  net_a: n6359 (id=9661)
+  net_b: n23037 (id=14914)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 26
+  net_a: n6359 (id=9661)
+  net_b: n22028 (id=15001)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 27
+  net_a: n6359 (id=9661)
+  net_b: n17776 (id=15003)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 28
+  net_a: n6359 (id=9661)
+  net_b: n22027 (id=15004)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 29
+  net_a: n6359 (id=9661)
+  net_b: n22026 (id=15008)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 30
+  net_a: n6359 (id=9661)
+  net_b: n17265 (id=15009)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 31
+  net_a: n6359 (id=9661)
+  net_b: n22025 (id=15010)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 32
+  net_a: n6359 (id=9661)
+  net_b: n20772 (id=15296)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 33
+  net_a: n6359 (id=9661)
+  net_b: n20766 (id=15309)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 34
+  net_a: n6359 (id=9661)
+  net_b: n19189 (id=15323)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 35
+  net_a: n6359 (id=9661)
+  net_b: n21723 (id=15324)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 36
+  net_a: n6359 (id=9661)
+  net_b: n19953 (id=15342)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 37
+  net_a: n6359 (id=9661)
+  net_b: n19952 (id=15344)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 38
+  net_a: n6359 (id=9661)
+  net_b: n19951 (id=15346)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 39
+  net_a: n6359 (id=9661)
+  net_b: n19950 (id=15348)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 40
+  net_a: n6359 (id=9661)
+  net_b: n19949 (id=15350)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 41
+  net_a: n6359 (id=9661)
+  net_b: n19948 (id=15352)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 42
+  net_a: n6359 (id=9661)
+  net_b: n19947 (id=15354)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 43
+  net_a: n6359 (id=9661)
+  net_b: n19945 (id=15356)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 44
+  net_a: n6359 (id=9661)
+  net_b: n19946 (id=15358)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 45
+  net_a: n6359 (id=9661)
+  net_b: n19944 (id=15360)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 46
+  net_a: n6359 (id=9661)
+  net_b: n19943 (id=15362)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 47
+  net_a: n6359 (id=9661)
+  net_b: n19942 (id=15364)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 48
+  net_a: n6359 (id=9661)
+  net_b: n19941 (id=15366)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 49
+  net_a: n6359 (id=9661)
+  net_b: n19939 (id=15368)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 50
+  net_a: n6359 (id=9661)
+  net_b: n19940 (id=15370)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 51
+  net_a: n6359 (id=9661)
+  net_b: n19938 (id=15372)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 52
+  net_a: n6359 (id=9661)
+  net_b: n19937 (id=15374)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 53
+  net_a: n6359 (id=9661)
+  net_b: n19936 (id=15376)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 54
+  net_a: n6359 (id=9661)
+  net_b: n19935 (id=15378)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 55
+  net_a: n6359 (id=9661)
+  net_b: n19933 (id=15380)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 56
+  net_a: n6359 (id=9661)
+  net_b: n19932 (id=15382)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 57
+  net_a: n6359 (id=9661)
+  net_b: n19934 (id=15384)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 58
+  net_a: n6359 (id=9661)
+  net_b: n19931 (id=15386)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 59
+  net_a: n6359 (id=9661)
+  net_b: n19930 (id=15388)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 60
+  net_a: n6359 (id=9661)
+  net_b: n19929 (id=15390)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 61
+  net_a: n6359 (id=9661)
+  net_b: n19928 (id=15392)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 62
+  net_a: n6359 (id=9661)
+  net_b: n19927 (id=15394)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 63
+  net_a: n6359 (id=9661)
+  net_b: n19926 (id=15396)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 64
+  net_a: n6359 (id=9661)
+  net_b: n19925 (id=15398)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 65
+  net_a: n6359 (id=9661)
+  net_b: n19924 (id=15400)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 66
+  net_a: n6359 (id=9661)
+  net_b: n19333 (id=15402)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 67
+  net_a: n6359 (id=9661)
+  net_b: n19353 (id=15404)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 68
+  net_a: n6359 (id=9661)
+  net_b: n19923 (id=15406)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 69
+  net_a: n6359 (id=9661)
+  net_b: n19922 (id=15408)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 70
+  net_a: n6359 (id=9661)
+  net_b: n19921 (id=15410)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 71
+  net_a: n6359 (id=9661)
+  net_b: n19920 (id=15412)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 72
+  net_a: n6359 (id=9661)
+  net_b: n19919 (id=15414)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 73
+  net_a: n6359 (id=9661)
+  net_b: n19918 (id=15416)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 74
+  net_a: n6359 (id=9661)
+  net_b: n19917 (id=15418)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 75
+  net_a: n6359 (id=9661)
+  net_b: n19916 (id=15420)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 76
+  net_a: n6359 (id=9661)
+  net_b: n19915 (id=15422)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 77
+  net_a: n6359 (id=9661)
+  net_b: n19914 (id=15424)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 78
+  net_a: n6359 (id=9661)
+  net_b: n19913 (id=15426)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 79
+  net_a: n6359 (id=9661)
+  net_b: n19912 (id=15428)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 80
+  net_a: n6359 (id=9661)
+  net_b: n19911 (id=15430)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 81
+  net_a: n6359 (id=9661)
+  net_b: n19910 (id=15432)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 82
+  net_a: n6359 (id=9661)
+  net_b: n19909 (id=15434)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 83
+  net_a: n6359 (id=9661)
+  net_b: n19908 (id=15436)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 84
+  net_a: n6359 (id=9661)
+  net_b: n19907 (id=15438)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 85
+  net_a: n6359 (id=9661)
+  net_b: n19906 (id=15440)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 86
+  net_a: n6359 (id=9661)
+  net_b: n19905 (id=15442)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 87
+  net_a: n6359 (id=9661)
+  net_b: n19904 (id=15444)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 88
+  net_a: n6359 (id=9661)
+  net_b: n19903 (id=15446)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 89
+  net_a: n6359 (id=9661)
+  net_b: n19902 (id=15448)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 90
+  net_a: n6359 (id=9661)
+  net_b: n19901 (id=15450)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 91
+  net_a: n6359 (id=9661)
+  net_b: n19900 (id=15452)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 92
+  net_a: n6359 (id=9661)
+  net_b: n19899 (id=15454)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 93
+  net_a: n6359 (id=9661)
+  net_b: n19898 (id=15456)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 94
+  net_a: n6359 (id=9661)
+  net_b: n19897 (id=15458)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 95
+  net_a: n6359 (id=9661)
+  net_b: n19896 (id=15460)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 96
+  net_a: n6359 (id=9661)
+  net_b: n19895 (id=15462)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 97
+  net_a: n6359 (id=9661)
+  net_b: n19332 (id=15464)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 98
+  net_a: n6359 (id=9661)
+  net_b: n19352 (id=15466)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 99
+  net_a: n6359 (id=9661)
+  net_b: n19894 (id=15468)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 100
+  net_a: n6359 (id=9661)
+  net_b: n19893 (id=15470)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 101
+  net_a: n6359 (id=9661)
+  net_b: n19892 (id=15472)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 102
+  net_a: n6359 (id=9661)
+  net_b: n19891 (id=15474)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 103
+  net_a: n6359 (id=9661)
+  net_b: n19890 (id=15476)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 104
+  net_a: n6359 (id=9661)
+  net_b: n19888 (id=15478)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 105
+  net_a: n6359 (id=9661)
+  net_b: n19889 (id=15480)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 106
+  net_a: n6359 (id=9661)
+  net_b: n19887 (id=15482)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 107
+  net_a: n6359 (id=9661)
+  net_b: n19886 (id=15484)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 108
+  net_a: n6359 (id=9661)
+  net_b: n19885 (id=15486)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 109
+  net_a: n6359 (id=9661)
+  net_b: n19884 (id=15488)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 110
+  net_a: n6359 (id=9661)
+  net_b: n19883 (id=15490)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 111
+  net_a: n6359 (id=9661)
+  net_b: n19880 (id=15492)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 112
+  net_a: n6359 (id=9661)
+  net_b: n19879 (id=15494)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 113
+  net_a: n6359 (id=9661)
+  net_b: n19878 (id=15496)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 114
+  net_a: n6359 (id=9661)
+  net_b: n19877 (id=15498)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 115
+  net_a: n6359 (id=9661)
+  net_b: n19882 (id=15500)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 116
+  net_a: n6359 (id=9661)
+  net_b: n19881 (id=15502)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 117
+  net_a: n6359 (id=9661)
+  net_b: n19876 (id=15504)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 118
+  net_a: n6359 (id=9661)
+  net_b: n19874 (id=15506)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 119
+  net_a: n6359 (id=9661)
+  net_b: n19875 (id=15508)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 120
+  net_a: n6359 (id=9661)
+  net_b: n19873 (id=15510)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 121
+  net_a: n6359 (id=9661)
+  net_b: n19872 (id=15512)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 122
+  net_a: n6359 (id=9661)
+  net_b: n19871 (id=15514)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 123
+  net_a: n6359 (id=9661)
+  net_b: n19870 (id=15516)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 124
+  net_a: n6359 (id=9661)
+  net_b: n19868 (id=15518)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 125
+  net_a: n6359 (id=9661)
+  net_b: n19867 (id=15520)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 126
+  net_a: n6359 (id=9661)
+  net_b: n19866 (id=15522)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 127
+  net_a: n6359 (id=9661)
+  net_b: n19869 (id=15524)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 128
+  net_a: n6359 (id=9661)
+  net_b: n19865 (id=15526)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 129
+  net_a: n6359 (id=9661)
+  net_b: n19864 (id=15528)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 130
+  net_a: n6359 (id=9661)
+  net_b: n19331 (id=15530)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 131
+  net_a: n6359 (id=9661)
+  net_b: n19351 (id=15532)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 132
+  net_a: n6359 (id=9661)
+  net_b: n19863 (id=15534)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 133
+  net_a: n6359 (id=9661)
+  net_b: n19862 (id=15536)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 134
+  net_a: n6359 (id=9661)
+  net_b: n19861 (id=15538)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 135
+  net_a: n6359 (id=9661)
+  net_b: n19860 (id=15540)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 136
+  net_a: n6359 (id=9661)
+  net_b: n19859 (id=15542)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 137
+  net_a: n6359 (id=9661)
+  net_b: n19858 (id=15544)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 138
+  net_a: n6359 (id=9661)
+  net_b: n19857 (id=15546)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 139
+  net_a: n6359 (id=9661)
+  net_b: n19856 (id=15548)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 140
+  net_a: n6359 (id=9661)
+  net_b: n19854 (id=15550)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 141
+  net_a: n6359 (id=9661)
+  net_b: n19855 (id=15552)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 142
+  net_a: n6359 (id=9661)
+  net_b: n19853 (id=15554)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 143
+  net_a: n6359 (id=9661)
+  net_b: n19852 (id=15556)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 144
+  net_a: n6359 (id=9661)
+  net_b: n19851 (id=15558)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 145
+  net_a: n6359 (id=9661)
+  net_b: n19850 (id=15560)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 146
+  net_a: n6359 (id=9661)
+  net_b: n19848 (id=15562)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 147
+  net_a: n6359 (id=9661)
+  net_b: n19849 (id=15564)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 148
+  net_a: n6359 (id=9661)
+  net_b: n19847 (id=15566)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 149
+  net_a: n6359 (id=9661)
+  net_b: n19846 (id=15568)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 150
+  net_a: n6359 (id=9661)
+  net_b: n19845 (id=15570)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 151
+  net_a: n6359 (id=9661)
+  net_b: n19844 (id=15572)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 152
+  net_a: n6359 (id=9661)
+  net_b: n19843 (id=15574)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 153
+  net_a: n6359 (id=9661)
+  net_b: n19842 (id=15576)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 154
+  net_a: n6359 (id=9661)
+  net_b: n19841 (id=15578)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 155
+  net_a: n6359 (id=9661)
+  net_b: n19840 (id=15580)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 156
+  net_a: n6359 (id=9661)
+  net_b: n19839 (id=15582)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 157
+  net_a: n6359 (id=9661)
+  net_b: n19838 (id=15584)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 158
+  net_a: n6359 (id=9661)
+  net_b: n19837 (id=15586)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 159
+  net_a: n6359 (id=9661)
+  net_b: n19836 (id=15588)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 160
+  net_a: n6359 (id=9661)
+  net_b: n19835 (id=15590)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 161
+  net_a: n6359 (id=9661)
+  net_b: n19834 (id=15592)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 162
+  net_a: n6359 (id=9661)
+  net_b: n19330 (id=15594)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 163
+  net_a: n6359 (id=9661)
+  net_b: n19350 (id=15596)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 164
+  net_a: n6359 (id=9661)
+  net_b: n20079 (id=16691)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 165
+  net_a: n6359 (id=9661)
+  net_b: n21724 (id=16692)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 166
+  net_a: n6359 (id=9661)
+  net_b: n20078 (id=16693)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 167
+  net_a: n6359 (id=9661)
+  net_b: n21726 (id=16694)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 168
+  net_a: n6359 (id=9661)
+  net_b: n20077 (id=16695)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 169
+  net_a: n6359 (id=9661)
+  net_b: n21727 (id=16696)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 170
+  net_a: n6359 (id=9661)
+  net_b: n20076 (id=16699)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 171
+  net_a: n6359 (id=9661)
+  net_b: n21728 (id=16700)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 172
+  net_a: n6359 (id=9661)
+  net_b: n20074 (id=16701)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 173
+  net_a: n6359 (id=9661)
+  net_b: n21730 (id=16702)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 174
+  net_a: n6359 (id=9661)
+  net_b: n20073 (id=16703)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 175
+  net_a: n6359 (id=9661)
+  net_b: n21732 (id=16704)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 176
+  net_a: n6359 (id=9661)
+  net_b: n20071 (id=16707)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 177
+  net_a: n6359 (id=9661)
+  net_b: n21733 (id=16708)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 178
+  net_a: n6359 (id=9661)
+  net_b: n29729 (id=16827)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 179
+  net_a: n6359 (id=9661)
+  net_b: n16469 (id=17219)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 180
+  net_a: n6359 (id=9661)
+  net_b: n16470 (id=17221)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 181
+  net_a: n6359 (id=9661)
+  net_b: n16471 (id=17223)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 182
+  net_a: n6359 (id=9661)
+  net_b: n16472 (id=17225)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 183
+  net_a: n6359 (id=9661)
+  net_b: n16473 (id=17227)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 184
+  net_a: n6359 (id=9661)
+  net_b: n16474 (id=17229)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 185
+  net_a: n6359 (id=9661)
+  net_b: n16475 (id=17231)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 186
+  net_a: n6359 (id=9661)
+  net_b: n16476 (id=17233)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 187
+  net_a: n6359 (id=9661)
+  net_b: n16477 (id=17235)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 188
+  net_a: n6359 (id=9661)
+  net_b: n16478 (id=17237)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 189
+  net_a: n6359 (id=9661)
+  net_b: n16479 (id=17239)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 190
+  net_a: n6359 (id=9661)
+  net_b: n16480 (id=17241)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 191
+  net_a: n6359 (id=9661)
+  net_b: n16481 (id=17243)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 192
+  net_a: n6359 (id=9661)
+  net_b: n16482 (id=17245)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 193
+  net_a: n6359 (id=9661)
+  net_b: n16483 (id=17247)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 194
+  net_a: n6359 (id=9661)
+  net_b: n16388 (id=17249)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 195
+  net_a: n6359 (id=9661)
+  net_b: n16550 (id=17251)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 196
+  net_a: n6359 (id=9661)
+  net_b: n16551 (id=17253)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 197
+  net_a: n6359 (id=9661)
+  net_b: n16552 (id=17255)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 198
+  net_a: n6359 (id=9661)
+  net_b: n16553 (id=17257)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 199
+  net_a: n6359 (id=9661)
+  net_b: n16554 (id=17259)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 200
+  net_a: n6359 (id=9661)
+  net_b: n16555 (id=17261)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 201
+  net_a: n6359 (id=9661)
+  net_b: n16556 (id=17263)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 202
+  net_a: n6359 (id=9661)
+  net_b: n16557 (id=17265)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 203
+  net_a: n6359 (id=9661)
+  net_b: n16558 (id=17267)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 204
+  net_a: n6359 (id=9661)
+  net_b: n16559 (id=17269)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 205
+  net_a: n6359 (id=9661)
+  net_b: n16560 (id=17271)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 206
+  net_a: n6359 (id=9661)
+  net_b: n16561 (id=17273)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 207
+  net_a: n6359 (id=9661)
+  net_b: n16562 (id=17275)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 208
+  net_a: n6359 (id=9661)
+  net_b: n16563 (id=17277)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 209
+  net_a: n6359 (id=9661)
+  net_b: n16564 (id=17279)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 210
+  net_a: n6359 (id=9661)
+  net_b: n16488 (id=17283)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 211
+  net_a: n6359 (id=9661)
+  net_b: n17198 (id=17345)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 212
+  net_a: n6359 (id=9661)
+  net_b: n17197 (id=17347)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 213
+  net_a: n6359 (id=9661)
+  net_b: n17199 (id=17349)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 214
+  net_a: n6359 (id=9661)
+  net_b: n17196 (id=17351)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 215
+  net_a: n6359 (id=9661)
+  net_b: n17195 (id=17353)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 216
+  net_a: n6359 (id=9661)
+  net_b: n17194 (id=17355)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 217
+  net_a: n6359 (id=9661)
+  net_b: n17193 (id=17357)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 218
+  net_a: n6359 (id=9661)
+  net_b: n17192 (id=17359)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 219
+  net_a: n6359 (id=9661)
+  net_b: n17191 (id=17361)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 220
+  net_a: n6359 (id=9661)
+  net_b: n17190 (id=17363)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 221
+  net_a: n6359 (id=9661)
+  net_b: n17189 (id=17365)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 222
+  net_a: n6359 (id=9661)
+  net_b: n17187 (id=17367)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 223
+  net_a: n6359 (id=9661)
+  net_b: n17186 (id=17369)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 224
+  net_a: n6359 (id=9661)
+  net_b: n17185 (id=17371)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 225
+  net_a: n6359 (id=9661)
+  net_b: n17184 (id=17373)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 226
+  net_a: n6359 (id=9661)
+  net_b: n17183 (id=17375)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 227
+  net_a: n6359 (id=9661)
+  net_b: n17188 (id=17377)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 228
+  net_a: n6359 (id=9661)
+  net_b: n17182 (id=17379)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 229
+  net_a: n6359 (id=9661)
+  net_b: n17181 (id=17381)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 230
+  net_a: n6359 (id=9661)
+  net_b: n17180 (id=17383)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 231
+  net_a: n6359 (id=9661)
+  net_b: n17179 (id=17385)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 232
+  net_a: n6359 (id=9661)
+  net_b: n17178 (id=17387)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 233
+  net_a: n6359 (id=9661)
+  net_b: n17177 (id=17389)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 234
+  net_a: n6359 (id=9661)
+  net_b: n17176 (id=17391)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 235
+  net_a: n6359 (id=9661)
+  net_b: n17175 (id=17393)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 236
+  net_a: n6359 (id=9661)
+  net_b: n17173 (id=17395)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 237
+  net_a: n6359 (id=9661)
+  net_b: n17172 (id=17397)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 238
+  net_a: n6359 (id=9661)
+  net_b: n17174 (id=17399)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 239
+  net_a: n6359 (id=9661)
+  net_b: n17171 (id=17401)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 240
+  net_a: n6359 (id=9661)
+  net_b: n17170 (id=17403)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 241
+  net_a: n6359 (id=9661)
+  net_b: n16407 (id=17405)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 242
+  net_a: n6359 (id=9661)
+  net_b: n16584 (id=17407)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 243
+  net_a: n6359 (id=9661)
+  net_b: n17167 (id=17409)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 244
+  net_a: n6359 (id=9661)
+  net_b: n17166 (id=17411)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 245
+  net_a: n6359 (id=9661)
+  net_b: n17168 (id=17413)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 246
+  net_a: n6359 (id=9661)
+  net_b: n17165 (id=17415)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 247
+  net_a: n6359 (id=9661)
+  net_b: n17164 (id=17417)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 248
+  net_a: n6359 (id=9661)
+  net_b: n17169 (id=17419)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 249
+  net_a: n6359 (id=9661)
+  net_b: n17163 (id=17421)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 250
+  net_a: n6359 (id=9661)
+  net_b: n17162 (id=17423)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 251
+  net_a: n6359 (id=9661)
+  net_b: n17160 (id=17425)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 252
+  net_a: n6359 (id=9661)
+  net_b: n17159 (id=17427)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 253
+  net_a: n6359 (id=9661)
+  net_b: n17158 (id=17429)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 254
+  net_a: n6359 (id=9661)
+  net_b: n17157 (id=17431)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 255
+  net_a: n6359 (id=9661)
+  net_b: n17156 (id=17433)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 256
+  net_a: n6359 (id=9661)
+  net_b: n17155 (id=17435)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 257
+  net_a: n6359 (id=9661)
+  net_b: n17154 (id=17437)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 258
+  net_a: n6359 (id=9661)
+  net_b: n17153 (id=17439)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 259
+  net_a: n6359 (id=9661)
+  net_b: n17152 (id=17441)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 260
+  net_a: n6359 (id=9661)
+  net_b: n17151 (id=17443)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 261
+  net_a: n6359 (id=9661)
+  net_b: n17150 (id=17445)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 262
+  net_a: n6359 (id=9661)
+  net_b: n17149 (id=17447)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 263
+  net_a: n6359 (id=9661)
+  net_b: n17148 (id=17449)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 264
+  net_a: n6359 (id=9661)
+  net_b: n17147 (id=17451)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 265
+  net_a: n6359 (id=9661)
+  net_b: n17146 (id=17453)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 266
+  net_a: n6359 (id=9661)
+  net_b: n17145 (id=17455)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 267
+  net_a: n6359 (id=9661)
+  net_b: n17144 (id=17457)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 268
+  net_a: n6359 (id=9661)
+  net_b: n17143 (id=17459)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 269
+  net_a: n6359 (id=9661)
+  net_b: n17142 (id=17461)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 270
+  net_a: n6359 (id=9661)
+  net_b: n17141 (id=17463)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 271
+  net_a: n6359 (id=9661)
+  net_b: n17140 (id=17465)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 272
+  net_a: n6359 (id=9661)
+  net_b: n17139 (id=17467)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 273
+  net_a: n6359 (id=9661)
+  net_b: n16406 (id=17469)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 274
+  net_a: n6359 (id=9661)
+  net_b: n16583 (id=17471)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 275
+  net_a: n6359 (id=9661)
+  net_b: n17138 (id=17473)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 276
+  net_a: n6359 (id=9661)
+  net_b: n17137 (id=17475)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 277
+  net_a: n6359 (id=9661)
+  net_b: n17136 (id=17477)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 278
+  net_a: n6359 (id=9661)
+  net_b: n17135 (id=17479)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 279
+  net_a: n6359 (id=9661)
+  net_b: n17134 (id=17481)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 280
+  net_a: n6359 (id=9661)
+  net_b: n17133 (id=17483)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 281
+  net_a: n6359 (id=9661)
+  net_b: n17132 (id=17485)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 282
+  net_a: n6359 (id=9661)
+  net_b: n17131 (id=17487)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 283
+  net_a: n6359 (id=9661)
+  net_b: n17130 (id=17489)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 284
+  net_a: n6359 (id=9661)
+  net_b: n17129 (id=17491)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 285
+  net_a: n6359 (id=9661)
+  net_b: n17128 (id=17493)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 286
+  net_a: n6359 (id=9661)
+  net_b: n17127 (id=17495)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 287
+  net_a: n6359 (id=9661)
+  net_b: n17126 (id=17497)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 288
+  net_a: n6359 (id=9661)
+  net_b: n17125 (id=17499)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 289
+  net_a: n6359 (id=9661)
+  net_b: n17124 (id=17501)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 290
+  net_a: n6359 (id=9661)
+  net_b: n17123 (id=17503)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 291
+  net_a: n6359 (id=9661)
+  net_b: n17122 (id=17505)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 292
+  net_a: n6359 (id=9661)
+  net_b: n17121 (id=17507)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 293
+  net_a: n6359 (id=9661)
+  net_b: n17120 (id=17509)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 294
+  net_a: n6359 (id=9661)
+  net_b: n17119 (id=17511)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 295
+  net_a: n6359 (id=9661)
+  net_b: n17118 (id=17513)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 296
+  net_a: n6359 (id=9661)
+  net_b: n17117 (id=17515)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 297
+  net_a: n6359 (id=9661)
+  net_b: n17116 (id=17517)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 298
+  net_a: n6359 (id=9661)
+  net_b: n17115 (id=17519)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 299
+  net_a: n6359 (id=9661)
+  net_b: n18709 (id=17521)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 300
+  net_a: n6359 (id=9661)
+  net_b: n17114 (id=17523)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 301
+  net_a: n6359 (id=9661)
+  net_b: n18707 (id=17525)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 302
+  net_a: n6359 (id=9661)
+  net_b: n18705 (id=17527)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 303
+  net_a: n6359 (id=9661)
+  net_b: n17113 (id=17529)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 304
+  net_a: n6359 (id=9661)
+  net_b: n18704 (id=17531)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 305
+  net_a: n6359 (id=9661)
+  net_b: n18702 (id=17533)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 306
+  net_a: n6359 (id=9661)
+  net_b: n18700 (id=17535)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 307
+  net_a: n6359 (id=9661)
+  net_b: n17112 (id=17537)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 308
+  net_a: n6359 (id=9661)
+  net_b: n18698 (id=17539)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 309
+  net_a: n6359 (id=9661)
+  net_b: n18697 (id=17541)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 310
+  net_a: n6359 (id=9661)
+  net_b: n17111 (id=17543)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 311
+  net_a: n6359 (id=9661)
+  net_b: n18696 (id=17545)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 312
+  net_a: n6359 (id=9661)
+  net_b: n17110 (id=17547)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 313
+  net_a: n6359 (id=9661)
+  net_b: n18694 (id=17549)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 314
+  net_a: n6359 (id=9661)
+  net_b: n18693 (id=17551)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 315
+  net_a: n6359 (id=9661)
+  net_b: n17109 (id=17553)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 316
+  net_a: n6359 (id=9661)
+  net_b: n18692 (id=17555)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 317
+  net_a: n6359 (id=9661)
+  net_b: n18690 (id=17557)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 318
+  net_a: n6359 (id=9661)
+  net_b: n18689 (id=17559)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 319
+  net_a: n6359 (id=9661)
+  net_b: n16405 (id=17561)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 320
+  net_a: n6359 (id=9661)
+  net_b: n18686 (id=17563)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 321
+  net_a: n6359 (id=9661)
+  net_b: n16582 (id=17575)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 322
+  net_a: n6359 (id=9661)
+  net_b: n17106 (id=17687)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 323
+  net_a: n6359 (id=9661)
+  net_b: n17105 (id=17689)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 324
+  net_a: n6359 (id=9661)
+  net_b: n17104 (id=17691)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 325
+  net_a: n6359 (id=9661)
+  net_b: n17103 (id=17693)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 326
+  net_a: n6359 (id=9661)
+  net_b: n17102 (id=17695)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 327
+  net_a: n6359 (id=9661)
+  net_b: n17101 (id=17697)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 328
+  net_a: n6359 (id=9661)
+  net_b: n17100 (id=17699)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 329
+  net_a: n6359 (id=9661)
+  net_b: n17098 (id=17701)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 330
+  net_a: n6359 (id=9661)
+  net_b: n17099 (id=17703)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 331
+  net_a: n6359 (id=9661)
+  net_b: n17097 (id=17705)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 332
+  net_a: n6359 (id=9661)
+  net_b: n17096 (id=17707)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 333
+  net_a: n6359 (id=9661)
+  net_b: n17095 (id=17709)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 334
+  net_a: n6359 (id=9661)
+  net_b: n17094 (id=17711)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 335
+  net_a: n6359 (id=9661)
+  net_b: n17092 (id=17713)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 336
+  net_a: n6359 (id=9661)
+  net_b: n17093 (id=17715)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 337
+  net_a: n6359 (id=9661)
+  net_b: n17091 (id=17717)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 338
+  net_a: n6359 (id=9661)
+  net_b: n17090 (id=17719)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 339
+  net_a: n6359 (id=9661)
+  net_b: n17089 (id=17721)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 340
+  net_a: n6359 (id=9661)
+  net_b: n17088 (id=17723)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 341
+  net_a: n6359 (id=9661)
+  net_b: n17086 (id=17725)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 342
+  net_a: n6359 (id=9661)
+  net_b: n17085 (id=17727)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 343
+  net_a: n6359 (id=9661)
+  net_b: n17087 (id=17729)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 344
+  net_a: n6359 (id=9661)
+  net_b: n17084 (id=17731)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 345
+  net_a: n6359 (id=9661)
+  net_b: n17083 (id=17733)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 346
+  net_a: n6359 (id=9661)
+  net_b: n17082 (id=17735)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 347
+  net_a: n6359 (id=9661)
+  net_b: n17081 (id=17737)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 348
+  net_a: n6359 (id=9661)
+  net_b: n17080 (id=17739)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 349
+  net_a: n6359 (id=9661)
+  net_b: n17079 (id=17741)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 350
+  net_a: n6359 (id=9661)
+  net_b: n17078 (id=17743)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 351
+  net_a: n6359 (id=9661)
+  net_b: n17077 (id=17745)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 352
+  net_a: n6359 (id=9661)
+  net_b: n16404 (id=17747)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 353
+  net_a: n6359 (id=9661)
+  net_b: n16581 (id=17749)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 354
+  net_a: n6359 (id=9661)
+  net_b: n18421 (id=17943)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 355
+  net_a: n6359 (id=9661)
+  net_b: n18420 (id=17945)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 356
+  net_a: n6359 (id=9661)
+  net_b: n18419 (id=17947)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 357
+  net_a: n6359 (id=9661)
+  net_b: n18418 (id=17949)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 358
+  net_a: n6359 (id=9661)
+  net_b: n18417 (id=17951)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 359
+  net_a: n6359 (id=9661)
+  net_b: n18416 (id=17953)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 360
+  net_a: n6359 (id=9661)
+  net_b: n18415 (id=17955)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 361
+  net_a: n6359 (id=9661)
+  net_b: n18414 (id=17957)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 362
+  net_a: n6359 (id=9661)
+  net_b: n18413 (id=17959)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 363
+  net_a: n6359 (id=9661)
+  net_b: n18412 (id=17961)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 364
+  net_a: n6359 (id=9661)
+  net_b: n18411 (id=17963)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 365
+  net_a: n6359 (id=9661)
+  net_b: n18410 (id=17965)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 366
+  net_a: n6359 (id=9661)
+  net_b: n18409 (id=17967)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 367
+  net_a: n6359 (id=9661)
+  net_b: n18408 (id=17969)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 368
+  net_a: n6359 (id=9661)
+  net_b: n18407 (id=17971)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 369
+  net_a: n6359 (id=9661)
+  net_b: n18326 (id=18137)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 370
+  net_a: n6359 (id=9661)
+  net_b: n18324 (id=18141)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 371
+  net_a: n6359 (id=9661)
+  net_b: n18323 (id=18143)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 372
+  net_a: n6359 (id=9661)
+  net_b: n18322 (id=18147)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 373
+  net_a: n6359 (id=9661)
+  net_b: n18320 (id=18151)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 374
+  net_a: n6359 (id=9661)
+  net_b: n18318 (id=18153)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 375
+  net_a: n6359 (id=9661)
+  net_b: n18317 (id=18157)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 376
+  net_a: n6359 (id=9661)
+  net_b: n18315 (id=18159)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 377
+  net_a: n6359 (id=9661)
+  net_b: n18314 (id=18161)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 378
+  net_a: n6359 (id=9661)
+  net_b: n18312 (id=18165)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 379
+  net_a: n6359 (id=9661)
+  net_b: n18310 (id=18167)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 380
+  net_a: n6359 (id=9661)
+  net_b: n18309 (id=18169)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 381
+  net_a: n6359 (id=9661)
+  net_b: n18308 (id=18173)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 382
+  net_a: n6359 (id=9661)
+  net_b: n18306 (id=18177)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 383
+  net_a: n6359 (id=9661)
+  net_b: n18305 (id=18181)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 384
+  net_a: n6359 (id=9661)
+  net_b: n17847 (id=19126)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 385
+  net_a: n6359 (id=9661)
+  net_b: n17837 (id=19127)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 386
+  net_a: n6359 (id=9661)
+  net_b: n17849 (id=19128)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 387
+  net_a: n6359 (id=9661)
+  net_b: n17839 (id=19129)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 388
+  net_a: n6359 (id=9661)
+  net_b: n19156 (id=19629)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 389
+  net_a: n6359 (id=9661)
+  net_b: n15438 (id=19656)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 390
+  net_a: n6359 (id=9661)
+  net_b: n15419 (id=19661)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 391
+  net_a: n6359 (id=9661)
+  net_b: n14024 (id=19674)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 392
+  net_a: n6359 (id=9661)
+  net_b: n14005 (id=19678)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 393
+  net_a: n6359 (id=9661)
+  net_b: n15447 (id=19688)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 394
+  net_a: n6359 (id=9661)
+  net_b: n15134 (id=19708)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 395
+  net_a: n6359 (id=9661)
+  net_b: n16113 (id=19710)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 396
+  net_a: n6359 (id=9661)
+  net_b: n15405 (id=19732)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 397
+  net_a: n6359 (id=9661)
+  net_b: n15403 (id=19733)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 398
+  net_a: n6359 (id=9661)
+  net_b: n15414 (id=19734)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 399
+  net_a: n6359 (id=9661)
+  net_b: n15396 (id=19815)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 400
+  net_a: n6359 (id=9661)
+  net_b: n15365 (id=19819)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 401
+  net_a: n6359 (id=9661)
+  net_b: n16177 (id=19821)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 402
+  net_a: n6359 (id=9661)
+  net_b: n15364 (id=19823)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 403
+  net_a: n6359 (id=9661)
+  net_b: n16167 (id=19825)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 404
+  net_a: n6359 (id=9661)
+  net_b: n15363 (id=19827)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 405
+  net_a: n6359 (id=9661)
+  net_b: n15362 (id=19829)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 406
+  net_a: n6359 (id=9661)
+  net_b: n15361 (id=19831)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 407
+  net_a: n6359 (id=9661)
+  net_b: n15360 (id=19833)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 408
+  net_a: n6359 (id=9661)
+  net_b: n15359 (id=19835)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 409
+  net_a: n6359 (id=9661)
+  net_b: n15358 (id=19837)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 410
+  net_a: n6359 (id=9661)
+  net_b: n15357 (id=19839)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 411
+  net_a: n6359 (id=9661)
+  net_b: n15368 (id=19841)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 412
+  net_a: n6359 (id=9661)
+  net_b: n15356 (id=19843)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 413
+  net_a: n6359 (id=9661)
+  net_b: n15355 (id=19845)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 414
+  net_a: n6359 (id=9661)
+  net_b: n15354 (id=19847)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 415
+  net_a: n6359 (id=9661)
+  net_b: n29726 (id=20450)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 416
+  net_a: n6359 (id=9661)
+  net_b: n15442 (id=20627)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 417
+  net_a: n6359 (id=9661)
+  net_b: n29724 (id=20685)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 418
+  net_a: n6359 (id=9661)
+  net_b: n13943 (id=20832)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 419
+  net_a: n6359 (id=9661)
+  net_b: n15520 (id=21163)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 420
+  net_a: n6359 (id=9661)
+  net_b: n15539 (id=21216)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 421
+  net_a: n6359 (id=9661)
+  net_b: n16205 (id=21217)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 422
+  net_a: n6359 (id=9661)
+  net_b: n14658 (id=21356)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 423
+  net_a: n6359 (id=9661)
+  net_b: n14657 (id=21358)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 424
+  net_a: n6359 (id=9661)
+  net_b: n14656 (id=21360)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 425
+  net_a: n6359 (id=9661)
+  net_b: n14655 (id=21362)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 426
+  net_a: n6359 (id=9661)
+  net_b: n14654 (id=21364)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 427
+  net_a: n6359 (id=9661)
+  net_b: n14653 (id=21366)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 428
+  net_a: n6359 (id=9661)
+  net_b: n14652 (id=21368)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 429
+  net_a: n6359 (id=9661)
+  net_b: n14651 (id=21370)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 430
+  net_a: n6359 (id=9661)
+  net_b: n14650 (id=21372)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 431
+  net_a: n6359 (id=9661)
+  net_b: n14649 (id=21374)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 432
+  net_a: n6359 (id=9661)
+  net_b: n14648 (id=21376)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 433
+  net_a: n6359 (id=9661)
+  net_b: n14647 (id=21378)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 434
+  net_a: n6359 (id=9661)
+  net_b: n14646 (id=21380)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 435
+  net_a: n6359 (id=9661)
+  net_b: n14645 (id=21382)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 436
+  net_a: n6359 (id=9661)
+  net_b: n14644 (id=21384)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 437
+  net_a: n6359 (id=9661)
+  net_b: n14643 (id=21386)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 438
+  net_a: n6359 (id=9661)
+  net_b: n14642 (id=21388)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 439
+  net_a: n6359 (id=9661)
+  net_b: n14641 (id=21390)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 440
+  net_a: n6359 (id=9661)
+  net_b: n14640 (id=21392)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 441
+  net_a: n6359 (id=9661)
+  net_b: n14639 (id=21394)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 442
+  net_a: n6359 (id=9661)
+  net_b: n14638 (id=21396)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 443
+  net_a: n6359 (id=9661)
+  net_b: n14637 (id=21398)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 444
+  net_a: n6359 (id=9661)
+  net_b: n14636 (id=21400)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 445
+  net_a: n6359 (id=9661)
+  net_b: n14635 (id=21402)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 446
+  net_a: n6359 (id=9661)
+  net_b: n14634 (id=21404)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 447
+  net_a: n6359 (id=9661)
+  net_b: n14633 (id=21406)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 448
+  net_a: n6359 (id=9661)
+  net_b: n14632 (id=21408)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 449
+  net_a: n6359 (id=9661)
+  net_b: n14631 (id=21410)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 450
+  net_a: n6359 (id=9661)
+  net_b: n14630 (id=21412)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 451
+  net_a: n6359 (id=9661)
+  net_b: n14629 (id=21414)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 452
+  net_a: n6359 (id=9661)
+  net_b: n14628 (id=21416)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 453
+  net_a: n6359 (id=9661)
+  net_b: n13848 (id=21673)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 454
+  net_a: n6359 (id=9661)
+  net_b: n6286 (id=22240)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 455
+  net_a: n6359 (id=9661)
+  net_b: n13278 (id=22246)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 456
+  net_a: n6359 (id=9661)
+  net_b: n8441 (id=22910)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 457
+  net_a: n6359 (id=9661)
+  net_b: n14054 (id=22935)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 458
+  net_a: n6359 (id=9661)
+  net_b: n13047 (id=23303)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 459
+  net_a: n6359 (id=9661)
+  net_b: n11703 (id=24916)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 460
+  net_a: n6359 (id=9661)
+  net_b: n10451 (id=25822)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 461
+  net_a: n6359 (id=9661)
+  net_b: n10450 (id=25824)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 462
+  net_a: n6359 (id=9661)
+  net_b: n10449 (id=25826)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 463
+  net_a: n6359 (id=9661)
+  net_b: n10448 (id=25828)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 464
+  net_a: n6359 (id=9661)
+  net_b: n10447 (id=25830)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 465
+  net_a: n6359 (id=9661)
+  net_b: n10446 (id=25832)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 466
+  net_a: n6359 (id=9661)
+  net_b: n9504 (id=25834)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 467
+  net_a: n6359 (id=9661)
+  net_b: n10445 (id=25836)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 468
+  net_a: n6359 (id=9661)
+  net_b: n10444 (id=25838)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 469
+  net_a: n6359 (id=9661)
+  net_b: n10443 (id=25840)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 470
+  net_a: n6359 (id=9661)
+  net_b: n10442 (id=25842)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 471
+  net_a: n6359 (id=9661)
+  net_b: n10441 (id=25844)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 472
+  net_a: n6359 (id=9661)
+  net_b: n10440 (id=25846)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 473
+  net_a: n6359 (id=9661)
+  net_b: n10439 (id=25848)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 474
+  net_a: n6359 (id=9661)
+  net_b: n10438 (id=25850)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 475
+  net_a: n6359 (id=9661)
+  net_b: n10437 (id=25852)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 476
+  net_a: n6359 (id=9661)
+  net_b: n10436 (id=25854)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 477
+  net_a: n6359 (id=9661)
+  net_b: n10434 (id=25856)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 478
+  net_a: n6359 (id=9661)
+  net_b: n9820 (id=25858)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 479
+  net_a: n6359 (id=9661)
+  net_b: n10433 (id=25860)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 480
+  net_a: n6359 (id=9661)
+  net_b: n10432 (id=25862)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 481
+  net_a: n6359 (id=9661)
+  net_b: n10431 (id=25864)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 482
+  net_a: n6359 (id=9661)
+  net_b: n10430 (id=25866)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 483
+  net_a: n6359 (id=9661)
+  net_b: n10429 (id=25868)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 484
+  net_a: n6359 (id=9661)
+  net_b: n10428 (id=25870)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 485
+  net_a: n6359 (id=9661)
+  net_b: n10427 (id=25872)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 486
+  net_a: n6359 (id=9661)
+  net_b: n9278 (id=25874)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 487
+  net_a: n6359 (id=9661)
+  net_b: n10426 (id=25876)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 488
+  net_a: n6359 (id=9661)
+  net_b: n10425 (id=25878)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 489
+  net_a: n6359 (id=9661)
+  net_b: n10424 (id=25880)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 490
+  net_a: n6359 (id=9661)
+  net_b: n10423 (id=25882)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 491
+  net_a: n6359 (id=9661)
+  net_b: n8123 (id=26990)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 492
+  net_a: n6359 (id=9661)
+  net_b: n8299 (id=26992)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 493
+  net_a: n6359 (id=9661)
+  net_b: n8298 (id=26996)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 494
+  net_a: n6359 (id=9661)
+  net_b: n8130 (id=27000)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 495
+  net_a: n6359 (id=9661)
+  net_b: n7979 (id=27439)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 496
+  net_a: n6359 (id=9661)
+  net_b: n6638 (id=27440)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 497
+  net_a: n6359 (id=9661)
+  net_b: n6276 (id=28559)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 498
+  net_a: n6359 (id=9661)
+  net_b: n974 (id=29881)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 499
+  net_a: n6359 (id=9661)
+  net_b: n979 (id=29886)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 500
+  net_a: n6359 (id=9661)
+  net_b: n1437 (id=30300)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 501
+  net_a: n6359 (id=9661)
+  net_b: n1434 (id=30303)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 502
+  net_a: n6359 (id=9661)
+  net_b: n1430 (id=30304)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 503
+  net_a: n6359 (id=9661)
+  net_b: n1487 (id=30350)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 504
+  net_a: n6359 (id=9661)
+  net_b: n1484 (id=30353)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 505
+  net_a: n6359 (id=9661)
+  net_b: n1480 (id=30354)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 506
+  net_a: n6359 (id=9661)
+  net_b: n1975 (id=30838)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 507
+  net_a: n6359 (id=9661)
+  net_b: n6200 (id=35027)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 508
+  net_a: n6359 (id=9661)
+  net_b: n6198 (id=35029)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 509
+  net_a: n6359 (id=9661)
+  net_b: n6204 (id=35030)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 510
+  net_a: n6359 (id=9661)
+  net_b: n6203 (id=35032)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 511
+  net_a: n6359 (id=9661)
+  net_b: n6202 (id=35033)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Match 512
+  net_a: n6359 (id=9661)
+  net_b: n6196 (id=35036)
+  proof_method: SAT_UNSAT_MITER
+  solver_status: UNSAT
+
+Total matches: 512
+Complete: yes
+Status: MATCHES_FOUND

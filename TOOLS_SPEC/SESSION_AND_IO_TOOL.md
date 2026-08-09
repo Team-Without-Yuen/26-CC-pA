@@ -7,7 +7,16 @@
 完整性規則：除 prompt 明確限制筆數外，不自行截斷結果；支援 file output 時寫入完整檔案，
 正式答案只回必要摘要。時間限制依題目指定。詳見 [`LLM_NOTES.md`](LLM_NOTES.md)。
 
-## 2. Commands
+## 2. 選擇條件
+
+每個 testcase 的 load prompt 先使用 `read`，最後的 output prompt 使用 `write`。所有其他
+public query/edit 都要求同一 session 已有成功載入的 current design。不要因 prompt 同時要求
+「load and report」就只執行 `read`；load 後仍需呼叫負責 report 的 query。
+
+`help` 只用於確認 public grammar，不回答 circuit prompt。`quit`/`exit` 只在該 testcase
+全部 prompt 與 final write 完成後使用。
+
+## 3. Commands
 
 ```text
 read <verilog_file>
@@ -19,7 +28,7 @@ exit
 
 路徑可使用單引號或雙引號包含空白。`read` 或 `write` 會把 command 後剩餘整行視為路徑。
 
-## 3. Read
+## 4. Read
 
 成功 `read` 後：
 
@@ -41,11 +50,23 @@ exit
 
 讀取失敗時原本 session 不會被新 temporary design 取代。
 
-## 4. Write
+## 5. Write
 
 `write` 只輸出 current design。主要 data 為 `output_file` 與 `written`。尚未成功 `read` 時會回 `NO_DESIGN_LOADED`。
 
-## 5. Prompt Examples
+## 6. 輸出判讀
+
+| Command | 成功條件 | 主要 data | 常見失敗 |
+|---|---|---|---|
+| `read` | `status:ok`, `complete:true`, `original_snapshot_available:true` | loaded file、active gate/net、PI/PO count | file/parser error；舊 session 保留 |
+| `write` | `status:ok`, `complete:true`, `written:true` | `output_file` | `NO_DESIGN_LOADED` 或 writer error |
+| `help` | `status:ok`, `complete:true` | public grammar text | 無 design 也可使用 |
+| `quit`/`exit` | `status:ok`, `complete:true` | 無必要 data | session 結束後不可繼續 query |
+
+`read` 回傳的 gate/net/PI/PO count 只用於確認載入與基本 size；需要 gate-type breakdown、
+bus width 或 structural issue 時，必須再呼叫 `structure_query`。
+
+## 7. Prompt Examples
 
 ```text
 Prompt: Load the input design and report its basic size.
@@ -60,7 +81,7 @@ Command:
   write result.v
 ```
 
-## 6. 限制
+## 8. 限制
 
 `write` 不會自動執行 equivalence。題目要求功能不變時，先使用 `equiv_query` 確認，再輸出設計。
 

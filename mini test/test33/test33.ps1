@@ -78,8 +78,10 @@ if ($responses.Count -ge 13) {
         ($responses[4] -match "status: ok" -and
          $responses[4] -match "Total paths: 2" -and
          $responses[4] -match "Wrote paths to file: yes" -and
-         (First-Line $smallOut) -eq "Total paths:                    2") `
-        "small streaming output writes the correct final header"
+         (First-Line $smallOut) -eq "Total paths: 2" -and
+         (Get-Content -LiteralPath $smallOut -Raw) -match "Format: COMPACT_PATH_V3" -and
+         (Get-Content -LiteralPath $smallOut -Raw) -match "Written paths: 2") `
+        "small streaming output writes the compact exact-count artifact"
 
     Check-Result `
         ($responses[6] -match "status: ok" -and
@@ -92,8 +94,10 @@ if ($responses.Count -ge 13) {
         ($responses[7] -match "status: ok" -and
          $responses[7] -match "Total paths: 289366" -and
          $responses[7] -match "Wrote paths to file: yes" -and
-         (First-Line $largeOut) -eq "Total paths:               289366") `
-        "released test14 streaming output completes and patches the path-count header"
+         (First-Line $largeOut) -eq "Total paths: 289366" -and
+         (Get-Content -LiteralPath $largeOut -Raw) -match "Written paths: 289366" -and
+         (Get-Content -LiteralPath $largeOut -Raw) -match "Complete: yes") `
+        "released test14 streaming output completes in compact format"
 
     Check-Result `
         ($responses[9] -match "status: ok" -and

@@ -293,6 +293,34 @@ void testDirectConnectivityQuery(TestReport& report, const Netlist& netlist) {
                  containsString(direct.netNames, "c"),
                  "runDirectConnectivityQuery GateInputs");
 
+    query.includeIds = true;
+    query.includeNames = true;
+    const Netlist::DirectConnectivityReport gateInputsBoth =
+        netlist.runDirectConnectivityQuery(query);
+    query.includeIds = true;
+    query.includeNames = false;
+    const Netlist::DirectConnectivityReport gateInputsIdsOnly =
+        netlist.runDirectConnectivityQuery(query);
+    query.includeIds = false;
+    query.includeNames = true;
+    const Netlist::DirectConnectivityReport gateInputsNamesOnly =
+        netlist.runDirectConnectivityQuery(query);
+    query.includeIds = false;
+    query.includeNames = false;
+    const Netlist::DirectConnectivityReport gateInputsMetadataOnly =
+        netlist.runDirectConnectivityQuery(query);
+    report.check(gateInputsBoth.count == 2 &&
+                     gateInputsIdsOnly.count == 2 &&
+                     gateInputsNamesOnly.count == 2 &&
+                     gateInputsMetadataOnly.count == 2 &&
+                     !gateInputsIdsOnly.netIds.empty() &&
+                     gateInputsIdsOnly.netNames.empty() &&
+                     gateInputsNamesOnly.netIds.empty() &&
+                     !gateInputsNamesOnly.netNames.empty() &&
+                     gateInputsMetadataOnly.netIds.empty() &&
+                     gateInputsMetadataOnly.netNames.empty(),
+                 "runDirectConnectivityQuery GateInputs count ignores include flags");
+
     query = Netlist::DirectConnectivityQuery();
     query.type = Netlist::DirectConnectivityQueryType::GateFanout;
     query.gateName = "g_or";
@@ -380,6 +408,156 @@ void testDirectConnectivityQuery(TestReport& report, const Netlist& netlist) {
                  direct.globalFanoutReport.maxFanout == 3 &&
                  !direct.globalFanoutReport.satisfiesLimit,
                  "runDirectConnectivityQuery GlobalFanoutReport");
+
+    Netlist removedNetlist = netlist;
+    const int removedNetId = removedNetlist.addNet("removed_scalar");
+    removedNetlist.removeNetIfUnused(removedNetId);
+
+    query = Netlist::DirectConnectivityQuery();
+    query.type = Netlist::DirectConnectivityQueryType::NetDriverGates;
+    query.netName = "removed_scalar";
+    direct = removedNetlist.runDirectConnectivityQuery(query);
+    report.check(!direct.ok && !direct.exists && direct.netId == -1,
+                 "runDirectConnectivityQuery NetDriverGates rejects removed scalar net");
+
+    query.type = Netlist::DirectConnectivityQueryType::NetLoadGates;
+    direct = removedNetlist.runDirectConnectivityQuery(query);
+    report.check(!direct.ok && !direct.exists && direct.netId == -1,
+                 "runDirectConnectivityQuery NetLoadGates rejects removed scalar net");
+
+    query.type = Netlist::DirectConnectivityQueryType::FanoutLoadReport;
+    direct = removedNetlist.runDirectConnectivityQuery(query);
+    report.check(!direct.ok && !direct.exists,
+                 "runDirectConnectivityQuery FanoutLoadReport rejects removed scalar net");
+
+    query = Netlist::DirectConnectivityQuery();
+    query.type = Netlist::DirectConnectivityQueryType::DirectlyConnected;
+    query.gateName = "g_or";
+    query.netName = "removed_scalar";
+    direct = removedNetlist.runDirectConnectivityQuery(query);
+    report.check(!direct.ok && !direct.exists,
+                 "runDirectConnectivityQuery DirectlyConnected rejects removed net");
+
+    Netlist removedGateNetlist = netlist;
+    const int removedGateId = removedGateNetlist.getGateId("g_or");
+    removedGateNetlist.removeGate(removedGateId);
+
+    query = Netlist::DirectConnectivityQuery();
+    query.type = Netlist::DirectConnectivityQueryType::GateInputs;
+    query.gateName = "g_or";
+    direct = removedGateNetlist.runDirectConnectivityQuery(query);
+    report.check(!direct.ok && !direct.exists,
+                 "runDirectConnectivityQuery GateInputs rejects removed gate");
+
+    query.type = Netlist::DirectConnectivityQueryType::GateOutput;
+    direct = removedGateNetlist.runDirectConnectivityQuery(query);
+    report.check(!direct.ok && !direct.exists,
+                 "runDirectConnectivityQuery GateOutput rejects removed gate");
+
+    query.type = Netlist::DirectConnectivityQueryType::GateFanin;
+    direct = removedGateNetlist.runDirectConnectivityQuery(query);
+    report.check(!direct.ok && !direct.exists,
+                 "runDirectConnectivityQuery GateFanin rejects removed gate");
+
+    query.type = Netlist::DirectConnectivityQueryType::GateFanout;
+    direct = removedGateNetlist.runDirectConnectivityQuery(query);
+    report.check(!direct.ok && !direct.exists,
+                 "runDirectConnectivityQuery GateFanout rejects removed gate");
+
+    query = Netlist::DirectConnectivityQuery();
+    query.type = Netlist::DirectConnectivityQueryType::DirectlyConnected;
+    query.gateName = "g_or";
+    query.netName = "n_and";
+    direct = removedGateNetlist.runDirectConnectivityQuery(query);
+    report.check(!direct.ok && !direct.exists,
+                 "runDirectConnectivityQuery DirectlyConnected rejects removed gate");
+
+    Netlist inconsistentDriverNetlist;
+    inconsistentDriverNetlist.addPrimaryOutput("shared_out");
+    const int staleDriverId =
+        inconsistentDriverNetlist.addGate("g_stale_driver", GateType::BUF);
+    const int currentDriverId =
+        inconsistentDriverNetlist.addGate("g_current_driver", GateType::BUF);
+    const int sharedOutId = inconsistentDriverNetlist.getNetId("shared_out");
+    inconsistentDriverNetlist.connectGateOutput(staleDriverId, sharedOutId);
+    inconsistentDriverNetlist.connectGateOutput(currentDriverId, sharedOutId);
+
+    query = Netlist::DirectConnectivityQuery();
+    query.type = Netlist::DirectConnectivityQueryType::GateOutput;
+    query.gateName = "g_stale_driver";
+    direct = inconsistentDriverNetlist.runDirectConnectivityQuery(query);
+    report.check(direct.ok && direct.exists && direct.count == 0 &&
+                     direct.netId == -1 && direct.netName.empty() &&
+                     direct.netIds.empty() && direct.netNames.empty() &&
+                     inconsistentDriverNetlist.getGateOutputNetName(
+                         "g_stale_driver").empty(),
+                 "GateOutput suppresses inconsistent stale output payload");
+
+    query = Netlist::DirectConnectivityQuery();
+    query.type = Netlist::DirectConnectivityQueryType::NetDriverGates;
+    query.netName = "shared_out";
+    direct = inconsistentDriverNetlist.runDirectConnectivityQuery(query);
+    report.check(direct.ok && direct.count == 1 &&
+                     containsString(direct.gateNames, "g_current_driver") &&
+                     !containsString(direct.gateNames, "g_stale_driver"),
+                 "NetDriverGates reports only the consistent current driver");
+
+    query = Netlist::DirectConnectivityQuery();
+    query.type = Netlist::DirectConnectivityQueryType::DirectlyConnected;
+    query.gateName = "g_stale_driver";
+    query.netName = "shared_out";
+    direct = inconsistentDriverNetlist.runDirectConnectivityQuery(query);
+    report.check(direct.ok && direct.exists && !direct.connected &&
+                     direct.count == 0,
+                 "DirectlyConnected rejects inconsistent stale output edge");
+
+    Netlist tiedInputNetlist;
+    tiedInputNetlist.addPrimaryInput("a");
+    tiedInputNetlist.addPrimaryOutput("y");
+    const int tiedGate = tiedInputNetlist.addGate("g_tied", GateType::AND);
+    tiedInputNetlist.connectGateInput(tiedGate, tiedInputNetlist.getNetId("a"));
+    tiedInputNetlist.connectGateInput(tiedGate, tiedInputNetlist.getNetId("a"));
+    tiedInputNetlist.connectGateOutput(tiedGate, tiedInputNetlist.getNetId("y"));
+
+    query = Netlist::DirectConnectivityQuery();
+    query.type = Netlist::DirectConnectivityQueryType::NetLoadGates;
+    query.netName = "a";
+    direct = tiedInputNetlist.runDirectConnectivityQuery(query);
+    const Netlist::FanoutLoadReport tiedFanout =
+        tiedInputNetlist.getFanoutLoadReport("a");
+    report.check(direct.ok && direct.count == 1 &&
+                     containsString(direct.gateNames, "g_tied") &&
+                     tiedFanout.ok &&
+                     tiedFanout.combinationalGateLoads.size() == 2 &&
+                     tiedFanout.totalLoadCount == 2,
+                 "direct gate loads dedupe tied input while fanout load counts pins");
+
+    Netlist busNetlist;
+    busNetlist.addNet("bus[1]");
+    busNetlist.addNet("bus[0]");
+    busNetlist.addPrimaryOutput("y");
+    const int busBuf0 = busNetlist.addGate("g_bus0", GateType::BUF);
+    const int busBuf1 = busNetlist.addGate("g_bus1", GateType::BUF);
+    busNetlist.connectGateInput(busBuf0, busNetlist.getNetId("bus[0]"));
+    busNetlist.connectGateOutput(busBuf0, busNetlist.getNetId("y"));
+    const int bus1Out = busNetlist.addNet("bus1_out");
+    busNetlist.connectGateOutput(busBuf1, bus1Out);
+    busNetlist.removeNetIfUnused(busNetlist.getNetId("bus[1]"));
+
+    query = Netlist::DirectConnectivityQuery();
+    query.type = Netlist::DirectConnectivityQueryType::NetLoadGates;
+    query.netName = "bus";
+    direct = busNetlist.runDirectConnectivityQuery(query);
+    report.check(direct.ok && direct.exists && direct.count == 1 &&
+                     containsString(direct.gateNames, "g_bus0") &&
+                     !containsString(direct.gateNames, "g_bus1"),
+                 "runDirectConnectivityQuery NetLoadGates keeps only active bus bits");
+
+    busNetlist.disconnectGateInput("g_bus0", "bus[0]");
+    busNetlist.removeNetIfUnused(busNetlist.getNetId("bus[0]"));
+    direct = busNetlist.runDirectConnectivityQuery(query);
+    report.check(!direct.ok && !direct.exists,
+                 "runDirectConnectivityQuery NetLoadGates rejects all-removed bus");
 }
 
 // 測試 Function Query：SAT-based equivalence、可能值、常數函數判斷。
@@ -879,7 +1057,11 @@ void testWriterAndSmallMutation(TestReport& report, const Netlist& original) {
                  redirectLoadsReport.changed &&
                  !redirectLoadsReport.rolledBack &&
                  redirectLoadsReport.operationKind == Netlist::NetlistEditOperationKind::PrimitiveMutation &&
+                 redirectLoadsReport.changedGateIds.size() == 1 &&
+                 redirectLoadsReport.changedGateIds[0] == redirectLoadGate &&
                  redirectLoadsNetlist.getGate(redirectLoadGate).inputNetIds[0] == redirectNewNet &&
+                 redirectLoadsNetlist.getGate(redirectLoadGate).inputNetIds[1] == redirectNewNet &&
+                 redirectLoadsNetlist.getNet(redirectNewNet).loadGateIds.size() == 2 &&
                  redirectLoadsNetlist.validateAfterMutation(),
                  "redirectAllLoadsWithReport");
 
@@ -1491,11 +1673,12 @@ void testEditApplyFlow(TestReport& report, const Netlist& original) {
 
 } // namespace
 
-// 執行 mini Verilog 整合測試；argv[1] 可指定 Verilog，argv[2] 可用 --basic-only。
+// 執行 mini Verilog 整合測試；argv[1] 可指定 Verilog，argv[2] 可用 --basic-only / --direct-only。
 int main(int argc, char* argv[]) {
     const std::string verilogPath =
         (argc >= 2) ? argv[1] : "mini test/mini_circuit.v";
     const bool basicOnly = argc >= 3 && std::string(argv[2]) == "--basic-only";
+    const bool directOnly = argc >= 3 && std::string(argv[2]) == "--direct-only";
 
     TestReport report;
     Netlist netlist;
@@ -1506,14 +1689,22 @@ int main(int argc, char* argv[]) {
         return report.failed;
     }
 
-    testBasicQuery(report, netlist);
-    if (basicOnly) {
+    if (!directOnly) {
+        testBasicQuery(report, netlist);
+        if (basicOnly) {
+            std::cout << "\nSummary: " << report.passed << " passed, "
+                      << report.failed << " failed.\n";
+            return report.failed == 0 ? 0 : 1;
+        }
+    }
+
+    testDirectConnectivityQuery(report, netlist);
+    if (directOnly) {
         std::cout << "\nSummary: " << report.passed << " passed, "
                   << report.failed << " failed.\n";
         return report.failed == 0 ? 0 : 1;
     }
 
-    testDirectConnectivityQuery(report, netlist);
     testFunctionQuery(report, netlist);
     testConeQuery(report, netlist);
     testPathQuery(report, netlist);

@@ -11,7 +11,39 @@
 
 prompt 明確指定 rename、cleanup、constant propagation、buffer insertion、gate replacement、basis conversion，或要求找出並合併 functionally equivalent gates 時使用本 tool。若要求 `minimize`、`best depth`、`best cost` 或自動搜尋最佳 transformation，改用 `opt_apply critical_path_depth`，不是 `edit_apply`。
 
-## 3. Rename/Cleanup Modes
+## 3. Command Grammar
+
+```text
+edit_apply <simple_mode> [required_args]
+
+edit_apply merge_functionally_equivalent_gates <scope> [scope_name]
+           [--gate-type type] [--patterns 1..4096]
+           [--time-limit seconds]
+
+edit_apply convert_basis <scope> [scope_name]
+           -allow <type...> [-ban <type...>]
+           [--validate_equivalence]
+
+edit_apply replace_type <scope> [scope_name] <target_type>
+           -allow <type...> [--validate_equivalence]
+```
+
+`simple_mode` 的 required arguments 見下方 mode tables。`scope_name` 對 `whole` 省略，
+其他 scope 必填。`convert_basis`/`replace_type` 的 `-allow` 必填且可接受空白或逗號分隔；
+`-ban` 只適用 `convert_basis`。
+
+| 輸入 | Required when | Default/規則 |
+|---|---|---|
+| old/new name | `rename_gate`, `rename_net` | 兩者皆必填，不自行改寫名稱 |
+| net | net-specific buffer/remove modes | 必填，bus bit 保留完整 `[]` 名稱 |
+| max fanout | fanout buffer modes | 必填正整數，直接使用 prompt limit |
+| gate type | typed buffer/simplification/mapping | 使用 public primitive type token |
+| constant value | `simplify_constants` | 未指定時才使用 `any`；明確 0/1 不得放寬 |
+| input count | `simplify_constants --inputs N` | 只有 prompt 明確指定 N-input 時使用 |
+| scope/scope name | functional merge/mapping | `whole` 不需 name；其他 scope 必填 name |
+| time limit | functional merge | 題目 budget；未指定時不自行縮短 |
+
+## 4. Rename/Cleanup Modes
 
 | Mode | 參數 | 用途 |
 |---|---|---|
@@ -32,7 +64,7 @@ prompt 明確指定 rename、cleanup、constant propagation、buffer insertion�
 
 `merge_equivalent_gates` 不是 public command；它是名稱容易誤導的 legacy structural alias。functional merge 固定使用 `merge_functionally_equivalent_gates`。
 
-## 4. Buffer Modes
+## 5. Buffer Modes
 
 | Mode | 參數 | 用途 |
 |---|---|---|
@@ -44,7 +76,7 @@ prompt 明確指定 rename、cleanup、constant propagation、buffer insertion�
 | `insert_buffer_before_gate` | `<net> <gate>` | 指定 gate load 前插 BUF |
 | `insert_buffers_by_gate_type` | `<type> [-inputs] [-outputs] [-both]` | 依 gate type input/output 插 BUF |
 
-## 5. Technology Mapping Modes
+## 6. Technology Mapping Modes
 
 ```text
 edit_apply convert_basis <scope> [scope_name]
@@ -66,7 +98,7 @@ gate_fanout <gate>
 
 `convert_basis` 確保 scope 最終只使用允許且未被禁止的 combinational gate types。`replace_type` 只替換 scope 中指定 `target_type`。
 
-## 6. 輸出判讀
+## 7. 輸出判讀
 
 先讀 envelope，再讀 edit report：
 
@@ -93,7 +125,7 @@ gate_fanout <gate>
 
 題目問「移除了多少 gates」時使用 active count delta；題目問「多少 OR gates 被 constant-1 propagation 消除」時使用 `constant_simplification.eliminated_target_gate_count`，不要使用較寬泛的 `simplified_count`。
 
-## 7. Prompt Examples
+## 8. Prompt Examples
 
 ```text
 Prompt: Collapse all back-to-back inverter pairs.
@@ -126,7 +158,7 @@ Read: functional_merge.merged_gate_count, merge records, validation.equivalence_
 Require: report_success=true, rolled_back=false, whole_design_equivalent=true
 ```
 
-## 8. 組合流程與限制
+## 9. 組合流程與限制
 
 修改後回答成果可再呼叫 `report_query last_edit`。`merge_functionally_equivalent_gates` 已強制執行 whole-design SAT；其他 edit 若題目明確要求 whole-design 功能不變，可再呼叫 `equiv_query previous_edit`，最終流程可使用 `equiv_query original`。
 

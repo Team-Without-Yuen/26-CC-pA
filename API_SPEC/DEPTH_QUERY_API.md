@@ -222,14 +222,14 @@ dispatch 對照：
 
 | DepthQueryType | 底層 helper | 主要讀取 |
 |---|---|---|
-| `SpecificNet` | `analyzeDepthToNet(netName)` | `reports[0]`, `worst.depth`, `worst.criticalPath` |
-| `PrimaryOutputs` | `analyzePrimaryOutputDepths()` | `reports`, `worst` |
-| `DffD` | `analyzeDffDDepths()` | `reports`, `worst` |
-| `GlobalCriticalPath` | `findGlobalCriticalPath()` | `worst`, `reports[0]` |
-| `EndpointsExceedingDepth` | `findEndpointsExceedingDepth(threshold)` | `reports`, `count`, `worst` |
-| `PrimaryOutputsExceedingDepth` | bulk PO depth analysis + threshold filter | `reports`, `count`, `worst` |
-| `GateOnCriticalPath` | net level + remaining depth analysis | `gateOnCriticalPath`, `exists`, `worst` |
-| `DeepestOutputCone` | `analyzePrimaryOutputDepths()` | `worst`, `reports`, `count` |
+| `SpecificNet` | shared net levels + single-net report builder | `reports[0]`, `worst.depth`, `worst.criticalPath` |
+| `PrimaryOutputs` | shared net levels + active PO collector | `reports`, `worst` |
+| `DffD` | shared net levels + active DFF.D collector | `reports`, `worst` |
+| `GlobalCriticalPath` | single level pass + endpoint metadata selection | `worst`, `reports[0]` |
+| `EndpointsExceedingDepth` | single level pass + all-endpoint threshold filter | `reports`, `count`, `worst` |
+| `PrimaryOutputsExceedingDepth` | single level pass + PO-only threshold filter | `reports`, `count`, `worst` |
+| `GateOnCriticalPath` | net level + iterative remaining-depth DP | `gateOnCriticalPath`, `exists`, `worst` |
+| `DeepestOutputCone` | shared net levels + active PO collector | `worst`, `reports`, `count` |
 
 `analyzePrimaryOutputDepths()` 與 `analyzeDffDDepths()` 會先計算一次全設計 net levels，再讓所有 endpoint 共用；不會為每個 output/DFF.D 重跑整張 graph。critical path 也從同一份 level vector 重建。
 
@@ -240,6 +240,16 @@ dispatch 對照：
 它不是只檢查 findGlobalCriticalPath() 回傳的單一路徑，而是用：
 fanin depth to gate + gate cost + remaining depth to timing endpoint
 是否等於 global maximum depth。
+```
+
+實作規則：
+
+```text
+1. level、endpoint collection 與 critical-path reconstruction 只接受 active gate/net。
+2. traversal edge 必須同時存在於 net.loadGateIds 與 gate.inputNetIds；driver 也必須雙向一致。
+3. includeCriticalPath=false 時不建立稍後會被丟棄的 path。
+4. Global/threshold query 先用同一份 netLevels 收集 metadata，只替必要 endpoint 建 path。
+5. GateOnCriticalPath 在 combinational DAG 上使用 iterative reverse-depth DP，避免深鏈遞迴 stack overflow。
 ```
 
 ---
@@ -350,7 +360,8 @@ DepthQuery / DepthReportSet / runDepthQuery()
 ```text
 mini test/tester.cpp 已覆蓋 computeNetLevels / computeGateLevels /
 findCriticalPathToNet / runDepthQuery(SpecificNet, DffD, GlobalCriticalPath)。
-mini test/test5/test5.cpp 已覆蓋 GateOnCriticalPath / DeepestOutputCone。
+mini test/test5/test5.cpp 已覆蓋 GateOnCriticalPath / DeepestOutputCone、
+includeCriticalPath=false、tombstone/stale edge 與 30000-level deep-chain regression。
 ```
 
 後續建議補：

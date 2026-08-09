@@ -20,6 +20,7 @@
 | FUNCSEARCH-003 | timeout 停止誤差與 partial artifact 保存 | P1 | Verified | 不需修改 | NewTestCase 29/35 的 0.01 秒與 1 秒 probe 通過 |
 | FUNCSEARCH-004 | 未知 primitive 在 reader 階段靜默遺失 | P3 | Out of Scope | 不需修改 | 官方 netlist 不含額外 gate types |
 | FUNCSEARCH-005 | candidate、boundary、scope 與 gate-type filter 語意 | P1 | Verified | 不需修改 | mixed-boundary probe 全部符合預期 |
+| FUNCSEARCH-006 | NAND FindAll 貼近 30 秒內建上限 | P1 | Root Cause Confirmed | 否 | test35 診斷：72,030,003 pairs；29.46 秒完成，僅餘約 0.54 秒 |
 
 狀態語意沿用 `PATH_QUERY_ISSUES_AND_CHANGES.md`。每個已修改項目必須列出檔案、函式或
 章節、修改內容及外部行為；測試檔與正式程式碼分開記錄。
@@ -170,6 +171,38 @@ terminal 只回 summary、總數與檔案路徑
 
 明確指定 `--max-results` 的 regression 仍回 `RESULT_LIMIT_REACHED`、`truncated=true` 與
 partial，證明外部 grammar 與原有顯式限制能力皆保留。
+
+## FUNCSEARCH-006：NAND FindAll 30 秒邊界風險
+
+- 狀態：`Root Cause Confirmed`
+- 優先級：P1
+- 類型：Performance / Time Budget
+- Boolean 相關：現階段只盤查，不進行 AIG 重構
+
+### 問題
+
+test35 #13 原文只問是否存在，正確命令是 FindAny 的 `func_search nand_pair n25`，現有 API
+約 5.5 秒即可完整回答。封閉 runner 錯誤加上 `--all`，才觸發本節的 FindAll 診斷。
+
+FindAll 重跑雖完成，但 report elapsed 約 29.46 秒，而
+`FunctionSearchQuery::timeLimitSeconds` 預設只有 30 秒。首次執行已在約 30.00 秒回 partial，
+因此 hidden prompt 若真的要求列出全部，結果會受機器負載與快取狀態影響，不能視為穩定通過；
+此問題不阻擋目前 test35 的 existence prompt。
+
+### 根因
+
+| 階段 | 數量 / 行為 |
+|---|---|
+| candidate signals | 39,283 |
+| simulation-eligible signals | 12,003 |
+| candidate pairs | 72,030,003，雙層迴圈逐組檢查 signature |
+| simulation-pass / SAT checks | 12,003 |
+| SAT 建模 | 每一組呼叫 `solveNandPairEquivalenceDetailed()`，重新收集 cone、建立 CNF 與 solver |
+| 完整 matches | 514 |
+
+官方 basic operation 時限為 60 秒，但 API 的無參數預設值為 30 秒。短期可以討論將內部預設
+調整為保留官方外層餘裕的值；中長期則應以候選索引、共享 CNF/SAT context，或後期 AIG
+functional index 消除重複建模。修改前需先決定本階段是否只修 budget，或同時動演算法。
 
 ## FUNCSEARCH-002：Boolean engine/AIG 重構與 hidden structure coverage
 

@@ -30,6 +30,11 @@ private:
     std::vector<Port> primaryInputs;
     std::vector<Port> primaryOutputs;
 
+    // Bulk rewrite passes may defer pin-level load-list maintenance and rebuild
+    // it once at the end. This avoids repeated O(fanout) vector erases while
+    // remaining invisible outside a single synchronous mutation call.
+    bool deferLoadListMaintenance = false;
+
 public:
     Netlist() = default;
 

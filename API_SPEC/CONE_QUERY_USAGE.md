@@ -95,6 +95,15 @@ DFF 是 sequential boundary，ConeQuery 不穿越 DFF。
 | `longestPathNetNames` | cone 內 local longest path 的 net names |
 | `shortestPathNetNames` | cone 內 local shortest path 的 net names |
 
+通用存在性與連線規則：
+
+```text
+removed gate/net 視為不存在，不會出現在 root、count 或 payload。
+bus 只有至少一個 active bit 時才存在；partial-removed bus 只走訪 active bits。
+cone 只沿著 net cache 與 gate pin 兩端一致的 driver/load edge traversal。
+includeIds/includeNames 只控制 payload，不改變 count、ok 或 exists。
+```
+
 ---
 
 ## 5. NetTransitiveFanin
@@ -275,7 +284,7 @@ query.secondNetName = "n17";
 Netlist::ConeReport report = netlist.runConeQuery(query);
 ```
 
-`report.ok=true` 且 `report.gateCount=0` 表示兩個合法 cones 沒有共有 gate；名稱不存在才是 query error。
+`report.ok=true`、`report.exists=true` 且 `report.gateCount=0` 表示兩個合法 cones 沒有共有 gate；名稱不存在才是 query error。即使結果為空，`includeIds/includeNames` 仍只控制相應 root/gate payload。
 
 ---
 
@@ -331,5 +340,7 @@ Netlist::ConeReport report = netlist.runConeQuery(query);
 實作檔案：src/analysis/ConeAnalysis.cpp
 型別檔案：include/core/NetlistQueries.h
 tester：mini test/tester.cpp, mini test/test6/test6.cpp
-目前 test6：Summary: 4 passed, 0 failed.
+目前 test6：Summary: 16 passed, 0 failed.
+覆蓋 active/tombstone、partial/all-removed bus、stale driver、SharedFanin flags、
+reconvergent/multi-root/cycle 與 100000-level iterative longest path。
 ```

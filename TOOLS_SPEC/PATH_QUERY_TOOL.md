@@ -15,13 +15,26 @@ prompt 出現 `path from A to B`、`through`、`avoid`、`every path`、`shortes
 
 只問某物件可到達的完整範圍使用 `cone_query`；全設計 maximum depth/critical endpoint 使用 `depth_query`。
 
-## 3. Endpoint 與 Node
-
-一般語法：
+## 3. Command Grammar
 
 ```text
-path_query <mode> <start_endpoint> <end_endpoint> [options]
+path_query <mode> <start_endpoint> <end_endpoint>
+           [-req <node...>] [-avoid <node...>]
+
+path_query enumerate <start_endpoint> <end_endpoint>
+           [-req <node...>] [-avoid <node...>] [-count_only]
+           [-out <file>] [-max_print N] [-max_paths N]
+           [-time_limit seconds]
+
+path_query is_separator <start_endpoint> <end_endpoint> <candidate_net>
+path_query pi_po_cut <candidate_net>
+path_query direct_pi_po
 ```
+
+`start_endpoint` 與 `end_endpoint` 是 required。只有 `enumerate` 接受輸出、顯示、legacy
+path limit、time limit 與 count-only options。`-req`/`-avoid` 遇到下一個 option 或行尾結束。
+
+### Endpoint 與 Node
 
 endpoint tokens：
 
@@ -55,17 +68,28 @@ required/avoided nodes 使用 `gate:<g>`、`net:<n>` 或 bare net；bare token �
 | `pi_po_cut` | `<candidate_net>` | candidate 是否為 PI-to-PO directed cut | `Is separator`, witness fields |
 | `direct_pi_po` | 無必要 option | 所有 depth-0 PI-to-PO direct connections | 完整 connection list 與總數 |
 
-## 5. Enumeration Options
+## 5. Enumeration Options 與輸出判讀
 
-| Option | 用途 |
+| Option | Default | 適用 mode | 用途 |
+|---|---|---|---|
+| `-req <node...>` | empty | endpoint path modes | path 必須經過的 nodes；遇到下一個 option 結束 |
+| `-avoid <node...>` | empty | endpoint path modes | path 必須避開的 nodes |
+| `-out <file>` | 自動唯一檔名 | `enumerate` | 明確指定輸出檔 |
+| `-max_print <N>` | 工具摘要策略 | `enumerate`/`direct_pi_po` | 最多在 terminal data 顯示 N 筆，不限制完整檔案 |
+| `-max_paths <N>` | 不限制 | `enumerate` | Legacy 相容參數；不作為完整列舉的截斷條件 |
+| `-time_limit <seconds>` | 題目/session budget | `enumerate` | enumeration 時間上限 |
+| `-count_only` | false | `enumerate` | 只計數，不保存/顯示每條 path |
+
+共同輸出判讀：
+
+| Mode | 作答欄位 |
 |---|---|
-| `-req <node...>` | path 必須經過的 nodes；遇到下一個 option 結束 |
-| `-avoid <node...>` | path 必須避開的 nodes |
-| `-out <file>` | 明確指定輸出檔；未指定時 CLI 自動產生唯一檔名 |
-| `-max_print <N>` | 最多在 terminal data 顯示 N 條 |
-| `-max_paths <N>` | Legacy 相容參數；目前不作為完整列舉的截斷條件 |
-| `-time_limit <seconds>` | enumeration 時間上限 |
-| `-count_only` | 只計數，不保存/顯示每條 path |
+| `exists`, `every_through`, `every_avoids` | `Yes` / `No`；必須先確認 `complete:true` |
+| `find_any`, `min_depth`, `max_depth` | path existence、`Depth`, `Nets`, `Gates` |
+| `mandatory_nodes` | `Path exists`, `Mandatory internal nets` |
+| `is_separator`, `pi_po_cut` | `Is separator` 與 witness fields |
+| `enumerate` | `Total paths`, `Complete enumeration`, `Timed out`, `Stop reason`, `Output file` |
+| `direct_pi_po` | total count 與完整 connection list |
 
 對 `enumerate`，只有 envelope `complete:true` 且 data `Complete enumeration: yes` 時，
 `Total paths` 才是精確完整總數。非 `-count_only` 查詢會在 DFS 過程中自動 streaming 寫檔，

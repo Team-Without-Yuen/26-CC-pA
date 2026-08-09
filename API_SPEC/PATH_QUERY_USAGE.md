@@ -102,6 +102,19 @@ bare constraint token 預設視為 net。多個 `-req` 必須全部經過；任�
 `<design>_path_query_<sequence>.txt`，並在 terminal 回傳檔案位置。核心 C++ facade 若沒有
 設定 `outputFilePath`，相容 fallback 是 `path_enumeration_output.txt`。
 
+完整檔案採 `COMPACT_PATH_V3`：名稱只在 dictionary 出現一次，dictionary 與 path records 的 ID
+統一使用 base36。完整 sequence 是 `S=[start_net_id, gate_id_1, ..., gate_id_N]`；prefix/suffix
+count 對整個 `S` 計數，包含 token 0 的 start net。讀檔時依 artifact header 內附的 reconstruction
+公式與範例還原，不要把 record 內的 ID 直接當成 net/gate 名稱。正式判讀必須同時確認：
+
+```text
+Total paths == Expected paths == Written paths
+Complete: yes
+Timed out: no
+```
+
+若 footer 為 `Complete: no`，檔案只包含 timeout 前已完成的 records，不是完整答案。
+
 ## 4. 回傳欄位與狀態判讀
 
 ### 4.1 成功、false 與 invalid input

@@ -29,7 +29,7 @@ depth_query <mode> [args]
 | `global_critical` | 無 | PO 與 DFF.D 中的全域最大 depth | `Worst endpoint`, `depth`, path |
 | `exceeding` | `<depth>` | 超過 threshold 的 PO 與 DFF.D endpoints | `Report count`, endpoint/depth list |
 | `po_exceeding` | `<depth>` | 只計算超過 threshold 的 primary outputs | `Report count`, endpoint/depth list |
-| `gate_on_critical` | `<gate>` | gate 是否位於目前代表性 global critical path | `Gate on critical path` |
+| `gate_on_critical` | `<gate>` | gate 是否位於任一條 global maximum-depth path | `Gate on critical path`；顯示的 worst path 仍只是一條代表路徑 |
 | `deepest_output` | 無 | fanin depth 最大的 primary output | `Worst endpoint`, depth, path |
 
 ## 5. 輸出判讀
@@ -64,8 +64,18 @@ Command: depth_query gate_on_critical g10
 Read: Gate on critical path
 ```
 
+若 prompt 將 startpoint 明確限制為 PI，例如「PI 到 PO 的最長路徑」或「PI 到 DFF.D
+的最大 depth」，不可直接使用 timing-global `depth_query global_critical`，因為後者同時允許
+DFF.Q start boundary。應改用：
+
+```text
+path_query max_depth all_pi all_po
+path_query max_depth all_pi all_dff_d
+```
+
 ## 7. 限制
 
-- 同一 maximum depth 可能有多條 paths；`global_critical` 回傳一條代表性 path，不代表唯一 critical path。
+- 同一 maximum depth 可能有多條 paths；`global_critical` 回傳一條代表性 path，不代表唯一
+  critical path。`gate_on_critical` 則判斷任一條 maximum-depth path，不只檢查該代表路徑。
 - depth traversal 以 combinational boundary 處理 DFF，DFF.Q 為 start boundary，DFF.D 為 endpoint boundary。
 - `deepest_output` 只比較 PO；全域最差 endpoint 使用 `global_critical`。
