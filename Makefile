@@ -11,76 +11,79 @@ AR  = ar
 CADICAL_DIR = include/lib/cadical
 ABC_DIR     = include/lib/abc
 
-TARGET = tools
+TARGET = NetlistTool
 
 # =============================================================
 # 1. 環境偵測
 #    產生三種身分之一: UCRT64 / MINGW64 / LINUX
 # =============================================================
 ifeq ($(MSYSTEM),UCRT64)
-    ENV        := UCRT64
-    IS_WINDOWS := 1
+	ENV        := UCRT64
+	IS_WINDOWS := 1
 else ifeq ($(MSYSTEM),MINGW64)
-    ENV        := MINGW64
-    IS_WINDOWS := 1
+	ENV        := MINGW64
+	IS_WINDOWS := 1
 else
-    ENV        := LINUX
-    IS_WINDOWS := 0
+	ENV        := LINUX
+	IS_WINDOWS := 0
 endif
 
 $(info [INFO] Detected Environment: $(ENV))
 
 # ---- 依環境決定平台巨集、執行檔名、系統庫 ----
 ifeq ($(IS_WINDOWS),1)
-    PLATFORM_DEF = -DWIN64 -DWIN32_LEAN_AND_MEAN -DNOMINMAX
-    TARGET_BIN   = $(TARGET).exe
-    SYS_LIBS     = -lpthread -lm
+	PLATFORM_DEF = -DWIN64 -DWIN32_LEAN_AND_MEAN -DNOMINMAX
+	TARGET_BIN   = $(TARGET).exe
+	SYS_LIBS     = -lpthread -lm
 else
-    PLATFORM_DEF = -DLIN64
-    TARGET_BIN   = $(TARGET)
-    SYS_LIBS     = -lpthread -lm -ldl
+	PLATFORM_DEF = -DLIN64
+	TARGET_BIN   = $(TARGET)
+	SYS_LIBS     = -lpthread -lm -ldl
 endif
 
 # =============================================================
 # 2. 編譯參數
 # =============================================================
 COMMON_WARN = -Wno-unknown-pragmas -Wno-narrowing -Wno-sign-compare \
-              -Wno-unused-parameter -Wno-misleading-indentation \
-              -Wno-unused-variable -Wno-unused-but-set-variable \
-              -Wno-format -Wno-dangling-else -Wno-class-memaccess \
-              -Wno-int-to-pointer-cast -Wno-overflow
+			  -Wno-unused-parameter -Wno-misleading-indentation \
+			  -Wno-unused-variable -Wno-unused-but-set-variable \
+			  -Wno-format -Wno-dangling-else -Wno-class-memaccess \
+			  -Wno-int-to-pointer-cast -Wno-overflow
 
-COMMON_INC  = -I. -Iinclude -Iinclude/lib -Iinclude/lib/nauty \
-              -Iinclude/lib/abcsat -Iinclude/lib/abcesop \
-              -I$(CADICAL_DIR)/src -I$(ABC_DIR)/src
+# 在這裡新增了 -Iinclude/SATEngine
+COMMON_INC  = -I. -Iinclude -Iinclude/SATEngine -Iinclude/lib -Iinclude/lib/nauty \
+			  -Iinclude/lib/abcsat -Iinclude/lib/abcesop \
+			  -I$(CADICAL_DIR)/src -I$(ABC_DIR)/src
 
 # ABC 標頭需要的巨集,必須與編 libabc.a 時 (scripts/build_abc.sh) 一致
 # 另:FMT_USE_WINDOWS_H=0 阻止 fmt 引入 <windows.h>,避免其 rpcndr.h 的
-#     'typedef unsigned char boolean' 與 nauty 的 'typedef int boolean' 衝突。
+#    'typedef unsigned char boolean' 與 nauty 的 'typedef int boolean' 衝突。
 ifeq ($(IS_WINDOWS),1)
-    ABC_DEFS = -DABC_USE_STDINT_H -DNUNLOCKED -DFMT_USE_WINDOWS_H=0
+	ABC_DEFS = -DABC_USE_STDINT_H -DNUNLOCKED -DFMT_USE_WINDOWS_H=0
 else
-    ABC_DEFS =
+	ABC_DEFS =
 endif
 
 CXXFLAGS = -std=c++20 -O3 -Wall $(PLATFORM_DEF) $(ABC_DEFS) -DFMT_HEADER_ONLY \
-           -fpermissive $(COMMON_WARN) $(COMMON_INC)
+		   -fpermissive $(COMMON_WARN) $(COMMON_INC)
 
 CFLAGS   = -O3 -Wall $(PLATFORM_DEF) $(ABC_DEFS) \
-           -Wno-narrowing -Wno-int-to-pointer-cast -Wno-overflow \
-           $(COMMON_INC)
+		   -Wno-narrowing -Wno-int-to-pointer-cast -Wno-overflow \
+		   $(COMMON_INC)
 
 # =============================================================
 # 3. 原始碼與目的檔
 # =============================================================
-SRCS_CPP = tools.cpp \
-           $(wildcard src/core/*.cpp) \
-           $(wildcard src/io/*.cpp) \
-           $(wildcard src/analysis/*.cpp) \
-           $(wildcard src/optimization/*.cpp) \
-           $(wildcard src/transformation/*.cpp) \
-           $(wildcard include/lib/abcsat/*.cpp) \
-           $(wildcard include/lib/abcesop/*.cpp)
+# 在這裡新增了 $(wildcard src/SATEngine/*.cpp)
+SRCS_CPP = main.cpp \
+		   $(wildcard src/core/*.cpp) \
+		   $(wildcard src/io/*.cpp) \
+		   $(wildcard src/analysis/*.cpp) \
+		   $(wildcard src/optimization/*.cpp) \
+		   $(wildcard src/transformation/*.cpp) \
+		   $(wildcard src/SATEngine/*.cpp) \
+		   $(wildcard include/lib/abcsat/*.cpp) \
+		   $(wildcard include/lib/abcesop/*.cpp)
 
 SRCS_C   =
 

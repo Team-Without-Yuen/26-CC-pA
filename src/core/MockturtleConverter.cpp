@@ -520,6 +520,7 @@ void redirectNetLoads(Netlist& netlist, int fromNet, int toNet) {
         toNetObj.loadGateIds.push_back(gid);
     }
     fromNetObj.loadGateIds.clear();
+    netlist.markDirty();
 }
 
 // 把一顆閘標死並從其 fanin 的 loadGateIds 斷開。
@@ -543,4 +544,5 @@ void detachGate(Netlist& netlist, int gid) {
     }
 
     g.type = GateType::UNKNOWN;
+    netlist.markDirty();
 }
