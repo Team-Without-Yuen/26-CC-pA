@@ -1,6 +1,6 @@
 #include "include/core/Netlist.h"
 #include "include/core/TechMapper.h"
-#include "include/core/SatTime.h"
+#include "include/SATEngine/SatTime.h"
 #include <string>
 #include <functional>
 #include <algorithm>
@@ -196,6 +196,8 @@ bool Netlist::renameGate(const std::string& oldName, const std::string& newName)
     gateNameToId.erase(it);        // 刪除舊的 Key
     gateNameToId[newName] = gateId; // 建立新的 Key 指向同一個 ID
 
+    // AIG <-> Netlist 之間有一份名字對照表，改名會讓對照表失效，需要重建。
+    markDirty();
     return true;
 }
 
@@ -246,6 +248,8 @@ bool Netlist::renameNet(const std::string& oldName, const std::string& newName) 
     netNameToId.erase(it);
     netNameToId[newName] = netId;
 
+    // AIG <-> Netlist 之間有一份名字對照表，改名會讓對照表失效，需要重建。
+    markDirty();
     return true;
 }
 
@@ -299,6 +303,7 @@ bool Netlist::disconnectGateInput(const std::string& gateName, const std::string
         net.loadGateIds.erase(netLoadIt);
     }
 
+    markDirty();
     return true;
 }
 
@@ -366,6 +371,7 @@ bool Netlist::connectGateInput(const std::string& gateName, const std::string& n
     // 正式連線
     gate.inputNetIds[pinIndex] = netId;
 
+    markDirty();
     return true;
 }
 
@@ -416,19 +422,21 @@ bool Netlist::disconnectAllPins(int gateId) {
         nets[gate.outputNetId].driverGateId = -1;
         gate.outputNetId = -1;
     }
-    
+
+    markDirty();
     return true;
 }
 
 bool Netlist::removeGate(int gateId) {
     if (gateId < 0 || gateId >= (int)gates.size()) return false;
-    
+
     // 斷開所有腳位連線 (保留 DFF pin index)
     disconnectAllPins(gateId);
-    
+
     // 將 GateType 標記為 UNKNOWN (Tombstone 機制)
     gates[gateId].type = GateType::UNKNOWN;
-    
+
+    markDirty();
     return true;
 }
 
@@ -441,6 +449,7 @@ bool Netlist::swapPrimaryOutputNet(int oldNetId, int newNetId) {
     // 1. 更新底層 Net 的屬性標記
     nets[oldNetId].isPO = false;
     nets[newNetId].isPO = true;
+    markDirty();
 
     // 2. 尋找並更新 primaryOutputs 列表中的對應 ID
     // 這樣寫可以完美支援 Bus，確保替換後該 bit 依然在正確的匯流排位置上
@@ -515,6 +524,8 @@ void Netlist::mergeNets(int oldNetId, int newNetId) {
         // 屬性繼承與內部列表更新 (將 PO 列表中的 oldNetId 替換為 newNetId)
         swapPrimaryOutputNet(oldNetId, newNetId);
     }
+
+    markDirty();
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -585,6 +596,7 @@ BufferInsertionReport Netlist::insertBuffersForFanout(int maxFanout) {
             }
             moveFanoutSinkPinsToBuffer(gates, nets, netIdx, bufGateId, bufNetId,
                                        keptSinks, overLoads);
+            markDirty();
 
             // 填入負載總數並將單筆紀錄推入報告中
             record.fanoutCount = record.drivenGateIds.size();
@@ -733,6 +745,7 @@ BufferInsertionReport Netlist::insertBuffersForSpecificNet(const std::string& wi
             }
             moveFanoutSinkPinsToBuffer(gates, nets, netIdx, bufGateId, bufNetId,
                                        keptSinks, overLoads);
+            markDirty();
 
             // 結算這顆 Buffer 的資訊，並存入 Report
             record.fanoutCount = record.drivenGateIds.size();
@@ -937,6 +950,7 @@ BufferInsertionReport Netlist::insertBuffersForDffControl(int maxFanout, bool pr
             }
             moveFanoutSinkPinsToBuffer(gates, nets, netIdx, bufGateId, bufNetId,
                                        keptSinks, overLoads);
+            markDirty();
 
             record.fanoutCount = record.drivenGateIds.size();
             report.records.push_back(record);
@@ -1032,6 +1046,7 @@ BufferInsertionReport Netlist::insertBuffersOnEachLoad(const std::string& wireNa
             report.records.push_back(record);
         }
     }
+    if (!report.records.empty()) markDirty();
     return report;
 }
 
@@ -1163,6 +1178,7 @@ BufferInsertionReport Netlist::insertBufferAtDriver(const std::string& wireName)
             report.records.push_back(record);
         }
     }
+    if (!report.records.empty()) markDirty();
     return report;
 }
 
@@ -1265,6 +1281,7 @@ BufferInsertionReport Netlist::insertBufferBeforeGate(const std::string& wireNam
 
         report.records.push_back(record);
     }
+    if (!report.records.empty()) markDirty();
     return report;
 }
 
@@ -1395,7 +1412,8 @@ BufferInsertionReport Netlist::insertBuffersByGateType(GateType type, bool buffe
             }
         }
     }
-    
+
+    if (!report.records.empty()) markDirty();
     return report;
 }
 

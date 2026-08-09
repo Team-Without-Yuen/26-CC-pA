@@ -2,7 +2,7 @@
 
 #include "include/core/BitParallelSimulation.h"
 #include "include/core/Netlist.h"
-#include "include/core/SatTime.h"
+#include "include/SATEngine/SatTime.h"
 
 #include <algorithm>
 #include <array>

@@ -13,7 +13,7 @@
 #include "include/core/OptimizationFlow.h"
 #include "include/core/NetlistEditReport.h"
 #include "TransformationReport.h"
-#include "include/core/SatTime.h"
+#include "include/SATEngine/SatTime.h"
 
 // The core data structure representing the entire circuit graph
 class Netlist {
@@ -30,8 +30,27 @@ private:
     std::vector<Port> primaryInputs;
     std::vector<Port> primaryOutputs;
 
+    // dirty 是引擎的正確性保證機制，不是效能優化。
+    // 初值為 true：新建的 Netlist 還沒有對應的 AIG。
+    bool     dirty_    = true;
+    uint64_t revision_ = 0;   // 每次 mutation 遞增；供 snapshot 檢查用
+
 public:
     Netlist() = default;
+
+    // 所有 mutation 的唯一標記入口。
+    // public：TechMapper / DepthOptimizer / MockturtleConverter 等外部 class 或
+    // free function 直接改 gates/nets 時也需要呼叫。
+    // LLM 與高階 API 不需要知道這存在，也不該主動呼叫。
+    void markDirty() { dirty_ = true; ++revision_; }
+
+    // 供 Primitives::ensure_fresh() 使用。
+    // LLM 與 高階 API 都不需要知道這些存在，也不該直接呼叫。
+    bool     isDirty()  const { return dirty_; }
+    uint64_t revision() const { return revision_; }
+
+    // 只有「AIG 已重建完成」時才可呼叫。除了 SatPrimitives 不該有人碰。
+    void clearDirty() { dirty_ = false; }
 
     // =========================================================================
     // Netlist.h API 分類索引
@@ -114,11 +133,11 @@ public:
 
     // 依 ID 取得 Gate；呼叫者需先確認 id 合法。
     const Gate& getGate(int id) const { return gates[id]; } 
-    Gate& getGateMutable(int id) { return gates[id]; }
+    Gate& getGateMutable(int id) { markDirty(); return gates[id]; }
 
     // 依 ID 取得 Net；呼叫者需先確認 id 合法。
     const Net& getNet(int id) const { return nets[id]; } 
-    Net&  getNetMutable(int id)  { return nets[id]; }
+    Net&  getNetMutable(int id)  { markDirty(); return nets[id]; }
 
     // 取得 gates vector 的 slot 數；包含 edit 後保留 ID 的 tombstone。
     size_t getGateCount() const { return gates.size(); }

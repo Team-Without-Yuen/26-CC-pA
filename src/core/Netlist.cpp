@@ -7,6 +7,7 @@ void Netlist::setNetConst(int netId, bool isConst, int val) {
     if (netId >= 0 && netId < (int)nets.size()) {
         nets[netId].isConst = isConst;
         nets[netId].constVal = val;
+        markDirty();
     }
 }
 
@@ -66,6 +67,7 @@ int Netlist::addNet(const std::string& name) {
                 nets[existingId].isConst = true;
                 nets[existingId].constVal = (name == "1'b1") ? 1 : 0;
             }
+            markDirty();
         }
         return existingId;
     }
@@ -80,6 +82,7 @@ int Netlist::addNet(const std::string& name) {
     }
     netNameToId[name] = newId;
 
+    markDirty();
     return newId;
 }
 
@@ -89,6 +92,7 @@ int Netlist::addGate(const std::string& name, GateType type) {
     int newId = gates.size();
     gates.emplace_back(newId, name, type);
     gateNameToId[name] = newId;
+    markDirty();
     return newId;
 }
 
@@ -118,6 +122,7 @@ void Netlist::addPrimaryInput(const std::string& portName, int msb, int lsb) {
 
     // Store the port declaration
     primaryInputs.push_back(newPort);
+    markDirty();
 }
 
 // 新增 primary output；若是 bus，會展開成每一個 bit net，例如 n3[23] ... n3[0]
@@ -143,6 +148,7 @@ void Netlist::addPrimaryOutput(const std::string& portName, int msb, int lsb) {
 
     // Store the port declaration
     primaryOutputs.push_back(newPort);
+    markDirty();
 }
 
 // 將一條 net 接到指定 gate 的 input pin，並同步更新 net 的 load gate 清單
@@ -159,6 +165,7 @@ void Netlist::connectGateInput(int gateId, int netId, const std::string& pinName
     if (netId >= 0 && netId < (int)nets.size()) {
         nets[netId].loadGateIds.push_back(gateId);
     }
+    markDirty();
 }
 
 // 將一條 net 接到指定 gate 的 output pin，並記錄該 net 的 driver gate
@@ -171,6 +178,7 @@ void Netlist::connectGateOutput(int gateId, int netId) {
     if (netId >= 0 && netId < (int)nets.size()) {
         nets[netId].driverGateId = gateId;
     }
+    markDirty();
 }
 
 // 依 gate instance name 查 gate ID；找不到時回傳 -1
