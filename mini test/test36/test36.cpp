@@ -96,10 +96,8 @@ void testFloatingPrimaryOutput(TestReport& report) {
 
 void testMissingGateInput(TestReport& report) {
     Netlist netlist;
-    netlist.addPrimaryInput("a");
     netlist.addPrimaryOutput("y");
     const int gate = netlist.addGate("broken_and", GateType::AND);
-    netlist.connectGateInput(gate, netlist.getNetId("a"));
     netlist.connectGateOutput(gate, netlist.getNetId("y"));
 
     Primitives::Config config = quietConfig();
@@ -108,10 +106,10 @@ void testMissingGateInput(TestReport& report) {
     const auto y = prim.resolve("y");
 
     report.check(prim.model_health() == ModelHealth::Invalid,
-                 "missing binary-gate input makes the model Invalid");
-    report.check(prim.model_health_message().find("missing required input") !=
+                 "zero-input combinational gate makes the model Invalid");
+    report.check(prim.model_health_message().find("expected at least one") !=
                      std::string::npos,
-                 "invalid model reports the missing gate input");
+                 "invalid model reports the n-ary gate arity problem");
     report.check(prim.is_const_checked(y, false) == EquivResult::Unknown,
                  "checked constant query returns Unknown on invalid model");
 
@@ -132,6 +130,24 @@ void testMissingGateInput(TestReport& report) {
     }
     report.check(cutRejected,
                  "cut analysis rejects an invalid model");
+}
+
+void testInvalidUnaryArity(TestReport& report) {
+    Netlist netlist;
+    netlist.addPrimaryInput("a");
+    netlist.addPrimaryInput("b");
+    netlist.addPrimaryOutput("y");
+    const int gate = netlist.addGate("broken_not", GateType::NOT);
+    netlist.connectGateInput(gate, netlist.getNetId("a"));
+    netlist.connectGateInput(gate, netlist.getNetId("b"));
+    netlist.connectGateOutput(gate, netlist.getNetId("y"));
+
+    Primitives prim(netlist, {}, quietConfig());
+    report.check(prim.model_health() == ModelHealth::Invalid,
+                 "multi-input NOT makes the model Invalid");
+    report.check(prim.model_health_message().find("expected exactly one") !=
+                     std::string::npos,
+                 "invalid model reports the unary gate arity problem");
 }
 
 void testDffInputs(TestReport& report) {
@@ -190,6 +206,7 @@ int main() {
     testFloatingGateInput(report);
     testFloatingPrimaryOutput(report);
     testMissingGateInput(report);
+    testInvalidUnaryArity(report);
     testDffInputs(report);
     testCombinationalLoopAndCec(report);
 

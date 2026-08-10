@@ -2,6 +2,7 @@
 #include <string>
 #include <vector>
 #include <map>
+#include <memory>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -14,6 +15,10 @@
 #include "include/core/NetlistEditReport.h"
 #include "TransformationReport.h"
 #include "include/SATEngine/SatTime.h"
+
+namespace eqeng {
+class Primitives;
+}
 
 // The core data structure representing the entire circuit graph
 class Netlist {
@@ -35,13 +40,26 @@ private:
     // remaining invisible outside a single synchronous mutation call.
     bool deferLoadListMaintenance = false;
 
-    // dirty 是引擎的正確性保證機制，不是效能優化。
+    // revision 是 cache freshness 的正確性依據；dirty 只保留為共享診斷狀態。
     // 初值為 true：新建的 Netlist 還沒有對應的 AIG。
-    bool     dirty_    = true;
+    mutable bool dirty_ = true;
     uint64_t revision_ = 0;   // 每次 mutation 遞增；供 snapshot 檢查用
 
+    // One Netlist owns at most one Boolean-analysis cache.  It is lazy and is
+    // never copied or moved because Primitives is bound to this exact object.
+    mutable std::unique_ptr<eqeng::Primitives> primitives_;
+
+    // Internal backend entry point for Netlist's high-level API implementations.
+    // SigRef/AIG objects must never escape into public reports.
+    eqeng::Primitives& booleanPrimitives() const;
+
 public:
-    Netlist() = default;
+    Netlist();
+    ~Netlist();
+    Netlist(const Netlist& other);
+    Netlist& operator=(const Netlist& other);
+    Netlist(Netlist&& other) noexcept;
+    Netlist& operator=(Netlist&& other) noexcept;
 
     // 所有 mutation 的唯一標記入口。
     // public：TechMapper / DepthOptimizer / MockturtleConverter 等外部 class 或
@@ -54,8 +72,8 @@ public:
     bool     isDirty()  const { return dirty_; }
     uint64_t revision() const { return revision_; }
 
-    // 只有「AIG 已重建完成」時才可呼叫。除了 SatPrimitives 不該有人碰。
-    void clearDirty() { dirty_ = false; }
+    // 只有「AIG 已重建完成」時才可呼叫。除了 Primitives 不該有人碰。
+    void clearDirty() const { dirty_ = false; }
 
     // =========================================================================
     // Netlist.h API 分類索引

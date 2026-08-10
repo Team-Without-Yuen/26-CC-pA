@@ -171,7 +171,7 @@ public:
     };
 
     // 唯一建構方式。建構時不立刻建 AIG —— 等第一個 query 進來才建（lazy）。
-    explicit Primitives(Netlist& nl,
+    explicit Primitives(const Netlist& nl,
                         AigModel::Options bopt = {},
                         Config cfg = Config());
     ~Primitives();
@@ -329,7 +329,7 @@ private:
                       bool filterIsExclude,
                       const CecOptions& opt);
 
-    Netlist&                   nl_;
+    const Netlist&             nl_;
     AigModel::Options          bopt_;
     Config                     cfg_;
     std::unique_ptr<AigModel>  model_;

@@ -1,7 +1,84 @@
 #include "include/core/Netlist.h"
+#include "include/SATEngine/Primitives.h"
 #include <string>
 #include <algorithm>
 #include <sstream>
+#include <utility>
+
+Netlist::Netlist() = default;
+Netlist::~Netlist() = default;
+
+Netlist::Netlist(const Netlist& other)
+    : gates(other.gates),
+      nets(other.nets),
+      gateNameToId(other.gateNameToId),
+      netNameToId(other.netNameToId),
+      primaryInputs(other.primaryInputs),
+      primaryOutputs(other.primaryOutputs),
+      deferLoadListMaintenance(other.deferLoadListMaintenance),
+      dirty_(true),
+      revision_(other.revision_) {}
+
+Netlist& Netlist::operator=(const Netlist& other) {
+    if (this == &other) return *this;
+
+    primitives_.reset();
+    gates = other.gates;
+    nets = other.nets;
+    gateNameToId = other.gateNameToId;
+    netNameToId = other.netNameToId;
+    primaryInputs = other.primaryInputs;
+    primaryOutputs = other.primaryOutputs;
+    deferLoadListMaintenance = other.deferLoadListMaintenance;
+    dirty_ = true;
+    revision_ = other.revision_;
+    return *this;
+}
+
+Netlist::Netlist(Netlist&& other) noexcept {
+    // The cache references other, so destroy it before moving graph storage.
+    other.primitives_.reset();
+    gates = std::move(other.gates);
+    nets = std::move(other.nets);
+    gateNameToId = std::move(other.gateNameToId);
+    netNameToId = std::move(other.netNameToId);
+    primaryInputs = std::move(other.primaryInputs);
+    primaryOutputs = std::move(other.primaryOutputs);
+    deferLoadListMaintenance = other.deferLoadListMaintenance;
+    dirty_ = true;
+    revision_ = other.revision_;
+    other.deferLoadListMaintenance = false;
+    other.dirty_ = true;
+}
+
+Netlist& Netlist::operator=(Netlist&& other) noexcept {
+    if (this == &other) return *this;
+
+    primitives_.reset();
+    other.primitives_.reset();
+    gates = std::move(other.gates);
+    nets = std::move(other.nets);
+    gateNameToId = std::move(other.gateNameToId);
+    netNameToId = std::move(other.netNameToId);
+    primaryInputs = std::move(other.primaryInputs);
+    primaryOutputs = std::move(other.primaryOutputs);
+    deferLoadListMaintenance = other.deferLoadListMaintenance;
+    dirty_ = true;
+    revision_ = other.revision_;
+    other.deferLoadListMaintenance = false;
+    other.dirty_ = true;
+    return *this;
+}
+
+eqeng::Primitives& Netlist::booleanPrimitives() const {
+    if (!primitives_) {
+        eqeng::Primitives::Config config;
+        config.verbose_rebuild = false;
+        primitives_ = std::make_unique<eqeng::Primitives>(
+            *this, eqeng::AigModel::Options{}, config);
+    }
+    return *primitives_;
+}
 
 void Netlist::setNetConst(int netId, bool isConst, int val) {
     if (netId >= 0 && netId < (int)nets.size()) {

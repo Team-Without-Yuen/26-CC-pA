@@ -34,6 +34,7 @@ SOURCES := \
   $(wildcard $(ROOT_DIR)/src/analysis/*.cpp) \
   $(wildcard $(ROOT_DIR)/src/optimization/*.cpp) \
   $(wildcard $(ROOT_DIR)/src/transformation/*.cpp) \
+  $(wildcard $(ROOT_DIR)/src/SATEngine/*.cpp) \
   $(wildcard $(ROOT_DIR)/include/lib/abcsat/*.cpp) \
   $(wildcard $(ROOT_DIR)/include/lib/abcesop/*.cpp)
 
