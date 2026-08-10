@@ -10,6 +10,16 @@ transaction validation、session state 與底層 regression。
 API_SPEC/TOOLS待更新表.md
 ```
 
+## AIG Function backend 狀態
+
+- [x] 建立擁有 current Netlist 與唯一 Primitives 的 `DesignAnalysisContext` 第一版。
+- [x] 建立 Function Query AIG differential adapter，涵蓋 Equivalence、ConditionalEquivalence、CanBeValue、ConstantFunction、AlwaysZero、AlwaysOne、TruthStatus。
+- [x] test37 驗證新舊核心 report、bus、DFF.Q、internal condition、mixed-gate differential、Invalid model、lazy rebuild、stale SigRef 與 timeout，20/20 通過。
+- [x] Phase A timed equivalence/constant proof 使用 deadline-aware AIG-to-CNF 與 CaDiCaL `TimeLimitTerminator`，可在 solver 執行中中止。
+- [ ] snapshot CEC、cofactor/`equiv_under()` 與首次 lazy AIG rebuild 尚未接收同一套 cooperative deadline。
+- [ ] 使用正式 testcase 做 Function Query differential 與效能 benchmark，通過前不切換 tools dispatch。
+- [ ] 後續評估 FunctionalDependence、Symmetry hybrid、Function Search、Sequential fallback 與 snapshot CEC。
+
 ## 已完成：DFF.Q fanin scope 停在 boundary
 
 官方 QA 要求 DFF.Q/register output 的 fanin cone 視為空的 combinational

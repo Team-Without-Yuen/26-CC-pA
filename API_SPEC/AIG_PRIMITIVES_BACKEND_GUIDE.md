@@ -22,7 +22,16 @@ gate/net 名稱、gate type、depth、path、fanin/fanout 與輸出 Verilog 仍�
 Function Search、Function Analysis、Sequential Pattern 與 CEC 必須共用同一個 instance，
 不得各自在長生命週期物件中建立另一份 AIG cache。
 
-目前高階 API 尚未接入這個 context；接入前可在 backend regression 中直接建構：
+第一版共用 ownership layer 已放在：
+
+```text
+include/core/DesignAnalysisContext.h
+src/core/DesignAnalysisContext.cpp
+```
+
+它直接擁有 current named `Netlist` 與唯一的 `Primitives`，並禁止 copy/move。Function Query 的 differential bridge 位於 `AigFunctionQueryAdapter`；截至目前只供 backend 驗證，尚未切換正式 `Netlist::runFunctionQuery()` 或 tools session。
+
+低階 backend regression 仍可直接建構：
 
 ```cpp
 #include "include/SATEngine/Primitives.h"
@@ -48,6 +57,20 @@ auto current = primitives.resolve("n1");
 ```
 
 跨修改應保存 net/gate 名稱，不應保存 `SigRef`、raw AIG signal 或 `Cut`。
+
+### Deadline-aware Phase A proof
+
+需要遵守 query wall-clock budget 的高階 API 應使用 timed checked overload：
+
+```cpp
+auto eq = primitives.equiv_checked(a, b, remainingSeconds);
+auto c0 = primitives.is_const_checked(a, false, remainingSeconds);
+bool timedOut = primitives.last_proof_timed_out();
+```
+
+timed Phase A path 直接把所需 AIG union cone 編成 CaDiCaL CNF。cone traversal、CNF encoding 與 SAT solve 共用同一個 deadline；SAT solve 連接 `TimeLimitTerminator`，到期回 `EquivResult::Unknown`。呼叫端必須以 `last_proof_timed_out()` 區分 timeout 與其他 Unknown。
+
+既有不帶時間參數的 overload 仍保留給內部 golden/reference flow。目前 snapshot CEC、cofactor 與 `equiv_under()` 尚未提供同型 timed overload；首次 lazy AIG rebuild 也尚未接受 cooperative deadline。
 
 ## 3. ModelHealth
 

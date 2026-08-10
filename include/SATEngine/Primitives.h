@@ -215,6 +215,11 @@ public:
     // ---------- 等價 / 常數 ----------
     EquivResult equiv_checked(SigRef a, SigRef b);
     EquivResult is_const_checked(SigRef a, bool val);
+    // Deadline-aware Phase A proof. The budget includes lazy rebuild and CNF
+    // preparation; CaDiCaL is interrupted when the remaining wall time expires.
+    EquivResult equiv_checked(SigRef a, SigRef b, double time_limit_seconds);
+    EquivResult is_const_checked(SigRef a, bool val, double time_limit_seconds);
+    bool        last_proof_timed_out() const { return lastProofTimedOut_; }
     bool        equiv(SigRef a, SigRef b);
     bool        is_const(SigRef a, bool val);
     bool        is_const0(SigRef a) { return is_const(a, false); }
@@ -314,6 +319,7 @@ private:
     // ---------- 既有內部 ----------
     bool        resolve_policy(EquivResult r);
     EquivResult equiv_via_miter(Sig a, Sig b);
+    EquivResult equiv_via_cadical(Sig a, Sig b, double time_limit_seconds);
     Sig         build_cofactor(Sig f, Sig var, bool val);
     bool        in_structural_cone(Sig f, Node target);
     TruthTable  truth_of_raw(const Cut& cut);
@@ -333,6 +339,7 @@ private:
     bool                       wantPhaseB_ = false;
     uint32_t                   generation_ = kInvalidGeneration;
     Stats                      stats_;
+    bool                       lastProofTimedOut_ = false;
 
     // ★ rebuild 時必須全部清空：內容是舊 AIG 的 Sig 與 node index。
     std::unordered_map<uint64_t, Sig> cofactorCache_;
