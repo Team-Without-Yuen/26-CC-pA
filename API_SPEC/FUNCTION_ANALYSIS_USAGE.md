@@ -88,7 +88,7 @@ if (report.ok && report.exists) {
 | `conditionValue` | `int` | `-1` | `ConditionalEquivalence` 使用；只能是 0 或 1 |
 | `constValue` | `int` | `-1` | `CanBeValue` / `ConstantFunction` 使用；只能是 0 或 1 |
 | `maxExpressionDepth` | `int` | `10` | `SimplifiedBooleanExpression` 使用；必須 >= 0 |
-| `timeLimitSeconds` | `double` | `30.0` | SAT 類 query 的 wall-clock 上限；equivalence、conditional equivalence 與 truth/constant 類查詢會傳到底層 solver |
+| `timeLimitSeconds` | `double` | `30.0` | SAT 類 query 的 wall-clock 上限；equivalence、conditional equivalence、truth/constant、functional dependence 與 symmetry 都會傳到底層 solver |
 
 ---
 
@@ -687,4 +687,5 @@ tester：mini test/test4/test4.cpp
 CLI integration regression test9-test17：150 passed, 0 failed。
 symmetry integration test22：14 passed, 0 failed。
 NewTestCase test36/test37：兩題皆回 SYMMETRIC；指定 inputs 均不在 target support，solverStatus=NOT_NEEDED。
+test39：test33/36/37 正式 prompts、四個 SAT-active dependence/symmetry 案例與兩個 timeout 參數邊界，共 9/9 通過。
 ```

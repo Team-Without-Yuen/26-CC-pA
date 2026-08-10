@@ -1,0 +1,150 @@
+TESTCASE test33 PROMPT #12
+  text: Does output n8 depend on input n1? Report yes or no.
+  query_type: FunctionalDependence
+  status: FUNCTIONALLY_INDEPENDENT
+  expected_status: FUNCTIONALLY_INDEPENDENT
+  expected_status_matches: yes
+  solver_status: NOT_NEEDED
+  answer: no
+  depends_on_input: no
+  symmetric: no
+  input_in_structural_support: no
+  symmetry_input_a_in_structural_support: no
+  symmetry_input_b_in_structural_support: no
+  timeout: no
+  elapsed_seconds: 0.000042
+
+TESTCASE test36 PROMPT #10
+  text: Check whether the function at n11 is symmetric with respect to inputs n3 and n9[0].
+  query_type: Symmetry
+  status: SYMMETRIC
+  expected_status: SYMMETRIC
+  expected_status_matches: yes
+  solver_status: NOT_NEEDED
+  answer: yes
+  depends_on_input: no
+  symmetric: yes
+  input_in_structural_support: no
+  symmetry_input_a_in_structural_support: no
+  symmetry_input_b_in_structural_support: no
+  timeout: no
+  elapsed_seconds: 0.000022
+
+TESTCASE test37 PROMPT #16
+  text: Check whether the function at n8 is symmetric with respect to inputs n3 and n4[0].
+  query_type: Symmetry
+  status: SYMMETRIC
+  expected_status: SYMMETRIC
+  expected_status_matches: yes
+  solver_status: NOT_NEEDED
+  answer: yes
+  depends_on_input: no
+  symmetric: yes
+  input_in_structural_support: no
+  symmetry_input_a_in_structural_support: no
+  symmetry_input_b_in_structural_support: no
+  timeout: no
+  elapsed_seconds: 0.000008
+
+TESTCASE dependence_sat PROMPT #0
+  text: SAT-active positive dependence case.
+  query_type: FunctionalDependence
+  status: FUNCTIONALLY_DEPENDENT
+  expected_status: FUNCTIONALLY_DEPENDENT
+  expected_status_matches: yes
+  solver_status: SAT
+  answer: yes
+  depends_on_input: yes
+  symmetric: no
+  input_in_structural_support: yes
+  symmetry_input_a_in_structural_support: no
+  symmetry_input_b_in_structural_support: no
+  timeout: no
+  elapsed_seconds: 0.000521
+
+TESTCASE dependence_unsat PROMPT #0
+  text: UNSAT-active functional cancellation case.
+  query_type: FunctionalDependence
+  status: FUNCTIONALLY_INDEPENDENT
+  expected_status: FUNCTIONALLY_INDEPENDENT
+  expected_status_matches: yes
+  solver_status: UNSAT
+  answer: no
+  depends_on_input: no
+  symmetric: no
+  input_in_structural_support: yes
+  symmetry_input_a_in_structural_support: no
+  symmetry_input_b_in_structural_support: no
+  timeout: no
+  elapsed_seconds: 0.000332
+
+TESTCASE symmetry_unsat PROMPT #0
+  text: UNSAT-active symmetric case.
+  query_type: Symmetry
+  status: SYMMETRIC
+  expected_status: SYMMETRIC
+  expected_status_matches: yes
+  solver_status: UNSAT
+  answer: yes
+  depends_on_input: no
+  symmetric: yes
+  input_in_structural_support: no
+  symmetry_input_a_in_structural_support: yes
+  symmetry_input_b_in_structural_support: yes
+  timeout: no
+  elapsed_seconds: 0.000318
+
+TESTCASE symmetry_sat PROMPT #0
+  text: SAT-active asymmetric case.
+  query_type: Symmetry
+  status: NOT_SYMMETRIC
+  expected_status: NOT_SYMMETRIC
+  expected_status_matches: yes
+  solver_status: SAT
+  answer: no
+  depends_on_input: no
+  symmetric: no
+  input_in_structural_support: no
+  symmetry_input_a_in_structural_support: yes
+  symmetry_input_b_in_structural_support: yes
+  timeout: no
+  elapsed_seconds: 0.000349
+
+TESTCASE dependence_invalid_limit PROMPT #0
+  text: FunctionalDependence rejects a non-positive SAT budget.
+  query_type: FunctionalDependence
+  status: INVALID_ARGUMENT
+  expected_status: INVALID_ARGUMENT
+  expected_status_matches: yes
+  solver_status: 
+  answer: no
+  depends_on_input: no
+  symmetric: no
+  input_in_structural_support: no
+  symmetry_input_a_in_structural_support: no
+  symmetry_input_b_in_structural_support: no
+  timeout: no
+  elapsed_seconds: 0.000000
+
+TESTCASE symmetry_invalid_limit PROMPT #0
+  text: Symmetry rejects a non-positive SAT budget.
+  query_type: Symmetry
+  status: INVALID_ARGUMENT
+  expected_status: INVALID_ARGUMENT
+  expected_status_matches: yes
+  solver_status: 
+  answer: no
+  depends_on_input: no
+  symmetric: no
+  input_in_structural_support: no
+  symmetry_input_a_in_structural_support: no
+  symmetry_input_b_in_structural_support: no
+  timeout: no
+  elapsed_seconds: 0.000000
+
+SUMMARY
+  queries=9
+  expected_status_matches=9
+  timeouts=0
+  elapsed_seconds=0.001593
+  result=PASS

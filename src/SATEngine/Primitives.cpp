@@ -22,12 +22,6 @@ namespace eqeng {
 
 namespace {
 
-// (f, var, val) 的快取鍵。f/var 都是 signal（含 phase），val 一位。
-inline uint64_t cofactor_key(Sig f, Sig var, bool val) {
-    // signal.data 實際只用到低 ~33 bits，這樣拼不會撞。
-    return (f.data * 1000003ull) ^ (var.data * 31ull) ^ (val ? 1ull : 0ull);
-}
-
 using SteadyClock = std::chrono::steady_clock;
 
 double remaining_seconds(const SteadyClock::time_point& deadline) {
@@ -565,7 +559,7 @@ SigRef Primitives::cofactor(SigRef rf, SigRef rvar, bool val) {
         throw std::invalid_argument("Primitives::cofactor: var is not a free variable");
     }
 
-    const uint64_t key = cofactor_key(f, var, val);
+    const CofactorKey key{f.data, var.data, val};
     auto it = cofactorCache_.find(key);
     if (it != cofactorCache_.end()) return stamp(it->second);
 
