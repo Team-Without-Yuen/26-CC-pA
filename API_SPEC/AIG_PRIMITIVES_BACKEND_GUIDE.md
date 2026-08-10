@@ -1,174 +1,130 @@
-# AIG Primitives Backend 使用指南
+# AIG Primitives 內部工具指南
 
-本文件提供後端與高階 API 開發者使用 `eqeng::Primitives`。它不是 LLM command 規格，
-也不要求修改 `tools.cpp`。
+本文件描述 `eqeng::Primitives` 作為高階 API 內部 Boolean proof 工具的使用方式。它不是獨立高階 API、LLM command、tools routing 或另一套 report facade。
 
-實作位置：
+## 1. 責任邊界
+
+```text
+唯一高階 API
+  -> 共用參數驗證、名稱/bus、timeout、report
+     -> 內部 Boolean proof helper
+        -> eqeng::Primitives
+```
+
+`Primitives` 只應回傳 Boolean proof 所需的低階結果，例如：
+
+- `Equal / NotEqual / Unknown`
+- timeout / unsupported
+- counterexample 或 functional class 等 engine 資訊
+
+它不得：
+
+- 解析 LLM prompt 或 CLI 參數
+- 複製高階 API 的參數檢查
+- 組裝 `FunctionReport`、`EditReport` 或 tools envelope
+- 取代 named netlist 的 gate/name/path/depth/connectivity 語意
+- 對外暴露 `SigRef`、AIG node 或 CNF variable
+
+## 2. 核心檔案
 
 ```text
 include/SATEngine/AigBuilder.h
+include/SATEngine/NameMap.h
 include/SATEngine/Primitives.h
+include/SATEngine/SatEngine.h
+include/SATEngine/Fraig.h
+include/SATEngine/Types.h
 src/SATEngine/AigBuilder.cpp
+src/SATEngine/NameMap.cpp
 src/SATEngine/Primitives.cpp
 src/SATEngine/Session.cpp
+src/SATEngine/EngineStubs.cpp
 ```
 
-## 1. 定位與所有權
+`SatEngine` 與 `Fraig` 目前仍為 Phase B 介面與 stub，不可啟用。
 
-current named `Netlist` 是唯一正式設計；AIG 只是衍生的 Boolean functional index。
-gate/net 名稱、gate type、depth、path、fanin/fanout 與輸出 Verilog 仍以 named netlist 為準。
+## 3. Phase A 能力
 
-一份 current `Netlist` 最終只能由 backend analysis context 持有一個共用 `Primitives`。
-Function Search、Function Analysis、Sequential Pattern 與 CEC 必須共用同一個 instance，
-不得各自在長生命週期物件中建立另一份 AIG cache。
+- named netlist 轉 AIG，支援題目 gate types
+- net name/ID 與 AIG signal mapping
+- floating/undriven signal 以 free PI 保留
+- DFF.Q pseudo-PI 與 DFF next-state comparison point
+- model health：`Sound / Conservative / Invalid`
+- equivalence 與 constant proof
+- deadline-aware Phase A proof
+- cofactor、support、dependence、unateness、symmetry
+- cut、truth table、NPN classification
+- snapshot CEC 基礎
 
-第一版共用 ownership layer 已放在：
+Phase A 每次非 trivial proof 仍可能重新建立 solver/CNF，因此只能視為正確性基準，不代表大量 query 會加速。
 
-```text
-include/core/DesignAnalysisContext.h
-src/core/DesignAnalysisContext.cpp
-```
-
-它直接擁有 current named `Netlist` 與唯一的 `Primitives`，並禁止 copy/move。Function Query 的 differential bridge 位於 `AigFunctionQueryAdapter`；截至目前只供 backend 驗證，尚未切換正式 `Netlist::runFunctionQuery()` 或 tools session。
-
-低階 backend regression 仍可直接建構：
+## 4. 建構與生命週期
 
 ```cpp
-#include "include/SATEngine/Primitives.h"
-
-eqeng::Primitives::Config config;
-config.verbose_rebuild = false;
-eqeng::Primitives primitives(netlist, {}, config);
+Netlist current;
+eqeng::Primitives primitives(current);
 ```
 
-## 2. Lazy rebuild 與物件生命週期
+`Primitives` 保存 `current` 的 reference，因此其生命週期不得超過 Netlist，也不能在 Netlist move 到新地址後繼續使用。
 
-建構 `Primitives` 時不建立 AIG。第一個需要模型的操作才 lazy build；named netlist mutation
-必須經過會呼叫 `markDirty()` 的 API。下一個 query 會整體重建 AIG，generation 遞增。
+高階 session 可以保存一個內部 `Primitives` 以重用 AIG cache，但該 session 不應提供另一套高階 query facade。新設計整份取代 `Netlist` 時，應銷毀並重建 `Primitives`。
 
-所有舊 `SigRef` 與 `Cut` 在 rebuild 後失效：
+## 5. Freshness 與 revision
 
-```cpp
-auto old = primitives.resolve("n1");
-netlist.addNet("new_net");
-
-// 重新取得；不可沿用 old。
-auto current = primitives.resolve("n1");
-```
-
-跨修改應保存 net/gate 名稱，不應保存 `SigRef`、raw AIG signal 或 `Cut`。
-
-### Deadline-aware Phase A proof
-
-需要遵守 query wall-clock budget 的高階 API 應使用 timed checked overload：
-
-```cpp
-auto eq = primitives.equiv_checked(a, b, remainingSeconds);
-auto c0 = primitives.is_const_checked(a, false, remainingSeconds);
-bool timedOut = primitives.last_proof_timed_out();
-```
-
-timed Phase A path 直接把所需 AIG union cone 編成 CaDiCaL CNF。cone traversal、CNF encoding 與 SAT solve 共用同一個 deadline；SAT solve 連接 `TimeLimitTerminator`，到期回 `EquivResult::Unknown`。呼叫端必須以 `last_proof_timed_out()` 區分 timeout 與其他 Unknown。
-
-既有不帶時間參數的 overload 仍保留給內部 golden/reference flow。目前 snapshot CEC、cofactor 與 `equiv_under()` 尚未提供同型 timed overload；首次 lazy AIG rebuild 也尚未接受 cooperative deadline。
-
-## 3. ModelHealth
-
-每次 build 都會產生 model health：
-
-| 狀態 | 意義 | Boolean proof |
-|---|---|---|
-| `Sound` | 所有必要訊號均被忠實建模 | 允許 |
-| `Conservative` | floating/undriven signal 已建成具名 free PI | 允許 |
-| `Invalid` | 必要輸入、PO、DFF D、driver 或拓撲無法忠實建模 | 禁止 |
-
-查詢方式：
-
-```cpp
-const auto health = primitives.model_health();
-const auto reason = primitives.model_health_message();
-```
-
-PO-only floating net 也必須建立成 free PI，不得綁成 constant 0。未接 DFF RN/SN 依 cell
-定義視為 inactive，屬合法情況；DFF D 缺失或已連接的 control 無法解析則為 `Invalid`。
-
-## 4. Invalid model 的固定語意
-
-Invalid model 絕對不能產生 proven Boolean answer。
-
-下列 checked API 回 `EquivResult::Unknown`：
+所有 Netlist mutation 必須呼叫 `markDirty()` 並增加 revision。每個 `Primitives` 自行保存 `builtRevision`：
 
 ```text
-equiv_checked
-is_const_checked
-equiv_under
-is_const_under
-depends_on_checked
-equiv_to_snapshot / except / only
+builtRevision == netlist.revision
+  -> model fresh
+
+builtRevision != netlist.revision
+  -> lazy rebuild
 ```
 
-下列無法用回傳型別表達 Unknown 的功能會丟 `UnsoundModel`：
+這使多個暫時性 Primitives 不會因其中一個呼叫 `clearDirty()`，讓另一個誤用舊 AIG。正式設計仍應避免長期建立多份 engine，以免重複耗用記憶體。
+
+`restoreFrom()` 必須保持 revision 單調增加。一般 Netlist assignment 若可能複製較舊 revision，呼叫端應重建 Primitives。
+
+## 6. Generation 與 cache
+
+AIG rebuild 後：
+
+- generation 遞增
+- 舊 `SigRef` 與 `Cut` 必須被拒絕
+- cofactor/cone cache 清空
+- cofactor cache 使用完整 `(function, variable, value)` key 與 equality，不能把 hash 當唯一識別
+
+每次高階分析都應從名稱重新 resolve，不能跨 edit 保存 `SigRef`。
+
+## 7. Proof 安全語意
+
+- `Invalid` model 不得產生已證明的答案。
+- `Unknown` 與 timeout 不得當作 `Equal` 或普通 false。
+- 正式路徑使用 `StaleSigPolicy::Throw`。
+- `UnknownPolicy::AsEqual`、`StaleSigPolicy::Ignore` 與 `RebuildAndWarn` 只可用於低階診斷，不得用於競賽答案或 edit acceptance。
+- high-level API 必須將 engine 結果映射回既有 report contract。
+
+## 8. 高階 API 未來接入規則
+
+接入時只替換內部 proof function：
 
 ```text
-equiv / is_const / is_const0 / is_const1
-is_free_var / is_constant / is_complemented / raw / wrap
-cofactor / functional_support / is_unate / is_symmetric
-make_and / make_or / make_xor / make_mux
-enumerate_cuts / truth_of / npn_matches / cut access
-equivalence_classes
+existing high-level implementation
+  -> internal proof call
+     legacy SAT or Primitives
+  -> existing report assembly
 ```
 
-高階 API 接入後應捕捉 `UnsoundModel`，轉成自己的統一 report，不得讓例外穿透至 CLI。
-`UnknownPolicy::AsEqual` 只處理 solver resource-limit Unknown，不能把 Invalid model 轉成 true。
+禁止建立 `runXWithAigBackend()` 形式的第二套 public API，禁止在 AIG adapter 內複製整份 report 邏輯。正式切換前必須以相同 testcase 比較答案、Unknown/timeout、counterexample、完整性與時間。
 
-## 5. 可在 Invalid model 上使用的診斷入口
-
-下列入口不宣稱 Boolean proof，可用來診斷建模問題：
-
-```text
-model / model_health / model_health_message
-resolve / try_resolve / names_of
-comparison_points
-stats
-```
-
-`model()`、`aig()` 與 `names()` 不應出現在一般高階 API；它們主要供 backend debugging
-與 regression 使用。`raw()` / `wrap()` 仍受 model-health gate 保護，不可用來繞過 Invalid。
-
-## 6. Phase A 能力邊界
-
-目前正式可用的是 Phase A。Phase 切換介面保留給後續開發，本輪不修改其行為；現階段
-不得把 Phase B SatEngine/Fraig stub 當成可用 backend。
-
-Phase A 的重要限制：
-
-```text
-- equivalence_classes 只有 structural sharing，不是完整 functional equivalence classes。
-- equiv_under / is_const_under 仍會物化 cofactor。
-- functional_support、symmetry、unate 可能建立大量 cofactor。
-- enumerate_cuts 每次可能掃描整顆 AIG。
-```
-
-因此導入既有 API 前必須以 testcase 比較答案、時間與記憶體，不能只因介面存在就替換。
-
-## 7. CEC
-
-```cpp
-auto before = primitives.snapshot();
-apply_named_netlist_edit(netlist);
-const auto result = primitives.equiv_to_snapshot(before);
-```
-
-snapshot 是 move-only，並以名稱對齊 PI、PO、DFF Q 與 DFF next-state。若 before 或 after
-模型 Invalid，CEC 回 `Unknown`，不得將它解讀成 equivalent 或 not-equivalent。
-
-## 8. 測試
-
-專用 regression：
+## 9. 驗證
 
 ```text
 mini test/test36/test36.cpp
+mini test/test37/test37.cpp
 ```
 
-涵蓋 Sound DAG、gate-input floating、PO-only floating、missing gate input、DFF D、合法未接
-RN/SN、組合迴路、Invalid CEC，以及 `UnknownPolicy::AsEqual` 不得繞過 model-health gate。
+- test36：model health、floating、invalid model 與安全拒絕。
+- test37：直接測 Primitives proof、cofactor cache、per-instance revision freshness、stale SigRef 與 deadline。
+
+Function Query、Function Search 等高階 API 的 regression 應繼續呼叫唯一既有入口，不透過獨立 AIG facade。

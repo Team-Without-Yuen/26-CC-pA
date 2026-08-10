@@ -455,6 +455,10 @@ SAT 類 report 欄位：
 | `unsupported` | 是否因不支援而無法建模 |
 | `solverStatus` | `SAT`、`UNSAT`、`NOT_NEEDED`、`TIMEOUT`、`UNKNOWN`、`UNSUPPORTED` |
 
+所有會啟動 SAT 的 FunctionQuery mode 都使用 `query.timeLimitSeconds`，包含
+`FunctionalDependence` 與 `Symmetry`。非正值會回 `INVALID_ARGUMENT`；不能由
+底層改用固定 30 秒而忽略呼叫端預算。
+
 ---
 
 ## 9. 目前限制

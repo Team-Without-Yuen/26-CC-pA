@@ -459,7 +459,8 @@ DetailedSatResult solveFunctionalDependenceDetailed(
     const Netlist& netlist,
     const std::string& targetName,
     const std::string& inputName,
-    bool& inputInStructuralSupport) {
+    bool& inputInStructuralSupport,
+    double timeLimitSeconds) {
     inputInStructuralSupport = false;
 
     const std::vector<int> targetBits = netlist.expandNetToBits(targetName);
@@ -601,7 +602,7 @@ DetailedSatResult solveFunctionalDependenceDetailed(
     solver.add(-output0); solver.add(output1); solver.add(diffLit); solver.add(0);
     solver.add(diffLit); solver.add(0);
 
-    TimeLimitTerminator terminator(30.0);
+    TimeLimitTerminator terminator(timeLimitSeconds);
     solver.connect_terminator(&terminator);
     const int solverResult = solver.solve();
     solver.disconnect_terminator();
@@ -612,7 +613,8 @@ SymmetrySatResult solveSymmetryDetailed(
     const Netlist& netlist,
     const std::string& targetName,
     const std::string& inputNameA,
-    const std::string& inputNameB) {
+    const std::string& inputNameB,
+    double timeLimitSeconds) {
     SymmetrySatResult result;
 
     const std::vector<int> targetBits = netlist.expandNetToBits(targetName);
@@ -800,7 +802,7 @@ SymmetrySatResult solveSymmetryDetailed(
     }
     solver.add(0);
 
-    TimeLimitTerminator terminator(30.0);
+    TimeLimitTerminator terminator(timeLimitSeconds);
     solver.connect_terminator(&terminator);
     const int solverResult = solver.solve();
     solver.disconnect_terminator();
@@ -913,7 +915,9 @@ Netlist::FunctionReport Netlist::runFunctionQuery(const FunctionQuery& query) co
         query.type == FunctionQueryType::ConstantFunction ||
         query.type == FunctionQueryType::AlwaysZero ||
         query.type == FunctionQueryType::AlwaysOne ||
-        query.type == FunctionQueryType::TruthStatus;
+        query.type == FunctionQueryType::TruthStatus ||
+        query.type == FunctionQueryType::FunctionalDependence ||
+        query.type == FunctionQueryType::Symmetry;
     if (usesConfigurableSatLimit && query.timeLimitSeconds <= 0.0) {
         report.status = "INVALID_ARGUMENT";
         report.message = "SAT timeLimitSeconds must be positive.";
@@ -1246,7 +1250,8 @@ Netlist::FunctionReport Netlist::runFunctionQuery(const FunctionQuery& query) co
             *this,
             query.netNameA,
             query.netNameB,
-            report.inputInStructuralSupport);
+            report.inputInStructuralSupport,
+            query.timeLimitSeconds);
         mergeSolverStatus(report, dependence);
         if (!dependence.conclusive()) {
             markSolverFailure("FunctionalDependence query");
@@ -1295,7 +1300,8 @@ Netlist::FunctionReport Netlist::runFunctionQuery(const FunctionQuery& query) co
             *this,
             query.netNameA,
             query.symmetryInputNameA,
-            query.symmetryInputNameB);
+            query.symmetryInputNameB,
+            query.timeLimitSeconds);
         mergeSolverStatus(report, symmetry.solve);
         report.symmetryInputAInStructuralSupport =
             symmetry.inputAInStructuralSupport;
@@ -2411,4 +2417,3 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
         : "No internal signal pair satisfies the requested NAND equivalence.";
     return finish();
 }
-

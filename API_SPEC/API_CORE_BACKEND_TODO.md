@@ -10,15 +10,17 @@ transaction validation、session state 與底層 regression。
 API_SPEC/TOOLS待更新表.md
 ```
 
-## AIG Function backend 狀態
+## AIG 內部工具狀態
 
-- [x] 建立擁有 current Netlist 與唯一 Primitives 的 `DesignAnalysisContext` 第一版。
-- [x] 建立 Function Query AIG differential adapter，涵蓋 Equivalence、ConditionalEquivalence、CanBeValue、ConstantFunction、AlwaysZero、AlwaysOne、TruthStatus。
-- [x] test37 驗證新舊核心 report、bus、DFF.Q、internal condition、mixed-gate differential、Invalid model、lazy rebuild、stale SigRef 與 timeout，20/20 通過。
-- [x] Phase A timed equivalence/constant proof 使用 deadline-aware AIG-to-CNF 與 CaDiCaL `TimeLimitTerminator`，可在 solver 執行中中止。
+- [x] AIG engine 保持為高階 API 內部 Boolean proof utility，不提供第二套 query/report facade。
+- [x] 移除平行 Function Query facade 與 AIG Function Search differential public entry。
+- [x] Phase A timed equivalence/constant proof 使用 deadline-aware AIG-to-CNF 與 CaDiCaL `TimeLimitTerminator`。
+- [x] 每個 `Primitives` 以自身 `builtRevision` 判斷 freshness，不再只依賴共用 dirty flag。
+- [x] cofactor cache 改用完整 `(function, variable, value)` key 與 equality。
+- [x] Phase B 切換依 `Fraig -> SatEngine -> AigModel` 順序釋放。
 - [ ] snapshot CEC、cofactor/`equiv_under()` 與首次 lazy AIG rebuild 尚未接收同一套 cooperative deadline。
-- [ ] 使用正式 testcase 做 Function Query differential 與效能 benchmark，通過前不切換 tools dispatch。
-- [ ] 後續評估 FunctionalDependence、Symmetry hybrid、Function Search、Sequential fallback 與 snapshot CEC。
+- [ ] `SatEngine` 與 `Fraig` 仍為 Phase B stub，不可啟用。
+- [x] FunctionalDependence / Symmetry 統一遵守 `query.timeLimitSeconds`；非正值回 `INVALID_ARGUMENT`。
 
 ## 已完成：DFF.Q fanin scope 停在 boundary
 
@@ -103,7 +105,7 @@ unsupported diagnostic。
 實證：
 
 ```text
-Blup/function_search_runs/unsupported_probe/unknown_primitive_probe.v
+Blup/TESTING/function_search_runs/unsupported_probe/unknown_primitive_probe.v
 
 mux g_mux (y, select, data0, data1);
 read -> ok:true, gate_count:0
@@ -151,20 +153,16 @@ netlist。因此此項不列為競賽實作待辦，也不修改 Function Search
 - merge_functionally_equivalent_gates 這類依賴全域 Boolean equivalence 的 cleanup/edit。
 ```
 
-### AIG backend ownership 與導入規則
-
-這一層是後端共用的 Boolean analysis infrastructure，不是新的 LLM command，也不要求
-`tools.cpp` 直接管理 AIG engine。
+### AIG 內部導入規則
 
 ```text
-- 一份 current named Netlist 對應一個由後端 analysis context 持有的共用 Primitives。
-- Function Search、Function Analysis、Sequential Pattern、symmetry、constant/equivalence 與 CEC
-  逐步改用同一份 Primitives，不得各自長期保存不同的 AIG model/cache。
-- 導入時優先替換容易 timeout 的內部 simulation/SAT backend；既有 public query/report 與
-  tools command grammar 先保持不變。
-- named Netlist mutation 只負責 markDirty；下一個 Boolean API query 才 lazy rebuild AIG。
-- restoreFrom() 雖還原舊電路內容，仍必須產生新的單調 revision 並保持 dirty，避免沿用錯誤 cache。
-- 只有 API schema、CLI 參數或 envelope 欄位真的改變時，才另行登記到 TOOLS待更新表。
+- AIG 只替換既有高階 API 內部的 Boolean proof，不建立另一套 public query。
+- 參數驗證、名稱/bus、timeout、report 與 artifact 必須維持單一實作。
+- 內部 owner 可保存與 current Netlist 綁定的 Primitives，但不得再擁有另一份 Netlist 或組裝高階 report。
+- named Netlist mutation 呼叫 markDirty；Primitives 以 revision lazy rebuild。
+- 整份 Netlist replacement/move 後必須重建 Primitives。
+- restoreFrom() 必須保持 revision 單調增加。
+- 正式接入只在既有 backend 證明答案與效能均適合後進行。
 ```
 
 ### 已完成：AIG model-health 安全門檻

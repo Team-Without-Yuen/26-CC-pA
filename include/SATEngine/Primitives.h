@@ -1,6 +1,8 @@
 #pragma once
 
 #include <cstdint>
+#include <functional>
+#include <limits>
 #include <memory>
 #include <optional>
 #include <stdexcept>
@@ -117,14 +119,11 @@ public:
 //  Primitives
 // ============================================================
 
-// facade：高階 API 唯一的呼叫窗口。
+// Low-level Boolean analysis utility used inside high-level API implementations.
 //
 //   所有權：Primitives 擁有 AigModel（以及 Phase B 的 SatEngine / Fraig）。
-//   一個 current Netlist 只能由 backend analysis context 持有一個共用 Primitives；
-//   Function Search、Function Analysis、Sequential Pattern 與 CEC 等高階 API
-//   必須接收並共用該 instance，不得各自長期保存另一份 Primitives。
 //   每個 public method 開頭自行 ensure_fresh()：netlist 髒了就重建。
-//   → 高階 API 與 LLM 完全不需要知道 dirty 存在。
+//   高階 API 只使用 proof 結果，不得把 SigRef/AIG 細節暴露到 public report。
 //
 //   生命週期：
 //   rebuild 之後 generation 遞增，所有舊 SigRef 立即失效並在使用時被攔截。
@@ -338,11 +337,36 @@ private:
     std::unique_ptr<Fraig>     fraig_;   // Phase A 為 nullptr
     bool                       wantPhaseB_ = false;
     uint32_t                   generation_ = kInvalidGeneration;
+    uint64_t                   builtRevision_ =
+        std::numeric_limits<uint64_t>::max();
     Stats                      stats_;
     bool                       lastProofTimedOut_ = false;
 
+    struct CofactorKey {
+        uint64_t functionData = 0;
+        uint64_t variableData = 0;
+        bool value = false;
+
+        bool operator==(const CofactorKey& other) const noexcept {
+            return functionData == other.functionData &&
+                   variableData == other.variableData &&
+                   value == other.value;
+        }
+    };
+
+    struct CofactorKeyHash {
+        std::size_t operator()(const CofactorKey& key) const noexcept {
+            std::size_t seed = std::hash<uint64_t>{}(key.functionData);
+            seed ^= std::hash<uint64_t>{}(key.variableData) +
+                    0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
+            seed ^= std::hash<bool>{}(key.value) +
+                    0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
+            return seed;
+        }
+    };
+
     // ★ rebuild 時必須全部清空：內容是舊 AIG 的 Sig 與 node index。
-    std::unordered_map<uint64_t, Sig> cofactorCache_;
+    std::unordered_map<CofactorKey, Sig, CofactorKeyHash> cofactorCache_;
     std::unordered_map<uint64_t, std::unordered_set<uint64_t>> coneCache_;
 };
 

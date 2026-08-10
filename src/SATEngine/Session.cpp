@@ -207,7 +207,7 @@ Primitives::~Primitives() = default;
 //   而是讓這套機制在 100 萬 gate 下可用的前提。lazy 建構已經先做到一半：
 //   只要修改是連續發生的，中間不會有任何 rebuild。
 void Primitives::ensure_fresh() {
-    if (model_ && !nl_.isDirty()) return;
+    if (model_ && builtRevision_ == nl_.revision()) return;
     rebuild();
 }
 
@@ -227,6 +227,7 @@ void Primitives::rebuild() {
     coneCache_.clear();
 
     ++generation_;                 // 所有舊 SigRef / Cut 就此失效
+    builtRevision_ = nl_.revision();
     nl_.clearDirty();
 
     if (wantPhaseB_) {
@@ -288,7 +289,11 @@ Sig Primitives::unwrap(SigRef s) {
 void Primitives::enable_phase_b(bool on) {
     if (wantPhaseB_ == on) return;
     wantPhaseB_ = on;
-    model_.reset();          // 強制下次 ensure_fresh 重建整條引擎
+    // Dependencies must be destroyed from the outermost user to the AIG owner.
+    fraig_.reset();
+    sat_.reset();
+    model_.reset();
+    builtRevision_ = std::numeric_limits<uint64_t>::max();
 }
 
 void Primitives::reset_stats() { stats_ = Stats{}; }
