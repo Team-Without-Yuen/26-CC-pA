@@ -189,7 +189,7 @@ inline char sig_value(const Ntk& ntk, const std::vector<char>& vals, Sig s) {
 //  建構 / 解構 / 版本管理
 // ============================================================
 
-Primitives::Primitives(Netlist& nl, AigModel::Options bopt, Config cfg)
+Primitives::Primitives(const Netlist& nl, AigModel::Options bopt, Config cfg)
     : nl_(nl), bopt_(bopt), cfg_(cfg) {
     // 刻意不在這裡建 AIG：等第一個 query 進來才建（lazy）。
     // 這樣「讀檔 → 一連串修改 → 第一次分析」只會重建一次。

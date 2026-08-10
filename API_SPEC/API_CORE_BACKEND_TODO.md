@@ -18,6 +18,10 @@ API_SPEC/TOOLS待更新表.md
 - [x] 每個 `Primitives` 以自身 `builtRevision` 判斷 freshness，不再只依賴共用 dirty flag。
 - [x] cofactor cache 改用完整 `(function, variable, value)` key 與 equality。
 - [x] Phase B 切換依 `Fraig -> SatEngine -> AigModel` 順序釋放。
+- [x] AigBuilder 對 AND/OR/NAND/NOR/XOR/XNOR 折疊全部 inputs，並正確處理 non-adjacent tied input。
+- [x] NOT/BUF 驗證 exactly-one input；非法 arity 將 model 標為 Invalid。
+- [x] Netlist 私有持有唯一 lazy Primitives owner；copy/move/restore 一律捨棄 cache。
+- [x] Primitives 改以 `const Netlist&` 讀取 named design；revision 是 freshness 權威。
 - [ ] snapshot CEC、cofactor/`equiv_under()` 與首次 lazy AIG rebuild 尚未接收同一套 cooperative deadline。
 - [ ] `SatEngine` 與 `Fraig` 仍為 Phase B stub，不可啟用。
 - [x] FunctionalDependence / Symmetry 統一遵守 `query.timeLimitSeconds`；非正值回 `INVALID_ARGUMENT`。
@@ -174,7 +178,8 @@ netlist。因此此項不列為競賽實作待辦，也不修改 Function Search
   topo-dropped gate 會使模型成為 Invalid。
 - Invalid model 的 checked proof 回 Unknown；其他 Boolean operation 丟 UnsoundModel。
 - UnknownPolicy::AsEqual 不能把 Invalid model 轉成 true。
-- mini test/test36：19 passed, 0 failed。
+- mini test/test36：21 passed, 0 failed。
+- mini test/test37：22 passed, 0 failed；涵蓋任意 fan-in、tied input 與 Netlist copy/move/rollback lifecycle。
 ```
 
 使用與安全語意：`API_SPEC/AIG_PRIMITIVES_BACKEND_GUIDE.md`。

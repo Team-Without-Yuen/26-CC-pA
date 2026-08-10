@@ -25,9 +25,9 @@ int pin_net(const Gate& g, const char* pin) {
 
 // 組合閘的拓撲排序（Kahn）。
 //
-// 與 MockturtleConverter 版本的差異：這裡的閘最多 2 個輸入，
-// tied-input 去重只要比較 in0 == in1 即可，不必為每顆閘配一個 unordered_set。
-// 100 萬 gate 時這個差異很有感。
+// Gate::inputNetIds supports arbitrary fan-in.  Use integer stamps to count
+// each distinct input/load once without allocating a hash set per gate.  This
+// also handles non-adjacent tied inputs such as AND(a, b, a).
 std::vector<int> topo_order(const Netlist& nl, const std::vector<char>& netReady_in) {
     const int netCount  = static_cast<int>(nl.getNetCount());
     const int gateCount = static_cast<int>(nl.getGateCount());
@@ -40,14 +40,16 @@ std::vector<int> topo_order(const Netlist& nl, const std::vector<char>& netReady
     std::vector<int> queue;
     queue.reserve(gateCount);
 
-    auto pending_count = [&](const Gate& g) {
+    std::vector<int> inputSeenByGate(netCount, -1);
+    std::vector<int> loadFiredByNet(gateCount, -1);
+
+    auto pending_count = [&](const Gate& g, int gateIndex) {
         int cnt = 0;
-        int prev = kNoNet;
         for (int netId : g.inputNetIds) {
             if (netId < 0 || netId >= netCount) continue;
-            if (netId == prev) continue;              // tied input：只算一次
+            if (inputSeenByGate[netId] == gateIndex) continue;
+            inputSeenByGate[netId] = gateIndex;
             if (!ready[netId]) ++cnt;
-            prev = netId;
         }
         return cnt;
     };
@@ -55,7 +57,7 @@ std::vector<int> topo_order(const Netlist& nl, const std::vector<char>& netReady
     for (int g = 0; g < gateCount; ++g) {
         const Gate& gate = nl.getGate(g);
         if (!is_comb_gate(gate.type)) continue;
-        inDeg[g] = pending_count(gate);
+        inDeg[g] = pending_count(gate, g);
         if (inDeg[g] == 0) queue.push_back(g);
     }
 
@@ -69,11 +71,10 @@ std::vector<int> topo_order(const Netlist& nl, const std::vector<char>& netReady
         if (ready[outNet]) continue;
         ready[outNet] = 1;
 
-        int prevFired = kNoNet;
         for (int loadId : nl.getNet(outNet).loadGateIds) {
             if (loadId < 0 || loadId >= gateCount) continue;
-            if (loadId == prevFired) continue;        // 同一條 net 對同一顆閘只扣一次
-            prevFired = loadId;
+            if (loadFiredByNet[loadId] == outNet) continue;
+            loadFiredByNet[loadId] = outNet;
             if (!is_comb_gate(nl.getGate(loadId).type)) continue;
             if (--inDeg[loadId] == 0) queue.push_back(loadId);
         }
@@ -243,23 +244,58 @@ void AigModel::do_build(const Options& opt) {
     const std::vector<int> order = topo_order(nl, netReady);
     for (const int gid : order) {
         const Gate& g = nl.getGate(gid);
-        const Sig a = sig_of_input(g, 0);
-        const bool unary = g.type == GateType::NOT || g.type == GateType::BUF;
-        const Sig b = unary ? aig_.get_constant(false) : sig_of_input(g, 1);
+        auto invalid_arity = [&](const std::string& expected) {
+            mark_invalid(
+                "gate '" + g.instName + "' has " +
+                std::to_string(g.inputNetIds.size()) +
+                " input(s); expected " + expected);
+            return aig_.get_constant(false);
+        };
+        auto fold_and = [&]() {
+            if (g.inputNetIds.empty()) return invalid_arity("at least one");
+            Sig result = sig_of_input(g, 0);
+            for (size_t i = 1; i < g.inputNetIds.size(); ++i) {
+                result = aig_.create_and(result, sig_of_input(g, i));
+            }
+            return result;
+        };
+        auto fold_or = [&]() {
+            if (g.inputNetIds.empty()) return invalid_arity("at least one");
+            Sig result = sig_of_input(g, 0);
+            for (size_t i = 1; i < g.inputNetIds.size(); ++i) {
+                result = aig_.create_or(result, sig_of_input(g, i));
+            }
+            return result;
+        };
+        auto fold_xor = [&]() {
+            if (g.inputNetIds.empty()) return invalid_arity("at least one");
+            Sig result = sig_of_input(g, 0);
+            for (size_t i = 1; i < g.inputNetIds.size(); ++i) {
+                result = aig_.create_xor(result, sig_of_input(g, i));
+            }
+            return result;
+        };
 
-        Sig out;
+        Sig out = aig_.get_constant(false);
         switch (g.type) {
-            case GateType::AND:  out = aig_.create_and(a, b);   break;
-            case GateType::OR:   out = aig_.create_or(a, b);    break;
-            case GateType::NAND: out = !aig_.create_and(a, b);  break;
-            case GateType::NOR:  out = !aig_.create_or(a, b);   break;
-            case GateType::XOR:  out = aig_.create_xor(a, b);   break;
-            case GateType::XNOR: out = !aig_.create_xor(a, b);  break;
-            case GateType::NOT:  out = !a;                      break;
-            case GateType::BUF:  out = a;                       break;   // net alias：兩個名字同一 signal
+            case GateType::AND:  out = fold_and();              break;
+            case GateType::OR:   out = fold_or();               break;
+            case GateType::NAND: out = !fold_and();             break;
+            case GateType::NOR:  out = !fold_or();              break;
+            case GateType::XOR:  out = fold_xor();              break;
+            case GateType::XNOR: out = !fold_xor();             break;
+            case GateType::NOT:
+                out = g.inputNetIds.size() == 1
+                    ? !sig_of_input(g, 0)
+                    : invalid_arity("exactly one");
+                break;
+            case GateType::BUF:
+                out = g.inputNetIds.size() == 1
+                    ? sig_of_input(g, 0)
+                    : invalid_arity("exactly one");
+                break;
             default:
                 mark_invalid("gate '" + g.instName + "' has unsupported gate type");
-                out = aig_.get_constant(false);
                 break;
         }
         if (g.outputNetId < 0 || g.outputNetId >= netCount) {

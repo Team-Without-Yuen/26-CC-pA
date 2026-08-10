@@ -62,12 +62,16 @@ Phase A 每次非 trivial proof 仍可能重新建立 solver/CNF，因此只能�
 
 ```cpp
 Netlist current;
-eqeng::Primitives primitives(current);
+// High-level Netlist member implementations obtain the private lazy owner.
+// Callers do not construct or retain a second production Primitives instance.
 ```
 
-`Primitives` 保存 `current` 的 reference，因此其生命週期不得超過 Netlist，也不能在 Netlist move 到新地址後繼續使用。
+`Netlist` 私有保存一個 lazy `std::unique_ptr<eqeng::Primitives>`。第一次內部 Boolean
+backend 呼叫才建立；同一個正式 `Netlist` 不會由各個高階 API 各建一份 AIG cache。
 
-高階 session 可以保存一個內部 `Primitives` 以重用 AIG cache，但該 session 不應提供另一套高階 query facade。新設計整份取代 `Netlist` 時，應銷毀並重建 `Primitives`。
+`Primitives` 只以 `const Netlist&` 讀取 named design。Netlist copy、move、assignment、
+clone 與 restore 都不複製或搬移 cache；新物件在下次需要時重新 lazy build。這避免
+cache 仍引用舊地址，也避免 rollback 後沿用舊 AIG。
 
 ## 5. Freshness 與 revision
 
@@ -81,11 +85,20 @@ builtRevision != netlist.revision
   -> lazy rebuild
 ```
 
-這使多個暫時性 Primitives 不會因其中一個呼叫 `clearDirty()`，讓另一個誤用舊 AIG。正式設計仍應避免長期建立多份 engine，以免重複耗用記憶體。
+freshness 以每個 cache 的 `builtRevision` 為準；`dirty` 只保留為共享診斷狀態，不能
+單獨作為 cache 是否有效的依據。正式高階 API 一律使用 Netlist 的唯一 owner。
 
-`restoreFrom()` 必須保持 revision 單調增加。一般 Netlist assignment 若可能複製較舊 revision，呼叫端應重建 Primitives。
+`restoreFrom()` 先丟棄 owner，再將 revision 設為 current/backup 兩者最大值加一，保持
+單調增加。一般 copy/move assignment 同樣丟棄 owner，因此不可能保留指向舊設計的 cache。
 
-## 6. Generation 與 cache
+## 6. Gate arity 與建模
+
+- AND/OR/NAND/NOR/XOR/XNOR 接受至少一個 input，並按 `inputNetIds` 順序折疊全部輸入。
+- NAND/NOR/XNOR 是對完整 fold 的結果反相，不是逐級串接同類反相 gate。
+- NOT/BUF 必須恰好一個 input；零個或多個都將 model 標為 `Invalid`。
+- 拓撲排序以完整 distinct input set 計算 dependency，支援非相鄰 tied input。
+
+## 7. Generation 與 cache
 
 AIG rebuild 後：
 
@@ -96,7 +109,7 @@ AIG rebuild 後：
 
 每次高階分析都應從名稱重新 resolve，不能跨 edit 保存 `SigRef`。
 
-## 7. Proof 安全語意
+## 8. Proof 安全語意
 
 - `Invalid` model 不得產生已證明的答案。
 - `Unknown` 與 timeout 不得當作 `Equal` 或普通 false。
@@ -104,7 +117,7 @@ AIG rebuild 後：
 - `UnknownPolicy::AsEqual`、`StaleSigPolicy::Ignore` 與 `RebuildAndWarn` 只可用於低階診斷，不得用於競賽答案或 edit acceptance。
 - high-level API 必須將 engine 結果映射回既有 report contract。
 
-## 8. 高階 API 未來接入規則
+## 9. 高階 API 未來接入規則
 
 接入時只替換內部 proof function：
 
@@ -117,14 +130,14 @@ existing high-level implementation
 
 禁止建立 `runXWithAigBackend()` 形式的第二套 public API，禁止在 AIG adapter 內複製整份 report 邏輯。正式切換前必須以相同 testcase 比較答案、Unknown/timeout、counterexample、完整性與時間。
 
-## 9. 驗證
+## 10. 驗證
 
 ```text
 mini test/test36/test36.cpp
 mini test/test37/test37.cpp
 ```
 
-- test36：model health、floating、invalid model 與安全拒絕。
-- test37：直接測 Primitives proof、cofactor cache、per-instance revision freshness、stale SigRef 與 deadline。
+- test36：model health、floating、invalid arity/model 與安全拒絕（21 checks）。
+- test37：proof、cofactor cache、revision freshness、stale SigRef、deadline、任意 fan-in 與 Netlist value lifecycle（22 checks）。
 
 Function Query、Function Search 等高階 API 的 regression 應繼續呼叫唯一既有入口，不透過獨立 AIG facade。
