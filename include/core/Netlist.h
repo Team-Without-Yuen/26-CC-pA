@@ -30,6 +30,11 @@ private:
     std::vector<Port> primaryInputs;
     std::vector<Port> primaryOutputs;
 
+    // Bulk rewrite passes may defer pin-level load-list maintenance and rebuild
+    // it once at the end. This avoids repeated O(fanout) vector erases while
+    // remaining invisible outside a single synchronous mutation call.
+    bool deferLoadListMaintenance = false;
+
     // dirty 是引擎的正確性保證機制，不是效能優化。
     // 初值為 true：新建的 Netlist 還沒有對應的 AIG。
     bool     dirty_    = true;

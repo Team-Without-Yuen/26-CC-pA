@@ -12,6 +12,12 @@ API_SPEC/API_CORE_BACKEND_TODO.md
 
 已公開且已同步完成的 CLI schema 不再列為 tools.cpp 待修改項。
 
+## 合併後待同步項目
+
+| ID | API 來源 | tools 層問題 | 預定處理 |
+|---|---|---|---|
+| - | - | 目前沒有已確認但尚未同步的 API schema 項目 | 新發現請先登記後再修改 tools 層 |
+
 ## 短期盤查：完整輸出與 best-effort 作答
 
 競賽策略已改為「優先取得完整答案；完整計算失敗時仍提交明確候選答案」。文件層已在
@@ -35,14 +41,10 @@ driver 策略，不應在 tool envelope 內把 partial 改標為 complete。
 - Structure/Cone/Depth/Edit/Equivalence lists：目前 printer 全量輸出。
 - path_query enumerate：count_only 或 streaming -out。
 - path_query direct_pi_po：先讀 total，再以 total 重送 -max_print。
-- sequential_query detail：records_truncated + next_record_offset pagination。
-- func_search FindAll：可由 candidate count 計算 pair 上界後提高 --max-results 重試。
+- sequential_query detail：all-DFF 預設自動完整寫入唯一 artifact；明確 offset/limit 才使用 pagination。
+- func_search FindAll：預設不限量，完整 records 自動 streaming 至唯一 artifact。
 
 仍需評估 tools.cpp/parser/help/envelope：
-- func_search 的 maxResults 同時是計算與顯示上限；缺少 offset/file-output，
-  大型 all-pairs 只能整批重跑。
-- equivalent_pairs 已完成 equivalence classes 後，pair expansion 達 maxResults 仍把整個
-  envelope 標為 partial；後續應考慮分離 search completeness 與 record-display completeness。
 - func_query boolean_expression 沒有 file-output / output-length policy。
 - Structure/Cone/Edit/Equivalence 大清單雖不截斷，但只有 terminal 全量輸出，
   尚無 summary/file/pagination 選項。
@@ -54,25 +56,32 @@ driver 策略，不應在 tool envelope 內把 partial 改標為 complete。
 |---|---|---|---|---|
 | `path_query enumerate` | 所有 A-to-B paths，可能指數成長 | `-out` streaming、`-count_only`、time limit | 有 `-out` 時只簡答 total/complete/file | 否，現有架構可用 |
 | `path_query direct_pi_po` | 所有 direct PI-PO connections | `-max_print` 只控制顯示 | 先取 total，再以 total 重送 | 可考慮補 `-out` |
-| `sequential_query enable_hold all` | 全部 DFF detail records | `--offset/--limit` pagination | 逐頁取完；summary 題只簡答 count | pagination 可用，但每頁會重跑分析 |
-| `func_search nand_pair --all` | 大量 signal pairs | `--max-results` 會中止搜尋 | 以 candidate count 算 pair 上界後整批重跑 | 是，優先補 search/output 分離 |
-| `func_search equivalent_pairs --all` | equivalence classes 與展開 pair records | classes 全量；pair expansion 受 `--max-results` | 提高上限重跑 | 是，優先補 records pagination/file |
+| `sequential_query enable_hold all` | 全部 DFF detail records | 預設自動 artifact；offset/limit compatibility | 回 artifact count / complete / output_file | 否，已完成 |
+| `func_search nand_pair --all` | 大量 signal pairs | 預設不限量；streaming artifact | 回 match_count / complete / output_file | 否，已完成 |
+| `func_search equivalent_pairs --all` | equivalence classes 與展開 pair records | 緊湊 classes + streaming pair artifact | 回 class/pair count / complete / output_file | 否，已完成 |
 | `structure_query list_* / gates_by_type` | 全部 gate/net/port names | terminal 全量輸出 | count 題只簡答；list 題目前全量讀 terminal | 視 hidden size 決定是否補 `-out` |
 | `structure_query structural_issues / fanout_violations` | 大量問題 nets/gates | terminal 全量輸出 | count 題只簡答；list 題全量輸出 | 可考慮共用 list file output |
 | `cone_query net/gate fanin/fanout` | 大型 cone gate/net lists | terminal 全量輸出 | count/type 題只簡答；list 題全量輸出 | 建議討論 `summary_only` / `-out` |
 | `depth_query all_po/all_dff_d/exceeding` | 大量 endpoint/depth records | terminal 全量輸出 | count 題只簡答；list 題全量輸出 | 可考慮 `-out` |
 | `func_query boolean_expression` | expression 可能極長 | terminal 全量輸出 | 目前無 file output | 後期 Boolean/AIG 重構處理 |
 | `func_query support_pi` | 大型 support list | terminal 全量輸出 | list 題全量輸出 | 低優先，可共用 `-out` |
+
+### T14 Path compact artifact 待同步
+
+- API backend 已將完整 `path_query enumerate` artifact 改為 `COMPACT_PATH_V3`。
+- `tools.cpp` parser、command grammar、envelope 欄位與 output path 均不需修改。
+- 後續更新 `TOOLS_SPEC/PATH_QUERY_TOOL.md`：補充 dictionary、base36、prefix/suffix delta、
+  reconstruction 與 `Expected paths == Written paths && Complete: yes` 判讀規則。
+- 完整 test37：16,548,172 records，約 17.81 秒、670.1 MB，footer complete。
 | `edit_apply` / `report_query last_edit` | changed names、merge records、validation messages | terminal 全量輸出 | delta 題只簡答；detail 題全量輸出 | 可考慮 report file output |
 | `equiv_query` | matched/skipped boundary names | terminal 全量輸出 | yes/no 題只簡答；mismatch detail 全量輸出 | 可考慮只印 mismatch 或 `-out` |
 
 討論優先順序：
 
 ```text
-P0: func_search search completeness 與 record-output completeness 分離。
-P1: cone_query / structure_query 的共用 summary-only 與 file-output。
-P2: depth/edit/equivalence 的大型 detail file-output。
-P3: Boolean expression，留待 AIG/Boolean 重構。
+P0: cone_query / structure_query 的共用 summary-only 與 file-output。
+P1: depth/edit/equivalence 的大型 detail file-output。
+P2: Boolean expression，留待 AIG/Boolean 重構。
 ```
 
 ## 已完成的 tools.cpp 同步項目
@@ -94,9 +103,30 @@ P3: Boolean expression，留待 AIG/Boolean 重構。
 - T7 equivalence：original/previous_edit、timeout/partial/mismatch 判讀已同步。
 - T8 cone 大輸出：summary-first LLM policy 已同步；尚未新增 CLI max_print 或
   summary_only，因目前由 LLM policy 控制。
+- T9 Function Search FindAll：預設移除 hidden result cap，完整 records 自動
+  streaming 至不覆寫的 artifact；envelope 回 match_count、stored_match_count 與
+  output_file；test24 9/9、test26 18/18，NewTestCase test29/30/35 實測通過。
+- T10 Sequential Pattern all-DFF detail：未指定 summary/offset/limit 時自動完整寫入
+  不覆寫的 artifact；single-DFF 與明確 pagination 維持原行為。test21 18/18，test40
+  1583/1583 records，envelope 由約 3.23 MB 降至 1292 characters。
+- T11 Basic PortInfo：不再輸出無意義的 `id:-1`，新增 `is_bus`、
+  `is_primary_input`、`is_primary_output`；test9 驗證 input/output port direction。
+- T12 Basic StructuralIssues：CLI 新增 `Floating primary-input nets` 與
+  `Unconnected primary-output nets` 精確 bit-net 分類，同時保留既有 general lists。
+- T13 Depth routing：`gate_on_critical` 文件修正為「任一 global maximum-depth path」；
+  PI-only startpoint prompt 明確改走 `path_query max_depth all_pi ...`。
+- T14 OptApply timeout/envelope：graph-identity no-op 文件改為 `StructuralIdentity`；
+  pre-core `coreStatus=TIMEOUT` 現在正確映射 `status:timeout`，並與 SAT timeout 分開判讀。
 ```
 
-驗證：`scripts/run_tools_regression.ps1 -Profile Full`，24/24 PASS。
+驗證：
+
+```text
+mini test/test9: 24/24 PASS
+mini test/test32: 27/27 PASS
+scripts/run_tools_regression.ps1 -Profile Full: 24/24 PASS
+log: Testing/tools-regression/20260809-231609
+```
 
 ## 後期 AIG / Boolean 重構前暫不推進
 

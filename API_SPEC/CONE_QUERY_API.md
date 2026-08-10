@@ -59,6 +59,15 @@ Fanout cone：
 從起點 net 往前追 load gates，再追 load gate 的 output net。
 ```
 
+Active object 與 edge consistency 規則：
+
+```text
+removed gate（GateType::UNKNOWN）與 removed net（isRemoved=true）不屬於 cone。
+driver edge 必須同時滿足 net.driverGateId == gateId 與 gate.outputNetId == netId。
+load edge 必須同時存在於 net.loadGateIds 與 gate.inputNetIds。
+scalar/all-removed bus 來源視為不存在；partial-removed bus 只保留 active bit roots。
+```
+
 DFF 規則：
 
 ```text
@@ -263,11 +272,11 @@ struct ConeReport {
 1. sourceName/sourceId 是最大 fanin cone 的 primary output net。
 2. cone/rootNetIds/netNames/gateNames 等欄位對應該 output 的 fanin cone。
 3. gateCount 使用 getConeGateCount()，只計算有效 combinational gates，不計 DFF boundary。
-4. checkedOutputCount 表示掃描了多少個 primary output bit。
+4. checkedOutputCount 表示實際掃描了多少個 active primary output bit。
 5. 若多個 output gateCount 相同，會以 netCount 較大者優先；仍相同時保留先遇到的 output。
 ```
 
-`SharedFaninGates` 會分別建立兩個 transitive fanin cones，對排序後的 gate IDs 做 intersection，並回傳 shared `gateIds/gateNames/gateTypeCounts`。兩個名稱都合法但沒有交集時是成功的零結果，不是錯誤。
+`SharedFaninGates` 會分別建立兩個 transitive fanin cones，對排序後的 gate IDs 做 intersection，並回傳 shared `gateIds/gateNames/gateTypeCounts`。兩個名稱都合法但沒有交集時回 `ok=true`、`exists=true`、`gateCount=0`，不是來源不存在。`includeIds/includeNames` 只控制對應 payload，不影響成功狀態與 count。
 
 ---
 
@@ -286,7 +295,7 @@ src/analysis/ConeAnalysis.cpp
 ConeResult 建立 API
 ConeResult net/gate helper
 Cone gate names/count wrapper
-Cone local longest/shortest path wrapper
+Cone local longest/shortest path wrapper（longest 使用 iterative post-order，避免深鏈 call-stack overflow）
 ConeQuery / ConeReport 高階 API
 LargestOutputCone
 Cone gateTypeCounts
@@ -297,13 +306,13 @@ SharedFaninGates
 
 ```text
 mini test/tester.cpp 已覆蓋 runConeQuery() 的 NetTransitiveFanin / NetTransitiveFanout / GateTransitiveFanin。
-mini test/test6/test6.cpp 已覆蓋 LargestOutputCone。
+mini test/test6/test6.cpp 已覆蓋 GateTransitiveFanout、LargestOutputCone、tombstone/bus/stale driver、
+SharedFanin empty result/include flags、empty/reconvergent/multi-root/cycle local path，
+以及 100000-level iterative longest-path chain；目前 16/16 PASS。
 ```
 
 後續可補：
 
 ```text
-1. 在 tester 補 GateTransitiveFanout 的高階 query case。
-2. 增加 scope-aware cone query，供 transformation / optimization 限定修改範圍。
-3. 若遇到超大 cone，可加入 traversal budget 或 result limit。
+1. 增加 scope-aware cone query，供 transformation / optimization 限定修改範圍。
 ```

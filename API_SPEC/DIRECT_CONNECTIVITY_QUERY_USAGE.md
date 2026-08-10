@@ -69,6 +69,13 @@ DirectConnectivityQuery 只查 immediate connection。
 | `includeIds` | `bool` | `true` | 是否填 `gateIds` / `netIds` |
 | `includeNames` | `bool` | `true` | 是否填 `gateNames` / `netNames` |
 
+注意：
+
+```text
+includeIds / includeNames 只控制 payload 是否填入，不改變 count。
+例如 GateInputs 即使 includeIds=false 且 includeNames=false，count 仍是完整 input net 數。
+```
+
 ---
 
 ## 4. DirectConnectivityReport 回傳欄位
@@ -90,6 +97,25 @@ DirectConnectivityQuery 只查 immediate connection。
 | `netNames` | 查詢結果中的 net names |
 | `fanoutLoadReport` | `FanoutLoadReport` 查詢的分類結果 |
 | `globalFanoutReport` | `GlobalFanoutReport` 查詢的全域彙整結果 |
+
+通用錯誤與 tombstone 語意：
+
+```text
+名稱缺失或 active object 不存在時，ok=false、exists=false。
+removed gate（GateType::UNKNOWN）視為 Gate not found。
+removed net（isRemoved=true）視為 Net not found。
+bus query 只有至少一個 active bit net 時才算存在；全部 bit 都 removed 時視為 Net not found。
+```
+
+連線一致性語意：
+
+```text
+driver edge 必須同時滿足 net.driverGateId == gateId 與 gate.outputNetId == netId。
+load edge 必須同時滿足 net.loadGateIds 含 gateId，且 gate.inputNetIds 實際含 netId。
+若 edit 後留下 stale cached edge，DirectConnectivityQuery 不會回報該 edge。
+GateOutput 找不到有效且一致的 output edge 時，gate 本身仍存在，因此 ok=true、exists=true，
+但 count=0、netId=-1，且不會填入 output payload。
+```
 
 ---
 
@@ -119,6 +145,13 @@ Netlist::DirectConnectivityReport report =
 | driver gate names | `report.gateNames` |
 | driver gate IDs | `report.gateIds` |
 | driver 數量 | `report.count` |
+
+語意：
+
+```text
+removed scalar net 回 ok=false。
+bus 會展開 active bit nets，忽略 removed bits。
+```
 
 ---
 
@@ -155,6 +188,7 @@ Netlist::DirectConnectivityReport report =
 NetLoadGates 只回答「這條 net 接到哪些 gate/DFF instance」。
 它不會把 primary output connection 算成 load，也不會區分 DFF.D / DFF.CK / DFF.RN / DFF.SN。
 若題目問 fanout load count，應使用 FanoutLoadReport。
+同一顆 gate 的多個 input pin 接同一條 net 時，NetLoadGates 仍只列一次 gate。
 ```
 
 ---
@@ -211,6 +245,9 @@ FanoutLoadReport("rst_n").dffResetSetLoads.size() == 2
 ```
 
 因為 `.RN(rst_n)` 和 `.SN(rst_n)` 是兩個不同 sink pins。
+
+同樣地，若一般 gate 兩個 input pins 都接同一條 net，FanoutLoadReport 會計成兩個
+pin-level loads；這和 NetLoadGates 的 gate-level 去重不同。
 
 ---
 

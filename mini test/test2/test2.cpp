@@ -1,9 +1,13 @@
 #include "include/core/Netlist.h"
 #include "include/io/VerilogReader.h"
+#include "include/io/VerilogWriter.h"
 
 #include <algorithm>
+#include <cstdio>
+#include <fstream>
 #include <iostream>
 #include <map>
+#include <sstream>
 #include <string>
 #include <vector>
 
@@ -187,6 +191,114 @@ void testCollapseDoubleInverter(TestReport& report, const Netlist& original) {
                  "test2 edit_apply collapse_double_inverter");
 }
 
+void testCollapseDoubleInverterSafety(TestReport& report) {
+    auto makeInternalPair = []() {
+        Netlist netlist;
+        netlist.addPrimaryInput("a");
+        netlist.addPrimaryInput("other");
+        netlist.addPrimaryOutput("y");
+        const int a = netlist.getNetId("a");
+        const int mid = netlist.addNet("mid");
+        const int out = netlist.addNet("out");
+        const int g1 = netlist.addGate("g1", GateType::NOT);
+        const int g2 = netlist.addGate("g2", GateType::NOT);
+        const int sink = netlist.addGate("sink", GateType::BUF);
+        netlist.connectGateInput(g1, a);
+        netlist.connectGateOutput(g1, mid);
+        netlist.connectGateInput(g2, mid);
+        netlist.connectGateOutput(g2, out);
+        netlist.connectGateInput(sink, out);
+        netlist.connectGateOutput(sink, netlist.getNetId("y"));
+        return netlist;
+    };
+
+    Netlist poPair;
+    poPair.addPrimaryInput("a");
+    poPair.addPrimaryOutput("y");
+    const int poG1 = poPair.addGate("po_g1", GateType::NOT);
+    const int poG2 = poPair.addGate("po_g2", GateType::NOT);
+    const int poMid = poPair.addNet("po_mid");
+    poPair.connectGateInput(poG1, poPair.getNetId("a"));
+    poPair.connectGateOutput(poG1, poMid);
+    poPair.connectGateInput(poG2, poMid);
+    poPair.connectGateOutput(poG2, poPair.getNetId("y"));
+    const bool poGuard = poPair.findDoubleInverterPairs().empty() &&
+                         !poPair.bypassDoubleInverter(poG1, poG2) &&
+                         poPair.collapseBackToBackInverters() == 0 &&
+                         poPair.getGate(poG1).type == GateType::NOT &&
+                         poPair.getGate(poG2).type == GateType::NOT &&
+                         poPair.validateAfterMutation();
+
+    Netlist staleDriver = makeInternalPair();
+    const int staleDriverG1 = staleDriver.getGateId("g1");
+    const int staleDriverG2 = staleDriver.getGateId("g2");
+    const int staleDriverMid = staleDriver.getNetId("mid");
+    staleDriver.getNetMutable(staleDriverMid).driverGateId = -1;
+    const bool rejectsStaleDriver =
+        staleDriver.findDoubleInverterPairs().empty() &&
+        !staleDriver.bypassDoubleInverter(staleDriverG1, staleDriverG2) &&
+        staleDriver.collapseBackToBackInverters() == 0 &&
+        staleDriver.getGate(staleDriverG1).type == GateType::NOT &&
+        staleDriver.getGate(staleDriverG2).type == GateType::NOT;
+
+    Netlist staleLoad = makeInternalPair();
+    const int staleLoadG1 = staleLoad.getGateId("g1");
+    const int staleLoadG2 = staleLoad.getGateId("g2");
+    const int staleLoadMid = staleLoad.getNetId("mid");
+    const int unrelatedOut = staleLoad.addNet("unrelated_out");
+    const int unrelated = staleLoad.addGate("unrelated", GateType::NOT);
+    staleLoad.connectGateInput(unrelated, staleLoad.getNetId("other"));
+    staleLoad.connectGateOutput(unrelated, unrelatedOut);
+    staleLoad.getNetMutable(staleLoadMid).loadGateIds[0] = unrelated;
+    const bool rejectsStaleLoad =
+        staleLoad.findDoubleInverterPairs().empty() &&
+        staleLoad.collapseBackToBackInverters() == 0 &&
+        staleLoad.getGate(staleLoadG1).type == GateType::NOT &&
+        staleLoad.getGate(staleLoadG2).type == GateType::NOT &&
+        staleLoad.getGate(unrelated).type == GateType::NOT;
+
+    Netlist invalidIds = makeInternalPair();
+    const int invalidG1 = invalidIds.getGateId("g1");
+    const int originalOutput = invalidIds.getGate(invalidG1).outputNetId;
+    invalidIds.getGateMutable(invalidG1).outputNetId =
+        static_cast<int>(invalidIds.getNetCount()) + 7;
+    const bool rejectsInvalidOutput =
+        invalidIds.findDoubleInverterPairs().empty() &&
+        invalidIds.collapseBackToBackInverters() == 0 &&
+        invalidIds.getGate(invalidG1).type == GateType::NOT;
+    invalidIds.getGateMutable(invalidG1).outputNetId = originalOutput;
+
+    Netlist invalidLoad = makeInternalPair();
+    const int invalidLoadG1 = invalidLoad.getGateId("g1");
+    const int invalidLoadG2 = invalidLoad.getGateId("g2");
+    const int invalidMid = invalidLoad.getNetId("mid");
+    invalidLoad.getNetMutable(invalidMid).loadGateIds[0] =
+        static_cast<int>(invalidLoad.getGateCount()) + 9;
+    const bool rejectsInvalidLoad =
+        invalidLoad.findDoubleInverterPairs().empty() &&
+        invalidLoad.collapseBackToBackInverters() == 0 &&
+        invalidLoad.getGate(invalidLoadG1).type == GateType::NOT &&
+        invalidLoad.getGate(invalidLoadG2).type == GateType::NOT;
+
+    Netlist tombstone = makeInternalPair();
+    const int tombstoneG1 = tombstone.getGateId("g1");
+    const int tombstoneG2 = tombstone.getGateId("g2");
+    tombstone.getGateMutable(tombstoneG2).type = GateType::UNKNOWN;
+    const bool rejectsTombstone =
+        tombstone.findDoubleInverterPairs().empty() &&
+        tombstone.collapseBackToBackInverters() == 0 &&
+        tombstone.getGate(tombstoneG1).type == GateType::NOT &&
+        tombstone.getGate(tombstoneG2).type == GateType::UNKNOWN;
+
+    report.check(poGuard &&
+                 rejectsStaleDriver &&
+                 rejectsStaleLoad &&
+                 rejectsInvalidOutput &&
+                 rejectsInvalidLoad &&
+                 rejectsTombstone,
+                 "test2 double inverter rejects PO/stale/tombstone/invalid candidates");
+}
+
 void testSimplifyConstants(TestReport& report, const Netlist& original) {
     Netlist netlist = original.cloneForRollback();
 
@@ -254,6 +366,127 @@ void testMergeStructurallyEquivalentGates(TestReport& report, const Netlist& ori
                  isPoNet(netlist, "aux") &&
                  netlist.validateAfterMutation(),
                  "test2 edit_apply merge_structurally_equivalent_gates");
+}
+
+void testStructuralMergeSafetyAndScope(TestReport& report) {
+    Netlist scoped;
+    scoped.addPrimaryInput("a");
+    scoped.addPrimaryInput("b");
+    scoped.addPrimaryInput("c");
+    scoped.addPrimaryOutput("y");
+    const int a = scoped.getNetId("a");
+    const int b = scoped.getNetId("b");
+    const int c = scoped.getNetId("c");
+    const int keepOut = scoped.addNet("keep_out");
+    const int deadOut = scoped.addNet("dead_out");
+    const int keep = scoped.addGate("keep", GateType::AND);
+    const int dead = scoped.addGate("dead", GateType::AND);
+    scoped.connectGateInput(keep, a);
+    scoped.connectGateInput(keep, b);
+    scoped.connectGateOutput(keep, keepOut);
+    scoped.connectGateInput(dead, a);
+    scoped.connectGateInput(dead, b);
+    scoped.connectGateOutput(dead, deadOut);
+    const int sink = scoped.addGate("sink", GateType::OR);
+    scoped.connectGateInput(sink, deadOut);
+    scoped.connectGateInput(sink, deadOut);
+    scoped.connectGateOutput(sink, scoped.getNetId("y"));
+    const int danglingOut = scoped.addNet("dangling_out");
+    const int dangling = scoped.addGate("unrelated_dangling", GateType::NOT);
+    scoped.connectGateInput(dangling, c);
+    scoped.connectGateOutput(dangling, danglingOut);
+
+    Netlist::EditApplyRequest request;
+    request.kind = Netlist::EditCommandKind::MergeStructurallyEquivalentGates;
+    request.validateEquivalence = true;
+    const Netlist::NetlistEditReport scopedReport = scoped.runEditApply(request);
+    const Gate& rewiredSink = scoped.getGate(sink);
+    const bool scopedMerge = scopedReport.success &&
+                             scopedReport.changed &&
+                             !scopedReport.rolledBack &&
+                             scopedReport.diff.activeGateCountDelta == -1 &&
+                             scoped.getGate(dead).type == GateType::UNKNOWN &&
+                             scoped.getGate(dangling).type == GateType::NOT &&
+                             rewiredSink.inputNetIds.size() == 2 &&
+                             rewiredSink.inputNetIds[0] == keepOut &&
+                             rewiredSink.inputNetIds[1] == keepOut &&
+                             scoped.getNet(keepOut).loadGateIds.size() == 2 &&
+                             scoped.validateAfterMutation();
+
+    Netlist poPair;
+    poPair.addPrimaryInput("a");
+    poPair.addPrimaryInput("b");
+    poPair.addPrimaryOutput("y0");
+    poPair.addPrimaryOutput("y1");
+    const int poA = poPair.getNetId("a");
+    const int poB = poPair.getNetId("b");
+    const int po0 = poPair.addGate("po0", GateType::AND);
+    const int po1 = poPair.addGate("po1", GateType::AND);
+    poPair.connectGateInput(po0, poA);
+    poPair.connectGateInput(po0, poB);
+    poPair.connectGateOutput(po0, poPair.getNetId("y0"));
+    poPair.connectGateInput(po1, poA);
+    poPair.connectGateInput(po1, poB);
+    poPair.connectGateOutput(po1, poPair.getNetId("y1"));
+    const Netlist::NetlistEditReport poReport = poPair.runEditApply(request);
+    const bool preservesNamedPos = poReport.success &&
+                                   !poReport.changed &&
+                                   !poReport.rolledBack &&
+                                   poPair.getGate(po0).type == GateType::AND &&
+                                   poPair.getGate(po1).type == GateType::AND &&
+                                   poPair.validateAfterMutation();
+
+    Netlist poRepresentative;
+    poRepresentative.addPrimaryInput("a");
+    poRepresentative.addPrimaryInput("b");
+    poRepresentative.addPrimaryOutput("y");
+    const int repA = poRepresentative.getNetId("a");
+    const int repB = poRepresentative.getNetId("b");
+    const int internalOut = poRepresentative.addNet("internal_out");
+    const int internalGate = poRepresentative.addGate("internal", GateType::AND);
+    const int poGate = poRepresentative.addGate("po_gate", GateType::AND);
+    poRepresentative.connectGateInput(internalGate, repA);
+    poRepresentative.connectGateInput(internalGate, repB);
+    poRepresentative.connectGateOutput(internalGate, internalOut);
+    poRepresentative.connectGateInput(poGate, repA);
+    poRepresentative.connectGateInput(poGate, repB);
+    poRepresentative.connectGateOutput(poGate, poRepresentative.getNetId("y"));
+    const Netlist::NetlistEditReport representativeReport =
+        poRepresentative.runEditApply(request);
+    const bool selectsPoRepresentative = representativeReport.success &&
+                                         representativeReport.changed &&
+                                         !representativeReport.rolledBack &&
+                                         poRepresentative.getGate(internalGate).type == GateType::UNKNOWN &&
+                                         poRepresentative.getGate(poGate).type == GateType::AND &&
+                                         poRepresentative.validateAfterMutation();
+
+    Netlist invalidLoad;
+    invalidLoad.addPrimaryInput("a");
+    invalidLoad.addPrimaryInput("b");
+    const int invalidA = invalidLoad.getNetId("a");
+    const int invalidB = invalidLoad.getNetId("b");
+    const int invalidOut0 = invalidLoad.addNet("out0");
+    const int invalidOut1 = invalidLoad.addNet("out1");
+    const int invalidGate0 = invalidLoad.addGate("g0", GateType::AND);
+    const int invalidGate1 = invalidLoad.addGate("g1", GateType::AND);
+    invalidLoad.connectGateInput(invalidGate0, invalidA);
+    invalidLoad.connectGateInput(invalidGate0, invalidB);
+    invalidLoad.connectGateOutput(invalidGate0, invalidOut0);
+    invalidLoad.connectGateInput(invalidGate1, invalidA);
+    invalidLoad.connectGateInput(invalidGate1, invalidB);
+    invalidLoad.connectGateOutput(invalidGate1, invalidOut1);
+    invalidLoad.getNetMutable(invalidOut1).loadGateIds.push_back(
+        static_cast<int>(invalidLoad.getGateCount()) + 11);
+    const bool rejectsInvalidLoad =
+        invalidLoad.mergeStructurallyEquivalentGates() == 0 &&
+        invalidLoad.getGate(invalidGate0).type == GateType::AND &&
+        invalidLoad.getGate(invalidGate1).type == GateType::AND;
+
+    report.check(scopedMerge &&
+                 preservesNamedPos &&
+                 selectsPoRepresentative &&
+                 rejectsInvalidLoad,
+                 "test2 structural merge preserves scope/PO/pin-level safety");
 }
 
 void testTrimDeadLogic(TestReport& report, const Netlist& original) {
@@ -566,6 +799,217 @@ void testInsertBuffersOnEachLoad(TestReport& report, const Netlist& original) {
                  "test2 edit_apply insert_buffers_on_each_load");
 }
 
+size_t countActiveConstantNets(const Netlist& netlist, int value) {
+    size_t count = 0;
+    for (size_t netIndex = 0; netIndex < netlist.getNetCount(); ++netIndex) {
+        const Net& net = netlist.getNet(static_cast<int>(netIndex));
+        if (!net.isRemoved && net.isConst && net.constVal == value) {
+            ++count;
+        }
+    }
+    return count;
+}
+
+void testFanoutInsertionWithTiedInputs(TestReport& report) {
+    Netlist netlist;
+    netlist.addPrimaryInput("source");
+    netlist.addPrimaryOutput("y");
+
+    const int sourceNetId = netlist.getNetId("source");
+    const int outputNetId = netlist.getNetId("y");
+    const int gateId = netlist.addGate("tied_and", GateType::AND);
+    netlist.connectGateInput(gateId, sourceNetId);
+    netlist.connectGateInput(gateId, sourceNetId);
+    netlist.connectGateOutput(gateId, outputNetId);
+
+    const FanoutLoadReport before = netlist.getFanoutLoadReport(sourceNetId);
+
+    Netlist::EditApplyRequest request;
+    request.kind = Netlist::EditCommandKind::InsertBuffersOnEachLoad;
+    request.netName = "source";
+    request.validateEquivalence = true;
+
+    const Netlist::NetlistEditReport editReport = netlist.runEditApply(request);
+    const Gate& tiedAnd = netlist.getGate(gateId);
+    bool bothInputsHaveDistinctBufferDrivers = tiedAnd.inputNetIds.size() == 2 &&
+                                               tiedAnd.inputNetIds[0] != tiedAnd.inputNetIds[1];
+    if (bothInputsHaveDistinctBufferDrivers) {
+        for (int inputNetId : tiedAnd.inputNetIds) {
+            if (!netlist.isValidNetId(inputNetId)) {
+                bothInputsHaveDistinctBufferDrivers = false;
+                break;
+            }
+            const int driverGateId = netlist.getNet(inputNetId).driverGateId;
+            if (!netlist.isValidGateId(driverGateId) ||
+                netlist.getGate(driverGateId).type != GateType::BUF) {
+                bothInputsHaveDistinctBufferDrivers = false;
+                break;
+            }
+        }
+    }
+
+    report.check(before.ok &&
+                 before.totalLoadCount == 2 &&
+                 editReport.success &&
+                 editReport.changed &&
+                 !editReport.rolledBack &&
+                 editReport.changedGateNames.size() == 2 &&
+                 netlist.getFanoutLoadReport(sourceNetId).totalLoadCount == 2 &&
+                 bothInputsHaveDistinctBufferDrivers &&
+                 netlist.validateAfterMutation(),
+                 "test2 fanout insertion handles tied input pins exactly once");
+}
+
+void testReplaceAllLoadsPreservesPinMultiplicity(TestReport& report) {
+    Netlist netlist;
+    netlist.addPrimaryInput("old_source");
+    netlist.addPrimaryInput("new_source");
+    netlist.addPrimaryOutput("y");
+
+    const int oldNetId = netlist.getNetId("old_source");
+    const int newNetId = netlist.getNetId("new_source");
+    const int gateId = netlist.addGate("tied_and", GateType::AND);
+    netlist.connectGateInput(gateId, oldNetId);
+    netlist.connectGateInput(gateId, oldNetId);
+    netlist.connectGateOutput(gateId, netlist.getNetId("y"));
+
+    const bool replaced = netlist.replaceAllLoadsOfNet(oldNetId, newNetId);
+    const Gate& gate = netlist.getGate(gateId);
+    const Net& oldNet = netlist.getNet(oldNetId);
+    const Net& newNet = netlist.getNet(newNetId);
+    report.check(replaced &&
+                 gate.inputNetIds.size() == 2 &&
+                 gate.inputNetIds[0] == newNetId &&
+                 gate.inputNetIds[1] == newNetId &&
+                 oldNet.loadGateIds.empty() &&
+                 newNet.loadGateIds.size() == 2 &&
+                 newNet.loadGateIds[0] == gateId &&
+                 newNet.loadGateIds[1] == gateId &&
+                 netlist.validateAfterMutation(),
+                 "test2 replace_all_loads preserves pin-level multiplicity");
+}
+
+void testConstantNetDeduplication(TestReport& report) {
+    Netlist directNetlist;
+    const int const0First = directNetlist.addNet("1'b0");
+    const int const0Second = directNetlist.addNet("1'b0");
+    const int const1First = directNetlist.addNet("1'b1");
+    const int const1Second = directNetlist.addNet("1'b1");
+    report.check(const0First == const0Second &&
+                 const1First == const1Second &&
+                 directNetlist.getNetId("1'b0") == const0First &&
+                 directNetlist.getNetId("1'b1") == const1First &&
+                 directNetlist.getNetCount() == 2 &&
+                 countActiveConstantNets(directNetlist, 0) == 1 &&
+                 countActiveConstantNets(directNetlist, 1) == 1,
+                 "test2 addNet deduplicates canonical constant nets");
+
+    Netlist mappedNetlist;
+    mappedNetlist.addPrimaryInput("a");
+    const int inputNetId = mappedNetlist.getNetId("a");
+    constexpr int kGateCountPerType = 8;
+    for (int i = 0; i < kGateCountPerType; ++i) {
+        const std::string notOutputName = "not_y" + std::to_string(i);
+        mappedNetlist.addPrimaryOutput(notOutputName);
+        const int notGateId = mappedNetlist.addGate(
+            "not_g" + std::to_string(i), GateType::NOT);
+        mappedNetlist.connectGateInput(notGateId, inputNetId);
+        mappedNetlist.connectGateOutput(
+            notGateId, mappedNetlist.getNetId(notOutputName));
+
+        const std::string bufOutputName = "buf_y" + std::to_string(i);
+        mappedNetlist.addPrimaryOutput(bufOutputName);
+        const int bufGateId = mappedNetlist.addGate(
+            "buf_g" + std::to_string(i), GateType::BUF);
+        mappedNetlist.connectGateInput(bufGateId, inputNetId);
+        mappedNetlist.connectGateOutput(
+            bufGateId, mappedNetlist.getNetId(bufOutputName));
+    }
+
+    Netlist::EditApplyRequest request;
+    request.kind = Netlist::EditCommandKind::ConvertToBasis;
+    request.scope = TargetScope::WHOLE_NETLIST;
+    request.allowedTypes = {GateType::XOR};
+    request.validateEquivalence = true;
+
+    const Netlist::NetlistEditReport firstReport =
+        mappedNetlist.runEditApply(request);
+    const size_t netCountAfterFirstMapping = mappedNetlist.getNetCount();
+    const Netlist::NetlistEditReport secondReport =
+        mappedNetlist.runEditApply(request);
+
+    report.check(firstReport.success &&
+                 firstReport.changed &&
+                 !firstReport.rolledBack &&
+                 secondReport.success &&
+                 !secondReport.rolledBack &&
+                 mappedNetlist.getNetId("1'b0") >= 0 &&
+                 mappedNetlist.getNetId("1'b1") >= 0 &&
+                 countActiveConstantNets(mappedNetlist, 0) == 1 &&
+                 countActiveConstantNets(mappedNetlist, 1) == 1 &&
+                 mappedNetlist.getNetCount() == netCountAfterFirstMapping &&
+                 mappedNetlist.validateAfterMutation(),
+                 "test2 repeated technology mapping reuses constant nets");
+}
+
+void testConstantNetRenameRejected(TestReport& report) {
+    Netlist directNetlist;
+    const int directConst0 = directNetlist.addNet("1'b0");
+    const int directSignal = directNetlist.addNet("ordinary_signal");
+    const bool directRenameResult =
+        directNetlist.renameNet("1'b0", "renamed_zero");
+    const bool renameToLiteralResult =
+        directNetlist.renameNet("ordinary_signal", "1'b1");
+    report.check(!directRenameResult &&
+                 !renameToLiteralResult &&
+                 directNetlist.getNetId("1'b0") == directConst0 &&
+                 directNetlist.getNetId("renamed_zero") == -1 &&
+                 directNetlist.getNetId("ordinary_signal") == directSignal &&
+                 directNetlist.getNetId("1'b1") == -1 &&
+                 directNetlist.getNet(directConst0).name == "1'b0",
+                 "test2 low-level renameNet rejects constant literal");
+
+    Netlist netlist;
+    netlist.addPrimaryInput("a");
+    netlist.addPrimaryOutput("y");
+    const int a = netlist.getNetId("a");
+    const int y = netlist.getNetId("y");
+    const int const0 = netlist.addNet("1'b0");
+    const int gateId = netlist.addGate("g_and_const", GateType::AND);
+    netlist.connectGateInput(gateId, a);
+    netlist.connectGateInput(gateId, const0);
+    netlist.connectGateOutput(gateId, y);
+
+    Netlist::EditApplyRequest request;
+    request.kind = Netlist::EditCommandKind::RenameNet;
+    request.oldName = "1'b0";
+    request.newName = "renamed_zero";
+    request.validateEquivalence = true;
+    const Netlist::NetlistEditReport editReport = netlist.runEditApply(request);
+
+    const std::string outputPath =
+        "mini test/test2/constant_rename_rejection_output.v";
+    VerilogWriter writer;
+    const bool writeOk = writer.write(outputPath, netlist);
+    std::ifstream input(outputPath);
+    std::stringstream buffer;
+    buffer << input.rdbuf();
+    input.close();
+    std::remove(outputPath.c_str());
+    const std::string writtenVerilog = buffer.str();
+
+    report.check(!editReport.success &&
+                 !editReport.changed &&
+                 !editReport.rolledBack &&
+                 netlist.getNetId("1'b0") == const0 &&
+                 netlist.getNetId("renamed_zero") == -1 &&
+                 writeOk &&
+                 writtenVerilog.find("1'b0") != std::string::npos &&
+                 writtenVerilog.find("renamed_zero") == std::string::npos &&
+                 netlist.validateAfterMutation(),
+                 "test2 edit_apply rejects constant rename and writer keeps literal");
+}
+
 void testInsertBufferAtDriver(TestReport& report, const Netlist& original) {
     Netlist netlist = original.cloneForRollback();
     const int beforeYDriver = netlist.getNet(netlist.getNetId("y0")).driverGateId;
@@ -778,6 +1222,25 @@ void testMissingArgumentValidation(TestReport& report, const Netlist& original) 
                  "test2 edit_apply validation missing newName");
 }
 
+void testRestoreRevisionMonotonic(TestReport& report, const Netlist& original) {
+    Netlist netlist = original.cloneForRollback();
+    const Netlist backup = netlist.cloneForRollback();
+    const uint64_t backupRevision = backup.revision();
+
+    netlist.addNet("__restore_revision_probe");
+    const uint64_t mutatedRevision = netlist.revision();
+    netlist.clearDirty();
+
+    const bool restored = netlist.restoreFrom(backup);
+    report.check(restored &&
+                 mutatedRevision > backupRevision &&
+                 netlist.revision() > mutatedRevision &&
+                 netlist.isDirty() &&
+                 netlist.getNetId("__restore_revision_probe") < 0 &&
+                 netlist.validateAfterMutation(),
+                 "test2 rollback keeps revision monotonic and invalidates AIG cache");
+}
+
 } // namespace
 
 int main() {
@@ -801,11 +1264,13 @@ int main() {
     testRenameGate(report, editCircuit);
     testCleanupBuffers(report, editCircuit);
     testCollapseDoubleInverter(report, editCircuit);
+    testCollapseDoubleInverterSafety(report);
     testSimplifyConstants(report, editCircuit);
     testSimplifySameInput(report, editCircuit);
     testLocalSimplificationFixpoint(report, editCircuit);
     testMergeEquivalentGates(report, editCircuit);
     testMergeStructurallyEquivalentGates(report, editCircuit);
+    testStructuralMergeSafetyAndScope(report);
     testTrimDeadLogic(report, editCircuit);
     testRemoveDanglingLogic(report, editCircuit);
     testRemoveUnusedNets(report, editCircuit);
@@ -815,6 +1280,10 @@ int main() {
     testInsertBuffersForSpecificNet(report, fanoutCircuit);
     testInsertBuffersForFanout(report, fanoutCircuit);
     testInsertBuffersOnEachLoad(report, fanoutCircuit);
+    testFanoutInsertionWithTiedInputs(report);
+    testReplaceAllLoadsPreservesPinMultiplicity(report);
+    testConstantNetDeduplication(report);
+    testConstantNetRenameRejected(report);
     testInsertBufferAtDriver(report, fanoutCircuit);
     testInsertBufferBeforeGate(report, fanoutCircuit);
     testInsertBuffersByGateType(report, fanoutCircuit);
@@ -823,6 +1292,7 @@ int main() {
     testConvertToBasis(report, techmapCircuit);
     testInternalPrimitiveBlocked(report, editCircuit);
     testMissingArgumentValidation(report, editCircuit);
+    testRestoreRevisionMonotonic(report, editCircuit);
 
     std::cout << "\nSummary: " << report.passed << " passed, "
               << report.failed << " failed.\n";

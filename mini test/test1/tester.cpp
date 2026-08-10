@@ -38,6 +38,19 @@ bool containsInt(const std::vector<int>& values, int target) {
     return std::find(values.begin(), values.end(), target) != values.end();
 }
 
+std::vector<std::string> netIdsToNames(const Netlist& netlist,
+                                       const std::vector<int>& netIds) {
+    std::vector<std::string> names;
+    names.reserve(netIds.size());
+    for (int netId : netIds) {
+        if (!netlist.isValidNetId(netId)) {
+            return {};
+        }
+        names.push_back(netlist.getNet(netId).name);
+    }
+    return names;
+}
+
 // 建立 net 類型的 path condition node。
 Netlist::PathNode netNode(const std::string& name) {
     return Netlist::PathNode(Netlist::PathNodeType::Net, name);
@@ -99,6 +112,69 @@ void testBasicQuery(TestReport& report, const Netlist& netlist) {
                  containsString(netlist.getPortBitNames("bus"), "bus[0]"),
                  "basic bus port helpers");
 
+    const std::vector<std::string> expectedBusBits = {"bus[1]", "bus[0]"};
+    Netlist::BasicQuery portInfoQuery;
+    portInfoQuery.type = Netlist::BasicQueryType::PortInfo;
+    portInfoQuery.name = "bus";
+    const Netlist::BasicReport portInfo = netlist.runBasicQuery(portInfoQuery);
+    report.check(portInfo.ok && portInfo.exists && portInfo.isBus &&
+                     portInfo.isPrimaryInput && !portInfo.isPrimaryOutput &&
+                     portInfo.portWidth == 2 &&
+                     portInfo.netNames == expectedBusBits &&
+                     netIdsToNames(netlist, portInfo.netIds) == expectedBusBits,
+                 "runBasicQuery PortInfo preserves declaration-order name/id alignment");
+
+    portInfoQuery.includeIds = false;
+    const Netlist::BasicReport portNamesOnly = netlist.runBasicQuery(portInfoQuery);
+    report.check(portNamesOnly.netIds.empty() &&
+                     portNamesOnly.netNames == expectedBusBits,
+                 "runBasicQuery PortInfo names-only ordering");
+
+    portInfoQuery.includeIds = true;
+    portInfoQuery.includeNames = false;
+    const Netlist::BasicReport portIdsOnly = netlist.runBasicQuery(portInfoQuery);
+    report.check(portIdsOnly.netNames.empty() && portIdsOnly.portNames.empty() &&
+                     netIdsToNames(netlist, portIdsOnly.netIds) == expectedBusBits,
+                 "runBasicQuery PortInfo ids-only ordering");
+
+    portInfoQuery.includeIds = false;
+    const Netlist::BasicReport portMetadataOnly = netlist.runBasicQuery(portInfoQuery);
+    report.check(portMetadataOnly.ok && portMetadataOnly.netIds.empty() &&
+                     portMetadataOnly.netNames.empty() &&
+                     portMetadataOnly.portNames.empty() &&
+                     portMetadataOnly.isPrimaryInput,
+                 "runBasicQuery PortInfo metadata-only query");
+
+    portInfoQuery.name = "missing_port";
+    const Netlist::BasicReport missingPort = netlist.runBasicQuery(portInfoQuery);
+    report.check(!missingPort.ok && !missingPort.exists &&
+                     missingPort.portWidth == -1,
+                 "runBasicQuery PortInfo missing port");
+
+    Netlist::BasicQuery listPortsQuery;
+    listPortsQuery.type = Netlist::BasicQueryType::ListPrimaryInputs;
+    listPortsQuery.includeNames = false;
+    const Netlist::BasicReport inputMetadata = netlist.runBasicQuery(listPortsQuery);
+    const auto busSummary = std::find_if(
+        inputMetadata.ports.begin(), inputMetadata.ports.end(),
+        [](const PortSummary& port) { return port.name == "bus"; });
+    report.check(inputMetadata.ok && inputMetadata.portNames.empty() &&
+                     inputMetadata.ports.size() == inputMetadata.primaryInputCount &&
+                     busSummary != inputMetadata.ports.end() && busSummary->width == 2 &&
+                     busSummary->msb == 1 && busSummary->lsb == 0 &&
+                     busSummary->isBus && busSummary->isInput && !busSummary->isOutput,
+                 "runBasicQuery ListPrimaryInputs preserves structured metadata");
+
+    listPortsQuery.type = Netlist::BasicQueryType::ListPrimaryOutputs;
+    const Netlist::BasicReport outputMetadata = netlist.runBasicQuery(listPortsQuery);
+    report.check(outputMetadata.ok && outputMetadata.portNames.empty() &&
+                     outputMetadata.ports.size() == outputMetadata.primaryOutputCount &&
+                     std::all_of(outputMetadata.ports.begin(), outputMetadata.ports.end(),
+                         [](const PortSummary& port) {
+                             return !port.isInput && port.isOutput;
+                         }),
+                 "runBasicQuery ListPrimaryOutputs preserves structured metadata");
+
     Netlist::BasicQuery summaryQuery;
     summaryQuery.type = Netlist::BasicQueryType::Summary;
     const Netlist::BasicReport summary = netlist.runBasicQuery(summaryQuery);
@@ -137,6 +213,52 @@ void testBasicQuery(TestReport& report, const Netlist& netlist) {
                  constInput.gateCount == 1 &&
                  containsString(constInput.gateNames, "g_nand"),
                  "runBasicQuery GatesWithConstantInput");
+
+    constInputQuery.inputCount = 2;
+    const Netlist::BasicReport constInputByArity =
+        netlist.runBasicQuery(constInputQuery);
+    report.check(constInputByArity.ok && constInputByArity.gateCount == 1 &&
+                     containsString(constInputByArity.gateNames, "g_nand"),
+                 "runBasicQuery GatesWithConstantInput input-count filter");
+
+    constInputQuery.constValue = 2;
+    const Netlist::BasicReport invalidConstValue =
+        netlist.runBasicQuery(constInputQuery);
+    report.check(!invalidConstValue.ok && invalidConstValue.gateCount == 0,
+                 "runBasicQuery rejects invalid constant-input value");
+
+    constInputQuery.constValue = 1;
+    constInputQuery.inputCount = -2;
+    const Netlist::BasicReport invalidInputCount =
+        netlist.runBasicQuery(constInputQuery);
+    report.check(!invalidInputCount.ok && invalidInputCount.gateCount == 0,
+                 "runBasicQuery rejects invalid constant-input arity");
+
+    Netlist structuralNetlist;
+    structuralNetlist.addPrimaryInput("used_in");
+    structuralNetlist.addPrimaryInput("floating_in");
+    structuralNetlist.addPrimaryOutput("driven_out");
+    structuralNetlist.addPrimaryOutput("open_out");
+    const int bufferId = structuralNetlist.addGate("g_drive", GateType::BUF);
+    structuralNetlist.connectGateInput(
+        bufferId, structuralNetlist.getNetId("used_in"));
+    structuralNetlist.connectGateOutput(
+        bufferId, structuralNetlist.getNetId("driven_out"));
+
+    Netlist::BasicQuery structuralQuery;
+    structuralQuery.type = Netlist::BasicQueryType::StructuralIssues;
+    const Netlist::BasicReport structural =
+        structuralNetlist.runBasicQuery(structuralQuery);
+    report.check(structural.ok &&
+                     structural.floatingPrimaryInputNets ==
+                         std::vector<std::string>{"floating_in"} &&
+                     structural.unconnectedPrimaryOutputNets ==
+                         std::vector<std::string>{"open_out"} &&
+                     containsString(structural.noLoadNets, "floating_in") &&
+                     containsString(structural.undrivenNets, "open_out") &&
+                     containsString(structural.floatingNets, "floating_in") &&
+                     containsString(structural.floatingNets, "open_out"),
+                 "runBasicQuery classifies floating PI and unconnected PO");
 }
 
 // 測試 Direct Connectivity Query：driver、loads、gate input/output、fanin/fanout。
@@ -170,6 +292,34 @@ void testDirectConnectivityQuery(TestReport& report, const Netlist& netlist) {
                  containsString(direct.netNames, "n_and") &&
                  containsString(direct.netNames, "c"),
                  "runDirectConnectivityQuery GateInputs");
+
+    query.includeIds = true;
+    query.includeNames = true;
+    const Netlist::DirectConnectivityReport gateInputsBoth =
+        netlist.runDirectConnectivityQuery(query);
+    query.includeIds = true;
+    query.includeNames = false;
+    const Netlist::DirectConnectivityReport gateInputsIdsOnly =
+        netlist.runDirectConnectivityQuery(query);
+    query.includeIds = false;
+    query.includeNames = true;
+    const Netlist::DirectConnectivityReport gateInputsNamesOnly =
+        netlist.runDirectConnectivityQuery(query);
+    query.includeIds = false;
+    query.includeNames = false;
+    const Netlist::DirectConnectivityReport gateInputsMetadataOnly =
+        netlist.runDirectConnectivityQuery(query);
+    report.check(gateInputsBoth.count == 2 &&
+                     gateInputsIdsOnly.count == 2 &&
+                     gateInputsNamesOnly.count == 2 &&
+                     gateInputsMetadataOnly.count == 2 &&
+                     !gateInputsIdsOnly.netIds.empty() &&
+                     gateInputsIdsOnly.netNames.empty() &&
+                     gateInputsNamesOnly.netIds.empty() &&
+                     !gateInputsNamesOnly.netNames.empty() &&
+                     gateInputsMetadataOnly.netIds.empty() &&
+                     gateInputsMetadataOnly.netNames.empty(),
+                 "runDirectConnectivityQuery GateInputs count ignores include flags");
 
     query = Netlist::DirectConnectivityQuery();
     query.type = Netlist::DirectConnectivityQueryType::GateFanout;
@@ -258,6 +408,156 @@ void testDirectConnectivityQuery(TestReport& report, const Netlist& netlist) {
                  direct.globalFanoutReport.maxFanout == 3 &&
                  !direct.globalFanoutReport.satisfiesLimit,
                  "runDirectConnectivityQuery GlobalFanoutReport");
+
+    Netlist removedNetlist = netlist;
+    const int removedNetId = removedNetlist.addNet("removed_scalar");
+    removedNetlist.removeNetIfUnused(removedNetId);
+
+    query = Netlist::DirectConnectivityQuery();
+    query.type = Netlist::DirectConnectivityQueryType::NetDriverGates;
+    query.netName = "removed_scalar";
+    direct = removedNetlist.runDirectConnectivityQuery(query);
+    report.check(!direct.ok && !direct.exists && direct.netId == -1,
+                 "runDirectConnectivityQuery NetDriverGates rejects removed scalar net");
+
+    query.type = Netlist::DirectConnectivityQueryType::NetLoadGates;
+    direct = removedNetlist.runDirectConnectivityQuery(query);
+    report.check(!direct.ok && !direct.exists && direct.netId == -1,
+                 "runDirectConnectivityQuery NetLoadGates rejects removed scalar net");
+
+    query.type = Netlist::DirectConnectivityQueryType::FanoutLoadReport;
+    direct = removedNetlist.runDirectConnectivityQuery(query);
+    report.check(!direct.ok && !direct.exists,
+                 "runDirectConnectivityQuery FanoutLoadReport rejects removed scalar net");
+
+    query = Netlist::DirectConnectivityQuery();
+    query.type = Netlist::DirectConnectivityQueryType::DirectlyConnected;
+    query.gateName = "g_or";
+    query.netName = "removed_scalar";
+    direct = removedNetlist.runDirectConnectivityQuery(query);
+    report.check(!direct.ok && !direct.exists,
+                 "runDirectConnectivityQuery DirectlyConnected rejects removed net");
+
+    Netlist removedGateNetlist = netlist;
+    const int removedGateId = removedGateNetlist.getGateId("g_or");
+    removedGateNetlist.removeGate(removedGateId);
+
+    query = Netlist::DirectConnectivityQuery();
+    query.type = Netlist::DirectConnectivityQueryType::GateInputs;
+    query.gateName = "g_or";
+    direct = removedGateNetlist.runDirectConnectivityQuery(query);
+    report.check(!direct.ok && !direct.exists,
+                 "runDirectConnectivityQuery GateInputs rejects removed gate");
+
+    query.type = Netlist::DirectConnectivityQueryType::GateOutput;
+    direct = removedGateNetlist.runDirectConnectivityQuery(query);
+    report.check(!direct.ok && !direct.exists,
+                 "runDirectConnectivityQuery GateOutput rejects removed gate");
+
+    query.type = Netlist::DirectConnectivityQueryType::GateFanin;
+    direct = removedGateNetlist.runDirectConnectivityQuery(query);
+    report.check(!direct.ok && !direct.exists,
+                 "runDirectConnectivityQuery GateFanin rejects removed gate");
+
+    query.type = Netlist::DirectConnectivityQueryType::GateFanout;
+    direct = removedGateNetlist.runDirectConnectivityQuery(query);
+    report.check(!direct.ok && !direct.exists,
+                 "runDirectConnectivityQuery GateFanout rejects removed gate");
+
+    query = Netlist::DirectConnectivityQuery();
+    query.type = Netlist::DirectConnectivityQueryType::DirectlyConnected;
+    query.gateName = "g_or";
+    query.netName = "n_and";
+    direct = removedGateNetlist.runDirectConnectivityQuery(query);
+    report.check(!direct.ok && !direct.exists,
+                 "runDirectConnectivityQuery DirectlyConnected rejects removed gate");
+
+    Netlist inconsistentDriverNetlist;
+    inconsistentDriverNetlist.addPrimaryOutput("shared_out");
+    const int staleDriverId =
+        inconsistentDriverNetlist.addGate("g_stale_driver", GateType::BUF);
+    const int currentDriverId =
+        inconsistentDriverNetlist.addGate("g_current_driver", GateType::BUF);
+    const int sharedOutId = inconsistentDriverNetlist.getNetId("shared_out");
+    inconsistentDriverNetlist.connectGateOutput(staleDriverId, sharedOutId);
+    inconsistentDriverNetlist.connectGateOutput(currentDriverId, sharedOutId);
+
+    query = Netlist::DirectConnectivityQuery();
+    query.type = Netlist::DirectConnectivityQueryType::GateOutput;
+    query.gateName = "g_stale_driver";
+    direct = inconsistentDriverNetlist.runDirectConnectivityQuery(query);
+    report.check(direct.ok && direct.exists && direct.count == 0 &&
+                     direct.netId == -1 && direct.netName.empty() &&
+                     direct.netIds.empty() && direct.netNames.empty() &&
+                     inconsistentDriverNetlist.getGateOutputNetName(
+                         "g_stale_driver").empty(),
+                 "GateOutput suppresses inconsistent stale output payload");
+
+    query = Netlist::DirectConnectivityQuery();
+    query.type = Netlist::DirectConnectivityQueryType::NetDriverGates;
+    query.netName = "shared_out";
+    direct = inconsistentDriverNetlist.runDirectConnectivityQuery(query);
+    report.check(direct.ok && direct.count == 1 &&
+                     containsString(direct.gateNames, "g_current_driver") &&
+                     !containsString(direct.gateNames, "g_stale_driver"),
+                 "NetDriverGates reports only the consistent current driver");
+
+    query = Netlist::DirectConnectivityQuery();
+    query.type = Netlist::DirectConnectivityQueryType::DirectlyConnected;
+    query.gateName = "g_stale_driver";
+    query.netName = "shared_out";
+    direct = inconsistentDriverNetlist.runDirectConnectivityQuery(query);
+    report.check(direct.ok && direct.exists && !direct.connected &&
+                     direct.count == 0,
+                 "DirectlyConnected rejects inconsistent stale output edge");
+
+    Netlist tiedInputNetlist;
+    tiedInputNetlist.addPrimaryInput("a");
+    tiedInputNetlist.addPrimaryOutput("y");
+    const int tiedGate = tiedInputNetlist.addGate("g_tied", GateType::AND);
+    tiedInputNetlist.connectGateInput(tiedGate, tiedInputNetlist.getNetId("a"));
+    tiedInputNetlist.connectGateInput(tiedGate, tiedInputNetlist.getNetId("a"));
+    tiedInputNetlist.connectGateOutput(tiedGate, tiedInputNetlist.getNetId("y"));
+
+    query = Netlist::DirectConnectivityQuery();
+    query.type = Netlist::DirectConnectivityQueryType::NetLoadGates;
+    query.netName = "a";
+    direct = tiedInputNetlist.runDirectConnectivityQuery(query);
+    const Netlist::FanoutLoadReport tiedFanout =
+        tiedInputNetlist.getFanoutLoadReport("a");
+    report.check(direct.ok && direct.count == 1 &&
+                     containsString(direct.gateNames, "g_tied") &&
+                     tiedFanout.ok &&
+                     tiedFanout.combinationalGateLoads.size() == 2 &&
+                     tiedFanout.totalLoadCount == 2,
+                 "direct gate loads dedupe tied input while fanout load counts pins");
+
+    Netlist busNetlist;
+    busNetlist.addNet("bus[1]");
+    busNetlist.addNet("bus[0]");
+    busNetlist.addPrimaryOutput("y");
+    const int busBuf0 = busNetlist.addGate("g_bus0", GateType::BUF);
+    const int busBuf1 = busNetlist.addGate("g_bus1", GateType::BUF);
+    busNetlist.connectGateInput(busBuf0, busNetlist.getNetId("bus[0]"));
+    busNetlist.connectGateOutput(busBuf0, busNetlist.getNetId("y"));
+    const int bus1Out = busNetlist.addNet("bus1_out");
+    busNetlist.connectGateOutput(busBuf1, bus1Out);
+    busNetlist.removeNetIfUnused(busNetlist.getNetId("bus[1]"));
+
+    query = Netlist::DirectConnectivityQuery();
+    query.type = Netlist::DirectConnectivityQueryType::NetLoadGates;
+    query.netName = "bus";
+    direct = busNetlist.runDirectConnectivityQuery(query);
+    report.check(direct.ok && direct.exists && direct.count == 1 &&
+                     containsString(direct.gateNames, "g_bus0") &&
+                     !containsString(direct.gateNames, "g_bus1"),
+                 "runDirectConnectivityQuery NetLoadGates keeps only active bus bits");
+
+    busNetlist.disconnectGateInput("g_bus0", "bus[0]");
+    busNetlist.removeNetIfUnused(busNetlist.getNetId("bus[0]"));
+    direct = busNetlist.runDirectConnectivityQuery(query);
+    report.check(!direct.ok && !direct.exists,
+                 "runDirectConnectivityQuery NetLoadGates rejects all-removed bus");
 }
 
 // 測試 Function Query：SAT-based equivalence、可能值、常數函數判斷。
@@ -757,7 +1057,11 @@ void testWriterAndSmallMutation(TestReport& report, const Netlist& original) {
                  redirectLoadsReport.changed &&
                  !redirectLoadsReport.rolledBack &&
                  redirectLoadsReport.operationKind == Netlist::NetlistEditOperationKind::PrimitiveMutation &&
+                 redirectLoadsReport.changedGateIds.size() == 1 &&
+                 redirectLoadsReport.changedGateIds[0] == redirectLoadGate &&
                  redirectLoadsNetlist.getGate(redirectLoadGate).inputNetIds[0] == redirectNewNet &&
+                 redirectLoadsNetlist.getGate(redirectLoadGate).inputNetIds[1] == redirectNewNet &&
+                 redirectLoadsNetlist.getNet(redirectNewNet).loadGateIds.size() == 2 &&
                  redirectLoadsNetlist.validateAfterMutation(),
                  "redirectAllLoadsWithReport");
 
@@ -1369,10 +1673,12 @@ void testEditApplyFlow(TestReport& report, const Netlist& original) {
 
 } // namespace
 
-// 執行 mini Verilog 整合測試；可用 argv[1] 指定其他 Verilog 檔。
+// 執行 mini Verilog 整合測試；argv[1] 可指定 Verilog，argv[2] 可用 --basic-only / --direct-only。
 int main(int argc, char* argv[]) {
     const std::string verilogPath =
         (argc >= 2) ? argv[1] : "mini test/mini_circuit.v";
+    const bool basicOnly = argc >= 3 && std::string(argv[2]) == "--basic-only";
+    const bool directOnly = argc >= 3 && std::string(argv[2]) == "--direct-only";
 
     TestReport report;
     Netlist netlist;
@@ -1383,8 +1689,22 @@ int main(int argc, char* argv[]) {
         return report.failed;
     }
 
-    testBasicQuery(report, netlist);
+    if (!directOnly) {
+        testBasicQuery(report, netlist);
+        if (basicOnly) {
+            std::cout << "\nSummary: " << report.passed << " passed, "
+                      << report.failed << " failed.\n";
+            return report.failed == 0 ? 0 : 1;
+        }
+    }
+
     testDirectConnectivityQuery(report, netlist);
+    if (directOnly) {
+        std::cout << "\nSummary: " << report.passed << " passed, "
+                  << report.failed << " failed.\n";
+        return report.failed == 0 ? 0 : 1;
+    }
+
     testFunctionQuery(report, netlist);
     testConeQuery(report, netlist);
     testPathQuery(report, netlist);

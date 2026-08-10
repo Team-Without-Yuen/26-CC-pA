@@ -55,7 +55,7 @@ NetlistEditReport report = netlist.runOptApply(request);
 | `allowedTypes` | vector | empty | 白名單；empty 表示不限制 |
 | `bannedTypes` | vector | empty | 黑名單優先，且不得與白名單重疊 |
 | `targetDepth` | int | `-1` | `-1` best effort；`0+` 為 hard acceptance target |
-| `timeLimitSeconds` | double | `240` | 必須大於 0 |
+| `timeLimitSeconds` | double | `240` | 必須為有限且大於 0；前置流程耗盡預算時不啟動 optimizer core |
 | `requireDepthImprovement` | bool | true | baseline 合規而無改善時保留 original |
 | `verbose` | bool | false | 輸出 optimizer debug log |
 
@@ -63,7 +63,8 @@ NetlistEditReport report = netlist.runOptApply(request);
 
 ```text
 validateEquivalence=false
-  CriticalPathDepth 仍會做 mandatory whole-design SAT。
+  CriticalPathDepth 仍會驗證等價；graph identity 使用 StructuralIdentity，
+  其餘候選做 mandatory whole-design SAT。
 
 rollbackOnFailure=false
   CriticalPathDepth 仍會保留 original，並在 warnings 說明此值被忽略。
@@ -71,6 +72,14 @@ rollbackOnFailure=false
 candidateIds
   目前 CriticalPathDepth 是 pass-level search，candidateIds 尚未使用。
 ```
+
+### 3.1 Legacy cleanup pass
+
+`CleanupBufferChain`、`CollapseDoubleInverter` 與
+`LocalSimplificationFixpoint` 只保留預設 whole-design 相容呼叫。若需要指定 cone、
+候選 ID、gate basis、target depth、time limit 或額外 equivalence/rollback 語意，請改用
+對應的 `EditApply` command；legacy OptApply 會在修改前回失敗，message 會列出所有不支援
+欄位。`verbose=true` 可執行，但 warnings 會說明目前沒有 verbose log。
 
 ## 4. 回傳欄位與狀態判讀
 
@@ -107,6 +116,15 @@ report.depthOptimization->wholeDesignTimedOut
 report.depthOptimization->comparedOutputCount
 report.depthOptimization->comparedDffDCount
 ```
+
+目前已知例外：whole-design SAT 若回 UNKNOWN/inconclusive，contest scoring policy
+可能仍接受候選。此時 warning 會包含 `This has not been proven by SAT`；在 report
+redesign 完成前，不得只依 `functionallyEquivalent=true` 宣稱已有 SAT proof。
+
+若 optimizer 執行後 graph 完全不變，不會啟動 whole-design SAT。此時
+`equivalenceMethod=StructuralIdentity`、`wholeDesignEquivalenceChecked=false`，且
+`candidateGenerated=false`、`candidateAccepted=false`；這是已由結構同一性證明的
+no-op，不是 SAT UNKNOWN。
 
 判讀規則：
 
@@ -297,8 +315,9 @@ rollback / detailed NetlistEditReport
 Regression：
 
 ```text
-mini test/test30: 7 passed
-mini test/test31: 11 passed
+mini test/test30: 10 passed
+mini test/test31: 22 passed
+mini test/test31/double_inverter_worklist_regression: 3 passed
 mini test/test32: 27 passed（tools + lower-bound + timeout regression）
 testcase/test22: depth 41 -> 20
 testcase/test26: depth 58 -> 30, NOR/NOT cone compliance PASS

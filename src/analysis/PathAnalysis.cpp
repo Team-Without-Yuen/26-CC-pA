@@ -1,11 +1,14 @@
 #include "include/core/Netlist.h"
 #include <algorithm>
+#include <charconv>
 #include <chrono>
 #include <fstream>
 #include <iomanip>
 #include <limits>
+#include <memory>
 #include <queue>
 #include <string>
+#include <string_view>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
@@ -26,12 +29,14 @@ struct SearchState {
     int previousGateId;
 };
 
+class CompactPathArtifactWriter;
+
 struct PathEnumerationOptions {
     double timeLimitSeconds = 0.0;
     bool countOnly = false;
     bool storePaths = true;
     size_t maxStoredPaths = 0;
-    std::ostream* pathOutput = nullptr;
+    CompactPathArtifactWriter* pathWriter = nullptr;
 };
 
 struct PathEnumerationState {
@@ -39,6 +44,8 @@ struct PathEnumerationState {
     bool complete = true;
     bool timedOut = false;
     bool pathLimitReached = false;
+    bool outputFailed = false;
+    size_t periodicWorkCount = 0;
     std::chrono::steady_clock::time_point startTime = std::chrono::steady_clock::now();
 };
 
@@ -59,6 +66,10 @@ struct LongestPathMemo {
 
 bool shouldStopEnumeration(const PathEnumerationOptions& options,
                            PathEnumerationState& state) {
+    if (state.outputFailed) {
+        state.complete = false;
+        return true;
+    }
     if (options.timeLimitSeconds > 0.0) {
         const auto now = std::chrono::steady_clock::now();
         const std::chrono::duration<double> elapsed = now - state.startTime;
@@ -72,30 +83,22 @@ bool shouldStopEnumeration(const PathEnumerationOptions& options,
     return false;
 }
 
-// 將 ID 序列以名稱形式寫成 a -> b -> c，供完整 path enumeration 檔案使用。
-void writeNamedSequence(std::ostream& out,
-                        const Netlist& netlist,
-                        const std::vector<int>& ids,
-                        bool isNetSequence) {
-    for (size_t i = 0; i < ids.size(); ++i) {
-        if (i != 0) {
-            out << " -> ";
-        }
-        if (isNetSequence) {
-            out << netlist.getNet(ids[i]).name;
-        } else {
-            out << netlist.getGate(ids[i]).instName;
-        }
+bool shouldStopEnumerationPeriodically(const PathEnumerationOptions& options,
+                                       PathEnumerationState& state) {
+    if (state.outputFailed) {
+        state.complete = false;
+        return true;
     }
+    ++state.periodicWorkCount;
+    if ((state.periodicWorkCount & 0x3fffU) != 0) {
+        return false;
+    }
+    return shouldStopEnumeration(options, state);
 }
 
 constexpr std::streamoff kPathCountHeaderOffset =
     static_cast<std::streamoff>(sizeof("Total paths: ") - 1);
 constexpr int kPathCountHeaderWidth = 20;
-
-void writePathFileHeader(std::ostream& out) {
-    out << "Total paths: " << std::setw(kPathCountHeaderWidth) << 0 << "\n\n";
-}
 
 bool rewritePathFileCount(std::fstream& file, size_t pathCount) {
     file.flush();
@@ -109,19 +112,216 @@ bool rewritePathFileCount(std::fstream& file, size_t pathCount) {
     return static_cast<bool>(file);
 }
 
-void writeCombinationalPathRecord(std::ostream& out,
-                                  const Netlist& netlist,
-                                  const Netlist::CombinationalPath& path,
-                                  size_t pathIndex) {
-    out << "Path " << pathIndex << "\n";
-    out << "  depth: " << path.depth() << "\n";
-    out << "  nets: ";
-    writeNamedSequence(out, netlist, path.netIds, true);
-    out << "\n";
-    out << "  gates: ";
-    writeNamedSequence(out, netlist, path.gateIds, false);
-    out << "\n\n";
-}
+// 完整保留每條 path，但將重複名稱移到 dictionary，record 只寫 start-net ID 與 gate IDs。
+// 由 start net 和每個 gate 的 output net 可無損重建原本的 net/gate sequence。
+class CompactPathArtifactWriter {
+public:
+    CompactPathArtifactWriter(std::ostream& output,
+                              const Netlist& netlist,
+                              bool expectedCountKnown,
+                              size_t expectedPathCount)
+        : output_(output), expectedCountKnown_(expectedCountKnown) {
+        buffer_.reserve(kBufferCapacity);
+        appendText("Total paths: ");
+        if (expectedCountKnown_) {
+            appendUnsigned(expectedPathCount);
+        } else {
+            appendRepeated(' ', kPathCountHeaderWidth - 1);
+            appendText("0");
+        }
+        appendText("\nFormat: COMPACT_PATH_V3\n");
+        appendText("All IDs and path indices are unsigned base36 integers.\n");
+        appendText("Dictionary rows:\n");
+        appendText("  N <net_id> <net_name>\n");
+        appendText("  G <gate_id> <output_net_id> <gate_name> <gate_type>\n");
+        appendText("A decoded path token sequence is S = [start_net_id, gate_id_1, ..., gate_id_N].\n");
+        appendText("Token 0 is always the start net; tokens 1..N are always gates.\n");
+        appendText("First record: Path 0: F <every token in S>\n");
+        appendText("Delta record: P <path_index> <prefix_token_count> <suffix_token_count> <middle_tokens>...\n");
+        appendText("IMPORTANT: prefix/suffix counts apply to the entire S, including token 0 (start net).\n");
+        appendText("Decode delta: current S = previous S first <prefix> tokens + middle tokens + previous S last <suffix> tokens.\n");
+        appendText("Example: previous S=[0,0,2,6,7] and 'P 1 2 2 3' decodes to S=[0,0,3,6,7].\n");
+        appendText("Expand names: look up S[0] in net_dictionary; for each gate S[i], look up the gate and then its output_net_id.\n");
+        if (expectedCountKnown_) {
+            appendText("Expected paths: ");
+            appendUnsigned(expectedPathCount);
+            appendText("\n");
+        }
+
+        appendText("\n[net_dictionary]\n");
+        for (size_t i = 0; i < netlist.getNetCount(); ++i) {
+            const Net& net = netlist.getNet(static_cast<int>(i));
+            if (net.isRemoved || net.name.empty()) {
+                continue;
+            }
+            appendText("N\t");
+            appendBase36(i);
+            appendText("\t");
+            appendText(net.name);
+            appendText("\n");
+        }
+
+        appendText("\n[gate_dictionary]\n");
+        for (size_t i = 0; i < netlist.getGateCount(); ++i) {
+            const Gate& gate = netlist.getGate(static_cast<int>(i));
+            if (gate.type == GateType::UNKNOWN || gate.instName.empty()) {
+                continue;
+            }
+            appendText("G\t");
+            appendBase36(i);
+            appendText("\t");
+            if (gate.outputNetId >= 0) {
+                appendBase36(static_cast<size_t>(gate.outputNetId));
+            } else {
+                appendText("-1");
+            }
+            appendText("\t");
+            appendText(gate.instName);
+            appendText("\t");
+            appendText(netlist.gateTypeToString(gate.type));
+            appendText("\n");
+        }
+        appendText("\n[paths]\n");
+    }
+
+    bool writePath(const Netlist::CombinationalPath& path, size_t pathIndex) {
+        if (failed_ || path.netIds.empty()) {
+            failed_ = true;
+            return false;
+        }
+
+        const size_t currentSize = path.gateIds.size() + 1;
+        auto currentToken = [&](size_t index) {
+            return index == 0 ? path.netIds.front() : path.gateIds[index - 1];
+        };
+
+        if (previousPath_.empty()) {
+            appendText("Path 0: F");
+            for (size_t i = 0; i < currentSize; ++i) {
+                appendText(" ");
+                appendBase36(static_cast<size_t>(currentToken(i)));
+            }
+        } else {
+            size_t commonPrefix = 0;
+            const size_t comparable = std::min(previousPath_.size(), currentSize);
+            while (commonPrefix < comparable &&
+                   previousPath_[commonPrefix] == currentToken(commonPrefix)) {
+                ++commonPrefix;
+            }
+
+            size_t commonSuffix = 0;
+            while (commonSuffix < previousPath_.size() - commonPrefix &&
+                   commonSuffix < currentSize - commonPrefix &&
+                   previousPath_[previousPath_.size() - 1 - commonSuffix] ==
+                       currentToken(currentSize - 1 - commonSuffix)) {
+                ++commonSuffix;
+            }
+
+            appendText("P ");
+            appendBase36(pathIndex);
+            appendText(" ");
+            appendBase36(commonPrefix);
+            appendText(" ");
+            appendBase36(commonSuffix);
+            const size_t middleEnd = currentSize - commonSuffix;
+            for (size_t i = commonPrefix; i < middleEnd; ++i) {
+                appendText(" ");
+                appendBase36(static_cast<size_t>(currentToken(i)));
+            }
+        }
+        appendText("\n");
+
+        previousPath_.resize(currentSize);
+        for (size_t i = 0; i < currentSize; ++i) {
+            previousPath_[i] = currentToken(i);
+        }
+        return !failed_;
+    }
+
+    bool finish(size_t writtenPathCount, bool complete, bool timedOut) {
+        appendText("\n[summary]\nWritten paths: ");
+        appendUnsigned(writtenPathCount);
+        appendText("\nComplete: ");
+        appendText(complete ? "yes" : "no");
+        appendText("\nTimed out: ");
+        appendText(timedOut ? "yes" : "no");
+        appendText("\n");
+        return flush();
+    }
+
+    bool expectedCountKnown() const { return expectedCountKnown_; }
+
+private:
+    static constexpr size_t kBufferCapacity = 32U * 1024U * 1024U;
+
+    void appendText(std::string_view text) {
+        if (buffer_.size() + text.size() > kBufferCapacity && !flush()) {
+            return;
+        }
+        buffer_.append(text.data(), text.size());
+    }
+
+    void appendRepeated(char value, size_t count) {
+        if (buffer_.size() + count > kBufferCapacity && !flush()) {
+            return;
+        }
+        buffer_.append(count, value);
+    }
+
+    template <typename Integer>
+    void appendInteger(Integer value) {
+        char digits[32];
+        const auto converted = std::to_chars(digits, digits + sizeof(digits), value);
+        if (converted.ec != std::errc()) {
+            failed_ = true;
+            return;
+        }
+        if (buffer_.size() + static_cast<size_t>(converted.ptr - digits) >
+                kBufferCapacity &&
+            !flush()) {
+            return;
+        }
+        buffer_.append(digits, converted.ptr);
+    }
+
+    void appendUnsigned(size_t value) { appendInteger(value); }
+    void appendSigned(int value) { appendInteger(value); }
+
+    void appendBase36(size_t value) {
+        static constexpr char kDigits[] = "0123456789abcdefghijklmnopqrstuvwxyz";
+        char encoded[32];
+        char* cursor = encoded + sizeof(encoded);
+        do {
+            *--cursor = kDigits[value % 36U];
+            value /= 36U;
+        } while (value != 0);
+        const size_t length = static_cast<size_t>(encoded + sizeof(encoded) - cursor);
+        if (buffer_.size() + length > kBufferCapacity && !flush()) {
+            return;
+        }
+        buffer_.append(cursor, length);
+    }
+
+    bool flush() {
+        if (failed_) {
+            return false;
+        }
+        if (!buffer_.empty()) {
+            output_.write(buffer_.data(), static_cast<std::streamsize>(buffer_.size()));
+            buffer_.clear();
+        }
+        if (!output_) {
+            failed_ = true;
+        }
+        return !failed_;
+    }
+
+    std::ostream& output_;
+    std::string buffer_;
+    std::vector<int> previousPath_;
+    bool expectedCountKnown_ = false;
+    bool failed_ = false;
+};
 
 // 將一組 PathNode 名稱轉成 ID；任一名稱不存在代表查詢條件無效。
 bool resolvePathNodes(const Netlist& netlist,
@@ -557,11 +757,10 @@ void enumeratePathsDepthFirst(
             if (allRequiredPassed(passedRequired)) {
                 const size_t pathIndex = state.pathCount;
                 state.pathCount++;
-                if (options.pathOutput != nullptr) {
-                    writeCombinationalPathRecord(*options.pathOutput,
-                                                 netlist,
-                                                 currentPath,
-                                                 pathIndex);
+                if (options.pathWriter != nullptr &&
+                    !options.pathWriter->writePath(currentPath, pathIndex)) {
+                    state.outputFailed = true;
+                    state.complete = false;
                 }
                 if (!options.countOnly &&
                     options.storePaths &&
@@ -581,6 +780,63 @@ void enumeratePathsDepthFirst(
 
         currentPath.netIds.pop_back();
         currentPath.gateIds.pop_back();
+    }
+}
+
+// 無 required/avoided constraints 的官方 DAG fast path。省略空條件 vector 複製與
+// per-branch hash-set cycle guard；reverse reachability 仍會剪除不可能抵達 endpoint 的分支。
+void enumerateUnconstrainedPathsDepthFirst(
+    const Netlist& netlist,
+    int currentNetId,
+    int endNetId,
+    Netlist::CombinationalPath& currentPath,
+    std::vector<Netlist::CombinationalPath>& results,
+    const PathEnumerationOptions& options,
+    PathEnumerationState& state,
+    const std::vector<unsigned char>& canReachEnd) {
+    const Net& currentNet = netlist.getNet(currentNetId);
+    for (int gateId : currentNet.loadGateIds) {
+        if (shouldStopEnumerationPeriodically(options, state)) {
+            return;
+        }
+
+        const Gate& gate = netlist.getGate(gateId);
+        if (gate.type == GateType::DFF || gate.outputNetId < 0) {
+            continue;
+        }
+
+        const int nextNetId = gate.outputNetId;
+        if (static_cast<size_t>(nextNetId) >= canReachEnd.size() ||
+            canReachEnd[static_cast<size_t>(nextNetId)] == 0) {
+            continue;
+        }
+
+        currentPath.gateIds.push_back(gateId);
+        currentPath.netIds.push_back(nextNetId);
+
+        if (nextNetId == endNetId) {
+            const size_t pathIndex = state.pathCount++;
+            if (options.pathWriter != nullptr &&
+                !options.pathWriter->writePath(currentPath, pathIndex)) {
+                state.outputFailed = true;
+                state.complete = false;
+            }
+            if (!options.countOnly && options.storePaths &&
+                (options.maxStoredPaths == 0 ||
+                 results.size() < options.maxStoredPaths)) {
+                results.push_back(currentPath);
+            }
+        } else {
+            enumerateUnconstrainedPathsDepthFirst(
+                netlist, nextNetId, endNetId, currentPath, results,
+                options, state, canReachEnd);
+        }
+
+        currentPath.netIds.pop_back();
+        currentPath.gateIds.pop_back();
+        if (state.outputFailed || state.timedOut) {
+            return;
+        }
     }
 }
 
@@ -622,11 +878,10 @@ std::vector<Netlist::CombinationalPath> enumeratePathsMatching(
         if (allRequiredPassed(passedRequired)) {
             const size_t pathIndex = state.pathCount;
             state.pathCount++;
-            if (options.pathOutput != nullptr) {
-                writeCombinationalPathRecord(*options.pathOutput,
-                                             netlist,
-                                             currentPath,
-                                             pathIndex);
+            if (options.pathWriter != nullptr &&
+                !options.pathWriter->writePath(currentPath, pathIndex)) {
+                state.outputFailed = true;
+                state.complete = false;
             }
             if (!options.countOnly &&
                 options.storePaths &&
@@ -635,6 +890,13 @@ std::vector<Netlist::CombinationalPath> enumeratePathsMatching(
                 results.push_back(currentPath);
             }
         }
+        return results;
+    }
+
+    if (requiredNodes.empty() && avoidedNodes.empty()) {
+        enumerateUnconstrainedPathsDepthFirst(
+            netlist, startNetId, endNetId, currentPath, results,
+            options, state, *canReachEnd);
         return results;
     }
 
@@ -1669,6 +1931,25 @@ Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
         options.maxStoredPaths = 0;
         PathEnumerationState state;
         std::fstream pathOutput;
+        std::unique_ptr<CompactPathArtifactWriter> pathWriter;
+        bool expectedPathCountKnown = false;
+        size_t expectedPathCount = 0;
+
+        // 無 required-node 時可用既有 memoized count-only DP 先取得 exact total。
+        // 計數結果同時用於 artifact header 與完成後的完整性核對。
+        if (query.writePathsToFile && !query.countOnly && required.empty()) {
+            PathQuery countQuery = query;
+            countQuery.countOnly = true;
+            countQuery.writePathsToFile = false;
+            countQuery.outputFilePath.clear();
+            countQuery.maxPrintedPaths = 0;
+            const PathQueryResult countResult = runPathQuery(countQuery);
+            if (countResult.ok && countResult.completeEnumeration &&
+                !countResult.enumerationTimedOut) {
+                expectedPathCountKnown = true;
+                expectedPathCount = countResult.pathCount;
+            }
+        }
 
         if (query.writePathsToFile && !query.countOnly) {
             result.outputFilePath = query.outputFilePath.empty()
@@ -1682,8 +1963,9 @@ Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
                                  result.outputFilePath;
                 return result;
             }
-            writePathFileHeader(pathOutput);
-            options.pathOutput = &pathOutput;
+            pathWriter = std::make_unique<CompactPathArtifactWriter>(
+                pathOutput, *this, expectedPathCountKnown, expectedPathCount);
+            options.pathWriter = pathWriter.get();
             options.storePaths = query.maxPrintedPaths > 0;
             options.maxStoredPaths = query.maxPrintedPaths;
             result.wrotePathsToFile = true;
@@ -1765,12 +2047,20 @@ Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
         }
         result.pathCount = state.pathCount;
         result.exists = result.pathCount > 0;
+        if (expectedPathCountKnown && !state.timedOut && !state.outputFailed &&
+            state.pathCount != expectedPathCount) {
+            state.complete = false;
+            result.ok = false;
+            result.message = "Path enumeration count did not match the exact pre-count.";
+        }
         result.completeEnumeration = state.complete;
         result.enumerationTimedOut = state.timedOut;
         result.enumerationPathLimitReached = state.pathLimitReached;
         result.countOnly = query.countOnly;
         if (state.timedOut) {
             result.enumerationStopReason = "Enumeration stopped by time limit.";
+        } else if (state.outputFailed) {
+            result.enumerationStopReason = "Enumeration stopped because artifact output failed.";
         } else if (state.pathLimitReached) {
             result.enumerationStopReason = "Enumeration stopped by maxEnumeratedPaths limit.";
         }
@@ -1778,12 +2068,21 @@ Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
             result.path = result.paths.front();
             result.depth = result.path.depth();
         }
-        if (result.wrotePathsToFile &&
-            !rewritePathFileCount(pathOutput, result.pathCount)) {
-            result.ok = false;
-            result.message = "Failed to finalize path enumeration output file: " +
-                             result.outputFilePath;
-            return result;
+        if (result.wrotePathsToFile) {
+            const bool writerFinished = pathWriter != nullptr &&
+                pathWriter->finish(result.pathCount,
+                                   result.completeEnumeration,
+                                   result.enumerationTimedOut);
+            const bool countFinalized = writerFinished &&
+                (pathWriter->expectedCountKnown() ||
+                 rewritePathFileCount(pathOutput, result.pathCount));
+            if (!countFinalized) {
+                result.ok = false;
+                result.completeEnumeration = false;
+                result.message = "Failed to finalize path enumeration output file: " +
+                                 result.outputFilePath;
+                return result;
+            }
         }
         return result;
     }

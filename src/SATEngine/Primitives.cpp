@@ -1,7 +1,9 @@
 #include "include/SATEngine/Primitives.h"
 #include <algorithm>
 #include <cassert>
+#include <chrono>
 #include <iostream>
+#include <limits>
 #include <unordered_map>
 #include <unordered_set>
 #include <mockturtle/algorithms/equivalence_checking.hpp>
@@ -13,6 +15,7 @@
 #include <kitty/kitty.hpp>
 #include "include/SATEngine/SatEngine.h"
 #include "include/SATEngine/Fraig.h"
+#include "include/SATEngine/SatTime.h"
 #include "include/core/Netlist.h"
 
 namespace eqeng {
@@ -23,6 +26,12 @@ namespace {
 inline uint64_t cofactor_key(Sig f, Sig var, bool val) {
     // signal.data 實際只用到低 ~33 bits，這樣拼不會撞。
     return (f.data * 1000003ull) ^ (var.data * 31ull) ^ (val ? 1ull : 0ull);
+}
+
+using SteadyClock = std::chrono::steady_clock;
+
+double remaining_seconds(const SteadyClock::time_point& deadline) {
+    return std::chrono::duration<double>(deadline - SteadyClock::now()).count();
 }
 
 } // namespace
@@ -141,8 +150,125 @@ EquivResult Primitives::equiv_via_miter(Sig a, Sig b) {
     return *res ? EquivResult::Equal : EquivResult::NotEqual;
 }
 
+// Deadline-aware Phase A proof. The union cone is encoded directly into
+// CaDiCaL so both preprocessing and solve can observe one wall-clock budget.
+EquivResult Primitives::equiv_via_cadical(
+    Sig a, Sig b, double time_limit_seconds) {
+    lastProofTimedOut_ = false;
+    if (time_limit_seconds <= 0.0) {
+        lastProofTimedOut_ = true;
+        return EquivResult::Unknown;
+    }
+
+    const auto deadline = SteadyClock::now() +
+        std::chrono::duration_cast<SteadyClock::duration>(
+            std::chrono::duration<double>(time_limit_seconds));
+    auto expired = [&]() {
+        if (SteadyClock::now() < deadline) return false;
+        lastProofTimedOut_ = true;
+        return true;
+    };
+
+    Ntk& network = aig();
+    std::vector<Node> stack;
+    stack.reserve(1024);
+    stack.push_back(network.get_node(a));
+    stack.push_back(network.get_node(b));
+
+    std::vector<Node> coneNodes;
+    std::unordered_set<uint64_t> seen;
+    while (!stack.empty()) {
+        if (expired()) return EquivResult::Unknown;
+        const Node node = stack.back();
+        stack.pop_back();
+        const uint64_t index = network.node_to_index(node);
+        if (!seen.insert(index).second) continue;
+        coneNodes.push_back(node);
+        if (network.is_constant(node) || network.is_pi(node)) continue;
+        network.foreach_fanin(node, [&](Sig fanin) {
+            stack.push_back(network.get_node(fanin));
+        });
+    }
+
+    CaDiCaL::Solver solver;
+    solver.set("factor", 0);
+
+    auto variableForNode = [&](Node node) -> int {
+        const uint64_t index = network.node_to_index(node);
+        if (index >= static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+            return 0;
+        }
+        return static_cast<int>(index) + 1;
+    };
+    auto literalForSignal = [&](Sig signal) -> int {
+        const int variable = variableForNode(network.get_node(signal));
+        if (variable == 0) return 0;
+        return network.is_complemented(signal) ? -variable : variable;
+    };
+
+    // AIG node 0 is constant false; its complemented literal represents true.
+    solver.add(-1);
+    solver.add(0);
+
+    size_t encodedCount = 0;
+    for (Node node : coneNodes) {
+        if ((encodedCount++ & 0xffu) == 0u && expired()) {
+            return EquivResult::Unknown;
+        }
+        if (network.is_constant(node) || network.is_pi(node)) continue;
+
+        std::vector<Sig> fanins;
+        fanins.reserve(2);
+        network.foreach_fanin(node, [&](Sig fanin) {
+            fanins.push_back(fanin);
+        });
+        if (fanins.size() != 2) return EquivResult::Unknown;
+
+        const int output = variableForNode(node);
+        const int inputA = literalForSignal(fanins[0]);
+        const int inputB = literalForSignal(fanins[1]);
+        if (output == 0 || inputA == 0 || inputB == 0) {
+            return EquivResult::Unknown;
+        }
+
+        // output <-> (inputA & inputB)
+        solver.add(-inputA); solver.add(-inputB); solver.add(output); solver.add(0);
+        solver.add(inputA);  solver.add(-output); solver.add(0);
+        solver.add(inputB);  solver.add(-output); solver.add(0);
+    }
+
+    const int literalA = literalForSignal(a);
+    const int literalB = literalForSignal(b);
+    if (literalA == 0 || literalB == 0) return EquivResult::Unknown;
+
+    // Ask whether a XOR b can be true.
+    solver.add(literalA);  solver.add(literalB);  solver.add(0);
+    solver.add(-literalA); solver.add(-literalB); solver.add(0);
+
+    const double solveBudget = remaining_seconds(deadline);
+    if (solveBudget <= 0.0) {
+        lastProofTimedOut_ = true;
+        return EquivResult::Unknown;
+    }
+
+    TimeLimitTerminator terminator(solveBudget);
+    solver.connect_terminator(&terminator);
+    const int solverResult = solver.solve();
+    solver.disconnect_terminator();
+
+    if (terminator.wasTerminated() || expired()) {
+        lastProofTimedOut_ = true;
+        return EquivResult::Unknown;
+    }
+    if (solverResult == 20) return EquivResult::Equal;
+    if (solverResult == 10) return EquivResult::NotEqual;
+    return EquivResult::Unknown;
+}
+
 EquivResult Primitives::equiv_checked(SigRef ra, SigRef rb) {
+    lastProofTimedOut_ = false;
     ensure_fresh();
+    if (!model_can_prove()) return EquivResult::Unknown;
     const Sig a = unwrap(ra);
     const Sig b = unwrap(rb);
     Ntk& A = aig();
@@ -190,8 +316,63 @@ EquivResult Primitives::equiv_checked(SigRef ra, SigRef rb) {
     return r;
 }
 
-EquivResult Primitives::is_const_checked(SigRef ra, bool val) {
+EquivResult Primitives::equiv_checked(
+    SigRef ra, SigRef rb, double time_limit_seconds) {
+    lastProofTimedOut_ = false;
+    const auto startedAt = SteadyClock::now();
     ensure_fresh();
+    if (!model_can_prove()) return EquivResult::Unknown;
+
+    const double remaining = time_limit_seconds -
+        std::chrono::duration<double>(SteadyClock::now() - startedAt).count();
+    if (remaining <= 0.0) {
+        lastProofTimedOut_ = true;
+        return EquivResult::Unknown;
+    }
+
+    const Sig a = unwrap(ra);
+    const Sig b = unwrap(rb);
+    Ntk& network = aig();
+    if (cfg_.count_stats) ++stats_.equiv_calls;
+
+    if (a == b) {
+        if (cfg_.count_stats) ++stats_.equiv_trivial;
+        return EquivResult::Equal;
+    }
+    if (network.get_node(a) == network.get_node(b)) {
+        if (cfg_.count_stats) ++stats_.equiv_trivial;
+        return EquivResult::NotEqual;
+    }
+
+    if (fraig_ != nullptr && fraig_->is_swept()) {
+        const Node nodeA = network.get_node(a);
+        const Node nodeB = network.get_node(b);
+        if (fraig_->is_swept_node(nodeA) && fraig_->is_swept_node(nodeB)) {
+            if (cfg_.count_stats) ++stats_.equiv_by_lookup;
+            return fraig_->same_class(a, b) ? EquivResult::Equal
+                                            : EquivResult::NotEqual;
+        }
+    }
+
+    EquivResult result;
+    if (sat_ != nullptr) {
+        // Phase B remains disabled until its timed API is implemented.
+        result = sat_->are_equal(a, b);
+    } else {
+        if (cfg_.count_stats) ++stats_.miters_built;
+        result = equiv_via_cadical(a, b, remaining);
+    }
+    if (cfg_.count_stats) {
+        ++stats_.equiv_by_sat;
+        if (result == EquivResult::Unknown) ++stats_.equiv_unknown;
+    }
+    return result;
+}
+
+EquivResult Primitives::is_const_checked(SigRef ra, bool val) {
+    lastProofTimedOut_ = false;
+    ensure_fresh();
+    if (!model_can_prove()) return EquivResult::Unknown;
     const Sig a = unwrap(ra);
     Ntk& A = aig();
 
@@ -219,6 +400,51 @@ EquivResult Primitives::is_const_checked(SigRef ra, bool val) {
     return equiv_via_miter(a, A.get_constant(val));   // Phase A
 }
 
+EquivResult Primitives::is_const_checked(
+    SigRef ra, bool val, double time_limit_seconds) {
+    lastProofTimedOut_ = false;
+    const auto startedAt = SteadyClock::now();
+    ensure_fresh();
+    if (!model_can_prove()) return EquivResult::Unknown;
+
+    const double remaining = time_limit_seconds -
+        std::chrono::duration<double>(SteadyClock::now() - startedAt).count();
+    if (remaining <= 0.0) {
+        lastProofTimedOut_ = true;
+        return EquivResult::Unknown;
+    }
+
+    const Sig signal = unwrap(ra);
+    Ntk& network = aig();
+    const Node node = network.get_node(signal);
+    if (network.is_constant(node)) {
+        const bool actual = network.is_complemented(signal);
+        return actual == val ? EquivResult::Equal : EquivResult::NotEqual;
+    }
+
+    if (fraig_ != nullptr && fraig_->is_swept() && fraig_->is_swept_node(node)) {
+        bool known = false;
+        if (fraig_->is_known_const(signal, known)) {
+            if (cfg_.count_stats) ++stats_.equiv_by_lookup;
+            return known == val ? EquivResult::Equal : EquivResult::NotEqual;
+        }
+    }
+
+    EquivResult result;
+    if (sat_ != nullptr) {
+        result = sat_->is_const(signal, val);
+    } else {
+        if (cfg_.count_stats) ++stats_.miters_built;
+        result = equiv_via_cadical(
+            signal, network.get_constant(val), remaining);
+    }
+    if (cfg_.count_stats) {
+        ++stats_.equiv_by_sat;
+        if (result == EquivResult::Unknown) ++stats_.equiv_unknown;
+    }
+    return result;
+}
+
 bool Primitives::resolve_policy(EquivResult r) {
     switch (r) {
         case EquivResult::Equal:    return true;
@@ -234,10 +460,14 @@ bool Primitives::resolve_policy(EquivResult r) {
 }
 
 bool Primitives::equiv(SigRef a, SigRef b) {
+    ensure_fresh();
+    require_usable_model();
     return resolve_policy(equiv_checked(a, b));
 }
 
 bool Primitives::is_const(SigRef a, bool val) {
+    ensure_fresh();
+    require_usable_model();
     return resolve_policy(is_const_checked(a, val));
 }
 
@@ -322,6 +552,7 @@ Sig Primitives::build_cofactor(Sig f, Sig var, bool val) {
 
 SigRef Primitives::cofactor(SigRef rf, SigRef rvar, bool val) {
     ensure_fresh();
+    require_usable_model();
     const Sig f   = unwrap(rf);
     const Sig var = unwrap(rvar);
 
@@ -352,6 +583,7 @@ EquivResult Primitives::equiv_under(
     if (assumptions.empty()) return equiv_checked(ra, rb);
 
     ensure_fresh();
+    if (!model_can_prove()) return EquivResult::Unknown;
     const Sig a = unwrap(ra);
     const Sig b = unwrap(rb);
 
@@ -379,6 +611,7 @@ EquivResult Primitives::is_const_under(
         SigRef ra, bool val,
         const std::vector<std::pair<SigRef, bool>>& assumptions) {
     ensure_fresh();
+    if (!model_can_prove()) return EquivResult::Unknown;
     return equiv_under(ra, constant(val), assumptions);
 }
 
@@ -393,6 +626,7 @@ EquivResult Primitives::is_const_under(
 //   Unknown  = 不知道（絕不可當成任一邊）
 EquivResult Primitives::depends_on_checked(SigRef rf, SigRef rvar) {
     ensure_fresh();
+    if (!model_can_prove()) return EquivResult::Unknown;
     const Sig f   = unwrap(rf);
     const Sig var = unwrap(rvar);
     Ntk& A = aig();
@@ -421,6 +655,8 @@ EquivResult Primitives::depends_on_checked(SigRef rf, SigRef rvar) {
 }
 
 bool Primitives::depends_on(SigRef f, SigRef var) {
+    ensure_fresh();
+    require_usable_model();
     const auto r = depends_on_checked(f, var);
     switch (r) {
         case EquivResult::NotEqual: return true;    // cofactor 不同 → 相依
@@ -468,6 +704,7 @@ bool Primitives::in_structural_cone(Sig f, Node target) {
 std::vector<SigRef> Primitives::functional_support(
         SigRef f, const std::vector<SigRef>& candidates) {
     ensure_fresh();
+    require_usable_model();
 
     std::vector<SigRef> support;
     support.reserve(candidates.size());
@@ -482,6 +719,7 @@ std::vector<SigRef> Primitives::functional_support(
 
 std::vector<SigRef> Primitives::functional_support(SigRef rf) {
     ensure_fresh();
+    require_usable_model();
     const Sig f = unwrap(rf);
     Ntk& A = aig();
 
@@ -515,6 +753,7 @@ std::vector<SigRef> Primitives::functional_support(SigRef rf) {
 //   negative unate : f|var=1  ≤  f|var=0
 bool Primitives::is_unate(SigRef f, SigRef var, bool positive) {
     ensure_fresh();
+    require_usable_model();
 
     const SigRef f0 = cofactor(f, var, false);
     const SigRef f1 = cofactor(f, var, true);
@@ -530,6 +769,7 @@ bool Primitives::is_unate(SigRef f, SigRef var, bool positive) {
 // f 是否對 x、y 對稱：f|x=0,y=1 == f|x=1,y=0
 bool Primitives::is_symmetric(SigRef f, SigRef x, SigRef y) {
     ensure_fresh();
+    require_usable_model();
     Ntk& A = aig();
 
     if (A.get_node(unwrap(x)) == A.get_node(unwrap(y)))
@@ -551,6 +791,7 @@ bool Primitives::is_symmetric(SigRef f, SigRef x, SigRef y) {
 
 std::vector<Cut> Primitives::enumerate_cuts(SigRef rroot, int k) {
     ensure_fresh();
+    require_usable_model();
     const Sig root = unwrap(rroot);
     Ntk& A = aig();
 
@@ -698,6 +939,7 @@ TruthTable Primitives::truth_of_raw(const Cut& cut) {
 // 這是 mockturtle 的 cut 慣例 —— phase 不屬於 cut。
 TruthTable Primitives::truth_of(const Cut& cut) {
     ensure_fresh();
+    require_usable_model();
     check_cut(cut);
     return truth_of_raw(cut);
 }
@@ -709,6 +951,7 @@ TruthTable Primitives::truth_of(const Cut& cut) {
 //   npn_matches 不受影響 —— NPN 本來就吸收輸出反相。
 TruthTable Primitives::truth_of(const Cut& cut, SigRef rroot) {
     ensure_fresh();
+    require_usable_model();
     check_cut(cut);
     const Sig root = unwrap(rroot);
     Ntk& A = aig();
@@ -737,6 +980,7 @@ NpnClass Primitives::classify(const TruthTable& tt) {
 
 bool Primitives::npn_matches(const Cut& cut, const TruthTable& tmpl) {
     ensure_fresh();
+    require_usable_model();
     check_cut(cut);
 
     if (cut.leaves.size() != tmpl.num_vars()) return false;
@@ -755,6 +999,7 @@ bool Primitives::npn_matches(const Cut& cut, const TruthTable& tmpl) {
 
 SigRef Primitives::cut_leaf(const Cut& cut, std::size_t i) {
     ensure_fresh();
+    require_usable_model();
     check_cut(cut);
 
     if (i >= cut.leaves.size())
@@ -765,6 +1010,7 @@ SigRef Primitives::cut_leaf(const Cut& cut, std::size_t i) {
 
 std::vector<std::string> Primitives::cut_leaf_names(const Cut& cut) {
     ensure_fresh();
+    require_usable_model();
     check_cut(cut);
     Ntk& A = aig();
 
@@ -814,6 +1060,7 @@ std::vector<std::string> Primitives::names_of(SigRef rs) {
 
 std::vector<std::vector<std::string>> Primitives::equivalence_classes(int min_size) {
     ensure_fresh();
+    require_usable_model();
 
     // Phase A：只反映 structural sharing（strash 合併、BUF/NOT alias）。
     // Phase B：Fraig::sweep + NameMap::remap 之後，同一個 API 回完整功能等價類。
@@ -841,4 +1088,4 @@ std::vector<std::vector<std::string>> Primitives::equivalence_classes(int min_si
     return out;
 }
 
-} // namespace eqeng   
+} // namespace eqeng

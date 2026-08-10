@@ -47,6 +47,28 @@ bool isActiveNet(const Netlist& netlist, int netId) {
     return netlist.isValidNetId(netId) && !netlist.getNet(netId).isRemoved;
 }
 
+bool hasConsistentActiveDriver(const Netlist& netlist, const Net& net) {
+    if (!isActiveGate(netlist, net.driverGateId)) {
+        return false;
+    }
+    return netlist.getGate(net.driverGateId).outputNetId == net.id;
+}
+
+bool hasConsistentActiveLoad(const Netlist& netlist, const Net& net) {
+    for (int loadGateId : net.loadGateIds) {
+        if (!isActiveGate(netlist, loadGateId)) {
+            continue;
+        }
+        const Gate& loadGate = netlist.getGate(loadGateId);
+        for (int inputNetId : loadGate.inputNetIds) {
+            if (inputNetId == net.id) {
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
 size_t getActiveGateCount(const Netlist& netlist) {
     size_t count = 0;
     for (size_t i = 0; i < netlist.getGateCount(); ++i) {
@@ -211,7 +233,7 @@ std::vector<std::string> Netlist::getUndrivenNetNames() const {
         if (net.isRemoved || net.isPI || net.isConst) {
             continue;
         }
-        if (!isActiveGate(*this, net.driverGateId)) {
+        if (!hasConsistentActiveDriver(*this, net)) {
             names.push_back(net.name);
         }
     }
@@ -225,14 +247,7 @@ std::vector<std::string> Netlist::getNoLoadNetNames() const {
         if (net.isRemoved || net.isPO || net.isConst) {
             continue;
         }
-        bool hasActiveLoad = false;
-        for (int loadGateId : net.loadGateIds) {
-            if (isActiveGate(*this, loadGateId)) {
-                hasActiveLoad = true;
-                break;
-            }
-        }
-        if (!hasActiveLoad) {
+        if (!hasConsistentActiveLoad(*this, net)) {
             names.push_back(net.name);
         }
     }
@@ -338,7 +353,9 @@ std::vector<int> Netlist::findGatesWithConstInput(
 
         bool matched = false;
         for (int netId : gate.inputNetIds) {
-            if (netId < 0) continue;
+            if (!isActiveNet(*this, netId)) {
+                continue;
+            }
             const Net& net = getNet(netId);
             if (!net.isConst) {
                 continue;
@@ -458,16 +475,16 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
         report.primaryInputCount = getPrimaryInputs().size();
         if (query.includeNames) {
             report.portNames = getPrimaryInputNames();
-            for (const Port& port : primaryInputs) {
-                PortSummary summary;
-                summary.name = port.name;
-                summary.width = static_cast<int>(port.netIds.size());
-                summary.msb = port.msb;
-                summary.lsb = port.lsb;
-                summary.isBus = port.isBus();
-                summary.isInput = true;
-                report.ports.push_back(summary);
-            }
+        }
+        for (const Port& port : primaryInputs) {
+            PortSummary summary;
+            summary.name = port.name;
+            summary.width = static_cast<int>(port.netIds.size());
+            summary.msb = port.msb;
+            summary.lsb = port.lsb;
+            summary.isBus = port.isBus();
+            summary.isInput = true;
+            report.ports.push_back(summary);
         }
         return report;
 
@@ -477,16 +494,16 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
         report.primaryOutputCount = getPrimaryOutputs().size();
         if (query.includeNames) {
             report.portNames = getPrimaryOutputNames();
-            for (const Port& port : primaryOutputs) {
-                PortSummary summary;
-                summary.name = port.name;
-                summary.width = static_cast<int>(port.netIds.size());
-                summary.msb = port.msb;
-                summary.lsb = port.lsb;
-                summary.isBus = port.isBus();
-                summary.isOutput = true;
-                report.ports.push_back(summary);
-            }
+        }
+        for (const Port& port : primaryOutputs) {
+            PortSummary summary;
+            summary.name = port.name;
+            summary.width = static_cast<int>(port.netIds.size());
+            summary.msb = port.msb;
+            summary.lsb = port.lsb;
+            summary.isBus = port.isBus();
+            summary.isOutput = true;
+            report.ports.push_back(summary);
         }
         return report;
 
@@ -587,40 +604,52 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
         return report;
     }
 
-    case BasicQueryType::PortInfo:
+    case BasicQueryType::PortInfo: {
         report.objectName = query.name;
-        report.portWidth = getPortWidth(query.name);
-        if (report.portWidth < 0) {
+        const Port* port = nullptr;
+        for (const Port& input : primaryInputs) {
+            if (input.name == query.name) {
+                port = &input;
+                report.isPrimaryInput = true;
+                break;
+            }
+        }
+        for (const Port& output : primaryOutputs) {
+            if (output.name == query.name) {
+                if (port == nullptr) {
+                    port = &output;
+                }
+                report.isPrimaryOutput = true;
+                break;
+            }
+        }
+        if (port == nullptr) {
             report.message = "Port not found: " + query.name;
             return report;
         }
+
         report.ok = true;
         report.exists = true;
         report.message = "Port info";
-        report.isBus = isBusPort(query.name);
+        report.portWidth = static_cast<int>(port->netIds.size());
+        report.isBus = port->isBus();
         report.typeName = report.isBus ? "BUS_PORT" : "SCALAR_PORT";
-        // [Bug #1] Fix: compute netIds first, then derive netNames from netIds so both
-        // use the same bit ordering.
-        // Before: netIds used expandNetToBits() (ascending bit-index order, lsb→msb),
-        //         netNames used getPortBitNames() (port-declaration order, msb→lsb).
-        //         For "input [1:0] bus": netIds[0]=bus[0] but netNames[0]="bus[1]" → mismatch.
-        if (query.includeIds) {
-            report.netIds = expandNetToBits(query.name);
-        }
         if (query.includeNames) {
             report.portNames.push_back(query.name);
-            if (query.includeIds && !report.netIds.empty()) {
-                // Derive names from netIds to guarantee index alignment.
-                for (int netId : report.netIds) {
-                    if (isValidNetId(netId))
-                        report.netNames.push_back(nets[netId].name);
-                }
-            } else {
-                // ids not requested: fall back to port-declaration order.
-                report.netNames = getPortBitNames(query.name);
+        }
+        for (int netId : port->netIds) {
+            if (!isActiveNet(*this, netId)) {
+                continue;
+            }
+            if (query.includeIds) {
+                report.netIds.push_back(netId);
+            }
+            if (query.includeNames) {
+                report.netNames.push_back(nets[netId].name);
             }
         }
         return report;
+    }
 
     case BasicQueryType::CountByGateType:
         report.ok = true;
@@ -655,6 +684,14 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
     }
 
     case BasicQueryType::GatesWithConstantInput: {
+        if (query.constValue < -1 || query.constValue > 1) {
+            report.message = "GatesWithConstantInput constValue must be -1, 0, or 1";
+            return report;
+        }
+        if (query.inputCount < -1) {
+            report.message = "GatesWithConstantInput inputCount must be -1 or non-negative";
+            return report;
+        }
         report.ok = true;
         report.message = "List gates with constant input";
         // [Perf #3] Compute id list once; derive names + count from it.
@@ -678,6 +715,18 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
         report.noLoadNets = getNoLoadNetNames();
         report.floatingNets = getFloatingNetNames();
         report.unconnectedGates = getUnconnectedGateNames();
+        for (const std::string& netName : report.noLoadNets) {
+            const int netId = getNetId(netName);
+            if (isActiveNet(*this, netId) && isPrimaryInputNet(netId)) {
+                report.floatingPrimaryInputNets.push_back(netName);
+            }
+        }
+        for (const std::string& netName : report.undrivenNets) {
+            const int netId = getNetId(netName);
+            if (isActiveNet(*this, netId) && isPrimaryOutputNet(netId)) {
+                report.unconnectedPrimaryOutputNets.push_back(netName);
+            }
+        }
         return report;
     }
 

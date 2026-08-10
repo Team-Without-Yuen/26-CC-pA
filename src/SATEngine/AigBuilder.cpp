@@ -4,7 +4,7 @@
 #include <iostream>
 #include <unordered_map>
 #include <vector>
-#include "core/Netlist.h"  
+#include "core/Netlist.h"
 
 namespace eqeng {
 namespace {
@@ -96,6 +96,29 @@ bool AigModel::is_free_var(Sig s) const {
     return aig_.is_pi(aig_.get_node(s));
 }
 
+void AigModel::mark_conservative() {
+    if (health_ == ModelHealth::Sound) {
+        health_ = ModelHealth::Conservative;
+        healthMessage_ = "sound with floating signals modeled as free variables";
+    }
+}
+
+void AigModel::mark_invalid(const std::string& reason) {
+    ++invalidIssueCount_;
+    if (health_ != ModelHealth::Invalid) {
+        health_ = ModelHealth::Invalid;
+        healthMessage_ = reason;
+        return;
+    }
+    constexpr uint32_t kMaxDetailedIssues = 8;
+    if (invalidIssueCount_ <= kMaxDetailedIssues &&
+        healthMessage_.find(reason) == std::string::npos) {
+        healthMessage_ += "; " + reason;
+    } else if (invalidIssueCount_ == kMaxDetailedIssues + 1) {
+        healthMessage_ += "; additional issues omitted";
+    }
+}
+
 void AigModel::do_build(const Options& opt) {
     const Netlist& nl   = *nl_;
     const int netCount  = static_cast<int>(nl.getNetCount());
@@ -155,8 +178,10 @@ void AigModel::do_build(const Options& opt) {
             info.q = q;
             piNetIds_.push_back(gate.outputNetId);
         } else if (gate.outputNetId >= 0 && gate.outputNetId < netCount) {
+            mark_invalid("DFF '" + gate.instName + "' Q output has multiple drivers");
             info.q = netSig[gate.outputNetId];
         } else {
+            mark_invalid("DFF '" + gate.instName + "' has no valid Q output net");
             info.q = aig_.create_pi();                    // Q 未接：仍需佔位維持索引一致
             piNetIds_.push_back(kNoNet);
         }
@@ -174,6 +199,12 @@ void AigModel::do_build(const Options& opt) {
             for (int netId : gate.inputNetIds)
                 if (netId >= 0 && netId < netCount) referenced[netId] = 1;
         }
+        // A PO may be the only consumer of an undriven net. It still needs a
+        // free variable; otherwise the old implementation silently tied it to 0.
+        for (const auto& port : nl.getPrimaryOutputs())
+            for (int netId : port.netIds)
+                if (netId >= 0 && netId < netCount) referenced[netId] = 1;
+
         for (int i = 0; i < netCount; ++i) {
             if (!referenced[i] || hasSig[i]) continue;
             if (nl.getNet(i).isRemoved) continue;
@@ -181,6 +212,7 @@ void AigModel::do_build(const Options& opt) {
             assign(i, aig_.create_pi());
             piNetIds_.push_back(i);
             ++stats_.num_free_pis;
+            mark_conservative();
             if (opt.verbose)
                 std::cerr << "[AigBuilder] undriven net '" << nl.getNet(i).name
                           << "' treated as free PI\n";
@@ -189,10 +221,17 @@ void AigModel::do_build(const Options& opt) {
 
     // ---- 5. 組合閘（拓撲順序）----
     auto sig_of_input = [&](const Gate& g, size_t idx) -> Sig {
-        if (idx >= g.inputNetIds.size()) return aig_.get_constant(false);
+        if (idx >= g.inputNetIds.size()) {
+            ++stats_.num_unresolved;
+            mark_invalid("gate '" + g.instName + "' is missing required input " +
+                         std::to_string(idx));
+            return aig_.get_constant(false);
+        }
         const int netId = g.inputNetIds[idx];
         if (netId < 0 || netId >= netCount || !hasSig[netId]) {
             ++stats_.num_unresolved;
+            mark_invalid("gate '" + g.instName + "' input " + std::to_string(idx) +
+                         " cannot be resolved");
             if (opt.verbose)
                 std::cerr << "[AigBuilder][WARN] gate '" << g.instName
                           << "' input " << idx << " unresolved; tied to const0\n";
@@ -205,7 +244,8 @@ void AigModel::do_build(const Options& opt) {
     for (const int gid : order) {
         const Gate& g = nl.getGate(gid);
         const Sig a = sig_of_input(g, 0);
-        const Sig b = sig_of_input(g, 1);
+        const bool unary = g.type == GateType::NOT || g.type == GateType::BUF;
+        const Sig b = unary ? aig_.get_constant(false) : sig_of_input(g, 1);
 
         Sig out;
         switch (g.type) {
@@ -217,10 +257,18 @@ void AigModel::do_build(const Options& opt) {
             case GateType::XNOR: out = !aig_.create_xor(a, b);  break;
             case GateType::NOT:  out = !a;                      break;
             case GateType::BUF:  out = a;                       break;   // net alias：兩個名字同一 signal
-            default:             out = aig_.get_constant(false); break;
+            default:
+                mark_invalid("gate '" + g.instName + "' has unsupported gate type");
+                out = aig_.get_constant(false);
+                break;
         }
-        if (g.outputNetId >= 0 && g.outputNetId < netCount && !hasSig[g.outputNetId])
+        if (g.outputNetId < 0 || g.outputNetId >= netCount) {
+            mark_invalid("gate '" + g.instName + "' has no valid output net");
+        } else if (hasSig[g.outputNetId]) {
+            mark_invalid("gate '" + g.instName + "' output has multiple drivers");
+        } else {
             assign(g.outputNetId, out);
+        }
         ++stats_.num_comb_gates;
     }
 
@@ -229,15 +277,26 @@ void AigModel::do_build(const Options& opt) {
         for (int g = 0; g < gateCount; ++g)
             if (is_comb_gate(nl.getGate(g).type)) ++combTotal;
         stats_.num_topo_dropped = static_cast<uint32_t>(combTotal - static_cast<int>(order.size()));
-        if (stats_.num_topo_dropped > 0)
+        if (stats_.num_topo_dropped > 0) {
+            mark_invalid(std::to_string(stats_.num_topo_dropped) +
+                         " combinational gate(s) could not be topologically ordered");
             std::cerr << "[AigBuilder][WARN] " << stats_.num_topo_dropped
                       << " combinational gate(s) unresolved (combinational loop?)\n";
+        }
     }
 
     // ---- 6. 真實 PO ----
     for (const auto& port : nl.getPrimaryOutputs()) {
         for (int netId : port.netIds) {
-            if (netId < 0 || netId >= netCount) continue;
+            if (netId < 0 || netId >= netCount) {
+                mark_invalid("primary output '" + port.name + "' has an invalid net");
+                continue;
+            }
+            if (!hasSig[netId]) {
+                ++stats_.num_unresolved;
+                mark_invalid("primary output net '" + nl.getNet(netId).name +
+                             "' cannot be resolved");
+            }
             const Sig s = hasSig[netId] ? netSig[netId] : aig_.get_constant(false);
             aig_.create_po(s);
             poSigs_.push_back(s);
@@ -256,19 +315,30 @@ void AigModel::do_build(const Options& opt) {
     for (size_t i = 0; i < dffGateIds.size(); ++i) {
         DffInfo& info = dffs_[i];
 
-        auto ctrl_sig = [&](int netId, bool defaultVal) -> Sig {
-            if (netId < 0 || netId >= netCount || !hasSig[netId])
+        const Gate& dff = nl.getGate(info.gateId);
+        auto ctrl_sig = [&](int netId, bool defaultVal, const char* pin) -> Sig {
+            if (netId == kNoNet)
                 return aig_.get_constant(defaultVal);
+            if (netId < 0 || netId >= netCount || !hasSig[netId]) {
+                ++stats_.num_unresolved;
+                mark_invalid("DFF '" + dff.instName + "' " + pin +
+                             " input cannot be resolved");
+                return aig_.get_constant(defaultVal);
+            }
             return netSig[netId];
         };
 
-        info.d_raw = (info.dNetId >= 0 && info.dNetId < netCount && hasSig[info.dNetId])
-                         ? netSig[info.dNetId]
-                         : aig_.get_constant(false);
+        if (info.dNetId < 0 || info.dNetId >= netCount || !hasSig[info.dNetId]) {
+            ++stats_.num_unresolved;
+            mark_invalid("DFF '" + dff.instName + "' D input cannot be resolved");
+            info.d_raw = aig_.get_constant(false);
+        } else {
+            info.d_raw = netSig[info.dNetId];
+        }
 
         if (opt.fold_async_controls) {
-            const Sig rn = ctrl_sig(info.rnNetId, true);   // 未接 → 不 reset
-            const Sig sn = ctrl_sig(info.snNetId, true);   // 未接 → 不 set
+            const Sig rn = ctrl_sig(info.rnNetId, true, "RN");   // 未接 → 不 reset
+            const Sig sn = ctrl_sig(info.snNetId, true, "SN");   // 未接 → 不 set
             info.d_eff = aig_.create_and(rn, aig_.create_or(info.d_raw, !sn));
         } else {
             info.d_eff = info.d_raw;

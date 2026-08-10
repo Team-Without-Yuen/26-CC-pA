@@ -44,13 +44,13 @@ public:
         bool     use_constant_class;   // 一併掃「恆為 0/1」（最便宜，多半模擬就解掉）
 
         Config()
-        : sim_words_init(32)             
-        , sim_words_max(256)             
-        , max_rounds(8)                 
-        , sat_time_limit(1.0)            
+        : sim_words_init(32)
+        , sim_words_max(256)
+        , max_rounds(8)
+        , sat_time_limit(1.0)
         , sat_conflict_limit(10000)
-        , total_time_budget(0.0)         
-        , use_constant_class(true) {}    
+        , total_time_budget(0.0)
+        , use_constant_class(true) {}
     };
 
     struct Stats {

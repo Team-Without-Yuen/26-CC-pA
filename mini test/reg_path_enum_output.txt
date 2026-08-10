@@ -1,4 +1,4 @@
-Total paths: 1
+Total paths:                    1
 
 Path 0
   depth: 2

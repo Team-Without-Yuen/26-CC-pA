@@ -239,20 +239,27 @@ void Primitives::rebuild() {
     ++stats_.rebuilds;
     stats_.rebuild_seconds += sec;
 
+    const auto& st = model_->stats();
     if (cfg_.verbose_rebuild) {
-        const auto& st = model_->stats();
         std::cerr << "[Primitives] rebuild #" << stats_.rebuilds
                   << " (gen " << generation_ << "): aig=" << st.aig_size
                   << " pi=" << st.num_real_pis << " dff=" << st.num_dff
                   << " po=" << st.num_real_pos
                   << " in " << sec << "s\n";
-        if (st.num_topo_dropped > 0 || st.num_unresolved > 0) {
-            std::cerr << "[Primitives][ERROR] model is NOT sound: "
-                      << st.num_topo_dropped << " gate(s) unresolved, "
-                      << st.num_unresolved << " input(s) tied to const0. "
-                         "Equivalence results are unreliable.\n";
-        }
     }
+    if (!model_->can_prove()) {
+        std::cerr << "[Primitives][ERROR] Boolean proof disabled: "
+                  << model_->health_message() << "\n";
+    }
+}
+
+bool Primitives::model_can_prove() const {
+    return model_ != nullptr && model_->can_prove();
+}
+
+void Primitives::require_usable_model() const {
+    if (!model_can_prove())
+        throw UnsoundModel(model_ ? model_->health_message() : "model has not been built");
 }
 
 // SigRef → raw Sig，並檢查 generation。
@@ -297,6 +304,16 @@ const AigModel& Primitives::model() const {
     return *model_;
 }
 
+ModelHealth Primitives::model_health() {
+    ensure_fresh();
+    return model_->health();
+}
+
+std::string Primitives::model_health_message() {
+    ensure_fresh();
+    return model_->health_message();
+}
+
 Ntk&     Primitives::aig()   { ensure_fresh(); return model_->aig(); }
 NameMap& Primitives::names() { ensure_fresh(); return model_->names(); }
 const Netlist& Primitives::netlist() const { return nl_; }
@@ -307,11 +324,13 @@ const Netlist& Primitives::netlist() const { return nl_; }
 
 SigRef Primitives::constant(bool val) {
     ensure_fresh();
+    require_usable_model();
     return stamp(model_->aig().get_constant(val));
 }
 
 SigRef Primitives::make_and(SigRef a, SigRef b) {
     ensure_fresh();
+    require_usable_model();
     const Sig r = model_->aig().create_and(unwrap(a), unwrap(b));
     if (sat_) sat_->sync();
     return stamp(r);
@@ -319,6 +338,7 @@ SigRef Primitives::make_and(SigRef a, SigRef b) {
 
 SigRef Primitives::make_or(SigRef a, SigRef b) {
     ensure_fresh();
+    require_usable_model();
     const Sig r = model_->aig().create_or(unwrap(a), unwrap(b));
     if (sat_) sat_->sync();
     return stamp(r);
@@ -326,6 +346,7 @@ SigRef Primitives::make_or(SigRef a, SigRef b) {
 
 SigRef Primitives::make_xor(SigRef a, SigRef b) {
     ensure_fresh();
+    require_usable_model();
     const Sig r = model_->aig().create_xor(unwrap(a), unwrap(b));
     if (sat_) sat_->sync();
     return stamp(r);
@@ -333,6 +354,7 @@ SigRef Primitives::make_xor(SigRef a, SigRef b) {
 
 SigRef Primitives::make_mux(SigRef sel, SigRef onTrue, SigRef onFalse) {
     ensure_fresh();
+    require_usable_model();
     Ntk& A = aig();
     const Sig s = unwrap(sel), t = unwrap(onTrue), f = unwrap(onFalse);
     const Sig r = A.create_or(A.create_and(s, t), A.create_and(!s, f));
@@ -342,21 +364,33 @@ SigRef Primitives::make_mux(SigRef sel, SigRef onTrue, SigRef onFalse) {
 
 bool Primitives::is_free_var(SigRef s) {
     ensure_fresh();
+    require_usable_model();
     return model_->is_free_var(unwrap(s));
 }
 
 bool Primitives::is_constant(SigRef s) {
     ensure_fresh();
+    require_usable_model();
     return model_->aig().is_constant(model_->aig().get_node(unwrap(s)));
 }
 
 bool Primitives::is_complemented(SigRef s) {
     ensure_fresh();
+    require_usable_model();
     return model_->aig().is_complemented(unwrap(s));
 }
 
-Sig    Primitives::raw(SigRef s) { ensure_fresh(); return unwrap(s); }
-SigRef Primitives::wrap(Sig s)   { ensure_fresh(); return stamp(s); }
+Sig Primitives::raw(SigRef s) {
+    ensure_fresh();
+    require_usable_model();
+    return unwrap(s);
+}
+
+SigRef Primitives::wrap(Sig s) {
+    ensure_fresh();
+    require_usable_model();
+    return stamp(s);
+}
 
 // ============================================================
 //  修改前後等價驗證
@@ -382,6 +416,13 @@ std::vector<std::string> Primitives::comparison_points(bool include_dff_next_sta
 AigSnapshot Primitives::snapshot() {
     ensure_fresh();
     ++stats_.snapshots_taken;
+
+    if (!model_can_prove()) {
+        AigSnapshot snap;
+        snap.revision_ = nl_.revision();
+        snap.generation_ = generation_;
+        return snap;
+    }
 
     const auto view = collect_interface(*model_);
     const Ntk& src  = model_->aig();
@@ -448,6 +489,12 @@ CecResult Primitives::run_cec(const AigSnapshot& before,
     ++stats_.cec_runs;
 
     CecResult res;
+
+    if (!model_can_prove()) {
+        res.status = EquivResult::Unknown;
+        res.message = "AIG model is not usable for proof: " + model_->health_message();
+        return res;
+    }
 
     if (!before.valid()) {
         res.status  = EquivResult::Unknown;

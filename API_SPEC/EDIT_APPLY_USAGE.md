@@ -126,7 +126,7 @@ if (report.success) {
 | `bufferOutputs` | `bool` | `true` | `InsertBuffersByGateType` 是否 buffer outputs |
 | `verbose` | `bool` | `false` | technology mapping debug log |
 | `validateEquivalence` | `bool` | `false` | 要求等價性資訊；若 command 沒 certificate，report 會加 warning |
-| `rollbackOnFailure` | `bool` | `true` | 保留欄位；目前 edit validation 失敗會 rollback |
+| `rollbackOnFailure` | `bool` | `true` | 相容性保留欄位；public wrapper 在 validation failure 時固定 rollback，即使設為 `false` 也只回 warning，不保留無效設計 |
 
 ---
 
@@ -198,6 +198,7 @@ validation.messages 會包含同一個錯誤訊息
 | name-based command | `gateName` / `netName` 不可空，且物件需存在 |
 | id-based command | ID 必須在有效範圍內，且 gate/net 不可已 removed |
 | fanout command | `maxFanout` 若有設定，必須 >= 2；未設定時使用預設 4 |
+| rename net | constant net 不可改名；一般 net 也不可改成保留 literal `1'b0` / `1'b1` |
 | DFF control buffer | `processClock` / `processReset` 至少一個為 true |
 | by-gate-type buffer | `gateType != UNKNOWN`，且至少選擇 input/output 其中一種 |
 | constant simplification | `gateType` 必須為 combinational type 或 `UNKNOWN`；`constValue` 只能是 `-1/0/1`；`inputCount` 只能是 `-1` 或正整數 |
@@ -295,6 +296,9 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 對指定 signal 的每個 load 插 dedicated buffer。
 ```
 
+這裡的 load 依 Problem A fanout 規則以 sink pin 為單位。同一顆 gate 若有兩個
+input pins 都接到指定 signal，會建立兩顆 dedicated BUF，而不是把該 gate 只算一次。
+
 寫法：
 
 ```cpp
@@ -375,6 +379,11 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 
 若第二顆 NOT 直接驅動 PO，目前會保守跳過；一般 internal NOT -> NOT chain 可直接 collapse。
 
+candidate 必須同時滿足兩顆 NOT 的單一輸入、三條 active net、driver/load/input
+雙向一致與 pin-level fanout 一致。遇到 tombstone、stale edge 或非法 ID 時會安全跳過，
+不會在 validation 前先進行部分 mutation。100 萬個串接 NOT 已以 public
+`runEditApply()` 實測，約 0.741 秒 collapse 500,000 pairs。
+
 ---
 
 ## 11. SafeCleanupFixpoint
@@ -415,6 +424,30 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 | depth 是否改善 | `report.depthChange` |
 | 若已經沒有可清理項目 | `report.warnings` |
 | 等價性理由 | `report.validation.equivalenceMethod`，應為 `LocalRewriteRule` |
+
+---
+
+### 11.1 MergeStructurallyEquivalentGates
+
+用途：合併 gate type 與 input net 結構完全相同的 duplicates。
+
+```cpp
+Netlist::EditApplyRequest request;
+request.kind = Netlist::EditCommandKind::MergeStructurallyEquivalentGates;
+request.validateEquivalence = true;
+
+Netlist::NetlistEditReport report = netlist.runEditApply(request);
+```
+
+讀取 `report.changed` 判斷是否找到 duplicates，並以
+`-report.diff.activeGateCountDelta` 取得本次實際移除 gate 數量。此 command 不會
+隱含移除 unrelated dangling/dead logic；需要廣義 cleanup 時使用
+`SafeCleanupFixpoint`。不同具名 PO 的 duplicate drivers 會保守保留；PO driver 與
+internal duplicate 同組時使用 PO 作 canonical。
+
+100 萬個同組 gates 實測約 0.615 秒；50 萬層、共 100 萬 gates 的 cascade 實測約
+1.141 秒。DFF initial-state / sequential functional merge 屬後期 Boolean/AIG 項目，
+目前不可將本節視為已提供 sequential proof。
 
 ---
 
@@ -480,6 +513,11 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 | 等價性理由 | `report.validation.equivalenceMethod`，應為 `LocalRewriteRule` |
 
 `simplifiedCount` 不一定等於 gate eliminated count。例如 `NAND(a,b,1)` 會移除 constant input、保留 NAND gate，因此 simplified 為 1，但 eliminated NAND 為 0。
+
+bulk 執行時會在內部延後 adjacency 維護，全部 rewrite 完成後再依 active input pins
+一次重建 pin-level `loadGateIds`；呼叫方式與 report schema 不變。100 萬個符合條件的
+gate 已以 public `runEditApply()` 實測通過，完整回傳 `simplifiedCount`，不會因內部
+固定數量上限截斷。
 
 ---
 
@@ -709,7 +747,29 @@ runEditApply unsupported command
 目前驗證結果：
 
 ```text
-Summary: 115 passed, 0 failed.
+Summary: 142 passed, 0 failed.
 ```
+
+`mini test/test2` 另有 39 個 Edit Apply assertions，包含 tied-input pin-level fanout
+insertion；專用 regression 確認兩個實際 sink pins 只建立兩顆 BUF，且 mutation 後
+structure validation 通過；另覆蓋 canonical constant dedup、repeated mapping 與
+constant rename rejection/Writer literal preservation，以及 replace-all-loads 保留
+同一 gate 多個 input pins 的 load multiplicity。
+
+`mini test/test2/constant_simplification_scalability.cpp` 另以 1,000,000 gates 驗證
+public `SimplifyConstants`：約 0.96 秒完成，完整化簡 1,000,000 gates、無 rollback，
+且 structure validation 通過。
+
+`mini test/test2/double_inverter_scalability.cpp` 另以 1,000,000 個串接 NOT 驗證
+public `CollapseDoubleInverter`：約 0.741 秒 collapse 500,000 pairs、無 rollback，
+且 structure validation 通過；test2 同時覆蓋 PO/stale/tombstone/invalid-ID 拒絕。
+
+`mini test/test2/structural_merge_scalability.cpp` 另覆蓋兩種 100 萬 gate worst case：
+同組 duplicates 約 0.615 秒，50 萬層 cascade 約 1.141 秒；兩者皆完整 merge、
+無 rollback 且 structure validation 通過。
+
+非 Boolean public Edit Apply 共 22 個 commands，均有正向 regression；完整 public
+command suite 為 test2 39/39，通用 wrapper/report/validation suite 為 test1 142/142。
+Boolean functional merge、DFF initial-state 與 sequential proof 維持 Deferred。
 
 `mini test/test26` 另有 27 個 C++ API assertions 與 18 個 CLI assertions，涵蓋 functional search/merge、timeout-before-mutation 與 verification-failure rollback；NewTestCase test29/test30 分別實測合併 7/1 顆 gate 並通過 whole-design SAT。

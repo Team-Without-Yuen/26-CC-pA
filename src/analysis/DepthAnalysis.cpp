@@ -2,18 +2,47 @@
 #include <iostream>
 #include <algorithm>
 #include <queue>
+#include <utility>
 #include <vector>
 #include <functional>
 
 namespace {
+
+bool isActiveDepthGate(const Netlist& netlist, int gateId) {
+    return netlist.isValidGateId(gateId) &&
+           netlist.getGate(gateId).type != GateType::UNKNOWN;
+}
+
+bool isActiveDepthNet(const Netlist& netlist, int netId) {
+    return netlist.isValidNetId(netId) && !netlist.getNet(netId).isRemoved;
+}
+
+bool hasConsistentDepthDriver(const Netlist& netlist, int netId, int gateId) {
+    return isActiveDepthNet(netlist, netId) &&
+           isActiveDepthGate(netlist, gateId) &&
+           netlist.getNet(netId).driverGateId == gateId &&
+           netlist.getGate(gateId).outputNetId == netId;
+}
+
+bool hasConsistentDepthLoad(const Netlist& netlist, int netId, int gateId) {
+    if (!isActiveDepthNet(netlist, netId) ||
+        !isActiveDepthGate(netlist, gateId)) {
+        return false;
+    }
+    const Net& net = netlist.getNet(netId);
+    const Gate& gate = netlist.getGate(gateId);
+    return std::find(net.loadGateIds.begin(), net.loadGateIds.end(), gateId) !=
+               net.loadGateIds.end() &&
+           std::find(gate.inputNetIds.begin(), gate.inputNetIds.end(), netId) !=
+               gate.inputNetIds.end();
+}
 
 Netlist::CombinationalPath buildCriticalPathToNet(
     const Netlist& netlist,
     int targetNetId,
     const std::vector<int>& netLevels) {
     Netlist::CombinationalPath path;
-    if (targetNetId < 0 ||
-        targetNetId >= static_cast<int>(netlist.getNetCount()) ||
+    if (!isActiveDepthNet(netlist, targetNetId) ||
         targetNetId >= static_cast<int>(netLevels.size()) ||
         netLevels[targetNetId] < 0) {
         return path;
@@ -23,10 +52,12 @@ Netlist::CombinationalPath buildCriticalPathToNet(
     path.netIds.push_back(currentNetId);
     while (currentNetId >= 0 &&
            currentNetId < static_cast<int>(netlist.getNetCount())) {
+        if (!isActiveDepthNet(netlist, currentNetId)) {
+            break;
+        }
         const Net& currentNet = netlist.getNet(currentNetId);
         const int driverGateId = currentNet.driverGateId;
-        if (driverGateId < 0 ||
-            driverGateId >= static_cast<int>(netlist.getGateCount())) {
+        if (!hasConsistentDepthDriver(netlist, currentNetId, driverGateId)) {
             break;
         }
 
@@ -38,7 +69,7 @@ Netlist::CombinationalPath buildCriticalPathToNet(
         int bestInputNetId = -1;
         int bestInputLevel = -1;
         for (int inputNetId : driverGate.inputNetIds) {
-            if (inputNetId < 0 ||
+            if (!hasConsistentDepthLoad(netlist, inputNetId, driverGateId) ||
                 inputNetId >= static_cast<int>(netLevels.size()) ||
                 netLevels[inputNetId] < 0) {
                 continue;
@@ -72,7 +103,7 @@ Netlist::DepthReport makeDepthReportForNet(
     bool buildCriticalPath = true) {
     Netlist::DepthReport report;
     const int netId = netlist.getNetId(netName);
-    if (netId < 0 || netId >= static_cast<int>(netlist.getNetCount())) {
+    if (!isActiveDepthNet(netlist, netId)) {
         return report;
     }
 
@@ -98,6 +129,64 @@ Netlist::DepthReport makeDepthReportForNet(
     return report;
 }
 
+std::vector<Netlist::DepthReport> collectPrimaryOutputDepthReports(
+    const Netlist& netlist,
+    const std::vector<int>& netLevels,
+    bool buildCriticalPath) {
+    std::vector<Netlist::DepthReport> reports;
+    const std::vector<int> outputNetIds = netlist.getPrimaryOutputNetIds();
+    reports.reserve(outputNetIds.size());
+    for (int netId : outputNetIds) {
+        if (!isActiveDepthNet(netlist, netId)) {
+            continue;
+        }
+        const Net& net = netlist.getNet(netId);
+        reports.push_back(makeDepthReportForNet(
+            netlist, net.name, Netlist::DepthEndpointType::PrimaryOutput,
+            net.name, &netLevels, buildCriticalPath));
+    }
+    return reports;
+}
+
+std::vector<Netlist::DepthReport> collectDffDDepthReports(
+    const Netlist& netlist,
+    const std::vector<int>& netLevels,
+    bool buildCriticalPath) {
+    std::vector<Netlist::DepthReport> reports;
+    for (size_t gateIndex = 0; gateIndex < netlist.getGateCount(); ++gateIndex) {
+        const int gateId = static_cast<int>(gateIndex);
+        if (!isActiveDepthGate(netlist, gateId)) {
+            continue;
+        }
+        const Gate& gate = netlist.getGate(gateId);
+        if (gate.type != GateType::DFF) {
+            continue;
+        }
+
+        Netlist::DepthReport report;
+        const int dNetId = netlist.getGateInputNetId(gateId, "D");
+        if (hasConsistentDepthLoad(netlist, dNetId, gateId)) {
+            report = makeDepthReportForNet(
+                netlist, netlist.getNet(dNetId).name,
+                Netlist::DepthEndpointType::DffD, gate.instName + ".D",
+                &netLevels, buildCriticalPath);
+        }
+        reports.push_back(report);
+    }
+    return reports;
+}
+
+Netlist::DepthReport selectWorstDepthReport(
+    const std::vector<Netlist::DepthReport>& reports) {
+    Netlist::DepthReport worst;
+    for (const Netlist::DepthReport& report : reports) {
+        if (report.depth > worst.depth) {
+            worst = report;
+        }
+    }
+    return worst;
+}
+
 } // namespace
 
 // 計算每個 net 的 combinational level；PI、constant、DFF.Q 視為 level 0。
@@ -107,7 +196,7 @@ std::vector<int> Netlist::computeNetLevels() const {
     std::queue<int> readyNets;
 
     auto markSourceNet = [&](int netId) {
-        if (netId < 0 || netId >= static_cast<int>(nets.size())) {
+        if (!isActiveDepthNet(*this, netId)) {
             return;
         }
         if (netLevels[netId] == -1) {
@@ -117,13 +206,14 @@ std::vector<int> Netlist::computeNetLevels() const {
     };
 
     for (const Net& net : nets) {
-        if (net.isPI || net.isConst) {
+        if (!net.isRemoved && (net.isPI || net.isConst)) {
             markSourceNet(net.id);
         }
     }
 
     for (const Gate& gate : gates) {
-        if (gate.type == GateType::DFF) {
+        if (gate.type == GateType::DFF &&
+            hasConsistentDepthDriver(*this, gate.outputNetId, gate.id)) {
             markSourceNet(gate.outputNetId);
         }
     }
@@ -132,21 +222,24 @@ std::vector<int> Netlist::computeNetLevels() const {
         const int currentNetId = readyNets.front();
         readyNets.pop();
 
-        if (currentNetId < 0 || currentNetId >= static_cast<int>(nets.size())) {
+        if (!isActiveDepthNet(*this, currentNetId)) {
             continue;
         }
 
         const Net& currentNet = nets[currentNetId];
         for (int gateId : currentNet.loadGateIds) {
-            if (gateId < 0 || gateId >= static_cast<int>(gates.size()) ||
+            if (!isActiveDepthGate(*this, gateId) ||
                 processedGates[gateId] != 0) {
                 continue;
             }
 
             const Gate& gate = gates[gateId];
+            if (std::find(gate.inputNetIds.begin(), gate.inputNetIds.end(),
+                          currentNetId) == gate.inputNetIds.end()) {
+                continue;
+            }
             if (gate.type == GateType::DFF ||
-                gate.outputNetId < 0 ||
-                gate.outputNetId >= static_cast<int>(nets.size()) ||
+                !hasConsistentDepthDriver(*this, gate.outputNetId, gateId) ||
                 gate.inputNetIds.empty()) {
                 continue;
             }
@@ -154,8 +247,11 @@ std::vector<int> Netlist::computeNetLevels() const {
             bool allInputsKnown = true;
             int maxInputLevel = -1;
             for (int inputNetId : gate.inputNetIds) {
-                if (inputNetId < 0 ||
-                    inputNetId >= static_cast<int>(nets.size()) ||
+                // The gate was reached through a verified fanout edge. Checking
+                // every input by scanning that net's complete load list turns a
+                // high-fanout levelization into O(E^2). Structural validation
+                // separately verifies both directions of the adjacency.
+                if (!isActiveDepthNet(*this, inputNetId) ||
                     netLevels[inputNetId] < 0) {
                     allInputsKnown = false;
                     break;
@@ -185,9 +281,9 @@ std::vector<int> Netlist::computeGateLevels() const {
     std::vector<int> gateLevels(gates.size(), -1);
 
     for (const Gate& gate : gates) {
-        if (gate.type == GateType::DFF ||
-            gate.outputNetId < 0 ||
-            gate.outputNetId >= static_cast<int>(nets.size()) ||
+        if (!isActiveDepthGate(*this, gate.id) ||
+            gate.type == GateType::DFF ||
+            !hasConsistentDepthDriver(*this, gate.outputNetId, gate.id) ||
             gate.inputNetIds.empty()) {
             continue;
         }
@@ -195,8 +291,7 @@ std::vector<int> Netlist::computeGateLevels() const {
         bool allInputsKnown = true;
         int maxInputLevel = -1;
         for (int inputNetId : gate.inputNetIds) {
-            if (inputNetId < 0 ||
-                inputNetId >= static_cast<int>(nets.size()) ||
+            if (!hasConsistentDepthLoad(*this, inputNetId, gate.id) ||
                 netLevels[inputNetId] < 0) {
                 allInputsKnown = false;
                 break;
@@ -215,7 +310,7 @@ std::vector<int> Netlist::computeGateLevels() const {
 // 查詢指定 net 的最大 fanin depth；找不到或無法計算時回傳 -1。
 int Netlist::getMaxDepthToNet(const std::string& netName) const {
     const int netId = getNetId(netName);
-    if (netId < 0 || netId >= static_cast<int>(nets.size())) {
+    if (!isActiveDepthNet(*this, netId)) {
         return -1;
     }
 
@@ -226,7 +321,7 @@ int Netlist::getMaxDepthToNet(const std::string& netName) const {
 // 找到到指定 net 的一條 critical path；不存在或無法計算時回傳空路徑。
 Netlist::CombinationalPath Netlist::findCriticalPathToNet(const std::string& netName) const {
     const int targetNetId = getNetId(netName);
-    if (targetNetId < 0 || targetNetId >= static_cast<int>(nets.size())) {
+    if (!isActiveDepthNet(*this, targetNetId)) {
         return CombinationalPath();
     }
 
@@ -241,21 +336,8 @@ Netlist::DepthReport Netlist::analyzeDepthToNet(const std::string& netName) cons
 
 // 分析所有 primary output net 的 depth；bus output 會展開成每一個 bit net。
 std::vector<Netlist::DepthReport> Netlist::analyzePrimaryOutputDepths() const {
-    std::vector<DepthReport> reports;
-    const std::vector<int> outputNetIds = getPrimaryOutputNetIds();
     const std::vector<int> netLevels = computeNetLevels();
-    reports.reserve(outputNetIds.size());
-
-    for (int netId : outputNetIds) {
-        if (netId < 0 || netId >= static_cast<int>(nets.size())) {
-            continue;
-        }
-        reports.push_back(makeDepthReportForNet(*this, nets[netId].name,
-                                                DepthEndpointType::PrimaryOutput,
-                                                nets[netId].name,
-                                                &netLevels));
-    }
-    return reports;
+    return collectPrimaryOutputDepthReports(*this, netLevels, true);
 }
 
 // 列出所有 depth 大於 limit 的 primary output 名稱；bus bit 會使用展開後的 net 名稱。
@@ -275,25 +357,8 @@ std::vector<std::string> Netlist::getPrimaryOutputsWithDepthGreaterThan(int limi
 
 // 分析所有 DFF D-pin 的 depth；D pin 未連接或無法計算時保留 depth = -1。
 std::vector<Netlist::DepthReport> Netlist::analyzeDffDDepths() const {
-    std::vector<DepthReport> reports;
     const std::vector<int> netLevels = computeNetLevels();
-
-    for (const Gate& gate : gates) {
-        if (gate.type != GateType::DFF) {
-            continue;
-        }
-
-        DepthReport report;
-        const int dNetId = getGateInputNetId(gate.id, "D");
-        if (dNetId >= 0 && dNetId < static_cast<int>(nets.size())) {
-            report = makeDepthReportForNet(*this, nets[dNetId].name,
-                                           DepthEndpointType::DffD,
-                                           gate.instName + ".D",
-                                           &netLevels);
-        }
-        reports.push_back(report);
-    }
-    return reports;
+    return collectDffDDepthReports(*this, netLevels, true);
 }
 
 // 列出所有 D-pin depth 大於 limit 的 DFF instance name。
@@ -307,12 +372,13 @@ std::vector<std::string> Netlist::getDffsWithDDepthGreaterThan(int limit) const 
     const std::vector<int> netLevels = computeNetLevels();
 
     for (const Gate& gate : gates) {
-        if (gate.type != GateType::DFF) {
+        if (gate.type != GateType::DFF ||
+            !isActiveDepthGate(*this, gate.id)) {
             continue;
         }
 
         const int dNetId = getGateInputNetId(gate.id, "D");
-        if (dNetId < 0 || dNetId >= static_cast<int>(nets.size()) ||
+        if (!hasConsistentDepthLoad(*this, dNetId, gate.id) ||
             dNetId >= static_cast<int>(netLevels.size())) {
             continue;
         }
@@ -327,41 +393,38 @@ std::vector<std::string> Netlist::getDffsWithDDepthGreaterThan(int limit) const 
 
 // 在所有 primary output 與 DFF D-pin endpoints 中，找出 depth 最大的一條 critical path。
 Netlist::DepthReport Netlist::findGlobalCriticalPath() const {
-    DepthReport bestReport;
+    const std::vector<int> netLevels = computeNetLevels();
+    std::vector<DepthReport> reports =
+        collectPrimaryOutputDepthReports(*this, netLevels, false);
+    std::vector<DepthReport> dffReports =
+        collectDffDDepthReports(*this, netLevels, false);
+    reports.insert(reports.end(), dffReports.begin(), dffReports.end());
 
-    auto considerReport = [&](const DepthReport& report) {
-        if (report.depth > bestReport.depth) {
-            bestReport = report;
-        }
-    };
-
-    for (const DepthReport& report : analyzePrimaryOutputDepths()) {
-        considerReport(report);
+    DepthReport bestReport = selectWorstDepthReport(reports);
+    if (bestReport.endpointNetId >= 0 && bestReport.depth >= 0) {
+        bestReport.criticalPath =
+            buildCriticalPathToNet(*this, bestReport.endpointNetId, netLevels);
     }
-
-    for (const DepthReport& report : analyzeDffDDepths()) {
-        considerReport(report);
-    }
-
     return bestReport;
 }
 
 // 找出所有 depth 大於 maxDepth 的 timing endpoints；endpoint 範圍包含 PO 與 DFF.D。
 std::vector<Netlist::DepthReport> Netlist::findEndpointsExceedingDepth(int maxDepth) const {
     std::vector<DepthReport> reports;
+    const std::vector<int> netLevels = computeNetLevels();
+    std::vector<DepthReport> candidates =
+        collectPrimaryOutputDepthReports(*this, netLevels, false);
+    std::vector<DepthReport> dffReports =
+        collectDffDDepthReports(*this, netLevels, false);
+    candidates.insert(candidates.end(), dffReports.begin(), dffReports.end());
 
-    auto appendIfExceeded = [&](const DepthReport& report) {
-        if (report.depth > maxDepth) {
-            reports.push_back(report);
+    for (DepthReport& report : candidates) {
+        if (report.depth <= maxDepth) {
+            continue;
         }
-    };
-
-    for (const DepthReport& report : analyzePrimaryOutputDepths()) {
-        appendIfExceeded(report);
-    }
-
-    for (const DepthReport& report : analyzeDffDDepths()) {
-        appendIfExceeded(report);
+        report.criticalPath =
+            buildCriticalPathToNet(*this, report.endpointNetId, netLevels);
+        reports.push_back(std::move(report));
     }
 
     return reports;
@@ -404,39 +467,23 @@ Netlist::DepthReportSet Netlist::runDepthQuery(const DepthQuery& query) const {
     // functions) so they keep the exact same private-member access as the
     // original member functions they mirror.
     auto collectPrimaryOutputReports = [&](const std::vector<int>& netLevels,
-                                            bool buildCriticalPath) {
-        std::vector<DepthReport> reports;
-        const std::vector<int> outputNetIds = getPrimaryOutputNetIds();
-        reports.reserve(outputNetIds.size());
-        for (int netId : outputNetIds) {
-            if (netId < 0 || netId >= static_cast<int>(nets.size())) {
-                continue;
-            }
-            reports.push_back(makeDepthReportForNet(*this, nets[netId].name,
-                                                      DepthEndpointType::PrimaryOutput,
-                                                      nets[netId].name,
-                                                      &netLevels, buildCriticalPath));
-        }
-        return reports;
+                                             bool buildCriticalPath) {
+        return collectPrimaryOutputDepthReports(
+            *this, netLevels, buildCriticalPath);
     };
 
     auto collectDffDReports = [&](const std::vector<int>& netLevels,
                                    bool buildCriticalPath) {
-        std::vector<DepthReport> reports;
-        for (const Gate& gate : gates) {
-            if (gate.type != GateType::DFF) {
-                continue;
-            }
-            DepthReport report;
-            const int dNetId = getGateInputNetId(gate.id, "D");
-            if (dNetId >= 0 && dNetId < static_cast<int>(nets.size())) {
-                report = makeDepthReportForNet(*this, nets[dNetId].name,
-                                                DepthEndpointType::DffD,
-                                                gate.instName + ".D",
-                                                &netLevels, buildCriticalPath);
-            }
-            reports.push_back(report);
-        }
+        return collectDffDDepthReports(*this, netLevels, buildCriticalPath);
+    };
+
+    auto collectAllEndpointReports = [&](const std::vector<int>& netLevels,
+                                          bool buildCriticalPath) {
+        std::vector<DepthReport> reports =
+            collectPrimaryOutputReports(netLevels, buildCriticalPath);
+        std::vector<DepthReport> dffReports =
+            collectDffDReports(netLevels, buildCriticalPath);
+        reports.insert(reports.end(), dffReports.begin(), dffReports.end());
         return reports;
     };
 
@@ -447,7 +494,15 @@ Netlist::DepthReportSet Netlist::runDepthQuery(const DepthQuery& query) const {
             return result;
         }
 
-        DepthReport report = analyzeDepthToNet(query.netName);
+        const int netId = getNetId(query.netName);
+        if (!isActiveDepthNet(*this, netId)) {
+            result.message = "Net not found or depth unavailable: " + query.netName;
+            return result;
+        }
+        const std::vector<int> netLevels = computeNetLevels();
+        DepthReport report = makeDepthReportForNet(
+            *this, query.netName, DepthEndpointType::SpecificNet,
+            query.netName, &netLevels, query.includeCriticalPath);
         if (report.endpointNetId < 0 || report.depth < 0) {
             result.message = "Net not found or depth unavailable: " + query.netName;
             return result;
@@ -478,8 +533,11 @@ Netlist::DepthReportSet Netlist::runDepthQuery(const DepthQuery& query) const {
         return result;
     }
 
-    case DepthQueryType::GlobalCriticalPath:
-        result.worst = findGlobalCriticalPath();
+    case DepthQueryType::GlobalCriticalPath: {
+        const std::vector<int> netLevels = computeNetLevels();
+        const std::vector<DepthReport> endpointReports =
+            collectAllEndpointReports(netLevels, false);
+        result.worst = selectWorstDepthReport(endpointReports);
         if (result.worst.endpointNetId < 0 || result.worst.depth < 0) {
             result.message = "Global critical path is unavailable";
             clearCriticalPathsIfNeeded();
@@ -487,32 +545,30 @@ Netlist::DepthReportSet Netlist::runDepthQuery(const DepthQuery& query) const {
         }
         result.ok = true;
         result.message = "Global critical path";
+        if (query.includeCriticalPath) {
+            result.worst.criticalPath = buildCriticalPathToNet(
+                *this, result.worst.endpointNetId, netLevels);
+        }
         result.reports.push_back(result.worst);
         result.count = result.reports.size();
         result.exists = true;
         clearCriticalPathsIfNeeded();
         return result;
+    }
 
     case DepthQueryType::EndpointsExceedingDepth: {
         if (query.threshold < 0) {
             result.message = "EndpointsExceedingDepth requires non-negative threshold";
             return result;
         }
-        if (query.includeCriticalPath) {
-            // Unchanged behavior: caller wants full paths, keep using the
-            // existing documented helper.
-            result.reports = findEndpointsExceedingDepth(query.threshold);
-        } else {
-            const std::vector<int> netLevels = computeNetLevels();
-            for (const DepthReport& report : collectPrimaryOutputReports(netLevels, false)) {
-                if (report.depth > query.threshold) {
-                    result.reports.push_back(report);
+        const std::vector<int> netLevels = computeNetLevels();
+        for (DepthReport report : collectAllEndpointReports(netLevels, false)) {
+            if (report.depth > query.threshold) {
+                if (query.includeCriticalPath) {
+                    report.criticalPath = buildCriticalPathToNet(
+                        *this, report.endpointNetId, netLevels);
                 }
-            }
-            for (const DepthReport& report : collectDffDReports(netLevels, false)) {
-                if (report.depth > query.threshold) {
-                    result.reports.push_back(report);
-                }
+                result.reports.push_back(std::move(report));
             }
         }
         result.ok = true;
@@ -527,10 +583,13 @@ Netlist::DepthReportSet Netlist::runDepthQuery(const DepthQuery& query) const {
             return result;
         }
         const std::vector<int> netLevels = computeNetLevels();
-        for (const DepthReport& report :
-             collectPrimaryOutputReports(netLevels, query.includeCriticalPath)) {
+        for (DepthReport report : collectPrimaryOutputReports(netLevels, false)) {
             if (report.depth > query.threshold) {
-                result.reports.push_back(report);
+                if (query.includeCriticalPath) {
+                    report.criticalPath = buildCriticalPathToNet(
+                        *this, report.endpointNetId, netLevels);
+                }
+                result.reports.push_back(std::move(report));
             }
         }
         result.ok = true;
@@ -547,16 +606,14 @@ Netlist::DepthReportSet Netlist::runDepthQuery(const DepthQuery& query) const {
 
         const int gateId = getGateId(query.gateName);
         result.gateId = gateId;
-        if (gateId < 0 || gateId >= static_cast<int>(gates.size()) ||
-            gates[gateId].type == GateType::UNKNOWN) {
+        if (!isActiveDepthGate(*this, gateId)) {
             result.message = "Gate not found: " + query.gateName;
             return result;
         }
 
         const Gate& targetGate = gates[gateId];
         if (targetGate.type == GateType::DFF ||
-            targetGate.outputNetId < 0 ||
-            targetGate.outputNetId >= static_cast<int>(nets.size()) ||
+            !hasConsistentDepthDriver(*this, targetGate.outputNetId, gateId) ||
             targetGate.inputNetIds.empty()) {
             result.ok = true;
             result.message = "Gate is not a combinational gate with a valid output";
@@ -573,17 +630,11 @@ Netlist::DepthReportSet Netlist::runDepthQuery(const DepthQuery& query) const {
         const std::vector<int> netLevels = computeNetLevels();
         {
             DepthReport globalWorst;
-            for (const DepthReport& report :
-                 collectPrimaryOutputReports(netLevels, query.includeCriticalPath)) {
-                if (report.depth > globalWorst.depth) {
-                    globalWorst = report;
-                }
-            }
-            for (const DepthReport& report :
-                 collectDffDReports(netLevels, query.includeCriticalPath)) {
-                if (report.depth > globalWorst.depth) {
-                    globalWorst = report;
-                }
+            globalWorst = selectWorstDepthReport(
+                collectAllEndpointReports(netLevels, false));
+            if (query.includeCriticalPath && globalWorst.endpointNetId >= 0) {
+                globalWorst.criticalPath = buildCriticalPathToNet(
+                    *this, globalWorst.endpointNetId, netLevels);
             }
             result.worst = globalWorst;
         }
@@ -595,8 +646,7 @@ Netlist::DepthReportSet Netlist::runDepthQuery(const DepthQuery& query) const {
 
         int bestInputLevel = -1;
         for (int inputNetId : targetGate.inputNetIds) {
-            if (inputNetId >= 0 &&
-                inputNetId < static_cast<int>(netLevels.size()) &&
+            if (hasConsistentDepthLoad(*this, inputNetId, gateId) &&
                 netLevels[inputNetId] > bestInputLevel) {
                 bestInputLevel = netLevels[inputNetId];
             }
@@ -609,24 +659,31 @@ Netlist::DepthReportSet Netlist::runDepthQuery(const DepthQuery& query) const {
             return result;
         }
 
-        std::vector<int> memo(nets.size(), -2);
-        std::vector<unsigned char> visiting(nets.size(), 0);
-        std::function<int(int)> maxRemainingDepthFromNet = [&](int netId) -> int {
-            if (netId < 0 || netId >= static_cast<int>(nets.size())) {
-                return -1;
+        std::vector<int> orderedNetIds;
+        orderedNetIds.reserve(nets.size());
+        for (size_t netIndex = 0; netIndex < nets.size(); ++netIndex) {
+            const int netId = static_cast<int>(netIndex);
+            if (isActiveDepthNet(*this, netId) && netLevels[netId] >= 0) {
+                orderedNetIds.push_back(netId);
             }
-            if (memo[netId] != -2) {
-                return memo[netId];
-            }
-            if (visiting[netId] != 0) {
-                return -1;
-            }
+        }
+        std::sort(orderedNetIds.begin(), orderedNetIds.end(),
+                  [&](int lhs, int rhs) {
+                      if (netLevels[lhs] != netLevels[rhs]) {
+                          return netLevels[lhs] > netLevels[rhs];
+                      }
+                      return lhs < rhs;
+                  });
 
-            visiting[netId] = 1;
+        // The contest combinational graph is a DAG. Processing nets from high
+        // level to low level means every downstream output has already been
+        // solved when its input net is visited, avoiding recursion on deep
+        // chains while preserving the exact maximum remaining-depth result.
+        std::vector<int> remainingDepthByNet(nets.size(), -1);
+        for (int netId : orderedNetIds) {
             int best = nets[netId].isPO ? 0 : -1;
-
             for (int loadGateId : nets[netId].loadGateIds) {
-                if (loadGateId < 0 || loadGateId >= static_cast<int>(gates.size())) {
+                if (!hasConsistentDepthLoad(*this, netId, loadGateId)) {
                     continue;
                 }
 
@@ -638,24 +695,20 @@ Netlist::DepthReportSet Netlist::runDepthQuery(const DepthQuery& query) const {
                     continue;
                 }
 
-                if (loadGate.type == GateType::UNKNOWN ||
-                    loadGate.outputNetId < 0 ||
-                    loadGate.outputNetId >= static_cast<int>(nets.size())) {
+                if (!hasConsistentDepthDriver(
+                        *this, loadGate.outputNetId, loadGateId)) {
                     continue;
                 }
-
-                const int downstreamDepth = maxRemainingDepthFromNet(loadGate.outputNetId);
+                const int downstreamDepth =
+                    remainingDepthByNet[loadGate.outputNetId];
                 if (downstreamDepth >= 0) {
                     best = std::max(best, downstreamDepth + 1);
                 }
             }
+            remainingDepthByNet[netId] = best;
+        }
 
-            visiting[netId] = 0;
-            memo[netId] = best;
-            return best;
-        };
-
-        const int remainingDepth = maxRemainingDepthFromNet(targetGate.outputNetId);
+        const int remainingDepth = remainingDepthByNet[targetGate.outputNetId];
         result.gateOnCriticalPath =
             remainingDepth >= 0 &&
             bestInputLevel + 1 + remainingDepth == result.worst.depth;

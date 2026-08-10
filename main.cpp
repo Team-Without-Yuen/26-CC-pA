@@ -91,7 +91,7 @@ struct Session {
 };
 
 void print_help() {
-    std::cout << 
+    std::cout <<
         "\n可用指令：\n"
         "  info                        建模摘要與健全性\n"
         "  gen                         目前 generation / dirty / rebuild 次數\n"

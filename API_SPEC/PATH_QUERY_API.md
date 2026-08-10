@@ -1,6 +1,6 @@
 # Path Query API 整理
 
-這份文件整理 `PathQuery` 的設計、endpoint model、責任邊界與內部實作。
+這份文件整理 `Netlist::PathQuery` 的設計、責任與內部 contract。
 
 使用方式與 prompt 範例請看：
 
@@ -10,469 +10,252 @@ API_SPEC/PATH_QUERY_USAGE.md
 
 ---
 
-這份文件整理 endpoints 之間的 path、reachability、mandatory node 與 separator/cut，並記錄統一 `PathQuery` API。原本公開的 `GraphQuery` 與 `RegisterPathQuery` 語意已收斂到本 API；底層 dominator 與 legacy wrapper 仍保留。
+## 1. 核心定位
 
-## 1. 核心抽象
+`PathQuery` 統一處理明確 startpoint 與 endpoint 之間的組合路徑問題：
 
-大部分 path 類 prompt 都可以抽象成：
+- connectivity 與任一路徑
+- 完整列舉或精確計數
+- 最短與最長 logic depth path
+- required/avoided node constraints
+- every-path、mandatory node 與 directed separator/cut
+- PI、PO、DFF pin、gate pin 與多 endpoint sets
 
-```text
-startpoints -> combinational graph -> endpoints
-```
+對外不再建立新的 `GraphQuery` 或 `RegisterPathQuery` 功能；register-to-register query 由
+`DffQ`/`DffD` endpoints 表示。`RegisterPathQuery` 只保留 legacy/internal wrapper。
 
-並套用額外條件：
+以下問題不屬於本 API：
 
-```text
-required nodes：路徑必須經過的 net / gate
-avoided nodes ：路徑必須避開的 net / gate
-mode          ：exists / find any / enumerate all / min depth / max depth
-boundary      ：遇到 DFF 是否停止
-```
+- 單一物件的完整 fanin/fanout cone：`ConeQuery`
+- 全設計 critical endpoint/depth：`DepthQuery`
+- Boolean equivalence、constant、expression：`FunctionQuery`
+- sequential enable/hold pattern：`SequentialPatternQuery`
 
-目前 Problem A 的主要網表語意是 gate-level netlist，所以基本 traversal 先採用：
+## 2. 資料模型與邊界
 
-```text
-Net -> Gate -> Net
-```
-
-組合邏輯 path 的重要規則：
+Traversal 使用 gate-level named netlist：
 
 ```text
-DFF 是 sequential boundary。
-組合路徑不從 DFF input 穿越到 DFF Q。
-若要分析 register-to-register，應從前一顆 DFF 的 Q net 出發，到下一顆 DFF 的 D pin net 結束。
+Net -> combinational Gate -> Net
 ```
 
-DFF pin 儲存規則：
+`CombinationalPath.netIds` 包含 start/end net，`gateIds` 保存真正穿越的 combinational
+gates，logic depth 等於 `gateIds.size()`。NOT、BUF 與其他 gate 一樣各算一層。
 
-```text
-DFF 的 inputNetIds 與 inputPinNames 是同位置對應。
-例如 inputPinNames[i] = "D" 時，inputNetIds[i] 才是 D pin 的 net。
-若某個 DFF input 被 disconnect，必須把 inputNetIds[i] 設成 -1，不能 erase。
-原因是 erase 會讓後面的 CK/RN/SN 往前遞補，造成 named pin 查詢錯位。
-```
+目前只支援 `combinationalOnly=true`：
 
-## 2. Startpoint 類型
+- DFF 是 sequential boundary。
+- 路徑不從 DFF.D 穿越到 DFF.Q。
+- register-to-register 從前一顆 DFF.Q net 出發，到後一顆 DFF.D net 結束。
+- DFF.Q 作為 fanin endpoint 時視為空的 sequential boundary。
 
-Startpoint 是 path analysis 的起點。常見類型如下。
+正式題目中的 combinational graph 為 DAG。max-depth 與 count-only DP 依此 contract 使用
+memoization；不承諾 combinational cycle 下的 longest-path 語意。
 
-| 類型 | 例子 | 轉成 traversal 起點 |
+## 3. Query 型別
+
+### 3.1 Endpoint
+
+| `PathEndpointType` | `name` | 解析結果 |
 |---|---|---|
-| Primary Input | `input a` | PI 對應的 net |
-| Bus Primary Input | `input [3:0] a` | `a[0] ... a[3]` 多個 net |
-| DFF Q-pin | `ff1.Q` | DFF 的 output net |
-| Specific Net | `n123` | 該 net |
-| Gate Output | `g0 output` | gate 的 output net |
-| Clock Source | `clk` | clock net，語意偏 control path |
-| Reset Source | `rst_n` | reset net，語意偏 control path |
-| Enable Source | `en` | enable net，若設計有 enable pin |
+| `SpecificNet` | net name | 指定 scalar net |
+| `PrimaryInput` | PI port；空或 `*` 表示全部 | 一個或多個 PI bit nets |
+| `PrimaryOutput` | PO port；空或 `*` 表示全部 | 一個或多個 PO bit nets |
+| `DffQ` | DFF instance；空或 `*` 表示全部 | DFF output/Q net |
+| `DffD` | DFF instance；空或 `*` 表示全部 | named D input net |
+| `DffClock` | DFF instance | `pinName` 或預設 CK net |
+| `DffReset` | DFF instance | 指定 pin，或未指定時嘗試 RN/SN |
+| `GateOutput` | gate instance | gate output net |
+| `GateInput` | gate instance | `pinName` 或 `pinIndex` 指定的 input net |
 
-目前已有支援：
+Bus port endpoint 會展開成各 bit net。Primitive gate 通常使用 positional input，應提供
+`pinIndex`；DFF/control pin 使用 `pinName`。
 
-```text
-Primary Input：可從 getPrimaryInputs() 取得。
-Bus Primary Input：Port.netIds 已保存每個 bit net。
-DFF Q-pin：Gate.outputNetId 可取得。
-Specific Net：getNetId() / findNet() 可取得。
-Gate Output：Gate.outputNetId 可取得。
-```
+### 3.2 Constraint Node
 
-目前缺比較明確的 helper：
+`PathNode` 可表示具名 `Net` 或 `Gate`：
 
 ```cpp
-std::vector<int> getPrimaryInputNetIds() const;
-int getDffOutputNetId(int dffGateId) const;
-int getGateOutputNetId(int gateId) const;
+PathNode(PathNodeType::Net, "n3")
+PathNode(PathNodeType::Gate, "g5")
 ```
 
-目前已新增 helper：
+`requiredNodes` 中每個節點都必須經過；`avoidedNodes` 中任一節點都不能經過。
 
-```cpp
-std::vector<int> getPrimaryInputNetIds() const;
-int getDffOutputNetId(int dffGateId) const;
-int getGateOutputNetId(int gateId) const;
-```
+### 3.3 Mode
 
-## 3. Endpoint 類型
-
-Endpoint 是 path analysis 的終點。常見類型如下。
-
-| 類型 | 例子 | 轉成 traversal 終點 |
+| `PathQueryMode` | 必要輸入 | 主要語意 |
 |---|---|---|
-| Primary Output | `output y` | PO 對應的 net |
-| Bus Primary Output | `output [3:0] y` | `y[0] ... y[3]` 多個 net |
-| DFF D-pin | `ff1.D` | DFF input pin `"D"` 接到的 net |
-| DFF Clock-pin | `ff1.CK` | DFF input pin `"CK"` 接到的 net |
-| DFF Reset-pin | `ff1.RN` / `ff1.SN` | DFF reset/set pin 接到的 net |
-| DFF Enable-pin | `ff1.EN` | 若 benchmark 或 cell 定義有 enable pin |
-| Specific Net | `n16` | 該 net |
-| Gate Input | `g0 input pin` | gate input pin 接到的 net |
-| Gate Output | `g0 output` | gate output net |
+| `Exists` | startpoints、endpoints | 是否至少存在一條合法 path |
+| `FindAny` | startpoints、endpoints | 回傳任一條合法 path |
+| `EnumerateAll` | startpoints、endpoints | 完整列舉或 count-only |
+| `MinDepth` | startpoints、endpoints | 最短合法 path |
+| `MaxDepth` | startpoints、endpoints | 最長合法 path |
+| `EveryPathThrough` | endpoints、requiredNodes | 每條既有 path 是否都通過 required nodes |
+| `EveryPathAvoids` | endpoints、avoidedNodes | 每條既有 path 是否都避開 avoided nodes |
+| `FindMandatoryNodes` | startpoints、endpoints | 所有 path 共用的 internal nets |
+| `IsSeparator` | candidate；可選 endpoints | candidate 是否為 directed separator/cut |
+| `DirectPiPoConnections` | 無 | PI 與 PO 共用同一 net 的 depth-0 connections |
 
-目前已有支援：
+`EnumerateAll` 的控制欄位：
 
-```text
-Primary Output：可從 getPrimaryOutputs() 取得。
-DFF D-pin / CK / RN / SN：getDffInputNetId(dffGateId, pinName) 已可查。
-Specific Net：getNetId() / findNet() 可查。
-```
+| 欄位 | 預設 | Contract |
+|---|---:|---|
+| `writePathsToFile` | `true` | 非 count-only 時 streaming 寫檔 |
+| `outputFilePath` | 空 | core fallback 為 `path_enumeration_output.txt` |
+| `maxPrintedPaths` | `20` | 只限制 report/sample 保存，不截斷完整列舉 |
+| `maxEnumeratedPaths` | legacy | 保留相容，不作為截斷條件 |
+| `enumerationTimeLimitSeconds` | `55.0` | `<=0` 表示不限制 |
+| `countOnly` | `false` | 只計數，不保存或輸出每條 path |
 
-目前缺比較明確的 helper：
+`tools.cpp` 的 CLI 會在未指定 `-out` 時建立唯一自動檔名；這是 CLI policy，不改變 core
+facade 的固定 fallback contract。
 
-```cpp
-std::vector<int> getPrimaryOutputNetIds() const;
-int getGateInputNetId(int gateId, int pinIndex) const;
-int getGateInputNetId(int gateId, const std::string& pinName) const;
-```
+## 4. Report Contract
 
-目前已新增 helper：
+### 4.1 共用狀態
 
-```cpp
-std::vector<int> getPrimaryOutputNetIds() const;
-int getGateInputNetId(int gateId, int pinIndex) const;
-int getGateInputNetId(int gateId, const std::string& pinName) const;
-```
+| 欄位 | 語意 |
+|---|---|
+| `ok` | request 是否通過 validation 並完成 dispatch |
+| `unsupported` | request 合法，但設定目前不支援 |
+| `message` | success、no-path 或 validation error 訊息 |
+| `status` | mode-specific 狀態，例如 `NO_PATH`、`SEPARATOR` |
+| `exists` | path/every-path 類 mode 的主要 Boolean 結果 |
 
-注意：目前 primitive gates 主要是 positional pins，沒有正式 pin name。  
-若要支援「特定 gate input pin」查詢，通常要用 pin index，例如 input 0 / input 1。
+名稱解析失敗為 `ok=false`，並填入對應 `unresolved*` 欄位。名稱合法但沒有 path 為
+`ok=true, exists=false`，不可把兩者混為同一種「沒有路徑」。
 
-## 4. 常見 Timing Path 類型
+| Validation 欄位 | 內容 |
+|---|---|
+| `unresolvedStartpoints` | 無法解析的 start endpoint descriptions |
+| `unresolvedEndpoints` | 無法解析的 end endpoint descriptions |
+| `unresolvedRequiredNodes` | 無法解析的 required constraint nodes |
+| `unresolvedAvoidedNodes` | 無法解析的 avoided constraint nodes |
 
-這些是 STA / EDA 中最常見的 startpoint-to-endpoint 組合。
+### 4.2 Path 與深度
 
-| 名稱 | 路徑 | 目前支援狀態 |
-|---|---|---|
-| input-to-output | PI -> PO | 可用現有 path API 組合 |
-| input-to-register | PI -> DFF.D | 已有 `getMaximumLogicDepthFromPiToDffD()` |
-| register-to-register | DFF.Q -> DFF.D | `PathQuery` 可用 all-DFF endpoint：`DffQ("")` -> `DffD("")`；單一 pair 用 `PathEndpoint(DffQ, "ff1")` + `PathEndpoint(DffD, "ff2")` |
-| register-to-output | DFF.Q -> PO | 可用 `PathEndpoint(DffQ)` + `PathEndpoint(PrimaryOutput)` 組合 |
-| net-to-net | specific net -> specific net | 已支援 |
-| gate-output-to-net | gate output -> specific net | 可用 `PathEndpoint(GateOutput)` + `PathEndpoint(SpecificNet)` 組合 |
-| net-to-gate-input | specific net -> gate input net | 可用 `PathEndpoint(SpecificNet)` + `PathEndpoint(GateInput)` 組合 |
-| gate-output-to-gate-input | gate output -> gate input net | 可用 `PathEndpoint(GateOutput)` + `PathEndpoint(GateInput)` 組合 |
+| 欄位 | 使用 mode |
+|---|---|
+| `depth` | FindAny、MinDepth、MaxDepth 的代表 path depth |
+| `path` | 單一代表 path |
+| `paths` | EnumerateAll samples 或 DirectPiPoConnections 完整集合 |
+| `pathCount` | EnumerateAll/DirectPiPoConnections 的數量 |
 
-## 5. Control Path 類型
+### 4.3 完整性與檔案
 
-Clock / reset / enable path 通常不完全等同 data path，但在 netlist exploration 題目中仍可能被問到。
+| 欄位 | 語意 |
+|---|---|
+| `wrotePathsToFile` | 是否成功建立 enumeration file |
+| `outputFilePath` | 實際輸出路徑 |
+| `completeEnumeration` | 是否未被截斷 |
+| `enumerationTimedOut` | 是否因 wall-clock limit 停止 |
+| `enumerationPathLimitReached` | legacy；目前應維持 false |
+| `countOnly` | 是否只保留 count |
+| `enumerationStopReason` | partial result 的停止原因 |
 
-| 類型 | 路徑 | 注意事項 |
-|---|---|---|
-| clock-to-register-clock | clock source -> DFF.CK | 通常屬 clock tree / clock path |
-| reset-to-register-reset | reset source -> DFF.RN / DFF.SN | 屬 async control path |
-| enable-to-register-enable | enable source -> DFF.EN | 題目目前未明確說 dff 有 EN |
+### 4.4 完整 Path Artifact 格式
 
-目前 benchmark 的 dff pins 需要依實際格式確認。已知常見 named pins：
+非 count-only 的 `EnumerateAll` 使用 `COMPACT_PATH_V3` 文字格式。API 的 query/report 欄位不變，
+但檔案不再對每條 path 重複輸出完整 net/gate 名稱：
 
-```text
-.D
-.Q
-.CK
-.RN
-.SN
-```
+1. header 記錄 exact `Total paths`、格式版本與 expected count。
+2. `net_dictionary`、`gate_dictionary` 各輸出一次 ID/name/output-net 對照。
+3. dictionary 與 path records 的 ID 統一使用 unsigned base36。
+4. 完整 token sequence 定義為 `S=[start_net_id, gate_id_1, ..., gate_id_N]`。
+5. 第一條 path 使用完整 `S`；後續每條 path 記錄相對前一條 `S` 的共同 prefix、共同 suffix 與中間差異 IDs。prefix/suffix count 包含 token 0 的 start net。
+6. footer 記錄 `Written paths`、`Complete` 與 `Timed out`。
 
-控制類 path 建議先保留在同一套 endpoint resolver 中，但在結果中標註它是 control path。
+每一筆 record 仍對應一條明確 path。解碼後的第一個 ID 是 start net，其餘為 gate IDs；完整 net
+sequence 由 start net 加上每個 gate 的 output net 無損重建。只有
+`Written paths == Expected paths` 且 `Complete: yes` 才能將 artifact 視為完整。
 
-## 6. Query Mode 類型
+只有 `ok=true` 且 `completeEnumeration=true` 時，`pathCount` 才可視為完整計數。目前
+`pathCount` 使用 `size_t`；超過 `2^64-1` 的正式規格正在等待官方確認，詳見
+`Blup/OFFICIAL_QUESTIONS.md`。
 
-同一組 startpoints / endpoints 可以問不同問題。
+### 4.5 Mandatory 與 Separator
 
-| Mode | 問題例子 | 目前支援狀態 |
-|---|---|---|
-| Exists | 是否存在 path？ | 已支援 |
-| FindAny | 回傳任意一條 path | 已支援 |
-| EnumerateAll | 列出所有 path | 已支援；預設自動寫檔保存完整 enumeration |
-| MinDepth | 最短 logic depth | 已支援 |
-| MaxDepth | 最長 logic depth | 已支援 start/end net；PI->DFF.D 已有 wrapper |
-| EveryPathThrough | 所有 path 是否都經過指定節點 | 已支援 |
-| EveryPathAvoids | 所有 path 是否都避開指定節點 | 已支援 |
-| FindMandatoryNodes | 找出所有 directed paths 共同經過的 internal nets | 已支援；底層使用 dominator |
-| IsSeparator | 指定 internal net 是否切斷 endpoints 間 connectivity | 已支援；無 endpoints 時採 PI-to-PO cut 語意 |
-| CountPaths | path 數量 | 可由 enumerate size 得到，但大型電路不安全 |
+| 欄位 | 語意 |
+|---|---|
+| `pathExists` | 指定 endpoints 是否原本相連 |
+| `isSeparator` | candidate 是否切斷原本存在的 directed connectivity |
+| `mandatoryNetIds/Names` | 所有 paths 共用的 internal nets，不含 source/target |
+| `separatorCandidateNetName/Id` | 實際解析的 candidate |
+| `witnessStartpoint/Endpoint` | PI-to-PO cut 成立時的 witness pair |
+| `checkedStartpointCount/EndpointCount` | cut 掃描範圍 |
+| `combinationalCycleDetected` | dominator backend 是否遇到不支援的 cycle |
 
-## 7. Filter / Constraint 類型
+若 endpoints 原本沒有 path，mandatory mode 回 `NO_PATH`，separator 不因 vacuous truth 成立。
 
-目前 path API 已支援：
+## 5. 高階入口與執行流程
 
-```cpp
-std::vector<PathNode> requiredNodes;
-std::vector<PathNode> avoidedNodes;
-```
-
-語意：
-
-```text
-requiredNodes 中的每個節點都必須經過。
-avoidedNodes 中的任一節點都不能碰到。
-PathNode 可表示 Net 或 Gate。
-```
-
-後續可擴充：
-
-```text
-限定最大深度 / 最小深度
-限定只能走某個 cone 內部
-限定不能穿過 DFF
-限定 endpoint 必須是 PO / DFF.D
-限定 startpoint 必須是 PI / DFF.Q
-```
-
-## 8. 目前已能回答的 prompt 類型
-
-### 8.1 all gates reachable from n2
-
-可視為 fanout cone query：
+公開入口：
 
 ```cpp
-getTransitiveFanoutConeGateNames("n2")
+Netlist::PathQueryResult Netlist::runPathQuery(
+    const Netlist::PathQuery& query) const;
 ```
 
-語意：
+主要流程：
 
 ```text
-從 n2 往下游走，列出所有 reachable gates。
-目前 traversal 不穿越 DFF。
+validate combinationalOnly
+-> resolve endpoints / constraints
+-> dispatch mode
+-> execute BFS、DFS、DAG DP 或 dominator
+-> populate PathQueryResult
+-> finalize streaming file and completeness fields
 ```
 
-### 8.2 every gate connected to output of g0
+主要演算法：
 
-可視為 direct fanout query：
+| 功能 | 實作策略 |
+|---|---|
+| Exists/FindAny/MinDepth | BFS/constraint-aware traversal |
+| EnumerateAll | exact pre-count + reverse reachability pruning + DFS + compact delta streaming；無 constraints 的官方 DAG 使用低開銷 fast path |
+| Count-only | endpoint-based memoized DAG path-count DP |
+| MaxDepth | multi-source/multi-endpoint DAG longest-path DP |
+| Mandatory/Separator | directed dominator analysis，不列舉所有 paths |
+| Direct PI-to-PO | PI/PO net ID intersection |
 
-```cpp
-getGateFanoutNames("g0")
-```
+## 6. 與其他 API 的責任界線
 
-語意：
+| Prompt 類型 | 使用 API |
+|---|---|
+| A 到 B 是否有 path、所有 paths、最短/最長 path | `PathQuery` |
+| 所有 register-to-register paths | `PathQuery(DffQ -> DffD)` |
+| A 的完整 transitive fanin/fanout cone | `ConeQuery` |
+| 全設計 maximum depth、critical endpoint、depth threshold | `DepthQuery` |
+| net driver/load、gate/net 基本資訊 | `BasicQuery` |
+| Boolean constant/equivalence/expression | `FunctionQuery` |
 
-```text
-g0.outputNet -> loadGateIds
-```
+Reachable cone 不是 start-to-end path；全域 critical depth 也不應用所有 PI/PO pair 的
+`MaxDepth` 取代專用 `DepthQuery`。
 
-### 8.3 maximum logic depth from any PI to any DFF D-pin
+## 7. 限制與安全規則
 
-已新增：
+- 只支援 `combinationalOnly=true`。
+- 正式 contract 假設 combinational graph 為 DAG；cycle 下 max-depth 不保證。
+- 完整 enumeration 的輸出數量可能呈指數成長；只問數量時使用 `countOnly=true`。
+- timeout result 必須保留 `completeEnumeration=false` 與 stop reason，不得把 partial count 當精確答案。
+- `maxEnumeratedPaths` 不限制完整列舉，完成性只看 completion/stop fields。
+- DFF named pin 查詢依 `inputPinNames` 與 `inputNetIds` 同位置對應；disconnect 應保留索引並設為 `-1`。
+- overflow count 的正式處理等待官方確認；目前不能把 `SIZE_MAX` 解讀成真實精確數量。
 
-```cpp
-getMaximumLogicDepthFromPiToDffD()
-```
+## 8. 實作與測試狀態
 
-語意：
+| 類型 | 路徑 |
+|---|---|
+| Public types | `include/core/PathTypes.h` |
+| Netlist declarations/aliases | `include/core/Netlist.h` |
+| Implementation | `src/analysis/PathAnalysis.cpp` |
+| CLI integration | `tools.cpp` |
+| API regression | `mini test/tester.cpp`、`mini test/test7`、`mini test/test8` |
+| 專項盤查 | `Blup/PATH_QUERY_ISSUES_AND_CHANGES.md` |
 
-```text
-for each PI bit:
-    for each DFF:
-        D_net = getDffInputNetId(dff, "D")
-        path = findLongestCombinationalPath(PI, D_net)
-取最大 depth。
-```
+目前所有 `PathQueryMode` 均已 dispatch。已知未完成事項：
 
-## 9. 目前還不能完整回答的 prompt 類型
-
-### 9.1 Is output n16 always 0?
-
-需要 constant SAT query，例如：
-
-```cpp
-bool isAlwaysConstant(const std::string& netName, int value) const;
-```
-
-目前 `checkEquivalence(net, "1'b0")` 不一定可靠，因為 constant net 的 name lookup 還要檢查。
-
-### 9.2 Derive Boolean equation for n16
-
-需要 symbolic expression builder，例如：
-
-```cpp
-std::string deriveBooleanEquation(const std::string& netName) const;
-```
-
-基本做法：
-
-```text
-從 target net 往 fanin 遞迴追 driver gate。
-遇到 PI 停。
-遇到 constant 回傳 0 / 1。
-遇到 DFF.Q 視為 sequential boundary。
-```
-
-## 10. 目前的統一 API
-
-目前已將常見 startpoint-to-endpoint path query 收斂成：
-
-```cpp
-enum class PathEndpointType {
-    SpecificNet,
-    PrimaryInput,
-    PrimaryOutput,
-    DffQ,
-    DffD,
-    DffClock,
-    DffReset,
-    GateOutput,
-    GateInput
-};
-
-struct PathEndpoint {
-    PathEndpointType type;
-    std::string name;
-    std::string pinName;
-    int pinIndex = -1;
-};
-
-enum class PathQueryMode {
-    Exists,
-    FindAny,
-    EnumerateAll,
-    MinDepth,
-    MaxDepth,
-    EveryPathThrough,
-    EveryPathAvoids,
-    DirectPiPoConnections
-};
-
-struct PathQuery {
-    std::vector<PathEndpoint> startpoints;
-    std::vector<PathEndpoint> endpoints;
-    std::vector<Netlist::PathNode> requiredNodes;
-    std::vector<Netlist::PathNode> avoidedNodes;
-    PathQueryMode mode;
-    bool combinationalOnly = true;
-};
-
-struct PathQueryResult {
-    bool ok = false;
-    bool unsupported = false;
-    std::string message;
-    bool exists = false;
-    int depth = -1;
-    Netlist::CombinationalPath path;
-    std::vector<Netlist::CombinationalPath> paths;
-    size_t pathCount = 0;
-    std::vector<std::string> unresolvedStartpoints;
-    std::vector<std::string> unresolvedEndpoints;
-    std::vector<std::string> unresolvedRequiredNodes;
-    std::vector<std::string> unresolvedAvoidedNodes;
-};
-```
-
-統一入口：
-
-```cpp
-PathQueryResult runPathQuery(const PathQuery& query) const;
-```
-
-## 11. 如何使用 PathQuery
-
-詳細使用方式已獨立整理在：
-
-```text
-API_SPEC/PATH_QUERY_USAGE.md
-```
-
-該文件包含：
-
-```text
-startpoint 類型表格
-endpoint 類型表格
-mode 類型表格
-requiredNodes / avoidedNodes 用法
-PathQueryResult 欄位說明
-常見範例
-注意事項
-```
-
-## 12. 目前實作狀態
-
-Endpoint resolver helpers：
-
-```cpp
-std::vector<int> getPrimaryInputNetIds() const;
-std::vector<int> getPrimaryOutputNetIds() const;
-int getDffOutputNetId(int dffGateId) const;
-int getGateInputNetId(int gateId, int pinIndex) const;
-```
-
-目前已完成：
-
-```cpp
-std::vector<int> getPrimaryInputNetIds() const;
-std::vector<int> getPrimaryOutputNetIds() const;
-int getDffOutputNetId(int dffGateId) const;
-int getGateOutputNetId(int gateId) const;
-int getGateInputNetId(int gateId, int pinIndex) const;
-int getGateInputNetId(int gateId, const std::string& pinName) const;
-```
-
-也已完成端點解析 API：
-
-```cpp
-std::vector<int> resolvePathEndpoint(const PathEndpoint& endpoint) const;
-std::vector<int> resolvePathEndpoints(const std::vector<PathEndpoint>& endpoints) const;
-```
-
-目前解析規則：
-
-```text
-SpecificNet   -> 指定 net name
-PrimaryInput  -> name 空字串代表全部 PI；有 name 則解析指定 PI port，bus 會展開
-PrimaryOutput -> name 空字串代表全部 PO；有 name 則解析指定 PO port，bus 會展開
-DffQ          -> 指定 DFF 的 Q/output net
-DffD          -> 指定 DFF 的 D input net
-DffClock      -> 預設解析 CK；若 pinName 非空，改用 pinName
-DffReset      -> pinName 非空時解析指定 pin；否則同時嘗試 RN 與 SN
-GateOutput    -> 指定 gate 的 output net
-GateInput     -> pinName 非空時用 named pin；否則用 pinIndex
-```
-
-已完成第一版統一查詢入口：
-
-```cpp
-PathQueryResult runPathQuery(const PathQuery& query) const;
-```
-
-目前支援：
-
-```text
-PathQueryMode::Exists
-PathQueryMode::FindAny
-PathQueryMode::EnumerateAll
-PathQueryMode::MinDepth
-PathQueryMode::MaxDepth
-PathQueryMode::EveryPathThrough
-PathQueryMode::EveryPathAvoids
-PathQueryMode::FindMandatoryNodes
-PathQueryMode::IsSeparator
-PathQueryMode::DirectPiPoConnections
-requiredNodes
-avoidedNodes
-combinationalOnly=true
-invalid endpoint / required / avoided node validation
-```
-
-目前尚未支援：
-
-```text
-combinationalOnly=false
-```
-
-目前測試狀態：
-
-```text
-實作檔案：src/analysis/PathAnalysis.cpp
-型別檔案：include/core/PathTypes.h
-tester：mini test/tester.cpp
-Path API 與 tools integration regression 均已通過。
-```
-
-後續可補 convenience wrapper：
-
-```text
-PI -> PO
-PI -> DFF.D
-DFF.Q -> DFF.D
-DFF.Q -> PO
-```
-
-這些 wrapper 不是底層能力缺口，而是為了讓 prompt handler 呼叫時更直覺。
-
-這些 wrapper 可以直接包 `PathQuery`，不一定要另外寫底層搜尋邏輯。
+- `combinationalOnly=false` 不支援。
+- 超過 64-bit 的 path count 等待官方回覆。
+- partial path file 本身尚未包含 completion metadata；completion 目前由 report envelope 提供。

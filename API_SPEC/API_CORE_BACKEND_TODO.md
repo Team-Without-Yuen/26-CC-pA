@@ -10,6 +10,16 @@ transaction validation、session state 與底層 regression。
 API_SPEC/TOOLS待更新表.md
 ```
 
+## AIG Function backend 狀態
+
+- [x] 建立擁有 current Netlist 與唯一 Primitives 的 `DesignAnalysisContext` 第一版。
+- [x] 建立 Function Query AIG differential adapter，涵蓋 Equivalence、ConditionalEquivalence、CanBeValue、ConstantFunction、AlwaysZero、AlwaysOne、TruthStatus。
+- [x] test37 驗證新舊核心 report、bus、DFF.Q、internal condition、mixed-gate differential、Invalid model、lazy rebuild、stale SigRef 與 timeout，20/20 通過。
+- [x] Phase A timed equivalence/constant proof 使用 deadline-aware AIG-to-CNF 與 CaDiCaL `TimeLimitTerminator`，可在 solver 執行中中止。
+- [ ] snapshot CEC、cofactor/`equiv_under()` 與首次 lazy AIG rebuild 尚未接收同一套 cooperative deadline。
+- [ ] 使用正式 testcase 做 Function Query differential 與效能 benchmark，通過前不切換 tools dispatch。
+- [ ] 後續評估 FunctionalDependence、Symmetry hybrid、Function Search、Sequential fallback 與 snapshot CEC。
+
 ## 已完成：DFF.Q fanin scope 停在 boundary
 
 官方 QA 要求 DFF.Q/register output 的 fanin cone 視為空的 combinational
@@ -84,6 +94,42 @@ NewTestCase/test40: official bounded smoke PASS，約 3.6 秒
 NewTestCase/test33: 120 秒 process timeout；large D-pin cone core runtime blocker
 ```
 
+## Out of Scope：VerilogReader 靜默略過未知 primitive
+
+`VerilogReader::read()` 目前只在第一個 token 可轉成既有 `GateType` 時呼叫
+`parseGateInstance()`；MUX 或其他未知 primitive 會被直接略過，read 仍回成功，且沒有
+unsupported diagnostic。
+
+實證：
+
+```text
+Blup/function_search_runs/unsupported_probe/unknown_primitive_probe.v
+
+mux g_mux (y, select, data0, data1);
+read -> ok:true, gate_count:0
+func_search equivalent_pairs whole --all
+  -> complete:true, NO_MATCH, unsupported:false
+func_search nand_pair y --all --include-boundary-signals
+  -> complete:true, NO_MATCH, unsupported:false
+```
+
+若任意 Verilog primitive 可出現在輸入，這會讓下游 API 在失真的 named netlist 上產生看似
+完整的答案。不過官方 testcase netlist 只會使用題目規定的 gate types；prompt 中的 MUX 等
+語意會由合法 gates 組成的 Boolean function 表示，不會以 direct `mux` primitive 出現在
+netlist。因此此項不列為競賽實作待辦，也不修改 Function Search。
+
+一般 robustness 的可能修正方向：
+
+```text
+1. reader 遇到未知 primitive 時不得靜默忽略。
+2. 若該 primitive 可保留，建立可辨識的 unsupported cell/net connectivity，讓 analysis 回 partial/unsupported。
+3. 若無法安全保留，read 應回失敗並列出 instance/type/line diagnostic。
+4. 若官方確認 direct MUX/cell 會出現，應正式擴充 GateType、reader、writer、graph、simulation 與 SAT encoding。
+5. 新增 read -> structure -> write round-trip regression，禁止 gate instance 靜默遺失。
+```
+
+目前決議：`Out of Scope / No Action`。若官方日後變更 netlist gate-type contract，再重新開啟。
+
 ## 後期 AIG / Boolean 重構項目
 
 目前決策：
@@ -104,6 +150,36 @@ NewTestCase/test33: 120 秒 process timeout；large D-pin cone core runtime bloc
 - func_query equivalence / constant function 的共用 SAT/AIG cache。
 - merge_functionally_equivalent_gates 這類依賴全域 Boolean equivalence 的 cleanup/edit。
 ```
+
+### AIG backend ownership 與導入規則
+
+這一層是後端共用的 Boolean analysis infrastructure，不是新的 LLM command，也不要求
+`tools.cpp` 直接管理 AIG engine。
+
+```text
+- 一份 current named Netlist 對應一個由後端 analysis context 持有的共用 Primitives。
+- Function Search、Function Analysis、Sequential Pattern、symmetry、constant/equivalence 與 CEC
+  逐步改用同一份 Primitives，不得各自長期保存不同的 AIG model/cache。
+- 導入時優先替換容易 timeout 的內部 simulation/SAT backend；既有 public query/report 與
+  tools command grammar 先保持不變。
+- named Netlist mutation 只負責 markDirty；下一個 Boolean API query 才 lazy rebuild AIG。
+- restoreFrom() 雖還原舊電路內容，仍必須產生新的單調 revision 並保持 dirty，避免沿用錯誤 cache。
+- 只有 API schema、CLI 參數或 envelope 欄位真的改變時，才另行登記到 TOOLS待更新表。
+```
+
+### 已完成：AIG model-health 安全門檻
+
+```text
+- 新增 Sound / Conservative / Invalid model health。
+- gate-input floating 與 PO-only floating 均以 free PI 建模，不再默認 constant 0。
+- missing required gate input、DFF D、無法解析的已連接 control、invalid output 與
+  topo-dropped gate 會使模型成為 Invalid。
+- Invalid model 的 checked proof 回 Unknown；其他 Boolean operation 丟 UnsoundModel。
+- UnknownPolicy::AsEqual 不能把 Invalid model 轉成 true。
+- mini test/test36：19 passed, 0 failed。
+```
+
+使用與安全語意：`API_SPEC/AIG_PRIMITIVES_BACKEND_GUIDE.md`。
 
 ## 已完成但歸屬 API / backend 的事項
 

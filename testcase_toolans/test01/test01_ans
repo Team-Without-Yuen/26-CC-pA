@@ -1,7 +1,0 @@
-#RESPONSE 1
-The design has been loaded from testcase/test01/test01.v.
-#END 1
-
-#RESPONSE 2
-The current design has been written to testcase_toolans/test01/test01_out.v.
-#END 2

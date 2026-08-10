@@ -4,10 +4,141 @@
 #include <algorithm>
 #include <vector>
 #include <queue>
+#include <unordered_map>
 #include <unordered_set>
 #include <iostream>
 
 namespace {
+
+void rebuildNetLoadGateIds(Netlist& netlist) {
+    for (size_t netIndex = 0; netIndex < netlist.getNetCount(); ++netIndex) {
+        netlist.getNetMutable(static_cast<int>(netIndex)).loadGateIds.clear();
+    }
+    for (size_t gateIndex = 0; gateIndex < netlist.getGateCount(); ++gateIndex) {
+        const int gateId = static_cast<int>(gateIndex);
+        const Gate& gate = netlist.getGate(gateId);
+        if (gate.type == GateType::UNKNOWN) {
+            continue;
+        }
+        for (int inputNetId : gate.inputNetIds) {
+            if (!netlist.isValidNetId(inputNetId) ||
+                netlist.getNet(inputNetId).isRemoved) {
+                continue;
+            }
+            netlist.getNetMutable(inputNetId).loadGateIds.push_back(gateId);
+        }
+    }
+}
+
+bool isSafeDoubleInverterPair(const Netlist& netlist, int g1id, int g2id) {
+    if (!netlist.isValidGateId(g1id) || !netlist.isValidGateId(g2id) ||
+        g1id == g2id) {
+        return false;
+    }
+
+    const Gate& g1 = netlist.getGate(g1id);
+    const Gate& g2 = netlist.getGate(g2id);
+    if (g1.id != g1id || g2.id != g2id ||
+        g1.type != GateType::NOT || g2.type != GateType::NOT ||
+        g1.inputNetIds.size() != 1 || g2.inputNetIds.size() != 1) {
+        return false;
+    }
+
+    const int inNetId = g1.inputNetIds[0];
+    const int midNetId = g1.outputNetId;
+    const int outNetId = g2.outputNetId;
+    if (!netlist.isValidNetId(inNetId) ||
+        !netlist.isValidNetId(midNetId) ||
+        !netlist.isValidNetId(outNetId) ||
+        inNetId == midNetId || midNetId == outNetId || inNetId == outNetId) {
+        return false;
+    }
+
+    const Net& inNet = netlist.getNet(inNetId);
+    const Net& midNet = netlist.getNet(midNetId);
+    const Net& outNet = netlist.getNet(outNetId);
+    if (inNet.isRemoved || midNet.isRemoved || outNet.isRemoved ||
+        midNet.isPI || midNet.isPO || midNet.isConst ||
+        outNet.isPI || outNet.isPO || outNet.isConst) {
+        return false;
+    }
+    if (midNet.driverGateId != g1id || outNet.driverGateId != g2id ||
+        g2.inputNetIds[0] != midNetId ||
+        midNet.loadGateIds.size() != 1 || midNet.loadGateIds[0] != g2id ||
+        std::count(inNet.loadGateIds.begin(), inNet.loadGateIds.end(), g1id) != 1) {
+        return false;
+    }
+
+    std::unordered_map<int, size_t> listedLoadCounts;
+    for (int loadGateId : outNet.loadGateIds) {
+        if (!netlist.isValidGateId(loadGateId) ||
+            netlist.getGate(loadGateId).type == GateType::UNKNOWN) {
+            return false;
+        }
+        ++listedLoadCounts[loadGateId];
+    }
+    for (const auto& item : listedLoadCounts) {
+        const Gate& loadGate = netlist.getGate(item.first);
+        const size_t pinCount = static_cast<size_t>(std::count(
+            loadGate.inputNetIds.begin(), loadGate.inputNetIds.end(), outNetId));
+        if (pinCount != item.second) {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+bool isSafeStructuralMergeCandidate(const Netlist& netlist, int gateId) {
+    if (!netlist.isValidGateId(gateId)) return false;
+    const Gate& gate = netlist.getGate(gateId);
+    if (gate.type == GateType::UNKNOWN || gate.id != gateId ||
+        !netlist.isValidNetId(gate.outputNetId)) {
+        return false;
+    }
+
+    const Net& output = netlist.getNet(gate.outputNetId);
+    if (output.isRemoved || output.isPI || output.isConst ||
+        output.driverGateId != gateId) {
+        return false;
+    }
+    for (int inputNetId : gate.inputNetIds) {
+        if (!netlist.isValidNetId(inputNetId) ||
+            netlist.getNet(inputNetId).isRemoved ||
+            inputNetId == gate.outputNetId) {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool collectActiveStructuralLoads(
+    const Netlist& netlist,
+    int outputNetId,
+    std::vector<int>& affectedGateIds)
+{
+    affectedGateIds.clear();
+    if (!netlist.isValidNetId(outputNetId) ||
+        netlist.getNet(outputNetId).isRemoved) {
+        return false;
+    }
+
+    std::unordered_map<int, size_t> listedLoadCounts;
+    for (int loadGateId : netlist.getNet(outputNetId).loadGateIds) {
+        if (!netlist.isValidGateId(loadGateId)) return false;
+        if (netlist.getGate(loadGateId).type == GateType::UNKNOWN) continue;
+        ++listedLoadCounts[loadGateId];
+    }
+    affectedGateIds.reserve(listedLoadCounts.size());
+    for (const auto& item : listedLoadCounts) {
+        const Gate& loadGate = netlist.getGate(item.first);
+        const size_t pinCount = static_cast<size_t>(std::count(
+            loadGate.inputNetIds.begin(), loadGate.inputNetIds.end(), outputNetId));
+        if (pinCount != item.second) return false;
+        affectedGateIds.push_back(item.first);
+    }
+    return true;
+}
 
 void eraseOneLoad(std::vector<int>& loads, int gateId) {
     auto it = std::find(loads.begin(), loads.end(), gateId);
@@ -211,67 +342,21 @@ int Netlist::collapseBackToBackInverters() {
         worklist.pop();
         queued.erase(i);
 
-        Gate& g1 = gates[i];
-
-        if (g1.type != GateType::NOT) continue;
-        if (g1.outputNetId < 0) continue;
-        if (g1.inputNetIds.empty() || g1.inputNetIds[0] < 0) continue;
-
-        Net& midNet = nets[g1.outputNetId];
-        if (midNet.loadGateIds.size() != 1) continue;
-        if (midNet.isPO) continue;
-
-        int g2id = midNet.loadGateIds[0];
-        if (g2id < 0) continue;
-
-        Gate& g2 = gates[g2id];
-        if (g2.type != GateType::NOT) continue;
-
-        if (g2.outputNetId < 0) continue;
-        if (nets[g2.outputNetId].isPO) continue;
-
-        int inNetId  = g1.inputNetIds[0];
-        int outNetId = g2.outputNetId;
-
-        Net& inNet = nets[inNetId];
-        Net& outNet = nets[outNetId];
-        const int inNetDriverGateId = inNet.driverGateId;
-
-        // redirect fanout
-        for (int loadGateId : outNet.loadGateIds) {
-            Gate& lg = gates[loadGateId];
-
-            for (int& pin : lg.inputNetIds) {
-                if (pin == outNetId) pin = inNetId;
-            }
-
-            inNet.loadGateIds.push_back(loadGateId);
+        if (gates[i].type != GateType::NOT ||
+            !isValidNetId(gates[i].outputNetId)) {
+            continue;
         }
+        const Net& midNet = nets[gates[i].outputNetId];
+        if (midNet.loadGateIds.size() != 1) continue;
 
-        // remove g1 from inNet fanout
-        inNet.loadGateIds.erase(
-            std::remove(inNet.loadGateIds.begin(),
-                        inNet.loadGateIds.end(),
-                        g1.id),
-            inNet.loadGateIds.end()
-        );
+        const int g2id = midNet.loadGateIds[0];
+        if (!isSafeDoubleInverterPair(*this, i, g2id)) continue;
 
-        // mark dead (NO structural cleanup here)
-        g1.type = GateType::UNKNOWN;
-        g1.inputNetIds.clear();
-        g1.outputNetId = -1;
+        const int inNetId = gates[i].inputNetIds[0];
+        const int inNetDriverGateId = nets[inNetId].driverGateId;
+        if (!bypassDoubleInverter(i, g2id)) continue;
 
-        g2.type = GateType::UNKNOWN;
-        g2.inputNetIds.clear();
-        g2.outputNetId = -1;
-
-        midNet.loadGateIds.clear();
-        midNet.driverGateId = -1;
-
-        outNet.driverGateId = -1;
-        outNet.loadGateIds.clear();
-
-        collapsed++;
+        ++collapsed;
 
         // inNet's load list just changed shape; if its driver is itself a NOT
         // gate it may now newly qualify as the next g1 (e.g. a NOT chain
@@ -474,6 +559,7 @@ int Netlist::compactRemovedGates() {
 // ─────────────────────────────────────────────────────────────────────────────
 bool Netlist::validateStructure() const {
     bool ok = true;
+    std::vector<std::vector<int>> expectedLoads(nets.size());
 
     for (int gi = 0; gi < (int)gates.size(); gi++) {
         const Gate& g = gates[gi];
@@ -503,14 +589,13 @@ bool Netlist::validateStructure() const {
                 ok = false;
                 continue;
             }
-            bool found = false;
-            for (int lgid : nets[inNetId].loadGateIds)
-                if (lgid == gi) { found = true; break; }
-            if (!found) {
-                std::cerr << "[validateStructure] gate[" << gi << "] not in net["
-                          << inNetId << "].loadGateIds\n";
+            if (nets[inNetId].isRemoved) {
+                std::cerr << "[validateStructure] gate[" << gi
+                          << "] references removed input net[" << inNetId << "]\n";
                 ok = false;
+                continue;
             }
+            expectedLoads[inNetId].push_back(gi);
         }
     }
 
@@ -548,6 +633,14 @@ bool Netlist::validateStructure() const {
                           << lgid << "] does not have this net as input\n";
                 ok = false;
             }
+        }
+
+        std::vector<int> actualLoads = nets[ni].loadGateIds;
+        std::sort(actualLoads.begin(), actualLoads.end());
+        if (actualLoads != expectedLoads[ni]) {
+            std::cerr << "[validateStructure] net[" << ni
+                      << "] pin-level loadGateIds multiplicity mismatch\n";
+            ok = false;
         }
     }
 
@@ -596,7 +689,8 @@ bool Netlist::replaceAllLoadsOfNet(int oldNetId, int newNetId) {
 
     if (oldNet.loadGateIds.empty()) return true; // 沒東西要搬，視為成功
 
-    // 1. 把所有 Load Gate 內部的腳位接線換掉，並把 ID 丟給 newNet
+    // 1. Rewire every matching input pin. loadGateIds is pin-level, so a gate
+    // appears once for each input pin connected to the net.
     for (int lgid : oldNet.loadGateIds) {
         if (lgid < 0 || lgid >= (int)gates.size()) continue;
         
@@ -604,21 +698,15 @@ bool Netlist::replaceAllLoadsOfNet(int oldNetId, int newNetId) {
         for (int k = 0; k < (int)g.inputNetIds.size(); k++) {
             if (g.inputNetIds[k] == oldNetId) {
                 g.inputNetIds[k] = newNetId;
+                if (!deferLoadListMaintenance) {
+                    newNet.loadGateIds.push_back(lgid);
+                }
             }
         }
-        
-        // 先無腦加進去，等一下一次性清理
-        newNet.loadGateIds.push_back(lgid);
     }
 
     // 2. 清除舊 Net 的負載
     oldNet.loadGateIds.clear();
-
-    // 3. 確保 newNet 的 loadGateIds 裡面沒有重複的 Gate ID
-    // 這樣可以防止同一個 Gate 接了多個相同的 Net 時，產生重複的記錄
-    std::sort(newNet.loadGateIds.begin(), newNet.loadGateIds.end());
-    auto last = std::unique(newNet.loadGateIds.begin(), newNet.loadGateIds.end());
-    newNet.loadGateIds.erase(last, newNet.loadGateIds.end());
 
     markDirty();
     return true;
@@ -779,19 +867,13 @@ std::vector<std::pair<int,int>> Netlist::findDoubleInverterPairs() const {
     for (int i = 0; i < (int)gates.size(); i++) {
         const Gate& g1 = gates[i];
         if (g1.type != GateType::NOT) continue;
-        if (g1.outputNetId < 0) continue;
-        if (g1.inputNetIds.empty() || g1.inputNetIds[0] < 0) continue;
+        if (!isValidNetId(g1.outputNetId)) continue;
 
         const Net& midNet = nets[g1.outputNetId];
         if (midNet.loadGateIds.size() != 1) continue;
-        if (midNet.isPI || midNet.isConst) continue;
 
-        int g2id = midNet.loadGateIds[0];
-        if (g2id < 0 || g2id >= (int)gates.size()) continue;
-        const Gate& g2 = gates[g2id];
-        if (g2.type != GateType::NOT) continue;
-        if (g2.outputNetId < 0) continue;
-        if (nets[g2.outputNetId].isPO) continue;
+        const int g2id = midNet.loadGateIds[0];
+        if (!isSafeDoubleInverterPair(*this, i, g2id)) continue;
 
         result.emplace_back(i, g2id);
     }
@@ -799,24 +881,16 @@ std::vector<std::pair<int,int>> Netlist::findDoubleInverterPairs() const {
 }
 
 bool Netlist::bypassDoubleInverter(int g1id, int g2id) {
-    if (g1id < 0 || g1id >= (int)gates.size()) return false;
-    if (g2id < 0 || g2id >= (int)gates.size()) return false;
+    if (!isSafeDoubleInverterPair(*this, g1id, g2id)) return false;
 
     Gate& g1 = gates[g1id];
     Gate& g2 = gates[g2id];
-
-    if (g1.type != GateType::NOT || g2.type != GateType::NOT) return false;
-    if (g1.outputNetId < 0 || g2.outputNetId < 0) return false;
-    if (g1.inputNetIds.empty() || g1.inputNetIds[0] < 0) return false;
 
     int inNetId  = g1.inputNetIds[0];
     int midNetId = g1.outputNetId;
     int outNetId = g2.outputNetId;
 
-    if (nets[midNetId].loadGateIds.size() != 1) return false;
-    if (nets[outNetId].isPO) return false;
-
-    replaceAllLoadsOfNet(outNetId, inNetId);
+    if (!replaceAllLoadsOfNet(outNetId, inNetId)) return false;
 
     auto& loads = nets[inNetId].loadGateIds;
     loads.erase(std::remove(loads.begin(), loads.end(), g1id), loads.end());
@@ -843,22 +917,19 @@ bool Netlist::isConst1Net(int netId) const {
     return nets[netId].isConst && (nets[netId].constVal == 1);
 }
 
-// Every constant net in this codebase is created through addNet("1'b0"/"1'b1"),
-// so the canonical net is normally reachable in O(1) through the name index.
+// Every constant net in this codebase is created through addNet("1'b0"/"1'b1")
+// and constant nets cannot be renamed, so the canonical net is reachable in
+// O(1) through the name index.
 // simplifyGateWithConstant()/simplifySameInputGate() call these twice per
 // candidate gate, so an O(net count) scan here turns SimplifyConstants /
 // LocalSimplificationFixpoint / SafeCleanupFixpoint into an O(candidates *
-// net count) pass on large designs. Fall back to the linear scan only if the
-// canonical name was ever renamed away (e.g. via RenameNet), so correctness
-// never depends on the naming convention holding.
+// net count) pass on large designs.
 int Netlist::getConst0NetId() const {
     const int fastId = getNetId("1'b0");
     if (fastId >= 0 && fastId < (int)nets.size() &&
         nets[fastId].isConst && nets[fastId].constVal == 0) {
         return fastId;
     }
-    for (int i = 0; i < (int)nets.size(); i++)
-        if (nets[i].isConst && nets[i].constVal == 0) return i;
     return -1;
 }
 
@@ -868,8 +939,6 @@ int Netlist::getConst1NetId() const {
         nets[fastId].isConst && nets[fastId].constVal == 1) {
         return fastId;
     }
-    for (int i = 0; i < (int)nets.size(); i++)
-        if (nets[i].isConst && nets[i].constVal == 1) return i;
     return -1;
 }
 
@@ -886,19 +955,20 @@ bool Netlist::simplifyGateWithConstant(int gateId) {
     auto rewriteGateInPlace = [&](GateType newType, const std::vector<int>& newInputs) -> bool {
         if (g.type == newType && g.inputNetIds == newInputs) return false;
 
-        for (int inNetId : g.inputNetIds) {
-            if (inNetId < 0 || inNetId >= (int)nets.size()) continue;
-            auto& loads = nets[inNetId].loadGateIds;
-            loads.erase(std::remove(loads.begin(), loads.end(), gateId), loads.end());
+        if (!deferLoadListMaintenance) {
+            for (int inNetId : g.inputNetIds) {
+                if (inNetId < 0 || inNetId >= (int)nets.size()) continue;
+                auto& loads = nets[inNetId].loadGateIds;
+                loads.erase(std::remove(loads.begin(), loads.end(), gateId), loads.end());
+            }
         }
 
         g.type = newType;
         g.inputNetIds = newInputs;
-        for (int inNetId : newInputs) {
-            if (inNetId < 0 || inNetId >= (int)nets.size()) continue;
-            auto& loads = nets[inNetId].loadGateIds;
-            if (std::find(loads.begin(), loads.end(), gateId) == loads.end()) {
-                loads.push_back(gateId);
+        if (!deferLoadListMaintenance) {
+            for (int inNetId : newInputs) {
+                if (inNetId < 0 || inNetId >= (int)nets.size()) continue;
+                nets[inNetId].loadGateIds.push_back(gateId);
             }
         }
         markDirty();
@@ -911,10 +981,12 @@ bool Netlist::simplifyGateWithConstant(int gateId) {
             return rewriteGateInPlace(GateType::BUF, {srcNetId});
         }
         replaceAllLoadsOfNet(outNetId, srcNetId);
-        for (int inNetId : g.inputNetIds) {
-            if (inNetId < 0) continue;
-            auto& loads = nets[inNetId].loadGateIds;
-            loads.erase(std::remove(loads.begin(), loads.end(), gateId), loads.end());
+        if (!deferLoadListMaintenance) {
+            for (int inNetId : g.inputNetIds) {
+                if (inNetId < 0) continue;
+                auto& loads = nets[inNetId].loadGateIds;
+                loads.erase(std::remove(loads.begin(), loads.end(), gateId), loads.end());
+            }
         }
         nets[outNetId].driverGateId = -1;
         g.type = GateType::UNKNOWN;
@@ -1288,61 +1360,78 @@ std::vector<std::vector<int>> Netlist::findStructurallyEquivalentGateGroups() co
 
 int Netlist::mergeStructurallyEquivalentGates() {
     int merged = 0;
-    bool changed = true;
 
-    while (changed) {
-        changed = false;
-        std::vector<std::vector<int>> groups = findStructurallyEquivalentGateGroups();
-        for (auto& group : groups) {
-            if (group.size() < 2) continue;
-            int keepGateId = group[0];
-            int keepOutNet = gates[keepGateId].outputNetId;
-            if (keepOutNet < 0) continue;
+    std::unordered_map<std::string, int> canonicalByKey;
+    std::queue<int> worklist;
+    std::vector<unsigned char> queued(gates.size(), 0);
+    auto enqueue = [&](int gateId) {
+        if (!isSafeStructuralMergeCandidate(*this, gateId) || queued[gateId] != 0) {
+            return;
+        }
+        queued[gateId] = 1;
+        worklist.push(gateId);
+    };
+    for (int gateId = 0; gateId < static_cast<int>(gates.size()); ++gateId) {
+        enqueue(gateId);
+    }
 
-            for (int j = 1; j < (int)group.size(); j++) {
-                int deadGateId = group[j];
-                int deadOutNet = gates[deadGateId].outputNetId;
-                if (deadOutNet < 0 || deadOutNet == keepOutNet) continue;
+    while (!worklist.empty()) {
+        int gateId = worklist.front();
+        worklist.pop();
+        queued[gateId] = 0;
+        if (!isSafeStructuralMergeCandidate(*this, gateId)) continue;
 
-                for (int loadGateId : nets[deadOutNet].loadGateIds) {
-                    Gate& loadGate = gates[loadGateId];
-                    for (int k = 0; k < (int)loadGate.inputNetIds.size(); k++) {
-                        if (loadGate.inputNetIds[k] == deadOutNet) {
-                            loadGate.inputNetIds[k] = keepOutNet;
-                            nets[keepOutNet].loadGateIds.push_back(loadGateId);
-                        }
-                    }
-                }
+        const std::string key = makeStructuralKey(gateId);
+        if (key.empty()) continue;
+        auto canonicalIt = canonicalByKey.find(key);
+        if (canonicalIt == canonicalByKey.end()) {
+            canonicalByKey.emplace(key, gateId);
+            continue;
+        }
 
-                if (nets[deadOutNet].isPO) {
-                    nets[keepOutNet].isPO = true;
-                    for (int pi = 0; pi < (int)primaryOutputs.size(); pi++)
-                        for (int pj = 0; pj < (int)primaryOutputs[pi].netIds.size(); pj++)
-                            if (primaryOutputs[pi].netIds[pj] == deadOutNet)
-                                primaryOutputs[pi].netIds[pj] = keepOutNet;
-                }
+        int keepGateId = canonicalIt->second;
+        if (!isSafeStructuralMergeCandidate(*this, keepGateId) ||
+            makeStructuralKey(keepGateId) != key) {
+            canonicalIt->second = gateId;
+            continue;
+        }
+        if (keepGateId == gateId) continue;
 
-                // 清除 deadGate 在 input nets 上的負載
-                for (int inNetId : gates[deadGateId].inputNetIds) {
-                    auto& loads = nets[inNetId].loadGateIds;
-                    loads.erase(std::remove(loads.begin(), loads.end(), deadGateId), loads.end());
-                }
+        int deadGateId = gateId;
+        int keepOutNet = gates[keepGateId].outputNetId;
+        int deadOutNet = gates[deadGateId].outputNetId;
+        const bool keepIsPo = nets[keepOutNet].isPO;
+        const bool deadIsPo = nets[deadOutNet].isPO;
+        if (keepIsPo && deadIsPo) {
+            continue;
+        }
+        if (deadIsPo) {
+            std::swap(keepGateId, deadGateId);
+            std::swap(keepOutNet, deadOutNet);
+            canonicalIt->second = keepGateId;
+        }
+        if (keepOutNet == deadOutNet) continue;
 
-                nets[deadOutNet].loadGateIds.clear();
-                nets[deadOutNet].driverGateId = -1;
-                gates[deadGateId].type = GateType::UNKNOWN;
-                gates[deadGateId].outputNetId = -1;
-                gates[deadGateId].inputNetIds.clear();
+        std::vector<int> affectedGateIds;
+        if (!collectActiveStructuralLoads(*this, deadOutNet, affectedGateIds) ||
+            !replaceAllLoadsOfNet(deadOutNet, keepOutNet)) {
+            continue;
+        }
 
-                merged++;
-                changed = true;
-            }
+        nets[deadOutNet].driverGateId = -1;
+        gates[deadGateId].type = GateType::UNKNOWN;
+        gates[deadGateId].outputNetId = -1;
+        gates[deadGateId].inputNetIds.clear();
+        ++merged;
+
+        for (int affectedGateId : affectedGateIds) {
+            enqueue(affectedGateId);
         }
     }
 
     if (merged > 0) {
+        rebuildNetLoadGateIds(*this);
         markDirty();
-        trimDeadLogic();
     }
     return merged;
 }
@@ -1973,26 +2062,11 @@ bool Netlist::redirectAllLoads(int oldNetId, int newNetId, bool allowDuplicateLo
     if (newNetId < 0 || newNetId >= (int)nets.size()) return false;
     if (oldNetId == newNetId) return false;
 
-    Net& oldNet = nets[oldNetId];
-    Net& newNet = nets[newNetId];
-
-    for (int lgid : oldNet.loadGateIds) {
-        if (lgid < 0 || lgid >= (int)gates.size()) continue;
-        Gate& g = gates[lgid];
-        for (int k = 0; k < (int)g.inputNetIds.size(); k++)
-            if (g.inputNetIds[k] == oldNetId) g.inputNetIds[k] = newNetId;
-
-        if (!allowDuplicateLoads) {
-            bool already = false;
-            for (int id : newNet.loadGateIds) if (id == lgid) { already = true; break; }
-            if (!already) newNet.loadGateIds.push_back(lgid);
-        } else {
-            newNet.loadGateIds.push_back(lgid);
-        }
-    }
-    oldNet.loadGateIds.clear();
-    markDirty();
-    return true;
+    // loadGateIds is pin-level, so suppressing repeated gate IDs would make
+    // the reverse adjacency disagree with gates that have multiple matching
+    // input pins. Keep the legacy parameter for API compatibility only.
+    (void)allowDuplicateLoads;
+    return replaceAllLoadsOfNet(oldNetId, newNetId);
 }
 
 NetlistEditReport Netlist::redirectAllLoadsWithReport(int oldNetId, int newNetId, bool allowDuplicateLoads) {
@@ -2008,8 +2082,10 @@ NetlistEditReport Netlist::redirectAllLoadsWithReport(int oldNetId, int newNetId
 
     std::vector<int> changedGateIds;
     std::vector<std::string> changedGateNames;
+    std::unordered_set<int> recordedGateIds;
     for (int gateId : oldLoadGateIds) {
         if (gateId < 0 || gateId >= (int)gates.size()) continue;
+        if (!recordedGateIds.insert(gateId).second) continue;
         changedGateIds.push_back(gateId);
         changedGateNames.push_back(gates[gateId].instName);
     }
@@ -2127,7 +2203,10 @@ NetlistEditReport Netlist::removeUnusedNetsWithReport() {
 // =============================================================================
 
 bool Netlist::restoreFrom(const Netlist& backup) {
+    const uint64_t currentRevision = revision_;
     *this = backup;
+    revision_ = std::max(currentRevision, revision_) + 1;
+    dirty_ = true;
     return true;
 }
 
@@ -2156,9 +2235,15 @@ int Netlist::simplifyGatesWithConstants(
 {
     const std::vector<int> candidates =
         findConstantSimplificationCandidates(*this, type, constValue, inputCount);
+    const bool wasDeferred = deferLoadListMaintenance;
+    deferLoadListMaintenance = true;
     int count = 0;
     for (int gateId : candidates) {
         if (simplifyGateWithConstant(gateId)) count++;
+    }
+    deferLoadListMaintenance = wasDeferred;
+    if (!wasDeferred) {
+        rebuildNetLoadGateIds(*this);
     }
     return count;
 }
@@ -2177,6 +2262,8 @@ NetlistEditReport Netlist::simplifyGatesWithConstantsWithReport(
         findConstantSimplificationCandidates(*this, type, constValue, inputCount);
     summary.candidateCount = summary.candidateGateIds.size();
 
+    const bool wasDeferred = deferLoadListMaintenance;
+    deferLoadListMaintenance = true;
     for (int gateId : summary.candidateGateIds) {
         const std::string gateName =
             (gateId >= 0 && gateId < (int)gates.size()) ? gates[gateId].instName : "";
@@ -2188,6 +2275,10 @@ NetlistEditReport Netlist::simplifyGatesWithConstantsWithReport(
             summary.skippedGateIds.push_back(gateId);
             summary.skippedGateNames.push_back(gateName);
         }
+    }
+    deferLoadListMaintenance = wasDeferred;
+    if (!wasDeferred) {
+        rebuildNetLoadGateIds(*this);
     }
 
     summary.simplifiedCount = summary.simplifiedGateIds.size();

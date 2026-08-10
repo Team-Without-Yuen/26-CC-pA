@@ -37,11 +37,11 @@ structure_query <mode> [args]
 | `list_comb` | 無 | 列 active combinational gates | `Gate names` |
 | `gate_info` | `<gate>` | gate type、ID 與基本資訊 | `object`, `id`, `type` |
 | `net_info` | `<net>` | net 類型、ID 與基本資訊 | `object`, `id`, `type` |
-| `port_info` | `<port>` | port direction、width/range | `object`, `width` |
+| `port_info` | `<port>` | port direction、width/bus flag 與 bit nets | `object`, `width`, `is_bus`, `is_primary_input`, `is_primary_output`, `Net names`；不輸出無意義的負 ID |
 | `count_by_type` | `[type]` | 指定 type 數量；省略時列全部 type 統計 | `gates`, `Gate type counts` |
 | `gates_by_type` | `<type>` | 指定 type 的 gate names | `Gate names` |
 | `const_input_gates` | `[type\|all] [0\|1\|any] [--inputs N]` | 找 input pin 直接接 constant 的 gates | `Gate names` |
-| `structural_issues` | 無 | 結構問題摘要 | `Undriven nets`, `No-load nets`, `Floating nets`, `Unconnected gates` |
+| `structural_issues` | 無 | 結構問題摘要 | 一般 issue lists，以及 `Floating primary-input nets`、`Unconnected primary-output nets` 精確分類 |
 
 gate 數量皆指 current active objects，不應使用底層 raw storage count 回答修改後的 gate 數量。
 
@@ -63,7 +63,25 @@ gate 數量皆指 current active objects，不應使用底層 raw storage count 
 
 `fanout_load` 的 `totalLoadCount` 包含 combinational input pins、DFF D/clock/reset/other input pins及 PO connections。同一 gate 多個 input pins 接同一 net 時會按 pin 計數。
 
-## 6. Prompt Examples
+## 6. 輸出判讀
+
+先確認 envelope `status:ok` 與 `complete:true`，再依 mode 讀取 data。不存在的 object、
+parser error 或不完整結果不能當成 count 0 或 empty list。
+
+| 題目 | 應讀欄位 |
+|---|---|
+| current active gate 總數與 type breakdown | `summary` 的 `gates` 與 `Gate type counts` |
+| 指定 type 的 active gate 數量 | `count_by_type` 的 `gates` |
+| PI/PO port 數量 | `summary` 的 `primary inputs` / `primary outputs` |
+| PI/PO bit 或 signal 數量 | `list_pi` / `list_po` 的 `Port summaries` width 加總 |
+| driver/load gate 數量 | `net_driver` / `net_loads` 的 count 與 `Gate names` |
+| pin-level fanout load | `fanout_load` / `fanout_report` 的 total load 與分類 |
+| floating/unconnected 結構問題 | `structural_issues` 的精確分類 lists |
+
+修改後的 gate count 必須使用 active fields；tombstone storage 中的 removed gate/net 不得計入。
+`const_input_gates` 只證明 input pin 直接連到 constant，不代表 output Boolean function 為常數。
+
+## 7. Prompt Examples
 
 ```text
 Prompt: How many primary inputs and primary outputs does this design have?
@@ -89,10 +107,13 @@ Command: structure_query pi_fanout
 Read: max fanout, Max-fanout nets
 ```
 
-## 7. 限制
+## 8. 限制
 
 - `const_input_gates` 是結構連線查詢，不證明 output function 為 constant。
 - `gate_fanout` 只回一層 immediate loads，不代表所有 reachable gates。
 - `summary` 的 PI/PO 數量是 port count；bus width 請讀 `list_pi`/`list_po` 的 `Port summaries`。
 - prompt 說 input/output bits 或 signals 時，必須加總 `Port summaries` 的 width，不能直接使用
   port count。
+- `Floating primary-input nets` 是沒有 active load 的 PI bit nets；
+  `Unconnected primary-output nets` 是沒有 active driver 的 PO bit nets。兩者都是 bit-net
+  name，不是 bus base port name。

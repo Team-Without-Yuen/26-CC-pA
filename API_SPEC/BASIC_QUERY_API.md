@@ -245,17 +245,20 @@ expandNetToBits(name) 偏一般名稱展開，未來可用於 prompt 中傳入 b
 ```cpp
 std::vector<int> findGatesWithConstInput(
     GateType type = GateType::UNKNOWN,
-    int constValue = -1
+    int constValue = -1,
+    int inputCount = -1
 ) const;
 
 std::vector<std::string> getGateNamesWithConstInput(
     GateType type = GateType::UNKNOWN,
-    int constValue = -1
+    int constValue = -1,
+    int inputCount = -1
 ) const;
 
 int countGatesWithConstInput(
     GateType type = GateType::UNKNOWN,
-    int constValue = -1
+    int constValue = -1,
+    int inputCount = -1
 ) const;
 ```
 
@@ -264,8 +267,11 @@ int countGatesWithConstInput(
 ```text
 找出 input 接到 1'b0 / 1'b1 的 gates。
 限制 gate type，例如只找 NAND gates。
+限制 gate input 數量，例如只找 two-input gates。
 統計 constant input 使用情況。
 ```
+
+高階 `GatesWithConstantInput` 只接受 `constValue=-1/0/1`，且 `inputCount` 必須為 `-1` 或非負數。非法 filter 回傳 `ok=false`，不會偽裝成成功的空結果。低階 helper 會略過 invalid 或 removed input net ID。
 
 注意：
 
@@ -296,8 +302,8 @@ std::vector<std::string> getUnconnectedGateNames() const;
 
 | API | 定義 |
 |---|---|
-| `getUndrivenNetNames()` | 非 PI、非 constant，且沒有合法 driver 的 net |
-| `getNoLoadNetNames()` | 非 PO、非 constant，且沒有 load gate 的 net |
+| `getUndrivenNetNames()` | 非 PI、非 constant，且沒有雙向一致 active driver 的 net |
+| `getNoLoadNetNames()` | 非 PO、非 constant，且沒有雙向一致 active load 的 net |
 | `getFloatingNetNames()` | undriven 與 no-load 的 union，不重複 |
 | `getUnconnectedGateNames()` | gate 的 input 或 output 存在非法 / disconnected net ID |
 
@@ -306,6 +312,8 @@ std::vector<std::string> getUnconnectedGateNames() const;
 ```text
 DFF input 若被 disconnect，可能以 -1 留在 inputNetIds 裡。
 因此 getUnconnectedGateNames() 需要把 -1 視為值得回報的結構狀態。
+StructuralIssues 另回傳 floatingPrimaryInputNets 與 unconnectedPrimaryOutputNets，
+兩者都是依 declaration/bit net 順序產生的具名 net，不是 base port name。
 ```
 
 ---
@@ -379,13 +387,17 @@ BasicReport runBasicQuery(const BasicQuery& query) const;
 | `ListCombinationalGates` | 列出所有組合邏輯 gates | `gateIds`、`gateNames` |
 | `GateInfo` | 查單一 gate | `objectId`、`typeName`、predicate flags、`formattedInfo` |
 | `NetInfo` | 查單一 net | `objectId`、`typeName`、PI/PO/constant flags |
-| `PortInfo` | 查單一 port | `portWidth`、`isBus`、bit net names |
+| `PortInfo` | 查單一 port | `portWidth`、`isBus`、direction flags、bit net names/IDs |
 | `CountByGateType` | 統計 gate type | `gateTypeCounts`、`gateCount` |
 | `GatesByType` | 列出指定 gate type | `gateIds`、`gateNames` |
 | `GatesWithConstantInput` | 找 constant input gates | `gateIds`、`gateNames`、`gateCount` |
 | `StructuralIssues` | 回報結構問題 | `undrivenNets`、`noLoadNets`、`floatingNets`、`unconnectedGates` |
 
 `ports` 是依 declaration 順序排列的 `PortSummary`，每筆包含 `name`、`width`、`msb`、`lsb`、`isBus`、`isInput`、`isOutput`。因此「列出所有 PI/PO 並附 bit width」只需要一次 `ListPrimaryInputs` 或 `ListPrimaryOutputs`。
+
+`ListPrimaryInputs` / `ListPrimaryOutputs` 會固定填入 structured `ports`；`includeNames=false` 只省略重複的 flat `portNames`，不會移除 width、range 與 direction metadata。
+
+`PortInfo` 的 `netNames` 與 `netIds` 都依該 port 的 Verilog declaration order 回傳，且兩者使用相同的 active-net filter，因此同一個 index 必定描述同一個 bit。`includeIds` / `includeNames` 只控制欄位是否填入，不會改變另一個欄位的排序。方向由 `isPrimaryInput` / `isPrimaryOutput` 表示。
 
 `Summary`、`ListGates`、`ListNets`、`CountByGateType` 與 structural issue helpers 都以 current active design 為準。`GateInfo` / `NetInfo` 查詢已移除的 tombstone 會回報 not found，不會將 `UNKNOWN` 暴露成題目中的 gate type。
 
@@ -397,6 +409,7 @@ struct BasicQuery {
     std::string name;
     GateType gateType = GateType::UNKNOWN;
     int constValue = -1;
+    int inputCount = -1;
     bool includeIds = true;
     bool includeNames = true;
 };
@@ -421,6 +434,8 @@ struct BasicReport {
     std::vector<std::string> noLoadNets;
     std::vector<std::string> floatingNets;
     std::vector<std::string> unconnectedGates;
+    std::vector<std::string> floatingPrimaryInputNets;
+    std::vector<std::string> unconnectedPrimaryOutputNets;
 };
 ```
 

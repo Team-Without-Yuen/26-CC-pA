@@ -357,14 +357,15 @@ OK
 
 ```text
 report.floatingNets
-report.unconnectedGates
+report.floatingPrimaryInputNets
+report.unconnectedPrimaryOutputNets
 ```
 
 注意：
 
 ```text
-若 prompt 嚴格區分 floating input / unconnected output port，目前 report 命名還偏 general structural issue。
-但 API 已能給出主要資料。
+floatingPrimaryInputNets 與 unconnectedPrimaryOutputNets 直接對應 prompt 的兩種分類；
+bus 以 bit-net names 回傳。若題目詢問所有 general floating signals，使用 floatingNets。
 ```
 
 ---

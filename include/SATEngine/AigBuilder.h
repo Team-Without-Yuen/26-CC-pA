@@ -11,6 +11,12 @@ class Netlist;
 
 namespace eqeng {
 
+enum class ModelHealth : uint8_t {
+    Sound,
+    Conservative,
+    Invalid
+};
+
 // 一顆 DFF 的組合抽象結果。
 struct DffInfo {
     int gateId   = -1;
@@ -43,9 +49,9 @@ public:
         bool undriven_as_free_pi;
         bool verbose;
 
-        Options() 
-        : fold_async_controls(true), 
-          undriven_as_free_pi(true), 
+        Options()
+        : fold_async_controls(true),
+          undriven_as_free_pi(true),
           verbose(false) {}
     };
 
@@ -85,10 +91,15 @@ public:
     const std::vector<int>& po_net_ids() const { return poNetIds_; }
 
     const Stats& stats() const { return stats_; }
+    ModelHealth  health() const { return health_; }
+    bool         can_prove() const { return health_ != ModelHealth::Invalid; }
+    const std::string& health_message() const { return healthMessage_; }
 
 private:
     explicit AigModel(const Netlist& nl);
     void do_build(const Options& opt);
+    void mark_conservative();
+    void mark_invalid(const std::string& reason);
 
     const Netlist*       nl_;
     Ntk                  aig_;      // 宣告順序重要：names_ 建構時要用到 aig_
@@ -98,6 +109,9 @@ private:
     std::vector<Sig>     poSigs_;
     std::vector<int>     poNetIds_;
     Stats                stats_;
+    ModelHealth          health_ = ModelHealth::Sound;
+    std::string          healthMessage_ = "sound";
+    uint32_t             invalidIssueCount_ = 0;
 };
 
 } // namespace eqeng

@@ -4,6 +4,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <unordered_set>
 #include <utility>
 
@@ -67,7 +68,29 @@ std::string depthObjectiveName(OptDepthObjective objective) {
 }
 
 bool isCombinationalGateType(GateType type) {
-    return type != GateType::DFF && type != GateType::UNKNOWN;
+    switch (type) {
+        case GateType::AND:
+        case GateType::OR:
+        case GateType::NAND:
+        case GateType::NOR:
+        case GateType::NOT:
+        case GateType::BUF:
+        case GateType::XOR:
+        case GateType::XNOR:
+            return true;
+        default:
+            return false;
+    }
+}
+
+bool isValidDepthObjective(OptDepthObjective objective) {
+    switch (objective) {
+        case OptDepthObjective::GlobalMaximum:
+        case OptDepthObjective::ScopedFaninCone:
+            return true;
+        default:
+            return false;
+    }
 }
 
 bool gateTypeAllowed(
@@ -365,6 +388,55 @@ NetlistEditReport makeFailedOptApplyReport(
     return report;
 }
 
+bool isLegacyWholeDesignPass(OptPassKind passKind) {
+    return passKind == OptPassKind::CleanupBufferChain ||
+           passKind == OptPassKind::CollapseDoubleInverter ||
+           passKind == OptPassKind::LocalSimplificationFixpoint;
+}
+
+std::vector<std::string> unsupportedLegacyOptApplyFields(
+    const OptApplyRequest& request)
+{
+    const OptApplyRequest defaults;
+    std::vector<std::string> fields;
+    if (request.candidateIds != defaults.candidateIds) fields.push_back("candidateIds");
+    if (request.scope != defaults.scope) fields.push_back("scope");
+    if (request.scopeName != defaults.scopeName) fields.push_back("scopeName");
+    if (request.depthObjective != defaults.depthObjective) {
+        fields.push_back("depthObjective");
+    }
+    if (request.allowedTypes != defaults.allowedTypes) fields.push_back("allowedTypes");
+    if (request.bannedTypes != defaults.bannedTypes) fields.push_back("bannedTypes");
+    if (request.targetDepth != defaults.targetDepth) fields.push_back("targetDepth");
+    if (request.timeLimitSeconds != defaults.timeLimitSeconds) {
+        fields.push_back("timeLimitSeconds");
+    }
+    if (request.requireDepthImprovement != defaults.requireDepthImprovement) {
+        fields.push_back("requireDepthImprovement");
+    }
+    if (request.validateEquivalence != defaults.validateEquivalence) {
+        fields.push_back("validateEquivalence");
+    }
+    if (request.rollbackOnFailure != defaults.rollbackOnFailure) {
+        fields.push_back("rollbackOnFailure");
+    }
+    return fields;
+}
+
+std::string formatUnsupportedLegacyFields(
+    const std::vector<std::string>& fields)
+{
+    std::string message =
+        "This legacy OptApply pass only supports its default whole-design operation; "
+        "unsupported request field(s): ";
+    for (size_t i = 0; i < fields.size(); ++i) {
+        if (i != 0) message += ", ";
+        message += fields[i];
+    }
+    message += ". Use EditApply for scoped or explicitly constrained cleanup.";
+    return message;
+}
+
 } // namespace
 
 OptQueryReport Netlist::runOptQuery(const OptQueryRequest& request) const {
@@ -449,6 +521,17 @@ OptQueryReport Netlist::runOptQuery(const OptQueryRequest& request) const {
 NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
     NetlistEditReport report;
 
+    if (isLegacyWholeDesignPass(request.passKind)) {
+        const std::vector<std::string> unsupportedFields =
+            unsupportedLegacyOptApplyFields(request);
+        if (!unsupportedFields.empty()) {
+            return makeFailedOptApplyReport(
+                *this,
+                request.passKind,
+                formatUnsupportedLegacyFields(unsupportedFields));
+        }
+    }
+
     switch (request.passKind) {
         case OptPassKind::CleanupBufferChain:
             report = cleanupAllRemovableBuffersWithReport();
@@ -463,13 +546,26 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
             report.operationName = "opt_apply:local_simplification_fixpoint";
             break;
         case OptPassKind::CriticalPathDepth: {
-            if (request.timeLimitSeconds <= 0.0) {
+            const auto startedAt = std::chrono::steady_clock::now();
+            auto elapsedSeconds = [&]() {
+                return std::chrono::duration<double>(
+                    std::chrono::steady_clock::now() - startedAt).count();
+            };
+
+            if (!std::isfinite(request.timeLimitSeconds) ||
+                request.timeLimitSeconds <= 0.0) {
                 return makeFailedOptApplyReport(
-                    *this, request.passKind, "timeLimitSeconds must be positive.");
+                    *this,
+                    request.passKind,
+                    "timeLimitSeconds must be finite and positive.");
             }
             if (request.targetDepth < -1) {
                 return makeFailedOptApplyReport(
                     *this, request.passKind, "targetDepth must be -1 or a non-negative depth.");
+            }
+            if (!isValidDepthObjective(request.depthObjective)) {
+                return makeFailedOptApplyReport(
+                    *this, request.passKind, "Unsupported depth objective.");
             }
             if (!hasValidGateTypeConstraints(request.allowedTypes, request.bannedTypes)) {
                 return makeFailedOptApplyReport(
@@ -495,12 +591,6 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                     "Failed to resolve optimization scope: " + originalScope.message);
             }
 
-            const auto startedAt = std::chrono::steady_clock::now();
-            auto elapsedSeconds = [&]() {
-                return std::chrono::duration<double>(
-                    std::chrono::steady_clock::now() - startedAt).count();
-            };
-
             const Netlist original = cloneForRollback();
             Netlist working = original.cloneForRollback();
             const bool baselineConstraintsSatisfied = scopeSatisfiesGateConstraints(
@@ -521,6 +611,37 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
             summary.bannedTypes = request.bannedTypes;
             summary.baselineConstraintsSatisfied = baselineConstraintsSatisfied;
             summary.timeBudgetSeconds = request.timeLimitSeconds;
+
+            auto makePreCoreTimeoutReport = [&]() {
+                NetlistEditReport timeoutReport = Netlist::buildEditReport(
+                    original,
+                    original,
+                    "opt_apply:critical_path_depth",
+                    NetlistEditOperationKind::DepthOptimization);
+                timeoutReport.success = false;
+                timeoutReport.changed = false;
+                timeoutReport.rolledBack = false;
+                timeoutReport.depthChange =
+                    buildOptimizationDepthChange(original, original, request);
+                summary.coreStatus = "TIMEOUT";
+                summary.coreMessage =
+                    "The transaction time budget was exhausted before optimizer core execution.";
+                summary.finalConstraintsSatisfied = baselineConstraintsSatisfied;
+                summary.candidateGenerated = false;
+                summary.candidateAccepted = false;
+                summary.elapsedSeconds = elapsedSeconds();
+                timeoutReport.depthOptimization = summary;
+                Netlist::certifyEquivalence(
+                    timeoutReport,
+                    EquivalenceCheckMethod::StructuralIdentity,
+                    "The original design was retained because no optimizer candidate was started.");
+                timeoutReport.message = summary.coreMessage;
+                return timeoutReport;
+            };
+
+            if (elapsedSeconds() >= request.timeLimitSeconds) {
+                return makePreCoreTimeoutReport();
+            }
 
             if (request.scope != TargetScope::WHOLE_NETLIST &&
                 original.getConeGateCount(originalScope.cone) == 0) {
@@ -569,6 +690,9 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
 
             const ScopedDepthLowerBoundProof lowerBound =
                 proveScopedDepthLowerBound(original, request, originalScope);
+            if (elapsedSeconds() >= request.timeLimitSeconds) {
+                return makePreCoreTimeoutReport();
+            }
             if (baselineConstraintsSatisfied && lowerBound.proven) {
                 NetlistEditReport originalReport = Netlist::buildEditReport(
                     original,
@@ -614,6 +738,11 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                     ? buildOptimizationConeReport(
                           working, request.scope, request.scopeName)
                     : ConeReport{};
+
+            if (elapsedSeconds() >= request.timeLimitSeconds) {
+                return makePreCoreTimeoutReport();
+            }
+
             TechMapper techMapper;
             DepthOptimizer optimizer;
             const OptimizationResult core = optimizer.executeCriticalPathOptimization(
@@ -698,6 +827,24 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                 report.rolledBack = core.changed;
                 report.message =
                     "Depth optimization candidate did not meet targetDepth and was discarded.";
+                return finishReport(std::move(report));
+            }
+
+            if (!report.changed) {
+                report.success = true;
+                report.changed = false;
+                report.rolledBack = false;
+                summary.candidateGenerated = false;
+                summary.candidateAccepted = false;
+                summary.wholeDesignEquivalenceChecked = false;
+                summary.wholeDesignEquivalent = true;
+                summary.wholeDesignTimedOut = false;
+                Netlist::certifyEquivalence(
+                    report,
+                    EquivalenceCheckMethod::StructuralIdentity,
+                    "The optimizer produced no graph change; the original design is structurally identical.");
+                report.message =
+                    "The optimizer produced no graph change; the original design was retained.";
                 return finishReport(std::move(report));
             }
 
@@ -834,14 +981,9 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
             return makeFailedOptApplyReport(*this, request.passKind, "Unsupported optimization pass kind.");
     }
 
-    if (!request.candidateIds.empty()) {
-        report.addWarning("candidateIds are accepted for API compatibility, but first-version opt_apply applies the whole pass.");
-    }
-    if (request.validateEquivalence) {
-        report.addWarning("validateEquivalence requested, but whole-design equivalence is not integrated yet.");
-    }
-    if (!request.rollbackOnFailure) {
-        report.addWarning("rollbackOnFailure=false is recorded, but current WithReport pass wrappers always rollback on validation failure.");
+    if (isLegacyWholeDesignPass(request.passKind) && request.verbose) {
+        report.addWarning(
+            "verbose is not implemented for this legacy whole-design OptApply pass.");
     }
 
     return report;

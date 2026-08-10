@@ -48,6 +48,13 @@ function Check-Result {
     }
 }
 
+function Get-OutputFile {
+    param([string]$Response)
+    $match = [regex]::Match($Response, "(?m)^  output_file: (.+)$")
+    if (!$match.Success) { return $null }
+    return $match.Groups[1].Value.Trim()
+}
+
 Check-Result ($responses.Count -eq 23) "every equivalent-pair search/edit command returns one envelope"
 if ($responses.Count -ge 23) {
     $findAny = $responses[1]
@@ -67,6 +74,22 @@ if ($responses.Count -ge 23) {
     $timeoutMerge = $responses[18]
     $rollbackMerge = $responses[20]
     $help = $responses[21]
+    $findAllFile = Get-OutputFile $findAll
+    $limitedFile = Get-OutputFile $limited
+    $andOnlyFile = Get-OutputFile $andOnly
+    $findAllFileExists = [bool]($findAllFile -and (Test-Path -LiteralPath $findAllFile))
+    $findAllFileMatchCount = if ($findAllFileExists) {
+        @(Select-String -LiteralPath $findAllFile -Pattern '^Match [0-9]+$').Count
+    } else {
+        -1
+    }
+    $limitedFileExists = [bool]($limitedFile -and (Test-Path -LiteralPath $limitedFile))
+    $limitedFileMatchCount = if ($limitedFileExists) {
+        @(Select-String -LiteralPath $limitedFile -Pattern '^Match [0-9]+$').Count
+    } else {
+        -1
+    }
+    $andOnlyFileExists = [bool]($andOnlyFile -and (Test-Path -LiteralPath $andOnlyFile))
 
     Check-Result `
         ($findAny -match "status: ok" -and
@@ -81,21 +104,28 @@ if ($responses.Count -ge 23) {
          $findAll -match "equivalence_class_count: 2" -and
          $findAll -match "equivalent_pair_count: 7" -and
          $findAll -match "match_count: 7" -and
-         $findAll -match "member_count: 4") `
-        "FindAll reports equivalence classes and expanded pairs"
+         $findAll -match "stored_match_count: 0" -and
+         $findAll -match "wrote_matches_to_file: true" -and
+         $findAllFileExists -and
+         (Get-Content -LiteralPath $findAllFile -Raw) -match "member_count: 4" -and
+         $findAllFileMatchCount -eq 7) `
+        "FindAll writes complete classes and expanded pairs to an artifact"
 
     Check-Result `
         ($limited -match "status: partial" -and
          $limited -match "report_status: RESULT_LIMIT_REACHED" -and
          $limited -match "equivalence_class_count: 2" -and
          $limited -match "equivalent_pair_count: 7" -and
-         $limited -match "match_count: 2") `
+         $limited -match "match_count: 7" -and
+         $limitedFileExists -and
+         $limitedFileMatchCount -eq 2) `
         "result limits truncate pair output without losing class statistics"
 
     Check-Result `
         ($andOnly -match "gate_type_filter: AND" -and
          $andOnly -match "equivalent_pair_count: 1" -and
-         $andOnly -match "member_count: 2") `
+         $andOnlyFileExists -and
+         (Get-Content -LiteralPath $andOnlyFile -Raw) -match "member_count: 2") `
         "gate-type filter reaches the public report"
 
     Check-Result `

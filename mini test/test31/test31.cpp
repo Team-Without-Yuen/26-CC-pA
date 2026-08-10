@@ -1,7 +1,9 @@
 #include "include/core/Netlist.h"
 #include "include/io/VerilogReader.h"
 
+#include <algorithm>
 #include <iostream>
+#include <limits>
 #include <string>
 
 namespace {
@@ -67,6 +69,38 @@ int main(int argc, char** argv) {
         globalReport.depthOptimization->comparedDffDCount == 1,
         "depth optimization summary records acceptance and endpoint counts");
 
+    Netlist noOpNetlist;
+    const int const0 = noOpNetlist.addNet("1'b0");
+    noOpNetlist.setNetConst(const0, true, 0);
+    const int const1 = noOpNetlist.addNet("1'b1");
+    noOpNetlist.setNetConst(const1, true, 1);
+    noOpNetlist.addPrimaryInput("a");
+    noOpNetlist.addPrimaryInput("b");
+    noOpNetlist.addPrimaryOutput("y");
+    const int andGate = noOpNetlist.addGate("opt_g0", GateType::AND);
+    noOpNetlist.connectGateInput(andGate, noOpNetlist.getNetId("a"));
+    noOpNetlist.connectGateInput(andGate, noOpNetlist.getNetId("b"));
+    noOpNetlist.connectGateOutput(andGate, noOpNetlist.getNetId("y"));
+    tests.check(noOpNetlist.validateStructure(), "no-op circuit is structurally valid");
+    OptApplyRequest noOpRequest = globalRequest;
+    noOpRequest.requireDepthImprovement = false;
+    const NetlistEditReport noOpReport = noOpNetlist.runOptApply(noOpRequest);
+    tests.check(
+        noOpReport.success &&
+        !noOpReport.changed &&
+        !noOpReport.rolledBack &&
+        noOpReport.validation.equivalenceChecked &&
+        noOpReport.validation.functionallyEquivalent &&
+        noOpReport.validation.equivalenceMethod ==
+            EquivalenceCheckMethod::StructuralIdentity &&
+        noOpReport.depthOptimization.has_value() &&
+        !noOpReport.depthOptimization->candidateGenerated &&
+        !noOpReport.depthOptimization->candidateAccepted &&
+        !noOpReport.depthOptimization->wholeDesignEquivalenceChecked &&
+        noOpReport.depthOptimization->wholeDesignEquivalent &&
+        !noOpReport.depthOptimization->wholeDesignTimedOut,
+        "unchanged optimizer result uses structural identity without whole-design SAT");
+
     Netlist impossibleTarget;
     tests.check(
         loadCircuit(circuitPath, impossibleTarget),
@@ -97,6 +131,102 @@ int main(int argc, char** argv) {
         !missingScopeReport.changed &&
         !missingScopeReport.rolledBack,
         "missing optimization scope fails before mutation");
+
+    Netlist requestValidation;
+    tests.check(
+        loadCircuit(circuitPath, requestValidation),
+        "request-validation circuit loads");
+    const int validationDepth = requestValidation.findGlobalCriticalPath().depth;
+    const size_t validationGateCount =
+        requestValidation.collectNetlistStats().activeGateCount;
+
+    OptApplyRequest nanTimeRequest = globalRequest;
+    nanTimeRequest.timeLimitSeconds =
+        std::numeric_limits<double>::quiet_NaN();
+    const NetlistEditReport nanTimeReport =
+        requestValidation.runOptApply(nanTimeRequest);
+    tests.check(
+        !nanTimeReport.success &&
+        !nanTimeReport.changed &&
+        !nanTimeReport.rolledBack &&
+        requestValidation.findGlobalCriticalPath().depth == validationDepth &&
+        requestValidation.collectNetlistStats().activeGateCount == validationGateCount,
+        "non-finite optimization time limit is rejected before mutation");
+
+    OptApplyRequest invalidObjectiveRequest = globalRequest;
+    invalidObjectiveRequest.depthObjective =
+        static_cast<OptDepthObjective>(999);
+    const NetlistEditReport invalidObjectiveReport =
+        requestValidation.runOptApply(invalidObjectiveRequest);
+    tests.check(
+        !invalidObjectiveReport.success &&
+        !invalidObjectiveReport.changed &&
+        !invalidObjectiveReport.rolledBack,
+        "invalid depth objective is rejected before mutation");
+
+    OptApplyRequest invalidGateTypeRequest = globalRequest;
+    invalidGateTypeRequest.allowedTypes = {static_cast<GateType>(999)};
+    const NetlistEditReport invalidGateTypeReport =
+        requestValidation.runOptApply(invalidGateTypeRequest);
+    tests.check(
+        !invalidGateTypeReport.success &&
+        !invalidGateTypeReport.changed &&
+        !invalidGateTypeReport.rolledBack,
+        "invalid gate-type constraint is rejected before mutation");
+
+    OptApplyRequest exhaustedBudgetRequest = globalRequest;
+    exhaustedBudgetRequest.timeLimitSeconds = 1.0e-12;
+    const NetlistEditReport exhaustedBudgetReport =
+        requestValidation.runOptApply(exhaustedBudgetRequest);
+    tests.check(
+        !exhaustedBudgetReport.success &&
+        !exhaustedBudgetReport.changed &&
+        !exhaustedBudgetReport.rolledBack &&
+        exhaustedBudgetReport.depthOptimization.has_value() &&
+        exhaustedBudgetReport.depthOptimization->coreStatus == "TIMEOUT" &&
+        !exhaustedBudgetReport.depthOptimization->candidateGenerated &&
+        requestValidation.findGlobalCriticalPath().depth == validationDepth &&
+        requestValidation.collectNetlistStats().activeGateCount == validationGateCount &&
+        requestValidation.validateStructure(),
+        "exhausted pre-core budget does not start an optimizer candidate");
+
+    OptApplyRequest unsupportedLegacyRequest;
+    unsupportedLegacyRequest.passKind = OptPassKind::CleanupBufferChain;
+    unsupportedLegacyRequest.candidateIds = {0};
+    unsupportedLegacyRequest.scope = TargetScope::NET_FANIN;
+    unsupportedLegacyRequest.scopeName = "z";
+    unsupportedLegacyRequest.allowedTypes = {GateType::AND};
+    unsupportedLegacyRequest.targetDepth = 1;
+    unsupportedLegacyRequest.validateEquivalence = true;
+    const NetlistEditReport unsupportedLegacyReport =
+        requestValidation.runOptApply(unsupportedLegacyRequest);
+    tests.check(
+        !unsupportedLegacyReport.success &&
+        !unsupportedLegacyReport.changed &&
+        !unsupportedLegacyReport.rolledBack &&
+        unsupportedLegacyReport.message.find("candidateIds") != std::string::npos &&
+        unsupportedLegacyReport.message.find("scope") != std::string::npos &&
+        unsupportedLegacyReport.message.find("allowedTypes") != std::string::npos &&
+        unsupportedLegacyReport.message.find("targetDepth") != std::string::npos &&
+        unsupportedLegacyReport.message.find("validateEquivalence") != std::string::npos &&
+        requestValidation.findGlobalCriticalPath().depth == validationDepth &&
+        requestValidation.collectNetlistStats().activeGateCount == validationGateCount,
+        "legacy pass rejects unsupported semantic fields before mutation");
+
+    OptApplyRequest verboseLegacyRequest;
+    verboseLegacyRequest.passKind = OptPassKind::CleanupBufferChain;
+    verboseLegacyRequest.verbose = true;
+    const NetlistEditReport verboseLegacyReport =
+        requestValidation.runOptApply(verboseLegacyRequest);
+    tests.check(
+        verboseLegacyReport.success &&
+        std::any_of(
+            verboseLegacyReport.warnings.begin(),
+            verboseLegacyReport.warnings.end(),
+            [](const std::string& warning) {
+                return warning.find("verbose") != std::string::npos;
+            }),
+        "legacy pass reports that verbose is unsupported");
 
     Netlist constrained;
     tests.check(

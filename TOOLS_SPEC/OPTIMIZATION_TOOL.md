@@ -8,7 +8,7 @@
 fanout limit 是題目 constraint，不是輸出截斷。時間限制依題目指定。詳見
 [`LLM_NOTES.md`](LLM_NOTES.md)。
 
-公開 tools layer 只開放 `CriticalPathDepth` 高階 transaction，不直接暴露 `DepthOptimizer`、mockturtle 或 unchecked rewrite。候選只有在 scope、gate-type constraint、target depth 與 whole-design SAT 全部通過後才會 commit。
+公開 tools layer 只開放 `CriticalPathDepth` 高階 transaction，不直接暴露 `DepthOptimizer`、mockturtle 或 unchecked rewrite。候選只有在 scope、gate-type constraint、target depth 與等價驗證全部通過後才會 commit；graph 完全不變時以 `StructuralIdentity` 證明，其餘候選執行 whole-design SAT。
 
 ## 2. 選擇條件
 
@@ -100,7 +100,7 @@ NAND/NOT-only basis 中，兩個獨立 boundary signals 的 NOT(NAND(a,b)) depth
 |---|---|
 | `status:ok` | 候選已接受並修改 design |
 | `status:no_change` | 原設計被保留，沒有接受的改善 |
-| `status:timeout` | mandatory whole-design equivalence 超時，候選未提交 |
+| `status:timeout` | transaction 預算耗盡；可能發生在 core 前或 whole-design SAT，候選不提交 |
 | `status:error` | scope、constraint、target、structure 或 equivalence 驗證失敗 |
 | `complete:true` | 成功結果具有 equivalence certificate |
 
@@ -124,13 +124,18 @@ NAND/NOT-only basis 中，兩個獨立 boundary signals 的 NOT(NAND(a,b)) depth
 | `baseline_constraints_satisfied` | 原設計是否已符合 constraints |
 | `final_constraints_satisfied` | 候選是否符合 constraints |
 | `candidate_generated`, `candidate_accepted` | core 是否產生候選、transaction 是否提交 |
-| `whole_design_equivalence_checked` | 是否完成 whole-design SAT |
-| `whole_design_equivalent` | PO 與 DFF.D 是否全部等價 |
+| `whole_design_equivalence_checked` | 是否執行 whole-design SAT；StructuralIdentity no-op 為 `false` |
+| `whole_design_equivalent` | 是否已確認等價；StructuralIdentity no-op 也可為 `true` |
 | `whole_design_timed_out` | SAT 是否超時 |
 | `compared_output_count`, `compared_dff_d_count` | 實際比較的 sequential boundaries |
 | `time_budget_seconds`, `elapsed_seconds` | 預算與耗時 |
 
 不可只因 `status:ok` 就回答「depth 已降低」。若原設計違反明確 gate-type hard constraint，流程可接受等價且合規、但 depth 沒改善的候選；此時會輸出 `improved:false`、`baseline_constraints_satisfied:false` 與 warning。最終答案必須直接報告 before/after depth。
+
+timeout 判讀需搭配 `core_status`：`core_status:TIMEOUT` 且
+`candidate_generated:false` 表示預算在 optimizer core 前已耗盡，因此
+`whole_design_timed_out:false`；若 SAT 階段超時，才會看到
+`whole_design_timed_out:true`。
 
 ## 7. Prompt Examples
 
@@ -160,7 +165,7 @@ Read: meets_target, report_success, rolled_back
 
 ## 8. 組合流程
 
-最佳化前可用 `depth_query global_critical` 取得 current baseline。`opt_apply` 已內建 mandatory whole-design SAT，不需要再呼叫 `equiv_query` 才能提交；但可使用 `equiv_query previous_edit` 取得獨立 follow-up report。
+最佳化前可用 `depth_query global_critical` 取得 current baseline。`opt_apply` 已內建 mandatory equivalence validation：graph identity 使用 `StructuralIdentity`，其餘候選執行 whole-design SAT，因此不需要再呼叫 `equiv_query` 才能提交；但可使用 `equiv_query previous_edit` 取得獨立 follow-up report。
 
 最佳化後的完整 report 會存入同一個 edit cache，可用：
 
@@ -174,7 +179,9 @@ report_query last_edit
 - 演算法是 best-effort，不保證取得數學上的 global optimum；只有明確命中的
   lower-bound pattern 才能宣稱 already optimal。
 - `--target-depth` 是 commit requirement；未達成時 candidate rollback。
-- `--allow-no-improvement` 允許提交同 depth 的合規候選，但仍要求 whole-design equivalence。
+- `--allow-no-improvement` 允許提交同 depth 的合規候選，但仍要求等價驗證；若 optimizer
+  沒有造成 graph change，回 `candidate_generated:false`、`candidate_accepted:false`、
+  `whole_design_equivalence_checked:false` 與 `EquivalenceMethod:StructuralIdentity`，不啟動 SAT。
 - whole-design equivalence 比較所有 PO 與 DFF.D；DFF initial state 尚未納入。
 - `--time-limit` 目前能限制 transaction 後段與 whole-design SAT，但單次
   mockturtle primitive 尚無 cooperative cancellation；大型 scoped cone 可能超出

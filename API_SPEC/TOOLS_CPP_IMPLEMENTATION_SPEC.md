@@ -1166,7 +1166,8 @@ sequential_query enable_hold <all|dff_name>
 | `--summary-only` | 只回完整 aggregate，回答 count prompt |
 | `--confirmed-only` | 排除 AND-only data-gating diagnostics |
 | `--include-no-pattern` | detail 也列無 pattern DFF |
-| `--offset/--limit` | detail 分頁；all 預設上限 50 records |
+| default all-DFF detail | 自動將全部符合 filter 的 records 寫入唯一 artifact，envelope 只回 summary/path |
+| `--offset/--limit` | 題目明確要求 record window 時使用；停用自動 artifact 並保留 pagination |
 | `--verify-sat` | 只允許指定 DFF；all-DFF SAT 會在 parser 階段拒絕 |
 | `--functional-fallback` | opt-in SAT cofactor search；未指定時維持 canonical fast path |
 | functional candidate/match options | 控制每顆 DFF 的 bounded search 與 FindAny/FindAll |

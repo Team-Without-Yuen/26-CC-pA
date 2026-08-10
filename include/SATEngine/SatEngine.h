@@ -37,8 +37,8 @@ public:
         bool    lazy_encode;      // 只 encode COI；100 萬 gate 建議維持 true
 
         Config()
-        : time_limit_sec(0.0)            
-        , conflict_limit(0)             
+        : time_limit_sec(0.0)
+        , conflict_limit(0)
         , lazy_encode(true) {}
     };
 

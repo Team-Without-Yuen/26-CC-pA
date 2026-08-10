@@ -51,11 +51,13 @@ original snapshot
   -> structure / Problem A constraint
   -> gate-basis constraint
   -> depth objective / targetDepth
-  -> whole-design SAT (PO + DFF.D)
+  -> graph 不變時 StructuralIdentity；否則 whole-design SAT (PO + DFF.D)
   -> 全部通過才 commit working copy
 ```
 
-候選失敗、timeout、不等價或未達要求時，原 Netlist 不會被修改。
+候選失敗、未達要求或已證明不等價時，原 Netlist 不會被修改。目前 SAT
+UNKNOWN/inconclusive 的候選可能依 contest scoring policy 被接受；此例外尚未有獨立
+report status，已列為 Deferred Boolean / Report Redesign。
 
 ## 3. Query / Request 型別
 
@@ -71,8 +73,11 @@ enum class OptPassKind {
 };
 ```
 
-前三個 pass 是既有 skeleton；公開 optimization 的主要入口是
-`CriticalPathDepth`。cleanup 類 prompt 仍優先走 `EditApply`。
+前三個 pass 是 legacy whole-design compatibility entry；公開 optimization 的主要入口是
+`CriticalPathDepth`，cleanup 類 prompt 應優先走 `EditApply`。legacy pass 只接受
+`OptApplyRequest` 的預設 whole-design 語意；若傳入 scoped、candidate selection、depth、
+basis、time、equivalence 或 rollback 條件，會在 mutation 前明確失敗，不會靜默忽略。
+`verbose=true` 不影響語意，因此 pass 仍執行，但 report 會加入 unsupported warning。
 
 ### 3.2 OptDepthObjective
 
@@ -92,13 +97,29 @@ enum class OptPassKind {
 | `allowedTypes` | empty | 非空時為 combinational gate 白名單 |
 | `bannedTypes` | empty | combinational gate 黑名單；不得與白名單重疊 |
 | `targetDepth` | `-1` | `-1` 表示 best effort；非負值表示候選必須達成 |
-| `timeLimitSeconds` | `240.0` | transaction 預算；mockturtle 單次 primitive 尚不可搶占 |
+| `timeLimitSeconds` | `240.0` | 必須為 finite positive；涵蓋 scope/前置作業，mockturtle 單次 primitive 尚不可搶占 |
 | `requireDepthImprovement` | `true` | baseline 已合規時，無改善就保留 original |
 | `verbose` | `false` | 內部 optimizer log |
-| `validateEquivalence` | `false` | CriticalPathDepth 仍固定執行 whole-design SAT |
+| `validateEquivalence` | `false` | CriticalPathDepth 仍固定驗證等價；graph identity 以 `StructuralIdentity`，其餘候選執行 whole-design SAT |
 | `rollbackOnFailure` | `true` | CriticalPathDepth 固定保留 original；false 會被忽略 |
 
 `candidateIds` 對 CriticalPathDepth 尚未生效；目前是 pass-level search。
+
+對 `CleanupBufferChain`、`CollapseDoubleInverter`、
+`LocalSimplificationFixpoint`，下列非預設欄位目前不支援，若出現即回
+`success=false / changed=false / rolledBack=false`：
+
+```text
+candidateIds
+scope / scopeName
+depthObjective
+allowedTypes / bannedTypes
+targetDepth
+timeLimitSeconds
+requireDepthImprovement
+validateEquivalence
+rollbackOnFailure
+```
 
 ## 4. Report Contract
 
@@ -156,8 +177,9 @@ CriticalPathDepth 內部流程：
 5. XAG/AIG 候選一律轉回 Netlist，以正式 Problem A depth 選 best candidate。
 6. 必要時執行 whole/local basis enforcement、double-inverter cleanup 與 inverter absorption。
 7. 驗證結構、basis、depth improvement/target。
-8. 對所有同名 PO 與 DFF.D 執行 whole-design SAT。
-9. 驗證通過才 `restoreFrom(working)`；否則保留 original。
+8. 若 optimizer 未造成 graph change，以 `StructuralIdentity` 回 original，不啟動 SAT。
+9. 其餘候選對所有同名 PO 與 DFF.D 執行 whole-design SAT。
+10. 驗證通過才 `restoreFrom(working)`；否則保留 original。
 
 ## 6. 與其他 API 的責任界線
 
@@ -168,7 +190,7 @@ CriticalPathDepth 內部流程：
 | 將 XOR 固定替換為指定 basis | `EditApply::ReplaceGateType` |
 | minimize maximum depth 並維持 basis | `OptApply::CriticalPathDepth` |
 | current 是否等價於 original/previous snapshot | `WholeDesignEquivalence` |
-| OptApply 內部候選是否可提交 | OptApply 固定執行 whole-design SAT |
+| OptApply 內部候選是否可提交 | graph identity 使用 `StructuralIdentity`；其餘候選執行 whole-design SAT |
 
 ## 7. 限制與安全規則
 
@@ -183,12 +205,20 @@ CriticalPathDepth 內部流程：
 6. whole-design checker 比較 PO 與 DFF.D；DFF.Q 視為 boundary leaf，initial state
    尚未納入。
 7. time budget 會限制後續 SAT 並在 core 結束後檢查；mockturtle core 尚無可中途
-   cancel 的 callback。
+   cancel 的 callback。transaction timer 從 CriticalPathDepth 分支起點開始，進 core
+   前若預算已耗盡則不啟動 candidate。
 8. scoped optimization 目前仍可能先做 global AIG/XAG restructuring，再重套局部
    basis；不是只允許 cone 內拓樸改動的 ECO isolation mode。
 9. CriticalPathDepth 不接受 unsafe no-rollback 或跳過 equivalence。
 10. scoped lower-bound proof 目前只涵蓋 depth 0，以及 NAND/NOT basis 下
    `NOT(NAND(a,b))` 且 a/b 為不同 independent boundary signals 的 depth 2。
+11. whole-design SAT 若為 UNKNOWN/inconclusive，目前可能信任 mockturtle rewrite 而
+    接受候選；`functionallyEquivalent` 在此情境不能視為 SAT proof。後續 AIG/SAT 與
+    report redesign 必須拆分 proved-equivalent 與 trusted-but-unproven。
+12. optimizer 執行後若 graph 完全不變，回 `changed=false`、
+    `candidateGenerated=false`、`candidateAccepted=false`、
+    `wholeDesignEquivalenceChecked=false`，並以 `StructuralIdentity` 證明等價；不消耗
+    whole-design SAT 預算。
 
 ## 8. 實作與測試狀態
 
@@ -209,14 +239,24 @@ src/transformation/EditFlow.cpp
 ```text
 mini test/test30
   DFF.Q boundary no-op、局部 NOR/NOT conversion
+  10 passed
 
 mini test/test31
   global/scoped depth improvement
   mandatory whole-design SAT
+  graph-identity no-op SAT fast path
   targetDepth rollback
   invalid scope
   DFF.Q local basis constraint
   no-basis scoped depth objective
+  finite/enum request validation、pre-core timeout guard
+  legacy pass unsupported-field rejection、verbose warning
+  22 passed
+
+mini test/test31/double_inverter_worklist_regression.cpp
+  reverse gate-ID chain correctness、PO driver protection、structure validation
+  200,000-gate reverse-ID NOT chain 約 0.022 秒
+  3 passed
 
 mini test/test32
   27 passed：tools parser/report/cache/timeout

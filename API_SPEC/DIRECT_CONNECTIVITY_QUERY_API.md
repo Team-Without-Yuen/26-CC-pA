@@ -54,6 +54,21 @@ Gate.inputNetIds  -> gate 直接讀取的 input nets
 Gate.outputNetId  -> gate 直接驅動的 output net
 ```
 
+Active object 規則：
+
+```text
+Direct Connectivity Query 只回報 active gate / active net。
+已移除 gate（GateType::UNKNOWN）與已移除 net（isRemoved=true）視為不存在。
+helper 不只檢查 ID 範圍，也會檢查 cached driver/load 是否與 gate 端 output/input pin 雙向一致。
+```
+
+這個規則的原因：
+
+```text
+cleanup / optimization 會使用 tombstone 保留 ID 穩定性。
+如果 query 只看 vector index 或 net.loadGateIds / net.driverGateId cache，可能把已刪除或 stale edge 誤報成有效直接連線。
+```
+
 Immediate fanin / fanout 定義：
 
 ```text
@@ -86,6 +101,13 @@ NetLoadGates / GateFanout 只回答 gate instance adjacency。
 FanoutLoadReport 回答 QA 定義的 pin-level fanout load。
 ```
 
+同一顆 gate 多個 input pin 接同一條 net 時：
+
+```text
+NetLoadGates / GateFanout 只列一次 gate instance。
+FanoutLoadReport 依 pin-level load 計數，會把每個 input pin 分別計入。
+```
+
 ---
 
 ## 3. 低階 Helper
@@ -104,6 +126,8 @@ std::vector<std::string> getNetDriverGateNames(const std::string& netName) const
 ```text
 getNetDriverGateId() 適合 scalar net，沒有 driver 時回傳 -1。
 getNetDriverGateIds() 支援 bus，會展開 bit nets 並去重。
+removed scalar net 視為不存在；bus 只有至少一個 active bit net 時才存在。
+driver 必須同時滿足 net.driverGateId == gateId 且 gate.outputNetId == netId。
 ```
 
 ---
@@ -121,6 +145,8 @@ size_t getNetLoadGateCount(const std::string& netName) const;
 ```text
 取得指定 net / bus 直接 load 到的 gates。
 這組 API 是 getWireLoads() / getWireLoadNames() / getWireLoadCount() 的 Net 命名 wrapper。
+removed scalar net 視為不存在；bus 只回報 active bit nets 的 loads。
+load gate 必須實際在 inputNetIds 中使用該 net，stale loadGateIds cache 不會被回報。
 ```
 
 ---
@@ -172,6 +198,8 @@ std::string getGateOutputNetName(const std::string& gateInstName) const;
 ```text
 取得 gate 直接連接的 input nets / output net。
 若 gate input 有 -1 disconnected slot，會被略過。
+GateOutput 對 active gate 若沒有有效且雙向一致的 active output net，會成功回報 gate 存在，
+但 `count=0`、`netId=-1`，且不填入 `netName` / `netIds` / `netNames` payload。
 ```
 
 ---
@@ -193,6 +221,7 @@ size_t getGateFanoutCount(const std::string& gateInstName) const;
 ```text
 GateFanin 只看直接驅動 gate input nets 的上一層 gates。
 GateFanout 只看 gate output net 直接 load 到的下一層 gates。
+兩者都只回報雙向一致的 active edges。
 ```
 
 ---
@@ -212,6 +241,7 @@ bool isNetDirectlyConnectedToGate(const std::string& netName,
 ```text
 若 net 是 gate 的任一 input 或 output，回傳 true。
 兩個 API 語意相同，只是參數順序不同。
+removed gate/net 會回 false；高階 DirectlyConnected report 則回 ok=false、exists=false。
 ```
 
 ---

@@ -1,9 +1,10 @@
-module function_expr_circuit(a, b, c, clk, rst_n, y, x, nand_out, xnor_out, limited, q, q_expr, const_zero, const_one, y_copy);
+module function_expr_circuit(a, b, c, clk, rst_n, y, x, nand_out, xnor_out, limited, q, q_expr, const_zero, const_one, y_copy, floating_expr);
 input a, b, c, clk, rst_n;
-output y, x, nand_out, xnor_out, limited, q, q_expr, const_zero, const_one, y_copy;
+output y, x, nand_out, xnor_out, limited, q, q_expr, const_zero, const_one, y_copy, floating_expr;
 
 wire n_and, n_not;
 wire n_deep1, n_deep2;
+wire floating_leaf;
 
 and g_and(n_and, a, b);
 not g_not(n_not, c);
@@ -22,5 +23,6 @@ or g_q_expr(q_expr, q, a);
 and g_const_zero(const_zero, a, 1'b0);
 or g_const_one(const_one, b, 1'b1);
 buf g_y_copy(y_copy, y);
+or g_floating(floating_expr, a, floating_leaf);
 
 endmodule

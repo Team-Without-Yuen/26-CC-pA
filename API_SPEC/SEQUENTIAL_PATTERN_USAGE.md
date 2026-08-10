@@ -19,6 +19,11 @@ const auto report = netlist.runSequentialPatternQuery(query);
 
 預設 `enableFunctionalFallback=false`，只跑 canonical fast path。大型 testcase 的 summary 應先使用這個模式。
 
+公開 CLI 的 all-DFF detail 若沒有指定 `--summary-only`、`--offset` 或 `--limit`，會自動將
+所有符合 filter 的 DFF records 寫入不覆寫的 artifact；terminal 只回 aggregate、
+`artifact_record_count` 與 `output_file`。指定單一 DFF 仍直接回 detail；offset/limit 只保留給
+題目明確要求 record window 的情況。
+
 ## 2. 指定 DFF
 
 ```cpp
@@ -206,6 +211,15 @@ D = EN ? DATA : Q
 | 是否為非 canonical 功能辨識？ | `detectionMethod=FunctionalCofactorSat` |
 | enable/hold 搜尋是否完整？ | `complete`, `timedOut` 與 per-DFF fallback 欄位 |
 | named data 是否解析完整？ | `dataSearchAttempted`, `dataSearchComplete`, `dataFunctionResolved` |
+
+CLI 完整名單範例：
+
+```text
+sequential_query enable_hold all --confirmed-only
+```
+
+讀取 `matched_dff_count`、`artifact_record_count`、`complete` 與 `output_file`；完整 detail 在
+artifact，不要將數 MB records 重新貼入自然語言答案。
 
 ## 9. 不屬於此 API
 

@@ -24,6 +24,46 @@ bool isActiveNet(const Netlist& netlist, int netId) {
     return netlist.isValidNetId(netId) && !netlist.getNet(netId).isRemoved;
 }
 
+bool hasConsistentActiveDriver(const Netlist& netlist, int netId, int gateId) {
+    return isActiveNet(netlist, netId) &&
+           isActiveGate(netlist, gateId) &&
+           netlist.getNet(netId).driverGateId == gateId &&
+           netlist.getGate(gateId).outputNetId == netId;
+}
+
+bool isConsistentActiveLoad(const Netlist& netlist, int netId, int gateId) {
+    if (!isActiveNet(netlist, netId) || !isActiveGate(netlist, gateId)) {
+        return false;
+    }
+    const std::vector<int>& loadGateIds = netlist.getNet(netId).loadGateIds;
+    if (std::find(loadGateIds.begin(), loadGateIds.end(), gateId) ==
+        loadGateIds.end()) {
+        return false;
+    }
+    const std::vector<int>& inputNetIds = netlist.getGate(gateId).inputNetIds;
+    return std::find(inputNetIds.begin(), inputNetIds.end(), netId) !=
+           inputNetIds.end();
+}
+
+std::vector<int> activeNetIdsForName(const Netlist& netlist,
+                                     const std::string& netName) {
+    std::vector<int> netIds;
+    const int scalarNetId = netlist.getNetId(netName);
+    if (isActiveNet(netlist, scalarNetId)) {
+        netIds.push_back(scalarNetId);
+        return netIds;
+    }
+
+    const std::vector<int> bitNetIds = netlist.expandNetToBits(netName);
+    netIds.reserve(bitNetIds.size());
+    for (int bitNetId : bitNetIds) {
+        if (isActiveNet(netlist, bitNetId)) {
+            netIds.push_back(bitNetId);
+        }
+    }
+    return netIds;
+}
+
 // 將 gate ID 陣列轉成 gate instance name 陣列；無效或已刪除(tombstone) 的 ID 會被略過。
 std::vector<std::string> gateIdsToNames(const Netlist& netlist,
                                         const std::vector<int>& gateIds) {
@@ -52,6 +92,33 @@ std::vector<int> uniqueValidGateIds(const Netlist& netlist,
     std::sort(filtered.begin(), filtered.end());
     filtered.erase(std::unique(filtered.begin(), filtered.end()), filtered.end());
     return filtered;
+}
+
+std::vector<int> driverGateIdsForNetIds(const Netlist& netlist,
+                                        const std::vector<int>& netIds) {
+    std::vector<int> driverGateIds;
+    driverGateIds.reserve(netIds.size());
+    for (int netId : netIds) {
+        const int driverGateId = netlist.getNet(netId).driverGateId;
+        if (hasConsistentActiveDriver(netlist, netId, driverGateId)) {
+            driverGateIds.push_back(driverGateId);
+        }
+    }
+    return uniqueValidGateIds(netlist, driverGateIds);
+}
+
+std::vector<int> loadGateIdsForNetIds(const Netlist& netlist,
+                                      const std::vector<int>& netIds) {
+    std::vector<int> loadGateIds;
+    for (int netId : netIds) {
+        const Net& net = netlist.getNet(netId);
+        for (int gateId : net.loadGateIds) {
+            if (isConsistentActiveLoad(netlist, netId, gateId)) {
+                loadGateIds.push_back(gateId);
+            }
+        }
+    }
+    return uniqueValidGateIds(netlist, loadGateIds);
 }
 
 // 將 pin name 正規化成大寫，方便辨識 DFF 的 D/CK/RN/SN。
@@ -96,7 +163,7 @@ int Netlist::getNetDriverGateId(int netId) const {
         return -1;
     }
     const int driverGateId = nets[netId].driverGateId;
-    if (!isValidGateId(driverGateId) || gates[driverGateId].type == GateType::UNKNOWN) {
+    if (!hasConsistentActiveDriver(*this, netId, driverGateId)) {
         return -1;
     }
     return driverGateId;
@@ -110,7 +177,7 @@ int Netlist::getNetDriverGateId(const std::string& netName) const {
     }
 
     const int driverGateId = nets[netId].driverGateId;
-    if (!isValidGateId(driverGateId) || gates[driverGateId].type == GateType::UNKNOWN) {
+    if (!hasConsistentActiveDriver(*this, netId, driverGateId)) {
         return -1;
     }
     return driverGateId;
@@ -118,20 +185,8 @@ int Netlist::getNetDriverGateId(const std::string& netName) const {
 
 // 取得指定 net / bus 的所有直接 driver gate IDs；bus 會展開每個 bit 並去重。
 std::vector<int> Netlist::getNetDriverGateIds(const std::string& netName) const {
-    std::vector<int> driverIds;
     const std::vector<int> netIds = expandNetToBits(netName);
-    driverIds.reserve(netIds.size());
-
-    for (int netId : netIds) {
-        if (!isValidNetId(netId) || nets[netId].isRemoved) {
-            continue;
-        }
-        const int driverGateId = nets[netId].driverGateId;
-        if (isValidGateId(driverGateId)) {
-            driverIds.push_back(driverGateId);
-        }
-    }
-    return uniqueValidGateIds(*this, driverIds);
+    return driverGateIdsForNetIds(*this, netIds);
 }
 
 // 取得指定 net / bus 的所有直接 driver gate names。
@@ -341,7 +396,7 @@ std::string Netlist::getGateOutputNetName(const std::string& gateInstName) const
         return "";
     }
     const int outputNetId = getGateOutputNetId(gateId);
-    if (!isValidNetId(outputNetId) || nets[outputNetId].isRemoved) {
+    if (!hasConsistentActiveDriver(*this, outputNetId, gateId)) {
         return "";
     }
     return nets[outputNetId].name;
@@ -355,7 +410,7 @@ std::vector<int> Netlist::getGateFaninGateIds(const std::string& gateInstName) c
 
     for (int netId : inputNetIds) {
         const int driverGateId = nets[netId].driverGateId;
-        if (isValidGateId(driverGateId)) {
+        if (hasConsistentActiveDriver(*this, netId, driverGateId)) {
             faninGateIds.push_back(driverGateId);
         }
     }
@@ -385,12 +440,11 @@ bool Netlist::isGateDirectlyConnectedToNet(const std::string& gateInstName,
     }
 
     const Gate& gate = gates[gateId];
-    if (gate.outputNetId == netId) {
+    if (hasConsistentActiveDriver(*this, netId, gateId)) {
         return true;
     }
 
-    return std::find(gate.inputNetIds.begin(), gate.inputNetIds.end(), netId) !=
-           gate.inputNetIds.end();
+    return isConsistentActiveLoad(*this, netId, gateId);
 }
 
 // 判斷指定 net 是否直接連到指定 gate；與 isGateDirectlyConnectedToNet 同語意。
@@ -407,23 +461,26 @@ Netlist::DirectConnectivityReport Netlist::runDirectConnectivityQuery(
     report.netName = query.netName;
 
     switch (query.type) {
-    case DirectConnectivityQueryType::NetDriverGates:
+    case DirectConnectivityQueryType::NetDriverGates: {
         if (query.netName.empty()) {
             report.message = "NetDriverGates requires netName";
             return report;
         }
-        report.netId = getNetId(query.netName);
-        if (!isValidNetId(report.netId) && expandNetToBits(query.netName).empty()) {
+        const std::vector<int> activeNetIds = activeNetIdsForName(*this, query.netName);
+        if (activeNetIds.empty()) {
             report.message = "Net not found: " + query.netName;
             return report;
         }
+        const int scalarNetId = getNetId(query.netName);
+        report.netId = isActiveNet(*this, scalarNetId) ? scalarNetId : -1;
         report.ok = true;
         report.exists = true;
         report.message = "Net driver";
         {
             // 只解析一次 netName -> driver gate IDs（bus 情況下這一步是 O(所有 net 數)
             // 的線性掃描），names 直接從同一份結果轉換，避免重複掃描整個 netlist。
-            const std::vector<int> driverGateIds = getNetDriverGateIds(query.netName);
+            const std::vector<int> driverGateIds =
+                driverGateIdsForNetIds(*this, activeNetIds);
             if (query.includeIds) {
                 report.gateIds = driverGateIds;
                 if (report.gateIds.size() == 1) {
@@ -439,25 +496,28 @@ Netlist::DirectConnectivityReport Netlist::runDirectConnectivityQuery(
             report.count = driverGateIds.size();
         }
         return report;
+    }
 
-    case DirectConnectivityQueryType::NetLoadGates:
+    case DirectConnectivityQueryType::NetLoadGates: {
         if (query.netName.empty()) {
             report.message = "NetLoadGates requires netName";
             return report;
         }
-        report.netId = getNetId(query.netName);
-        if (!isValidNetId(report.netId) && expandNetToBits(query.netName).empty()) {
+        const std::vector<int> activeNetIds = activeNetIdsForName(*this, query.netName);
+        if (activeNetIds.empty()) {
             report.message = "Net not found: " + query.netName;
             return report;
         }
+        const int scalarNetId = getNetId(query.netName);
+        report.netId = isActiveNet(*this, scalarNetId) ? scalarNetId : -1;
         report.ok = true;
         report.exists = true;
         report.message = "Net loads";
         {
-            // getWireLoads() 對 bus name 是整個 netNameToId 的線性掃描；原本 ids/
-            // names/count 各自呼叫一次等於掃 3 次，這裡改成只掃一次，names/count
-            // 都從同一份結果推導。
-            const std::vector<int> loadGateIds = getNetLoadGateIds(query.netName);
+            // bus name 解析會線性掃描 netNameToId；這裡只解析一次，names/count
+            // 都從同一份 active bit 與 load gate 結果推導。
+            const std::vector<int> loadGateIds =
+                loadGateIdsForNetIds(*this, activeNetIds);
             if (query.includeIds) {
                 report.gateIds = loadGateIds;
             }
@@ -467,6 +527,7 @@ Netlist::DirectConnectivityReport Netlist::runDirectConnectivityQuery(
             report.count = loadGateIds.size();
         }
         return report;
+    }
 
     case DirectConnectivityQueryType::FanoutLoadReport:
         if (query.netName.empty()) {
@@ -529,13 +590,19 @@ Netlist::DirectConnectivityReport Netlist::runDirectConnectivityQuery(
         report.ok = true;
         report.exists = true;
         report.message = "Gate input nets";
-        if (query.includeIds) {
-            report.netIds = getGateInputNetIds(query.gateName);
+        {
+            const std::vector<int> inputNetIds = getGateInputNetIds(query.gateName);
+            report.count = inputNetIds.size();
+            if (query.includeIds) {
+                report.netIds = inputNetIds;
+            }
+            if (query.includeNames) {
+                report.netNames.reserve(inputNetIds.size());
+                for (int netId : inputNetIds) {
+                    report.netNames.push_back(nets[netId].name);
+                }
+            }
         }
-        if (query.includeNames) {
-            report.netNames = getGateInputNetNames(query.gateName);
-        }
-        report.count = query.includeIds ? report.netIds.size() : report.netNames.size();
         return report;
 
     case DirectConnectivityQueryType::GateOutput:
@@ -551,12 +618,16 @@ Netlist::DirectConnectivityReport Netlist::runDirectConnectivityQuery(
         report.ok = true;
         report.exists = true;
         report.message = "Gate output net";
-        report.netId = getGateOutputNetId(report.gateId);
-        if (isValidNetId(report.netId)) {
-            report.netName = nets[report.netId].name;
+        {
+            const int outputNetId = getGateOutputNetId(report.gateId);
+            if (!hasConsistentActiveDriver(*this, outputNetId, report.gateId)) {
+                return report;
+            }
+            report.netId = outputNetId;
+            report.netName = nets[outputNetId].name;
             report.count = 1;
             if (query.includeIds) {
-                report.netIds.push_back(report.netId);
+                report.netIds.push_back(outputNetId);
             }
             if (query.includeNames) {
                 report.netNames.push_back(report.netName);
@@ -615,11 +686,11 @@ Netlist::DirectConnectivityReport Netlist::runDirectConnectivityQuery(
         }
         report.gateId = getGateId(query.gateName);
         report.netId = getNetId(query.netName);
-        if (!isValidGateId(report.gateId)) {
+        if (!isActiveGate(*this, report.gateId)) {
             report.message = "Gate not found: " + query.gateName;
             return report;
         }
-        if (!isValidNetId(report.netId)) {
+        if (!isActiveNet(*this, report.netId)) {
             report.message = "Net not found: " + query.netName;
             return report;
         }
@@ -649,34 +720,7 @@ Netlist::DirectConnectivityReport Netlist::runDirectConnectivityQuery(
 // 回傳指定 wire / bus 被多少個 gate input pins 直接使用
 // return which gate input pins this wire is connected to.
 std::vector<int> Netlist::getWireLoads(const std::string& wireName) const {
-    auto it = netNameToId.find(wireName);
-    if (it != netNameToId.end()) {
-        if (nets[it->second].isRemoved) {
-            return {};
-        }
-        return uniqueValidGateIds(*this, nets[it->second].loadGateIds);
-    }
-
-    std::vector<int> allLoadGates;
-    bool isBusFound = false;
-    const std::string busPrefix = wireName + "[";
-
-    for (const auto& pair : netNameToId) {
-        if (pair.first.find(busPrefix) == 0) {
-            if (nets[pair.second].isRemoved) {
-                continue;
-            }
-            const std::vector<int>& loads = nets[pair.second].loadGateIds;
-            allLoadGates.insert(allLoadGates.end(), loads.begin(), loads.end());
-            isBusFound = true;
-        }
-    }
-
-    if (isBusFound) {
-        return uniqueValidGateIds(*this, allLoadGates);
-    }
-
-    return {};
+    return loadGateIdsForNetIds(*this, activeNetIdsForName(*this, wireName));
 }
 
 // 回傳指定 wire / bus 直接 load 到的 gate instance names。
@@ -716,7 +760,17 @@ std::vector<int> Netlist::getGateFanout(const std::string& gateInstName) const {
     }
 
     const Net& outNet = nets[gate.outputNetId];
-    return uniqueValidGateIds(*this, outNet.loadGateIds);
+    if (!hasConsistentActiveDriver(*this, outNet.id, gate.id)) {
+        return {};
+    }
+    std::vector<int> consistentFanoutIds;
+    consistentFanoutIds.reserve(outNet.loadGateIds.size());
+    for (int gateId : outNet.loadGateIds) {
+        if (isConsistentActiveLoad(*this, outNet.id, gateId)) {
+            consistentFanoutIds.push_back(gateId);
+        }
+    }
+    return uniqueValidGateIds(*this, consistentFanoutIds);
 }
 
 // 回傳指定 gate output net 直接 fanout 到的 gate instance names。

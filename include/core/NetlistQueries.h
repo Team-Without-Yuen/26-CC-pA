@@ -46,7 +46,7 @@ struct BasicQuery {
     int constValue = -1;                    // constant input filter：-1 不限制，0 表示 1'b0，1 表示 1'b1
     int inputCount = -1;                    // gate input-count filter：-1 表示不限制
     bool includeIds = true;                 // 回傳 report 時是否填 gateIds/netIds
-    bool includeNames = true;               // 回傳 report 時是否填 gateNames/netNames/portNames
+    bool includeNames = true;               // 是否填 gateNames/netNames/portNames；不控制 structured ports
 };
 
 struct PortSummary {
@@ -77,8 +77,8 @@ struct BasicReport {
     bool exists = false;                    // 指定 name 是否存在
     bool isDff = false;                     // GateInfo 使用
     bool isCombinational = false;           // GateInfo 使用
-    bool isPrimaryInput = false;            // NetInfo 使用
-    bool isPrimaryOutput = false;           // NetInfo 使用
+    bool isPrimaryInput = false;            // NetInfo/PortInfo 使用
+    bool isPrimaryOutput = false;           // NetInfo/PortInfo 使用
     bool isConstant = false;                // NetInfo 使用
     bool isBus = false;                     // PortInfo 使用
     int portWidth = -1;                     // PortInfo 使用
@@ -96,6 +96,8 @@ struct BasicReport {
     std::vector<std::string> noLoadNets;        // structural issue：無 load 的 nets
     std::vector<std::string> floatingNets;      // structural issue：undriven/no-load union
     std::vector<std::string> unconnectedGates;  // structural issue：有未連接 pin 的 gates
+    std::vector<std::string> floatingPrimaryInputNets;    // PI bit nets with no active load
+    std::vector<std::string> unconnectedPrimaryOutputNets; // PO bit nets with no active driver
 };
 
 // =========================================================================
@@ -309,10 +311,13 @@ struct FunctionSearchQuery {
     bool internalSignalsOnly = true;
     bool allowSameSignalPair = false;
 
-    size_t maxResults = 256;
+    size_t maxResults = 0; // 0 = 不限制完整搜尋；正值只供明確 result limit
+    size_t maxStoredMatches = 256; // report.matches 最多保留的 samples；0 = 不保留
     size_t simulationPatternCount = 256;
     double timeLimitSeconds = 30.0;
     bool expandEquivalentPairs = true; // false 時只回傳 SAT-proven equivalenceClasses
+    bool writeMatchesToFile = false; // FindAll 可將完整 records 以 streaming 寫檔
+    std::string outputFilePath;       // 空字串時使用 backend 相容預設檔名
 };
 
 struct FunctionSearchMatch {
@@ -367,10 +372,14 @@ struct FunctionSearchReport {
     size_t unsupportedSignalCount = 0;
     size_t equivalenceClassCount = 0;
     size_t equivalentPairCount = 0;
+    size_t matchCount = 0; // 完整找到的 match 數；不等於 samples vector 大小
     size_t simulationPatternCount = 0;
     double elapsedSeconds = 0.0;
 
-    std::vector<FunctionSearchMatch> matches;
+    bool wroteMatchesToFile = false;
+    std::string outputFilePath;
+
+    std::vector<FunctionSearchMatch> matches; // 只保存 query.maxStoredMatches 筆 samples
     std::vector<FunctionSearchEquivalenceClass> equivalenceClasses;
 };
 

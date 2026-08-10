@@ -86,7 +86,8 @@ if ($responses.Count -ge 28) {
         ($help -match "opt_query critical_path_depth" -and
          $help -match "opt_apply critical_path_depth" -and
          $help -match "--target-depth N" -and
-         $help -match "whole-design SAT") `
+         $help -match "equivalence validation" -and
+         $help -match "StructuralIdentity") `
         "help exposes the public depth optimization contract"
 
     Check-Result `
@@ -197,11 +198,13 @@ if ($responses.Count -ge 28) {
         ($timedOut -match "status: timeout" -and
          $timedOut -match "design_revision: 0" -and
          $timedOut -match "report_success: false" -and
-         $timedOut -match "rolled_back: true" -and
+         $timedOut -match "rolled_back: false" -and
+         $timedOut -match "core_status: TIMEOUT" -and
+         $timedOut -match "candidate_generated: false" -and
          $timedOut -match "whole_design_equivalence_checked: false" -and
-         $timedOut -match "whole_design_timed_out: true" -and
+         $timedOut -match "whole_design_timed_out: false" -and
          $timedOut -match "candidate_accepted: false") `
-        "exhausted time budget is explicit and never commits the candidate"
+        "exhausted pre-core time budget is explicit and never starts a candidate"
 
     Check-Result `
         ($depthAfterTimeout -match "Worst endpoint: ff0.D depth=7") `
@@ -209,7 +212,9 @@ if ($responses.Count -ge 28) {
 
     Check-Result `
         ($cachedTimeout -match "report_success: false" -and
-         $cachedTimeout -match "whole_design_timed_out: true") `
+         $cachedTimeout -match "core_status: TIMEOUT" -and
+         $cachedTimeout -match "candidate_generated: false" -and
+         $cachedTimeout -match "whole_design_timed_out: false") `
         "timeout report remains available to follow-up queries"
 
     Check-Result `

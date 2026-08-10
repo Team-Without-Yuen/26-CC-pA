@@ -4,7 +4,7 @@
 #include <iostream>
 #include <stdexcept>
 #include <unordered_map>
-#include "include/core/Netlist.h"   
+#include "include/core/Netlist.h"
 
 namespace eqeng {
 

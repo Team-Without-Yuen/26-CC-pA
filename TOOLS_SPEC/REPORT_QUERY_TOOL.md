@@ -7,7 +7,14 @@
 完整性規則：不得把 changed-name sample 當成全部；只問數量時讀 delta/count 欄位並回摘要。
 時間限制依題目指定。詳見 [`LLM_NOTES.md`](LLM_NOTES.md)。
 
-## 2. Command Grammar
+## 2. 選擇條件
+
+prompt 使用 `previous step`、`last edit`、`how many were removed/added`、`what changed`、
+`how did the optimization perform` 等 follow-up 語意，且答案已存在最近一次 edit/optimization
+report 時使用本 tool。若 prompt 要求 current design 的即時結構統計，仍使用對應 query；
+若要求重新執行 transformation，使用 `edit_apply`/`opt_apply`。
+
+## 3. Command Grammar
 
 ```text
 report_query last_edit
@@ -15,7 +22,7 @@ report_query last_edit
 
 在任何 `edit_apply`/`opt_apply` 前呼叫會回 `NO_LAST_EDIT_REPORT`。新的 edit 或 optimization apply 會覆蓋上一筆 cached report；read-only query、equivalence 與 write 不會覆蓋它。新的 `read` 會清除 cache。
 
-## 3. 輸出判讀
+## 4. 輸出判讀
 
 輸出欄位與 [`EDIT_APPLY_TOOL.md`](EDIT_APPLY_TOOL.md) 的 edit report 相同，主要包括：
 
@@ -35,7 +42,7 @@ changed_gate_names / changed_net_names
 warnings
 ```
 
-## 4. Prompt Examples
+## 5. Prompt Examples
 
 ```text
 Prompt: What changed in the previous step?
@@ -61,7 +68,7 @@ Command: report_query last_edit
 Read: depth_change.before_depth/after_depth/improved，以及 depth_optimization.candidate_accepted/whole_design_equivalent
 ```
 
-## 5. 限制
+## 6. 限制
 
 - 只能取得最近一筆 edit/optimization apply，沒有歷史 report list。
 - `report_query` 的成功只代表 cache 可讀，不表示上一筆 operation 一定成功；仍需讀 `report_success`、`rolled_back`。

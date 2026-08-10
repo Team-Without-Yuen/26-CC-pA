@@ -10,27 +10,80 @@
 #include <utility>
 #include <vector>
 
+namespace {
+
+bool isActiveConeGate(const Netlist& netlist, int gateId) {
+    return netlist.isValidGateId(gateId) &&
+           netlist.getGate(gateId).type != GateType::UNKNOWN;
+}
+
+bool isActiveConeNet(const Netlist& netlist, int netId) {
+    return netlist.isValidNetId(netId) && !netlist.getNet(netId).isRemoved;
+}
+
+bool hasConsistentConeDriver(const Netlist& netlist, int netId, int gateId) {
+    return isActiveConeNet(netlist, netId) &&
+           isActiveConeGate(netlist, gateId) &&
+           netlist.getNet(netId).driverGateId == gateId &&
+           netlist.getGate(gateId).outputNetId == netId;
+}
+
+bool hasConsistentConeLoad(const Netlist& netlist, int netId, int gateId) {
+    if (!isActiveConeNet(netlist, netId) ||
+        !isActiveConeGate(netlist, gateId)) {
+        return false;
+    }
+
+    const Net& net = netlist.getNet(netId);
+    const Gate& gate = netlist.getGate(gateId);
+    return std::find(net.loadGateIds.begin(), net.loadGateIds.end(), gateId) !=
+               net.loadGateIds.end() &&
+           std::find(gate.inputNetIds.begin(), gate.inputNetIds.end(), netId) !=
+               gate.inputNetIds.end();
+}
+
+std::vector<int> activeConeNetIdsForName(const Netlist& netlist,
+                                         const std::string& netName) {
+    std::vector<int> activeNetIds;
+    const int scalarNetId = netlist.getNetId(netName);
+    if (isActiveConeNet(netlist, scalarNetId)) {
+        activeNetIds.push_back(scalarNetId);
+        return activeNetIds;
+    }
+
+    const std::vector<int> bitNetIds = netlist.expandNetToBits(netName);
+    activeNetIds.reserve(bitNetIds.size());
+    for (int bitNetId : bitNetIds) {
+        if (isActiveConeNet(netlist, bitNetId)) {
+            activeNetIds.push_back(bitNetId);
+        }
+    }
+    return activeNetIds;
+}
+
 // 將 cone path 回傳的 net ID 序列轉成 net name 序列。
 // findLongestPathInCone / findShortestPathInCone 的 raw path 存的是 net ID，不是 gate ID。
-static std::vector<std::string> coneNetPathToNames(
+std::vector<std::string> coneNetPathToNames(
     const Netlist& netlist,
     const std::vector<int>& netPath) {
     std::vector<std::string> pathNames;
     pathNames.reserve(netPath.size());
     for (int netId : netPath) {
-        if (netId >= 0 && netId < static_cast<int>(netlist.getNetCount())) {
+        if (isActiveConeNet(netlist, netId)) {
             pathNames.push_back(netlist.getNet(netId).name);
         }
     }
     return pathNames;
 }
 
+} // namespace
+
 //  支援 Bus 的 Transitive Fanin Cone (多源 BFS)
 ConeResult Netlist::getTransitiveFaninCone(const std::string& netName) const {
     ConeResult result;
     
     // 展開 Bus，取得所有起點
-    std::vector<int> startIds = expandNetToBits(netName);
+    std::vector<int> startIds = activeConeNetIdsForName(*this, netName);
     if (startIds.empty()) return result;
 
     result.rootNetIds = startIds;
@@ -47,16 +100,19 @@ ConeResult Netlist::getTransitiveFaninCone(const std::string& netName) const {
         int currNetId = q.front();
         q.pop();
 
+        if (!isActiveConeNet(*this, currNetId)) {
+            continue;
+        }
         const Net& net = nets[currNetId];
 
-        if (net.driverGateId >= 0) {
+        if (hasConsistentConeDriver(*this, currNetId, net.driverGateId)) {
             const Gate& driver = gates[net.driverGateId];
 
             if (driver.type == GateType::DFF) continue;
 
             for (int i = 0; i < (int)driver.inputNetIds.size(); i++) {
                 int inNetId = driver.inputNetIds[i];
-                if (inNetId < 0) continue;
+                if (!hasConsistentConeLoad(*this, inNetId, driver.id)) continue;
                 result.children[currNetId].push_back(inNetId);
                 
                 if (result.netIds.insert(inNetId).second) { 
@@ -74,7 +130,7 @@ ConeResult Netlist::getTransitiveFanoutCone(const std::string& netName) const {
     ConeResult result;
     
     // 展開 Bus，取得所有起點
-    std::vector<int> startIds = expandNetToBits(netName);
+    std::vector<int> startIds = activeConeNetIdsForName(*this, netName);
     if (startIds.empty()) return result;
 
     result.rootNetIds = startIds;
@@ -91,16 +147,20 @@ ConeResult Netlist::getTransitiveFanoutCone(const std::string& netName) const {
         int currNetId = q.front();
         q.pop();
 
+        if (!isActiveConeNet(*this, currNetId)) {
+            continue;
+        }
         const Net& net = nets[currNetId];
 
         for (int i = 0; i < (int)net.loadGateIds.size(); i++) {
             int gateId = net.loadGateIds[i];
+            if (!hasConsistentConeLoad(*this, currNetId, gateId)) continue;
             const Gate& gate = gates[gateId];
 
             if (gate.type == GateType::DFF) continue;
 
             int outNetId = gate.outputNetId;
-            if (outNetId < 0) continue;
+            if (!hasConsistentConeDriver(*this, outNetId, gateId)) continue;
 
             result.children[currNetId].push_back(outNetId);
             
@@ -115,12 +175,12 @@ ConeResult Netlist::getTransitiveFanoutCone(const std::string& netName) const {
 
 ConeResult Netlist::getGateTransitiveFaninCone(const std::string& gateName) const {
     int gateId = getGateId(gateName);
-    if (gateId < 0) return ConeResult(); // 找不到該 Gate
+    if (!isActiveConeGate(*this, gateId)) return ConeResult(); // 找不到該 Gate
 
     const Gate& gate = gates[gateId];
     
     // 如果這個 Gate 沒有輸出線 (例如輸出懸空)
-    if (gate.outputNetId < 0) return ConeResult(); 
+    if (!hasConsistentConeDriver(*this, gate.outputNetId, gateId)) return ConeResult();
 
     // Gate 的 Fanin 錐，就是它「輸出線」的 Fanin 錐
     return getTransitiveFaninCone(nets[gate.outputNetId].name);
@@ -128,10 +188,10 @@ ConeResult Netlist::getGateTransitiveFaninCone(const std::string& gateName) cons
 
 ConeResult Netlist::getGateTransitiveFanoutCone(const std::string& gateName) const {
     int gateId = getGateId(gateName);
-    if (gateId < 0) return ConeResult();
+    if (!isActiveConeGate(*this, gateId)) return ConeResult();
 
     const Gate& gate = gates[gateId];
-    if (gate.outputNetId < 0) return ConeResult();
+    if (!hasConsistentConeDriver(*this, gate.outputNetId, gateId)) return ConeResult();
 
     // Gate 的 Fanout 錐，就是它「輸出線」的 Fanout 錐
     return getTransitiveFanoutCone(nets[gate.outputNetId].name);
@@ -142,7 +202,7 @@ std::vector<int> Netlist::getConeNetIds(const ConeResult& cone) const {
     std::vector<int> netIds;
     netIds.reserve(cone.netIds.size());
     for (int netId : cone.netIds) {
-        if (isValidNetId(netId)) {
+        if (isActiveConeNet(*this, netId)) {
             netIds.push_back(netId);
         }
     }
@@ -171,32 +231,30 @@ std::vector<int> Netlist::getConeGateIds(const ConeResult& cone) const {
     std::unordered_set<int> gateSet;
     for (const auto& edgeList : cone.children) {
         const int fromNetId = edgeList.first;
-        if (!isValidNetId(fromNetId)) {
+        if (!isActiveConeNet(*this, fromNetId)) {
             continue;
         }
 
         for (int toNetId : edgeList.second) {
-            if (!isValidNetId(toNetId)) {
+            if (!isActiveConeNet(*this, toNetId)) {
                 continue;
             }
 
             const int fromDriverId = nets[fromNetId].driverGateId;
-            if (isValidGateId(fromDriverId) && !isGateRemoved(fromDriverId)) {
+            if (hasConsistentConeDriver(*this, fromNetId, fromDriverId)) {
                 const Gate& gate = gates[fromDriverId];
                 if (gate.type != GateType::DFF &&
-                    std::find(gate.inputNetIds.begin(), gate.inputNetIds.end(), toNetId) !=
-                        gate.inputNetIds.end()) {
+                    hasConsistentConeLoad(*this, toNetId, fromDriverId)) {
                     gateSet.insert(fromDriverId);
                     continue;
                 }
             }
 
             const int toDriverId = nets[toNetId].driverGateId;
-            if (isValidGateId(toDriverId) && !isGateRemoved(toDriverId)) {
+            if (hasConsistentConeDriver(*this, toNetId, toDriverId)) {
                 const Gate& gate = gates[toDriverId];
                 if (gate.type != GateType::DFF &&
-                    std::find(gate.inputNetIds.begin(), gate.inputNetIds.end(), fromNetId) !=
-                        gate.inputNetIds.end()) {
+                    hasConsistentConeLoad(*this, fromNetId, toDriverId)) {
                     gateSet.insert(toDriverId);
                 }
             }
@@ -266,35 +324,45 @@ Netlist::ConeReport Netlist::runConeQuery(const ConeQuery& query) const {
     report.type = query.type;
 
     switch (query.type) {
-    case ConeQueryType::NetTransitiveFanin:
+    case ConeQueryType::NetTransitiveFanin: {
         if (query.netName.empty()) {
             report.message = "NetTransitiveFanin requires netName";
             return report;
         }
-        if (expandNetToBits(query.netName).empty()) {
+        const std::vector<int> activeRootIds =
+            activeConeNetIdsForName(*this, query.netName);
+        if (activeRootIds.empty()) {
             report.message = "Net not found: " + query.netName;
             return report;
         }
         report.sourceName = query.netName;
-        report.sourceId = getNetId(query.netName);
+        const int scalarNetId = getNetId(query.netName);
+        report.sourceId = isActiveConeNet(*this, scalarNetId)
+            ? scalarNetId : activeRootIds.front();
         report.cone = getTransitiveFaninCone(query.netName);
         report.message = "Net transitive fanin cone";
         break;
+    }
 
-    case ConeQueryType::NetTransitiveFanout:
+    case ConeQueryType::NetTransitiveFanout: {
         if (query.netName.empty()) {
             report.message = "NetTransitiveFanout requires netName";
             return report;
         }
-        if (expandNetToBits(query.netName).empty()) {
+        const std::vector<int> activeRootIds =
+            activeConeNetIdsForName(*this, query.netName);
+        if (activeRootIds.empty()) {
             report.message = "Net not found: " + query.netName;
             return report;
         }
         report.sourceName = query.netName;
-        report.sourceId = getNetId(query.netName);
+        const int scalarNetId = getNetId(query.netName);
+        report.sourceId = isActiveConeNet(*this, scalarNetId)
+            ? scalarNetId : activeRootIds.front();
         report.cone = getTransitiveFanoutCone(query.netName);
         report.message = "Net transitive fanout cone";
         break;
+    }
 
     case ConeQueryType::GateTransitiveFanin:
         if (query.gateName.empty()) {
@@ -302,7 +370,7 @@ Netlist::ConeReport Netlist::runConeQuery(const ConeQuery& query) const {
             return report;
         }
         report.sourceId = getGateId(query.gateName);
-        if (!isValidGateId(report.sourceId)) {
+        if (!isActiveConeGate(*this, report.sourceId)) {
             report.message = "Gate not found: " + query.gateName;
             return report;
         }
@@ -317,7 +385,7 @@ Netlist::ConeReport Netlist::runConeQuery(const ConeQuery& query) const {
             return report;
         }
         report.sourceId = getGateId(query.gateName);
-        if (!isValidGateId(report.sourceId)) {
+        if (!isActiveConeGate(*this, report.sourceId)) {
             report.message = "Gate not found: " + query.gateName;
             return report;
         }
@@ -328,8 +396,15 @@ Netlist::ConeReport Netlist::runConeQuery(const ConeQuery& query) const {
 
     case ConeQueryType::LargestOutputCone: {
         const std::vector<int> outputNetIds = getPrimaryOutputNetIds();
-        report.checkedOutputCount = outputNetIds.size();
-        if (outputNetIds.empty()) {
+        std::vector<int> activeOutputNetIds;
+        activeOutputNetIds.reserve(outputNetIds.size());
+        for (int outputNetId : outputNetIds) {
+            if (isActiveConeNet(*this, outputNetId)) {
+                activeOutputNetIds.push_back(outputNetId);
+            }
+        }
+        report.checkedOutputCount = activeOutputNetIds.size();
+        if (activeOutputNetIds.empty()) {
             report.message = "No primary outputs available";
             return report;
         }
@@ -340,11 +415,7 @@ Netlist::ConeReport Netlist::runConeQuery(const ConeQuery& query) const {
         ConeResult bestCone;
         int bestNetId = -1;
 
-        for (int netId : outputNetIds) {
-            if (!isValidNetId(netId)) {
-                continue;
-            }
-
+        for (int netId : activeOutputNetIds) {
             ConeResult cone = getTransitiveFaninCone(nets[netId].name);
             const size_t gateCount = getConeGateCount(cone);
             const size_t netCount = getConeNetCount(cone);
@@ -376,12 +447,14 @@ Netlist::ConeReport Netlist::runConeQuery(const ConeQuery& query) const {
             report.message = "SharedFaninGates requires netName and secondNetName";
             return report;
         }
-        const std::vector<int> firstRootIds = expandNetToBits(query.netName);
+        const std::vector<int> firstRootIds =
+            activeConeNetIdsForName(*this, query.netName);
         if (firstRootIds.empty()) {
             report.message = "Net not found: " + query.netName;
             return report;
         }
-        const std::vector<int> secondRootIds = expandNetToBits(query.secondNetName);
+        const std::vector<int> secondRootIds =
+            activeConeNetIdsForName(*this, query.secondNetName);
         if (secondRootIds.empty()) {
             report.message = "Net not found: " + query.secondNetName;
             return report;
@@ -389,12 +462,12 @@ Netlist::ConeReport Netlist::runConeQuery(const ConeQuery& query) const {
 
         report.sourceName = query.netName;
         report.sourceId = getNetId(query.netName);
-        if (!isValidNetId(report.sourceId)) {
+        if (!isActiveConeNet(*this, report.sourceId)) {
             report.sourceId = firstRootIds.front();
         }
         report.secondSourceName = query.secondNetName;
         report.secondSourceId = getNetId(query.secondNetName);
-        if (!isValidNetId(report.secondSourceId)) {
+        if (!isActiveConeNet(*this, report.secondSourceId)) {
             report.secondSourceId = secondRootIds.front();
         }
 
@@ -409,16 +482,21 @@ Netlist::ConeReport Netlist::runConeQuery(const ConeQuery& query) const {
             std::back_inserter(sharedGateIds));
 
         report.ok = true;
-        report.exists = !sharedGateIds.empty();
+        report.exists = true;
         report.gateCount = sharedGateIds.size();
-        report.rootNetIds = {report.sourceId, report.secondSourceId};
-        report.rootNetNames = {report.sourceName, report.secondSourceName};
-        report.message = report.exists
+        report.message = !sharedGateIds.empty()
             ? "Shared fanin cone gates"
             : "No gates are shared between the two fanin cones";
 
+        if (query.includeIds) {
+            report.rootNetIds = {report.sourceId, report.secondSourceId};
+        }
+        if (query.includeNames) {
+            report.rootNetNames = {report.sourceName, report.secondSourceName};
+        }
+
         for (int gateId : sharedGateIds) {
-            if (!isValidGateId(gateId) || isGateRemoved(gateId)) {
+            if (!isActiveConeGate(*this, gateId)) {
                 continue;
             }
             ++report.gateTypeCounts[gates[gateId].type];
@@ -444,7 +522,7 @@ Netlist::ConeReport Netlist::runConeQuery(const ConeQuery& query) const {
     report.gateCount = getConeGateCount(report.cone);
     const std::vector<int> coneGateIds = getConeGateIds(report.cone);
     for (int gateId : coneGateIds) {
-        if (isValidGateId(gateId) && !isGateRemoved(gateId)) {
+        if (isActiveConeGate(*this, gateId)) {
             ++report.gateTypeCounts[gates[gateId].type];
         }
     }
@@ -457,7 +535,7 @@ Netlist::ConeReport Netlist::runConeQuery(const ConeQuery& query) const {
 
     if (query.includeNames) {
         for (int rootNetId : report.cone.rootNetIds) {
-            if (isValidNetId(rootNetId)) {
+            if (isActiveConeNet(*this, rootNetId)) {
                 report.rootNetNames.push_back(nets[rootNetId].name);
             }
         }

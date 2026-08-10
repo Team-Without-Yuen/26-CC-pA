@@ -79,7 +79,8 @@ Boolean expression query 的基本流程：
 ```text
 SAT 表示存在一組 primary input / pseudo primary input assignment 讓條件成立。
 UNSAT 表示不存在任何 assignment 讓條件成立。
-Boolean expression 是結構展開結果，不代表已經做代數化簡。
+Boolean expression 以結構展開為主，會套用固定的 local Boolean identity；不做一般
+algebraic minimization 或 SAT-based canonicalization。
 ```
 
 ---
@@ -123,11 +124,13 @@ bool isNetConstantFunction(const std::string& netName, int constValue) const;
 bool isNetAlwaysZero(const std::string& netName) const;
 bool isNetAlwaysOne(const std::string& netName) const;
 
-std::string getBooleanExpression(const std::string& netName) const;
+std::string getBooleanExpression(const std::string& netName,
+                                 bool* wasTruncated = nullptr) const;
 std::string getBooleanExpressionOfNet(int netId) const;
 std::string getSimplifiedBooleanExpression(const std::string& netName,
                                            int maxDepth = 10) const;
 std::vector<std::string> getPrimaryInputsOfNet(const std::string& netName) const;
+PrimaryInputSupport getPrimaryInputSupportBreakdown(const std::string& netName) const;
 ```
 
 用途：
@@ -139,9 +142,10 @@ std::vector<std::string> getPrimaryInputsOfNet(const std::string& netName) const
 | `isNetConstantFunction(net, constValue)` | 檢查 scalar net 是否恆等於 `constValue` |
 | `isNetAlwaysZero(net)` | 檢查 scalar net 是否永遠為 0 |
 | `isNetAlwaysOne(net)` | 檢查 scalar net 是否永遠為 1 |
-| `getBooleanExpression(net)` | 展開完整 Boolean expression |
+| `getBooleanExpression(net, wasTruncated)` | 展開 Boolean expression；安全上限被觸發時可回報截斷 |
 | `getSimplifiedBooleanExpression(net, maxDepth)` | 產生 depth-limited Boolean expression |
 | `getPrimaryInputsOfNet(net)` | 回報 fanin cone 的 PI / DFF.Q pseudo-PI leaves |
+| `getPrimaryInputSupportBreakdown(net)` | 將 support 分成 real PI、DFF.Q 與 undriven leaf |
 
 LLM / tools 對外應優先使用 `runFunctionQuery()`，不要直接呼叫散裝 helper。
 
@@ -246,7 +250,8 @@ f(..., A=0, B=1, ...) == f(..., A=1, B=0, ...)
 ### 6.1 完整展開
 
 ```cpp
-std::string getBooleanExpression(const std::string& netName) const;
+std::string getBooleanExpression(const std::string& netName,
+                                 bool* wasTruncated = nullptr) const;
 ```
 
 用途：
@@ -269,8 +274,10 @@ XNOR(a, b)
 注意：
 
 ```text
-這是 structural expression，不做 algebraic minimization。
-大型 cone 可能產生非常長的字串。
+這是以 structural expansion 為主的 expression。
+會套用 same-input、constant-input、complementary-input 與 double-negation 等固定的
+local identity，但不做一般 algebraic minimization。
+內部具有 depth 與 expression-size safety limit；觸發時深層子式會退化成 net name。
 ```
 
 ### 6.2 Depth-limited 展開
@@ -298,6 +305,7 @@ maxDepth = 1：NOT(n_deep2)
 
 ```cpp
 std::vector<std::string> getPrimaryInputsOfNet(const std::string& netName) const;
+PrimaryInputSupport getPrimaryInputSupportBreakdown(const std::string& netName) const;
 ```
 
 用途：
@@ -312,6 +320,7 @@ std::vector<std::string> getPrimaryInputsOfNet(const std::string& netName) const
 ```text
 DFF.Q 會被列為 pseudo PI leaf。
 undriven non-PI leaf 也會保守列入。
+需要區分三者時，使用 `getPrimaryInputSupportBreakdown()` 或 FunctionReport 的分類欄位。
 ```
 
 ---
@@ -397,6 +406,9 @@ struct FunctionReport {
     int maxExpressionDepth = -1;
     bool expressionDepthLimited = false;
     std::vector<std::string> supportPrimaryInputs;
+    std::vector<std::string> supportRealPrimaryInputs;
+    std::vector<std::string> supportDffPseudoInputs;
+    std::vector<std::string> supportUndrivenLeaves;
 };
 ```
 
@@ -455,8 +467,8 @@ SAT 類 report 欄位：
 1. canNetBeValue / isNetConstantFunction / TruthStatus 只支援 scalar net。
 2. Equivalence 支援 bus，但 ConstantFunction 類還沒支援整個 bus 常數分類。
 3. Symmetry 會回傳非對稱 counterexample；其他 SAT query 目前不一定回傳 witness assignment。
-4. Boolean expression 是 structural expansion，不做 algebraic simplification。
-5. Boolean expression 對大型 cone 可能很長，建議使用 SimplifiedBooleanExpression。
+4. Boolean expression 只做固定 local identity，不做一般 algebraic minimization。
+5. Boolean expression 有內部 size/depth safety limit；大型 cone 仍建議使用 SimplifiedBooleanExpression。
 6. 目前不是 sequential equivalence checking，不跨 DFF cycle。
 7. SAT solver timeout / UNKNOWN 會回報 `ok=false` 與 `solverTimedOut` / `solverUnknown`，不再被混成普通 false。
 8. FunctionalDependence 目前要求 scalar target 與 scalar PI / DFF.Q pseudo-PI input，不把 internal driven net 當成可獨立切換的 input。
@@ -496,9 +508,10 @@ FunctionQuery / FunctionReport / runFunctionQuery()
 
 ```text
 mini test/test4/test4.cpp 已覆蓋 FunctionQuery 的 BooleanExpression、
-SimplifiedBooleanExpression、PrimaryInputsOfNet、DFF.Q boundary、SAT-based
+SimplifiedBooleanExpression、PrimaryInputsOfNet、support 三分類、undriven leaf、
+DFF.Q/tombstone boundary、SAT-based
 AlwaysZero / AlwaysOne / TruthStatus / CanBeValue / Equivalence、invalid query。
-目前 test4 結果：Summary: 15 passed, 0 failed.
+目前 test4 結果：Summary: 17 passed, 0 failed.
 CLI integration regression test9-test17：150 passed, 0 failed。
 ```
 
@@ -507,7 +520,7 @@ CLI integration regression test9-test17：150 passed, 0 failed。
 ```text
 bus constant status
 SAT counterexample model extraction
-expression algebraic simplification
-expression size budget / streaming mode
+一般 expression algebraic minimization / AIG expression index
+iterative expression traversal / 更明確的 truncation report
 bounded sequential analysis
 ```

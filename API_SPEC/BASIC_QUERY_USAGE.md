@@ -26,7 +26,7 @@ query.type + optional filter fields -> runBasicQuery() -> BasicReport
 ```text
 1. 建立 Netlist::BasicQuery query
 2. 設定 query.type
-3. 視 query.type 設定 query.name / query.gateType / query.constValue
+3. 視 query.type 設定 query.name / query.gateType / query.constValue / query.inputCount
 4. 視需求設定 query.includeIds / query.includeNames
 5. 呼叫 netlist.runBasicQuery(query)
 6. 從 report.ok / report.message / report.* 欄位讀結果
@@ -68,10 +68,10 @@ if (report.ok) {
 | `ListCombinationalGates` | 列出所有組合邏輯 gate | 無 | `gateIds`, `gateNames`, `gateCount` |
 | `GateInfo` | 查單一 gate 基本資訊 | `name` = gate instance name | `exists`, `objectId`, `objectName`, `typeName`, `isDff`, `isCombinational`, `formattedInfo` |
 | `NetInfo` | 查單一 net 基本資訊 | `name` = net name | `exists`, `objectId`, `objectName`, `typeName`, `isPrimaryInput`, `isPrimaryOutput`, `isConstant` |
-| `PortInfo` | 查單一 PI/PO port | `name` = port name | `exists`, `objectName`, `portWidth`, `isBus`, `netNames`, `netIds` |
+| `PortInfo` | 查單一 PI/PO port | `name` = port name | `exists`, `objectName`, `portWidth`, `isBus`, `isPrimaryInput`, `isPrimaryOutput`, `netNames`, `netIds` |
 | `CountByGateType` | 統計 gate type 數量 | `gateType` 可選 | `gateTypeCounts`, `gateCount`, `typeName` |
 | `GatesByType` | 列出指定 gate type | `gateType` | `gateIds`, `gateNames`, `gateCount`, `typeName` |
-| `GatesWithConstantInput` | 找 constant input gates | `gateType` 可選，`constValue` 可選 | `gateIds`, `gateNames`, `gateCount`, `typeName` |
+| `GatesWithConstantInput` | 找 constant input gates | `gateType`、`constValue`、`inputCount` 可選 | `gateIds`, `gateNames`, `gateCount`, `typeName` |
 | `StructuralIssues` | 找結構問題 | 無 | `undrivenNets`, `noLoadNets`, `floatingNets`, `unconnectedGates` |
 
 ---
@@ -86,8 +86,9 @@ if (report.ok) {
 | `name` | `std::string` | `""` | `GateInfo`, `NetInfo`, `PortInfo` 使用 |
 | `gateType` | `GateType` | `UNKNOWN` | `CountByGateType`, `GatesByType`, `GatesWithConstantInput` 使用 |
 | `constValue` | `int` | `-1` | `GatesWithConstantInput` 使用；`-1` 不限制、`0` 找 `1'b0`、`1` 找 `1'b1` |
+| `inputCount` | `int` | `-1` | `GatesWithConstantInput` 使用；`-1` 不限制，非負數限制 gate input 數量 |
 | `includeIds` | `bool` | `true` | 是否填入 `gateIds` / `netIds` |
-| `includeNames` | `bool` | `true` | 是否填入 `gateNames` / `netNames` / `portNames` |
+| `includeNames` | `bool` | `true` | 是否填入 `gateNames` / `netNames` / `portNames`；不控制 structured `ports` |
 
 `gateType` 的常見值：
 
@@ -139,8 +140,8 @@ if (report.ok) {
 | `formattedInfo` | 人類可讀的格式化資訊，目前主要由 `GateInfo` 使用 |
 | `isDff` | gate 是否 DFF |
 | `isCombinational` | gate 是否 combinational gate |
-| `isPrimaryInput` | net 是否 PI |
-| `isPrimaryOutput` | net 是否 PO |
+| `isPrimaryInput` | `NetInfo` 的 net 是否 PI，或 `PortInfo` 的 port 是否 input |
+| `isPrimaryOutput` | `NetInfo` 的 net 是否 PO，或 `PortInfo` 的 port 是否 output |
 | `isConstant` | net 是否 constant |
 | `isBus` | port 是否 bus |
 | `portWidth` | port bit width |
@@ -164,6 +165,8 @@ if (report.ok) {
 | `noLoadNets` | 非 PO、非 constant，且沒有 load gate 的 nets |
 | `floatingNets` | `undrivenNets` 和 `noLoadNets` 的 union |
 | `unconnectedGates` | input 或 output 有無效 / unconnected net ID 的 gates |
+| `floatingPrimaryInputNets` | 沒有雙向一致 active load 的 PI bit nets |
+| `unconnectedPrimaryOutputNets` | 沒有雙向一致 active driver 的 PO bit nets |
 
 ---
 
@@ -225,6 +228,8 @@ query.type = Netlist::BasicQueryType::ListDffs;
 Netlist::BasicReport report = netlist.runBasicQuery(query);
 std::vector<std::string> dffNames = report.gateNames;
 ```
+
+`ListPrimaryInputs` / `ListPrimaryOutputs` 的 `ports` 一律包含 declaration-order metadata。若設定 `includeNames=false`，只有重複的 `portNames` 會省略，`ports` 仍可用來取得各 port 的 name、width、range 與 direction。
 
 ---
 
@@ -317,7 +322,7 @@ constant net 可能是 parser 內部建立的 net。
 用途：
 
 ```text
-查 PI/PO port 是否存在、是否 bus、bit width、展開後的 bit net names。
+查 PI/PO port 是否存在、方向、是否 bus、bit width，以及展開後的 bit net names/IDs。
 ```
 
 寫法：
@@ -336,10 +341,13 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 |---|---|
 | port 是否存在 | `report.ok && report.exists` |
 | port name | `report.objectName` |
+| port 是否 input/output | `report.isPrimaryInput`, `report.isPrimaryOutput` |
 | 是否 bus | `report.isBus` |
 | bit width | `report.portWidth` |
 | bit net names | `report.netNames` |
 | bit net IDs | `report.netIds` |
+
+`netNames` 與 `netIds` 都依 Verilog port declaration order 排列，且相同 index 對應同一個 bit。例如 `input [3:0] data_in` 會依序回傳 `data_in[3]` 到 `data_in[0]`。關閉 `includeIds` 或 `includeNames` 只會讓對應 vector 保持空白，不會改變另一個 vector 的順序。
 
 ---
 
@@ -405,6 +413,7 @@ Netlist::BasicQuery query;
 query.type = Netlist::BasicQueryType::GatesWithConstantInput;
 query.gateType = GateType::UNKNOWN;
 query.constValue = -1;
+query.inputCount = -1;
 
 Netlist::BasicReport report = netlist.runBasicQuery(query);
 ```
@@ -418,6 +427,10 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 | `constValue = -1` | 不限制 constant value |
 | `constValue = 0` | 只找接到 `1'b0` 的 input |
 | `constValue = 1` | 只找接到 `1'b1` 的 input |
+| `inputCount = -1` | 不限制 gate input 數量 |
+| `inputCount = 2` | 只找 two-input gates |
+
+`constValue` 只能是 `-1/0/1`，`inputCount` 只能是 `-1` 或非負數。非法值會回傳 `ok=false`，呼叫端不可把它解讀為「找到 0 個 gate」。
 
 讀取：
 
@@ -454,15 +467,19 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 | 無 load nets | `report.noLoadNets` |
 | floating nets | `report.floatingNets` |
 | 有 unconnected pin 的 gates | `report.unconnectedGates` |
+| floating primary-input bit nets | `report.floatingPrimaryInputNets` |
+| unconnected primary-output bit nets | `report.unconnectedPrimaryOutputNets` |
 
 目前定義：
 
 | 類型 | 定義 |
 |---|---|
-| undriven net | 非 PI、非 constant，且沒有合法 driver |
-| no-load net | 非 PO、非 constant，且沒有 load gate |
+| undriven net | 非 PI、非 constant，且沒有雙向一致 active driver |
+| no-load net | 非 PO、非 constant，且沒有雙向一致 active load |
 | floating net | undriven 與 no-load 的 union |
 | unconnected gate | input 或 output 存在無效 / unconnected net ID |
+
+PI/PO 專用欄位回傳 bit-net names。例如未驅動的 `output [1:0] y` 會回傳 `y[1]`、`y[0]`，不會只回傳 base port name `y`；因此可直接用 vector size 回答 signal 數量。
 
 ---
 

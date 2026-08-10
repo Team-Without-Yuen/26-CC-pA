@@ -107,6 +107,12 @@ struct CecOptions {
     bool include_dff_next_state = true;
 };
 
+class UnsoundModel : public std::runtime_error {
+public:
+    explicit UnsoundModel(const std::string& reason)
+        : std::runtime_error("AIG model is not usable for proof: " + reason) {}
+};
+
 // ============================================================
 //  Primitives
 // ============================================================
@@ -114,6 +120,9 @@ struct CecOptions {
 // facade：高階 API 唯一的呼叫窗口。
 //
 //   所有權：Primitives 擁有 AigModel（以及 Phase B 的 SatEngine / Fraig）。
+//   一個 current Netlist 只能由 backend analysis context 持有一個共用 Primitives；
+//   Function Search、Function Analysis、Sequential Pattern 與 CEC 等高階 API
+//   必須接收並共用該 instance，不得各自長期保存另一份 Primitives。
 //   每個 public method 開頭自行 ensure_fresh()：netlist 髒了就重建。
 //   → 高階 API 與 LLM 完全不需要知道 dirty 存在。
 //
@@ -138,7 +147,7 @@ public:
         bool count_stats;
         bool verbose_rebuild;
 
-        Config() 
+        Config()
         : unknown_policy(UnknownPolicy::AsNotEqual)
         , stale_sig_policy(StaleSigPolicy::Throw)
         , default_cut_size(6)
@@ -179,6 +188,8 @@ public:
     // 診斷／測試用。會先 ensure_fresh()。一般高階 API 不需要。
     AigModel& model();
     const AigModel& model() const;
+    ModelHealth model_health();
+    std::string model_health_message();
     Ntk&      aig();
     NameMap&  names();
     const Netlist& netlist() const;
@@ -204,6 +215,11 @@ public:
     // ---------- 等價 / 常數 ----------
     EquivResult equiv_checked(SigRef a, SigRef b);
     EquivResult is_const_checked(SigRef a, bool val);
+    // Deadline-aware Phase A proof. The budget includes lazy rebuild and CNF
+    // preparation; CaDiCaL is interrupted when the remaining wall time expires.
+    EquivResult equiv_checked(SigRef a, SigRef b, double time_limit_seconds);
+    EquivResult is_const_checked(SigRef a, bool val, double time_limit_seconds);
+    bool        last_proof_timed_out() const { return lastProofTimedOut_; }
     bool        equiv(SigRef a, SigRef b);
     bool        is_const(SigRef a, bool val);
     bool        is_const0(SigRef a) { return is_const(a, false); }
@@ -290,6 +306,8 @@ private:
     // ---------- dirty / rebuild ----------
     void ensure_fresh();
     void rebuild();
+    bool model_can_prove() const;
+    void require_usable_model() const;
 
     // 把 SigRef 解成 raw Sig，並檢查 generation。
     //   所有吃 SigRef 的 public method 都必須先 ensure_fresh()、再 unwrap()。
@@ -301,6 +319,7 @@ private:
     // ---------- 既有內部 ----------
     bool        resolve_policy(EquivResult r);
     EquivResult equiv_via_miter(Sig a, Sig b);
+    EquivResult equiv_via_cadical(Sig a, Sig b, double time_limit_seconds);
     Sig         build_cofactor(Sig f, Sig var, bool val);
     bool        in_structural_cone(Sig f, Node target);
     TruthTable  truth_of_raw(const Cut& cut);
@@ -320,6 +339,7 @@ private:
     bool                       wantPhaseB_ = false;
     uint32_t                   generation_ = kInvalidGeneration;
     Stats                      stats_;
+    bool                       lastProofTimedOut_ = false;
 
     // ★ rebuild 時必須全部清空：內容是舊 AIG 的 Sig 與 node index。
     std::unordered_map<uint64_t, Sig> cofactorCache_;

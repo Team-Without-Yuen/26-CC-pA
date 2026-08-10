@@ -69,9 +69,9 @@ if (report.ok && report.exists) {
 | `TruthStatus` | 分類 scalar net 的 truth status | `netNameA` | `canBeZero`, `canBeOne`, `isConstant`, `constValue`, `status` |
 | `FunctionalDependence` | target function 是否 exact 依賴 selected input | `netNameA`, `netNameB` | `dependsOnInput`, `inputInStructuralSupport`, `status` |
 | `Symmetry` | 交換兩個 inputs 後 target function 是否不變 | `netNameA`, `symmetryInputNameA`, `symmetryInputNameB` | `symmetric`, support flags、counterexample、`status` |
-| `BooleanExpression` | 展開完整 Boolean expression | `netNameA` | `expression`, `supportPrimaryInputs`, `expressionLength` |
+| `BooleanExpression` | 展開 Boolean expression | `netNameA` | `expression`, `expressionDepthLimited`, support 分類、`expressionLength` |
 | `SimplifiedBooleanExpression` | 展開 depth-limited Boolean expression | `netNameA`, `maxExpressionDepth` | `expression`, `expressionDepthLimited`, `maxExpressionDepth` |
-| `PrimaryInputsOfNet` | 回報 fanin cone 的 PI / pseudo-PI leaves | `netNameA` | `supportPrimaryInputs` |
+| `PrimaryInputsOfNet` | 回報並分類 fanin cone leaves | `netNameA` | `supportPrimaryInputs` 與三個分類欄位 |
 
 ---
 
@@ -138,8 +138,11 @@ if (report.ok && report.exists) {
 | `expression` | 完整或 depth-limited Boolean expression |
 | `expressionLength` | `expression.size()` |
 | `maxExpressionDepth` | depth-limited query 使用的展開深度；完整展開時為 -1 |
-| `expressionDepthLimited` | 這次是否使用 depth-limited expansion |
-| `supportPrimaryInputs` | fanin cone 的 PI / DFF.Q pseudo-PI leaves |
+| `expressionDepthLimited` | 完整 mode 表示實際觸發 safety limit；simplified mode 表示採用 depth-limited expansion |
+| `supportPrimaryInputs` | real PI、DFF.Q pseudo-PI、undriven leaf 的排序聯集 |
+| `supportRealPrimaryInputs` | 真正宣告的 top-level PI |
+| `supportDffPseudoInputs` | 作為 sequential boundary 的 DFF.Q leaves |
+| `supportUndrivenLeaves` | 沒有 driver 且不是 PI 的 floating/undriven leaves |
 
 ---
 
@@ -376,6 +379,9 @@ Netlist::FunctionReport report = netlist.runFunctionQuery(query);
 | expression 字串 | `report.expression` |
 | expression 長度 | `report.expressionLength` |
 | 依賴哪些 PI / pseudo-PI | `report.supportPrimaryInputs` |
+| 只看真正 PI | `report.supportRealPrimaryInputs` |
+| 跨時序 boundary 狀態 | `report.supportDffPseudoInputs` |
+| 是否含 undriven leaf | `report.supportUndrivenLeaves` |
 | 狀態文字 | `report.status` |
 
 prompt 對應：
@@ -389,8 +395,10 @@ prompt 對應：
 注意：
 
 ```text
-BooleanExpression 是 structural expansion，不會做代數化簡。
-大型 cone 請優先改用 SimplifiedBooleanExpression。
+BooleanExpression 以 structural expansion 為主，會做固定的 local identity 化簡，
+但不做一般 algebraic minimization。
+大型 cone 可改用 SimplifiedBooleanExpression；完整 mode 若觸發內部 safety limit，
+`expressionDepthLimited` 會是 true，深層子式會以 net name 表示。
 ```
 
 ---
@@ -450,11 +458,15 @@ Netlist::FunctionReport report = netlist.runFunctionQuery(query);
 |---|---|
 | support leaves | `report.supportPrimaryInputs` |
 | 數量 | `report.supportPrimaryInputs.size()` |
+| 真正 primary inputs | `report.supportRealPrimaryInputs` |
+| DFF.Q pseudo inputs | `report.supportDffPseudoInputs` |
+| undriven/floating leaves | `report.supportUndrivenLeaves` |
 
 注意：
 
 ```text
 DFF.Q 會被視為 pseudo PI leaf。
+undriven non-PI net 會列入 `supportUndrivenLeaves`，不會誤當成真正 PI。
 PrimaryInputsOfNet 只回報 structural support，不能單獨證明 exact functional dependence。
 ```
 
@@ -654,8 +666,8 @@ Netlist::FunctionReport report = netlist.runFunctionQuery(query);
 1. AlwaysZero / AlwaysOne / CanBeValue / TruthStatus 目前只支援 existing scalar net。
 2. Equivalence 支援 bus，但兩邊 bit width 必須一致。
 3. Symmetry 會回傳非對稱 counterexample；其他 SAT query 目前不一定回傳 witness assignment。
-4. Boolean expression 是 structural expansion，不做 algebraic simplification。
-5. Boolean expression 可能非常長；大型 testcase 建議使用 SimplifiedBooleanExpression。
+4. Boolean expression 只做固定 local identity，不做一般 algebraic minimization。
+5. Boolean expression 有內部 size/depth safety limit；大型 testcase 仍建議使用 SimplifiedBooleanExpression。
 6. DFF.Q 是 pseudo PI；這不是 sequential equivalence。
 7. 若 SAT solver timeout 或 UNKNOWN，`report.ok=false`，並透過 `solverTimedOut` / `solverUnknown` / `solverStatus` 明確回報，不應解讀成普通 false。
 8. FunctionalDependence 只接受 scalar target 與 scalar PI / DFF.Q pseudo-PI selected input，目前不回傳 SAT witness assignment。
@@ -671,7 +683,7 @@ Netlist::FunctionReport report = netlist.runFunctionQuery(query);
 expression 檔案：src/analysis/Booleanexpression.cpp
 型別檔案：include/core/NetlistQueries.h
 tester：mini test/test4/test4.cpp
-目前 test4：Summary: 15 passed, 0 failed.
+目前 test4：Summary: 17 passed, 0 failed.
 CLI integration regression test9-test17：150 passed, 0 failed。
 symmetry integration test22：14 passed, 0 failed。
 NewTestCase test36/test37：兩題皆回 SYMMETRIC；指定 inputs 均不在 target support，solverStatus=NOT_NEEDED。
