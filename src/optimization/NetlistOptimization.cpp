@@ -1,5 +1,5 @@
 #include "include/core/Netlist.h"
-#include "include/core/SatTime.h"
+#include "include/SATEngine/SatTime.h"
 #include <string>
 #include <algorithm>
 #include <vector>
@@ -292,6 +292,7 @@ int Netlist::trimDeadLogic() {
         ++deadCount;
     }
 
+    if (deadCount > 0) markDirty();
     return deadCount;
 }
 
@@ -362,6 +363,7 @@ int Netlist::collapseBackToBackInverters() {
         // collapsing inward one pair at a time).
         enqueue(inNetDriverGateId);
     }
+    if (collapsed > 0) markDirty();
     return collapsed;
 }
 
@@ -455,7 +457,10 @@ int Netlist::mergeEquivalentGates() {
         }
     }
 
-    if (merged > 0) trimDeadLogic();
+    if (merged > 0) {
+        markDirty();
+        trimDeadLogic();
+    }
     return merged;
 }
 
@@ -504,6 +509,7 @@ bool Netlist::markGateRemoved(int gateId) {
     gates[gateId].type = GateType::UNKNOWN;
     gates[gateId].inputNetIds.clear();
     gates[gateId].outputNetId = -1;
+    markDirty();
     return true;
 }
 
@@ -544,6 +550,7 @@ int Netlist::compactRemovedGates() {
 
     int removed = (int)gates.size() - (int)newGates.size();
     gates = newGates;
+    markDirty();
     return removed;
 }
 
@@ -701,6 +708,7 @@ bool Netlist::replaceAllLoadsOfNet(int oldNetId, int newNetId) {
     // 2. 清除舊 Net 的負載
     oldNet.loadGateIds.clear();
 
+    markDirty();
     return true;
 }
 
@@ -777,6 +785,7 @@ bool Netlist::bypassBufferGate(int bufGateId) {
     g.inputNetIds.clear();
     g.outputNetId = -1;
 
+    markDirty();
     return true;
 }
 
@@ -891,6 +900,7 @@ bool Netlist::bypassDoubleInverter(int g1id, int g2id) {
     nets[midNetId].driverGateId = -1; nets[midNetId].loadGateIds.clear();
     nets[outNetId].driverGateId = -1; nets[outNetId].loadGateIds.clear();
 
+    markDirty();
     return true;
 }
 
@@ -961,6 +971,7 @@ bool Netlist::simplifyGateWithConstant(int gateId) {
                 nets[inNetId].loadGateIds.push_back(gateId);
             }
         }
+        markDirty();
         return true;
     };
 
@@ -981,6 +992,7 @@ bool Netlist::simplifyGateWithConstant(int gateId) {
         g.type = GateType::UNKNOWN;
         g.inputNetIds.clear();
         g.outputNetId = -1;
+        markDirty();
         return true;
     };
 
@@ -1132,6 +1144,7 @@ bool Netlist::simplifySameInputGate(int gateId) {
         g.type = GateType::UNKNOWN;
         g.inputNetIds.clear();
         g.outputNetId = -1;
+        markDirty();
         return true;
     };
 
@@ -1143,6 +1156,7 @@ bool Netlist::simplifySameInputGate(int gateId) {
         g.type = GateType::NOT;
         g.inputNetIds = { srcNetId };
         nets[srcNetId].loadGateIds.push_back(gateId);
+        markDirty();
         return true;
     };
 
@@ -1417,6 +1431,7 @@ int Netlist::mergeStructurallyEquivalentGates() {
 
     if (merged > 0) {
         rebuildNetLoadGateIds(*this);
+        markDirty();
     }
     return merged;
 }
@@ -1489,6 +1504,7 @@ bool Netlist::replaceGateWithNet(int gateId, int sourceNetId) {
     }
     nets[outNetId].driverGateId = -1;
     g.type = GateType::UNKNOWN; g.inputNetIds.clear(); g.outputNetId = -1;
+    markDirty();
     return true;
 }
 
@@ -1568,6 +1584,7 @@ bool Netlist::replaceGateWithNotOfNet(int gateId, int sourceNetId) {
     g.type = GateType::NOT;
     g.inputNetIds = { sourceNetId };
     nets[sourceNetId].loadGateIds.push_back(gateId);
+    markDirty();
     return true;
 }
 
@@ -1628,6 +1645,7 @@ int Netlist::createGateDrivingNet(
         gates[gateId].inputNetIds.push_back(inNetId);
         nets[inNetId].loadGateIds.push_back(gateId);
     }
+    markDirty();
     return gateId;
 }
 
@@ -1653,6 +1671,7 @@ bool Netlist::disconnectGateInputPin(int gateId, int pinIndex) {
         eraseOneLoad(loads, gateId);
     }
     g.inputNetIds[pinIndex] = -1;
+    markDirty();
     return true;
 }
 
@@ -1677,6 +1696,7 @@ bool Netlist::connectGateInputPin(int gateId, int pinIndex, int netId) {
 
     g.inputNetIds[pinIndex] = netId;
     nets[netId].loadGateIds.push_back(gateId);
+    markDirty();
     return true;
 }
 
@@ -1730,6 +1750,7 @@ bool Netlist::replaceDriverOfNet(int targetNetId, int newDriverGateId) {
 
     nets[targetNetId].driverGateId = newDriverGateId;
     gates[newDriverGateId].outputNetId = targetNetId;
+    markDirty();
     return true;
 }
 
@@ -1787,6 +1808,7 @@ bool Netlist::rewireGateOutputToExistingNet(int gateId, int newOutputNetId) {
 
     gates[gateId].outputNetId = newOutputNetId;
     nets[newOutputNetId].driverGateId = gateId;
+    markDirty();
     return true;
 }
 
@@ -1846,8 +1868,10 @@ bool Netlist::preservePortNetAndReplaceDriver(
 
     // 移除舊 driver 的 outputNetId
     int oldDriver = nets[poNetId].driverGateId;
-    if (oldDriver >= 0 && oldDriver < (int)gates.size())
+    if (oldDriver >= 0 && oldDriver < (int)gates.size()) {
         gates[oldDriver].outputNetId = -1;
+        markDirty();
+    }
 
     // 新增一個 gate 驅動這個 PO net
     int newGateId = createGateDrivingNet(newGateType, inputNetIds, poNetId, "_po_drv");
@@ -1962,6 +1986,7 @@ bool Netlist::mergeNetIntoNet(int fromNetId, int toNetId) {
             gates[drv].outputNetId = -1;
     nets[fromNetId].driverGateId = -1;
 
+    markDirty();
     return true;
 }
 
@@ -2100,6 +2125,7 @@ bool Netlist::removeNetIfUnused(int netId) {
     nets[netId].loadGateIds.clear();
     nets[netId].isRemoved = true;
     // 不 erase，保留 slot，讓 compact 時處理
+    markDirty();
     return true;
 }
 
@@ -2177,7 +2203,10 @@ NetlistEditReport Netlist::removeUnusedNetsWithReport() {
 // =============================================================================
 
 bool Netlist::restoreFrom(const Netlist& backup) {
+    const uint64_t currentRevision = revision_;
     *this = backup;
+    revision_ = std::max(currentRevision, revision_) + 1;
+    dirty_ = true;
     return true;
 }
 
@@ -2430,5 +2459,6 @@ Netlist::CompactResult Netlist::compactRemovedGatesWithIdMap() {
 
     result.removedGateCount = (int)gates.size() - (int)newGates.size();
     gates = newGates;
+    markDirty();
     return result;
 }

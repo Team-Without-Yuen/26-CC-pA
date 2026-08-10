@@ -50,7 +50,7 @@ per-query SAT 流程。`Primitives` 的實際使用入口目前位於 `main.cpp`
 | AIG-MERGE-003 | engine 正確性依賴每個 mutation 呼叫 `markDirty()`；任何直接寫 gates/nets 的路徑都可能留下 stale AIG | audit mutation sites + mutation/requery regression |
 | AIG-MERGE-004 | commit Makefile 建置 `main.cpp`/`NetlistTool`，但交付 LLM 使用的是 `tools.cpp`/`tools.exe` | backend build 通過後再同步 `TOOLS_SPEC/Makefile` |
 | AIG-MERGE-005 | `Primitives` 預設 Phase A；Phase B incremental SAT 需明確啟用與驗證 | 分別記錄 Phase A/Phase B 結果，不把 demo 成功視為已接高階 API |
-| AIG-MERGE-006 | AIG build 對 unresolved/topo-dropped cone 的處理會影響 soundness | 檢查 build stats；存在 unresolved 時不得回 proven answer |
+| AIG-MERGE-006 | AIG build 對 unresolved/topo-dropped cone 的處理會影響 soundness | 已加入 `ModelHealth` 與 proof gate；test36 驗證 Invalid 只能 Unknown/拒絕 |
 | AIG-MERGE-007 | working tree 目前有大量未提交 API、文件及 tools 修改 | merge 前建立明確 checkpoint，避免 stash/resolve 時遺失使用者變更 |
 
 ## 5. 建議合併順序
@@ -63,6 +63,19 @@ per-query SAT 流程。`Primitives` 的實際使用入口目前位於 `main.cpp`
 6. 比較 match set、完整性與時間；先確認 merge 沒有改變既有 Function Search 語意。
 7. 最後才設計 Function Search 使用 AIG 的 adapter；保持現有 query/report/CLI 參數不變。
 8. backend 穩定後，才更新 `tools.cpp`、`TOOLS_SPEC/Makefile` 與工具文件。
+
+### Backend ownership contract
+
+每一份 current named `Netlist` 只允許由後端 analysis context 持有一個共用 `Primitives`。Function
+Search、Function Analysis、Sequential Pattern、symmetry 與 CEC 等 Boolean 高階 API 必須
+接收這個共用 instance，不得各自長期保存另一份 AIG context。工具呼叫維持單執行緒依序執行；
+本規則是 cache ownership 與一致性要求，不是多執行緒同步機制。
+
+`tools.cpp` 不直接擁有或操作 AIG；它仍呼叫原有高階 API。後續由各 API 的 backend 實作逐步
+改用共用 `Primitives`，只有 public schema 或 tool envelope 改變時才需要同步 tools 層。
+
+`restoreFrom()` 還原的是電路內容，但 rollback 本身仍是新的設計狀態，因此 restore 後必須
+保持 revision 單調遞增並設為 dirty，強制下一個 Boolean query 重建 functional index。
 
 ## 6. Function Search AIG 化的初步邊界
 
@@ -112,3 +125,34 @@ src/SATEngine/Session.cpp
 
 這些結果證明 engine 的基本生命週期與 Phase A golden CEC 可運作；尚不能證明所有既有 mutation
 path 都有正確呼叫 `markDirty()`，也不能代表 Function Search 已完成 AIG 串接。
+
+## 8. Model-health 安全化結果
+
+本地合併後已補上 `Sound / Conservative / Invalid` 狀態，並修正 PO-only floating net 原本會
+被綁成 constant 0 的問題。floating/undriven signal 以 free PI 保守建模；missing gate input、
+DFF D、無法解析的必要 control、invalid output 與 topo-dropped gate 會使模型成為 Invalid。
+
+Invalid model 的 checked proof API 固定回 `Unknown`；沒有三態回傳的 Boolean 操作會丟
+`UnsoundModel`。`UnknownPolicy::AsEqual` 不得繞過此門檻。專用 regression：
+
+```text
+mini test/test36/test36.cpp
+19 passed, 0 failed
+```
+
+合併後驗證：
+
+| 驗證 | 結果 |
+|---|---|
+| MSYS2 UCRT64 全專案增量 compile/link | `NetlistTool.exe` 成功 |
+| NetlistTool Phase A smoke | equivalence、snapshot、CEC 成功 |
+| `mini test/test2` | 40 passed, 0 failed |
+| Function Search test29 | 7 classes / 7 pairs，complete |
+| Function Search test30 | 1 class / 1 pair，complete |
+| Function Search test35 FindAny | witness `n26080`, `n6359`，complete |
+| Function Search test35 FindAll | 512 pairs，complete，無 timeout/Unknown |
+
+Windows 建置必須使用 MSYS2 UCRT64。直接以舊 `C:/MinGW/bin/g++` 連結 UCRT64 static library
+會出現 `stat64i32` / `fstat64i32` ABI 錯誤，不能誤判為 AIG source failure。
+
+這一層不改 tools grammar、report schema、Phase 切換或既有高階 API。

@@ -1222,6 +1222,25 @@ void testMissingArgumentValidation(TestReport& report, const Netlist& original) 
                  "test2 edit_apply validation missing newName");
 }
 
+void testRestoreRevisionMonotonic(TestReport& report, const Netlist& original) {
+    Netlist netlist = original.cloneForRollback();
+    const Netlist backup = netlist.cloneForRollback();
+    const uint64_t backupRevision = backup.revision();
+
+    netlist.addNet("__restore_revision_probe");
+    const uint64_t mutatedRevision = netlist.revision();
+    netlist.clearDirty();
+
+    const bool restored = netlist.restoreFrom(backup);
+    report.check(restored &&
+                 mutatedRevision > backupRevision &&
+                 netlist.revision() > mutatedRevision &&
+                 netlist.isDirty() &&
+                 netlist.getNetId("__restore_revision_probe") < 0 &&
+                 netlist.validateAfterMutation(),
+                 "test2 rollback keeps revision monotonic and invalidates AIG cache");
+}
+
 } // namespace
 
 int main() {
@@ -1273,6 +1292,7 @@ int main() {
     testConvertToBasis(report, techmapCircuit);
     testInternalPrimitiveBlocked(report, editCircuit);
     testMissingArgumentValidation(report, editCircuit);
+    testRestoreRevisionMonotonic(report, editCircuit);
 
     std::cout << "\nSummary: " << report.passed << " passed, "
               << report.failed << " failed.\n";

@@ -141,6 +141,36 @@ netlist。因此此項不列為競賽實作待辦，也不修改 Function Search
 - merge_functionally_equivalent_gates 這類依賴全域 Boolean equivalence 的 cleanup/edit。
 ```
 
+### AIG backend ownership 與導入規則
+
+這一層是後端共用的 Boolean analysis infrastructure，不是新的 LLM command，也不要求
+`tools.cpp` 直接管理 AIG engine。
+
+```text
+- 一份 current named Netlist 對應一個由後端 analysis context 持有的共用 Primitives。
+- Function Search、Function Analysis、Sequential Pattern、symmetry、constant/equivalence 與 CEC
+  逐步改用同一份 Primitives，不得各自長期保存不同的 AIG model/cache。
+- 導入時優先替換容易 timeout 的內部 simulation/SAT backend；既有 public query/report 與
+  tools command grammar 先保持不變。
+- named Netlist mutation 只負責 markDirty；下一個 Boolean API query 才 lazy rebuild AIG。
+- restoreFrom() 雖還原舊電路內容，仍必須產生新的單調 revision 並保持 dirty，避免沿用錯誤 cache。
+- 只有 API schema、CLI 參數或 envelope 欄位真的改變時，才另行登記到 TOOLS待更新表。
+```
+
+### 已完成：AIG model-health 安全門檻
+
+```text
+- 新增 Sound / Conservative / Invalid model health。
+- gate-input floating 與 PO-only floating 均以 free PI 建模，不再默認 constant 0。
+- missing required gate input、DFF D、無法解析的已連接 control、invalid output 與
+  topo-dropped gate 會使模型成為 Invalid。
+- Invalid model 的 checked proof 回 Unknown；其他 Boolean operation 丟 UnsoundModel。
+- UnknownPolicy::AsEqual 不能把 Invalid model 轉成 true。
+- mini test/test36：19 passed, 0 failed。
+```
+
+使用與安全語意：`API_SPEC/AIG_PRIMITIVES_BACKEND_GUIDE.md`。
+
 ## 已完成但歸屬 API / backend 的事項
 
 ### Sequential Pattern functional fallback
