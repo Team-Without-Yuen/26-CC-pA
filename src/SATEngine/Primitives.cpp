@@ -28,57 +28,84 @@ double remaining_seconds(const SteadyClock::time_point& deadline) {
     return std::chrono::duration<double>(deadline - SteadyClock::now()).count();
 }
 
+// 無時限查詢用的「實質無限」預算。走同一條 CaDiCaL 路徑，
+// 避免無時限與 timed 版本用不同 solver 而給出不一致的 Unknown 邊界。
+constexpr double kNoTimeLimit = 1e9;
+
 } // namespace
 
 // ============================================================
 //  呼叫樣板（本檔所有 public method 一律遵守）
 //
-//    ensure_fresh();              ① 先確保 AIG 與 netlist 同步（可能 rebuild）
-//    const Sig a = unwrap(ra);    ② 再檢查 generation
-//    ... 原本的實作只碰 raw Sig ...
-//    return stamp(result);        ③ 回傳 SigRef 時蓋上當前 generation
+//    ensure_fresh();                  ① 先同步 AIG（可能 rebuild）
+//    if (strict && !can_prove()) ...   ② 全域健康（預設關閉）
+//    tainted_any / require_trusted     ③ per-signal 污染
+//    const Sig a = unwrap(ra);         ④ 再檢查 generation
+//    ...                               ⑤ 實作只碰 raw Sig
+//    return stamp(result, tainted);    ⑥ 回傳時蓋 generation + 傳播污染
 //
-//  順序不可顛倒：unwrap 需要知道「當前」generation，而 ensure_fresh 可能改變它。
-//  私有方法（equiv_via_miter / build_cofactor / in_structural_cone /
-//  truth_of_raw）一律吃 raw Sig、不做任何檢查 —— 在單次呼叫中途觸發 rebuild
-//  會讓手上的 raw Sig 全部失效，那是比 stale SigRef 更難查的錯誤。
+//  順序不可顛倒：unwrap 需要「當前」generation，而 ensure_fresh 可能改變它。
+//
+//  三態 API（*_checked / *_under）遇到污染回 Unknown；
+//  bool 與建構類 API 一律 require_trusted → 丟 UnsoundModel。
+//    絕不可讓污染走 UnknownPolicy 折疊：AsEqual 會把「不可信」變成 true，
+//    那正是把 model-health gate 繞過去的漏洞。
+//
+//  私有方法（equiv_via_miter / equiv_via_cadical / build_cofactor /
+//  in_structural_cone / truth_of_raw）一律吃 raw Sig、不做任何檢查 ——
+//  在單次呼叫中途觸發 rebuild 會讓手上的 raw Sig 全部失效。
 // ============================================================
+
+// ============================================================
+//  污染閘門
+// ============================================================
+
+bool Primitives::tainted_any(std::initializer_list<SigRef> rs) {
+    for (const auto& r : rs) {
+        if (r.tainted()) {
+            if (cfg_.count_stats) ++stats_.tainted_rejected;
+            return true;
+        }
+    }
+    return false;
+}
+
+void Primitives::require_trusted(std::initializer_list<SigRef> rs) {
+    if (!tainted_any(rs)) return;
+    throw UnsoundModel(model_ ? model_->taint_summary()
+                              : std::string("model not built"));
+}
 
 // ============================================================
 //  等價 / 常數
 // ============================================================
 
-// Phase A 的等價判斷：對「a XOR b」建一顆單輸出 miter，問它是否恆為 0。
+// Phase A 的等價判斷（legacy 路徑，僅在 CaDiCaL 不可用時保留）。
 //
-// 為什麼不直接用 mockturtle::miter<Ntk>(ntk1, ntk2)：
-//   那個 API 比的是「兩顆完整網路的所有 PO」，而我們要比的是
-//   「同一顆 AIG 內的任意兩條 signal」。所以自己組一顆小網路：
-//   把 a、b 的 fanin cone 抽出來，以 XOR 收尾，再問 equivalence_checking
-//   它是否等價於常數 0。
-//
-// 慢，但正確且極簡 —— 這正是 stub 該有的樣子。Phase B 會整條換掉。
+// tmp 本身就是一顆合法的 miter：單一 PO = XOR(a, b)，
+// equivalence_checking 的語意正是「這顆網路的 PO 是否恆為 0」。
+// 舊版另外建 zero 網路再呼叫 miter<Ntk>() 會多做一次完整網路複製 ——
+// 在大 cone 上那個複製的成本會蓋過 solve 本身。
 EquivResult Primitives::equiv_via_miter(Sig a, Sig b) {
     ++stats_.miters_built;
     Ntk& A = aig();
 
-    // 在一顆「臨時網路」裡重建 a、b 的 cone，避免污染主 AIG。
     Ntk tmp;
     std::unordered_map<uint64_t, Sig> nodeMap;   // 主 AIG node index -> tmp signal
 
-    // 收集 a、b 聯集的 fanin cone（含常數與 PI）。
     std::vector<Node> order;
     std::unordered_set<uint64_t> seen;
 
     // 迭代式 DFS post-order（100 萬 gate 不能遞迴，會爆 stack）。
     {
-        std::vector<std::pair<Node, bool>> stk;   // (node, children_expanded)
+        std::vector<std::pair<Node, bool>> stk;
         stk.emplace_back(A.get_node(a), false);
         stk.emplace_back(A.get_node(b), false);
 
         while (!stk.empty()) {
-            const Node n         = stk.back().first;
-            const bool expanded  = stk.back().second;
-            const uint64_t idx   = A.node_to_index(n);
+            const Node n        = stk.back().first;
+            const bool expanded = stk.back().second;
+            const uint64_t idx  = A.node_to_index(n);
 
             if (expanded) {
                 stk.pop_back();
@@ -98,7 +125,6 @@ EquivResult Primitives::equiv_via_miter(Sig a, Sig b) {
         }
     }
 
-    // 依序在 tmp 裡重建。
     nodeMap[A.node_to_index(A.get_node(A.get_constant(false)))] = tmp.get_constant(false);
 
     auto lift = [&](Sig s) -> Sig {
@@ -110,42 +136,27 @@ EquivResult Primitives::equiv_via_miter(Sig a, Sig b) {
 
     for (const Node n : order) {
         const uint64_t idx = A.node_to_index(n);
-        if (A.is_constant(n)) continue;               // 已放進 nodeMap
-        if (A.is_pi(n)) {
-            nodeMap[idx] = tmp.create_pi();           // cone 內的 PI 都當自由變數
-            continue;
-        }
+        if (A.is_constant(n)) continue;
+        if (A.is_pi(n)) { nodeMap[idx] = tmp.create_pi(); continue; }
+
         std::vector<Sig> fins;
         A.foreach_fanin(n, [&](auto f) { fins.push_back(lift(f)); });
         assert(fins.size() == 2);
         nodeMap[idx] = tmp.create_and(fins[0], fins[1]);
     }
 
-    const Sig ta = lift(a);
-    const Sig tb = lift(b);
-    tmp.create_po(tmp.create_xor(ta, tb));            // miter：相異則為 1
-
-    // 與「恆 0」的參考網路比對。
-    Ntk zero;
-    const uint32_t npi = tmp.num_pis();
-    for (uint32_t i = 0; i < npi; ++i) zero.create_pi();
-    zero.create_po(zero.get_constant(false));
-
-    const auto m = mockturtle::miter<Ntk>(tmp, zero);
-    if (!m) {
-        std::cerr << "[Primitives][WARN] miter construction failed\n";
-        return EquivResult::Unknown;
-    }
+    tmp.create_po(tmp.create_xor(lift(a), lift(b)));   // 這就是 miter
 
     mockturtle::equivalence_checking_stats st;
-    const auto res = mockturtle::equivalence_checking(*m, {}, &st);
+    const auto res = mockturtle::equivalence_checking(tmp, {}, &st);
 
     if (!res) return EquivResult::Unknown;            // 打到內部 conflict limit
     return *res ? EquivResult::Equal : EquivResult::NotEqual;
 }
 
-// Deadline-aware Phase A proof. The union cone is encoded directly into
-// CaDiCaL so both preprocessing and solve can observe one wall-clock budget.
+// Deadline-aware Phase A proof：union cone 直接 encode 進 CaDiCaL，
+// 前處理與 solve 共用同一份 wall-clock 預算。
+// 沒有網路複製 —— 這是無時限與 timed 查詢共用的主路徑。
 EquivResult Primitives::equiv_via_cadical(
     Sig a, Sig b, double time_limit_seconds) {
     lastProofTimedOut_ = false;
@@ -164,6 +175,13 @@ EquivResult Primitives::equiv_via_cadical(
     };
 
     Ntk& network = aig();
+
+    // CNF 變數編號 = node index + 1，因此假設常數節點的 index 為 0。
+    // mockturtle 的 aig_network 保證如此；若哪天不成立，下面的
+    // solver.add(-1) 會把錯誤的變數釘成 false，是靜默的災難。
+    assert(network.node_to_index(network.get_node(network.get_constant(false))) == 0
+           && "constant node must be index 0");
+
     std::vector<Node> stack;
     stack.reserve(1024);
     stack.push_back(network.get_node(a));
@@ -189,9 +207,8 @@ EquivResult Primitives::equiv_via_cadical(
 
     auto variableForNode = [&](Node node) -> int {
         const uint64_t index = network.node_to_index(node);
-        if (index >= static_cast<uint64_t>(std::numeric_limits<int>::max())) {
+        if (index >= static_cast<uint64_t>(std::numeric_limits<int>::max()))
             return 0;
-        }
         return static_cast<int>(index) + 1;
     };
     auto literalForSignal = [&](Sig signal) -> int {
@@ -200,32 +217,28 @@ EquivResult Primitives::equiv_via_cadical(
         return network.is_complemented(signal) ? -variable : variable;
     };
 
-    // AIG node 0 is constant false; its complemented literal represents true.
+    // 變數 1 對應常數節點，釘成 false；其補數即為 true。
     solver.add(-1);
     solver.add(0);
 
     size_t encodedCount = 0;
     for (Node node : coneNodes) {
-        if ((encodedCount++ & 0xffu) == 0u && expired()) {
+        if ((encodedCount++ & 0xffu) == 0u && expired())
             return EquivResult::Unknown;
-        }
         if (network.is_constant(node) || network.is_pi(node)) continue;
 
         std::vector<Sig> fanins;
         fanins.reserve(2);
-        network.foreach_fanin(node, [&](Sig fanin) {
-            fanins.push_back(fanin);
-        });
+        network.foreach_fanin(node, [&](Sig fanin) { fanins.push_back(fanin); });
         if (fanins.size() != 2) return EquivResult::Unknown;
 
         const int output = variableForNode(node);
         const int inputA = literalForSignal(fanins[0]);
         const int inputB = literalForSignal(fanins[1]);
-        if (output == 0 || inputA == 0 || inputB == 0) {
+        if (output == 0 || inputA == 0 || inputB == 0)
             return EquivResult::Unknown;
-        }
 
-        // output <-> (inputA & inputB)
+        // output <-> (inputA & inputB)：每個 AND 節點固定 3 clause
         solver.add(-inputA); solver.add(-inputB); solver.add(output); solver.add(0);
         solver.add(inputA);  solver.add(-output); solver.add(0);
         solver.add(inputB);  solver.add(-output); solver.add(0);
@@ -235,7 +248,7 @@ EquivResult Primitives::equiv_via_cadical(
     const int literalB = literalForSignal(b);
     if (literalA == 0 || literalB == 0) return EquivResult::Unknown;
 
-    // Ask whether a XOR b can be true.
+    // 問「a XOR b 是否可滿足」：SAT = 有反例 = 不等價
     solver.add(literalA);  solver.add(literalB);  solver.add(0);
     solver.add(-literalA); solver.add(-literalB); solver.add(0);
 
@@ -250,6 +263,8 @@ EquivResult Primitives::equiv_via_cadical(
     const int solverResult = solver.solve();
     solver.disconnect_terminator();
 
+    // solver 返回後再檢查一次：terminator 的 polling 有間隔，
+    // 極短時限可能在下一次 polling 之前就已越過。
     if (terminator.wasTerminated() || expired()) {
         lastProofTimedOut_ = true;
         return EquivResult::Unknown;
@@ -259,23 +274,44 @@ EquivResult Primitives::equiv_via_cadical(
     return EquivResult::Unknown;
 }
 
+// 無時限版：轉呼叫 timed 版並給實質無限的預算。
+// 兩條路徑合一，避免同一個問題在兩個 solver 上給出不同的 Unknown 邊界。
 EquivResult Primitives::equiv_checked(SigRef ra, SigRef rb) {
+    return equiv_checked(ra, rb, kNoTimeLimit);
+}
+
+EquivResult Primitives::equiv_checked(
+    SigRef ra, SigRef rb, double time_limit_seconds) {
     lastProofTimedOut_ = false;
+    const auto startedAt = SteadyClock::now();
+
     ensure_fresh();
-    if (!model_can_prove()) return EquivResult::Unknown;
+    if (cfg_.strict_global_health && !model_can_prove())
+        return EquivResult::Unknown;
+    // per-signal 污染：三態 API 回 Unknown，不走 UnknownPolicy。
+    if (tainted_any({ra, rb})) return EquivResult::Unknown;
+
+    // rebuild 也吃預算：lazy 第一次建 AIG 可能就用掉大半時間。
+    const double remaining = time_limit_seconds -
+        std::chrono::duration<double>(SteadyClock::now() - startedAt).count();
+    if (remaining <= 0.0) {
+        lastProofTimedOut_ = true;
+        return EquivResult::Unknown;
+    }
+
     const Sig a = unwrap(ra);
     const Sig b = unwrap(rb);
     Ntk& A = aig();
 
     if (cfg_.count_stats) ++stats_.equiv_calls;
 
-    // ---- 0. 零成本：signal 完全相同（含 phase）----
-    // strash / BUF alias / 同一條 net 重複查詢，大量 query 在這一步就解決。
+    // ---- 0. 零成本短路 ----
+    // signal 完全相同（strash / BUF alias / 重複查詢）。
     if (a == b) {
         if (cfg_.count_stats) ++stats_.equiv_trivial;
         return EquivResult::Equal;
     }
-    // 同 node 但 phase 相反 → 必定不等價，不必送 SAT。
+    // 同 node 但 phase 相反 → 必定不等價。
     if (A.get_node(a) == A.get_node(b)) {
         if (cfg_.count_stats) ++stats_.equiv_trivial;
         return EquivResult::NotEqual;
@@ -283,8 +319,8 @@ EquivResult Primitives::equiv_checked(SigRef ra, SigRef rb) {
 
     // ---- 1. Phase B：FRAIG 查表 ----
     // 前置條件：兩者都必須是 sweep 當下就存在的節點。
-    // cofactor 物化出來的新節點在 watermark 之後，沒被 sweep 過，
-    // 查表會恆回「不同類」→ 靜默的錯誤答案，所以必須退回 SAT。
+    // cofactor 物化出來的新節點在 watermark 之後沒被 sweep 過，
+    // 查表會恆回「不同類」→ 靜默的錯誤答案，必須退回 SAT。
     if (fraig_ != nullptr && fraig_->is_swept()) {
         const Node na = A.get_node(a);
         const Node nb = A.get_node(b);
@@ -298,9 +334,10 @@ EquivResult Primitives::equiv_checked(SigRef ra, SigRef rb) {
     // ---- 2. SAT ----
     EquivResult r;
     if (sat_ != nullptr) {
-        r = sat_->are_equal(a, b);
+        r = sat_->are_equal(a, b);          // Phase B（尚未支援 deadline）
     } else {
-        r = equiv_via_miter(a, b);          // Phase A
+        if (cfg_.count_stats) ++stats_.miters_built;
+        r = equiv_via_cadical(a, b, remaining);
     }
 
     if (cfg_.count_stats) {
@@ -310,96 +347,19 @@ EquivResult Primitives::equiv_checked(SigRef ra, SigRef rb) {
     return r;
 }
 
-EquivResult Primitives::equiv_checked(
-    SigRef ra, SigRef rb, double time_limit_seconds) {
-    lastProofTimedOut_ = false;
-    const auto startedAt = SteadyClock::now();
-    ensure_fresh();
-    if (!model_can_prove()) return EquivResult::Unknown;
-
-    const double remaining = time_limit_seconds -
-        std::chrono::duration<double>(SteadyClock::now() - startedAt).count();
-    if (remaining <= 0.0) {
-        lastProofTimedOut_ = true;
-        return EquivResult::Unknown;
-    }
-
-    const Sig a = unwrap(ra);
-    const Sig b = unwrap(rb);
-    Ntk& network = aig();
-    if (cfg_.count_stats) ++stats_.equiv_calls;
-
-    if (a == b) {
-        if (cfg_.count_stats) ++stats_.equiv_trivial;
-        return EquivResult::Equal;
-    }
-    if (network.get_node(a) == network.get_node(b)) {
-        if (cfg_.count_stats) ++stats_.equiv_trivial;
-        return EquivResult::NotEqual;
-    }
-
-    if (fraig_ != nullptr && fraig_->is_swept()) {
-        const Node nodeA = network.get_node(a);
-        const Node nodeB = network.get_node(b);
-        if (fraig_->is_swept_node(nodeA) && fraig_->is_swept_node(nodeB)) {
-            if (cfg_.count_stats) ++stats_.equiv_by_lookup;
-            return fraig_->same_class(a, b) ? EquivResult::Equal
-                                            : EquivResult::NotEqual;
-        }
-    }
-
-    EquivResult result;
-    if (sat_ != nullptr) {
-        // Phase B remains disabled until its timed API is implemented.
-        result = sat_->are_equal(a, b);
-    } else {
-        if (cfg_.count_stats) ++stats_.miters_built;
-        result = equiv_via_cadical(a, b, remaining);
-    }
-    if (cfg_.count_stats) {
-        ++stats_.equiv_by_sat;
-        if (result == EquivResult::Unknown) ++stats_.equiv_unknown;
-    }
-    return result;
-}
-
 EquivResult Primitives::is_const_checked(SigRef ra, bool val) {
-    lastProofTimedOut_ = false;
-    ensure_fresh();
-    if (!model_can_prove()) return EquivResult::Unknown;
-    const Sig a = unwrap(ra);
-    Ntk& A = aig();
-
-    const Node n = A.get_node(a);
-
-    // 已經是常數節點：直接判定。
-    if (A.is_constant(n)) {
-        const bool actual = A.is_complemented(a);   // const0 節點 + compl = 1
-        return (actual == val) ? EquivResult::Equal : EquivResult::NotEqual;
-    }
-
-    if (fraig_ != nullptr && fraig_->is_swept() && fraig_->is_swept_node(n)) {
-        bool known = false;
-        if (fraig_->is_known_const(a, known)) {
-            if (cfg_.count_stats) ++stats_.equiv_by_lookup;
-            return (known == val) ? EquivResult::Equal : EquivResult::NotEqual;
-        }
-    }
-
-    if (sat_ != nullptr) {
-        const auto r = sat_->is_const(a, val);
-        if (cfg_.count_stats && r == EquivResult::Unknown) ++stats_.equiv_unknown;
-        return r;
-    }
-    return equiv_via_miter(a, A.get_constant(val));   // Phase A
+    return is_const_checked(ra, val, kNoTimeLimit);
 }
 
 EquivResult Primitives::is_const_checked(
     SigRef ra, bool val, double time_limit_seconds) {
     lastProofTimedOut_ = false;
     const auto startedAt = SteadyClock::now();
+
     ensure_fresh();
-    if (!model_can_prove()) return EquivResult::Unknown;
+    if (cfg_.strict_global_health && !model_can_prove())
+        return EquivResult::Unknown;
+    if (tainted_any({ra})) return EquivResult::Unknown;
 
     const double remaining = time_limit_seconds -
         std::chrono::duration<double>(SteadyClock::now() - startedAt).count();
@@ -411,16 +371,21 @@ EquivResult Primitives::is_const_checked(
     const Sig signal = unwrap(ra);
     Ntk& network = aig();
     const Node node = network.get_node(signal);
+
+    if (cfg_.count_stats) ++stats_.equiv_calls;
+
+    // 已經是常數節點：直接判定。
     if (network.is_constant(node)) {
-        const bool actual = network.is_complemented(signal);
-        return actual == val ? EquivResult::Equal : EquivResult::NotEqual;
+        if (cfg_.count_stats) ++stats_.equiv_trivial;
+        const bool actual = network.is_complemented(signal);   // const0 + compl = 1
+        return (actual == val) ? EquivResult::Equal : EquivResult::NotEqual;
     }
 
     if (fraig_ != nullptr && fraig_->is_swept() && fraig_->is_swept_node(node)) {
         bool known = false;
         if (fraig_->is_known_const(signal, known)) {
             if (cfg_.count_stats) ++stats_.equiv_by_lookup;
-            return known == val ? EquivResult::Equal : EquivResult::NotEqual;
+            return (known == val) ? EquivResult::Equal : EquivResult::NotEqual;
         }
     }
 
@@ -429,8 +394,7 @@ EquivResult Primitives::is_const_checked(
         result = sat_->is_const(signal, val);
     } else {
         if (cfg_.count_stats) ++stats_.miters_built;
-        result = equiv_via_cadical(
-            signal, network.get_constant(val), remaining);
+        result = equiv_via_cadical(signal, network.get_constant(val), remaining);
     }
     if (cfg_.count_stats) {
         ++stats_.equiv_by_sat;
@@ -444,7 +408,8 @@ bool Primitives::resolve_policy(EquivResult r) {
         case EquivResult::Equal:    return true;
         case EquivResult::NotEqual: return false;
         default:
-            // Unknown：預設保守回 false（不宣稱等價，寧可漏報也不假報）。
+            // Unknown = solver 資源上限。這裡「只」折疊 solver 的不確定性；
+            // 模型不可信（污染）在更上層就已經丟 UnsoundModel，不會走到這裡。
             switch (cfg_.unknown_policy) {
                 case UnknownPolicy::AsEqual: return true;
                 case UnknownPolicy::Throw:   throw EngineUnknown{};
@@ -456,12 +421,14 @@ bool Primitives::resolve_policy(EquivResult r) {
 bool Primitives::equiv(SigRef a, SigRef b) {
     ensure_fresh();
     require_usable_model();
+    require_trusted({a, b});          // 污染必須在 resolve_policy 之前擋掉
     return resolve_policy(equiv_checked(a, b));
 }
 
 bool Primitives::is_const(SigRef a, bool val) {
     ensure_fresh();
     require_usable_model();
+    require_trusted({a});
     return resolve_policy(is_const_checked(a, val));
 }
 
@@ -470,24 +437,19 @@ bool Primitives::is_const(SigRef a, bool val) {
 // ============================================================
 
 // 把 var 設為 val，在同一顆 AIG 內物化並 strash。
-//
-// 實作方式：只重建「var 的 transitive fanout ∩ f 的 fanin cone」，
-// 其餘節點原封不動共用。重複呼叫同一組 (f,var,val) 會命中快取；
-// 即使沒命中，strash 也會讓相同結構收斂到同一批節點，成長有界。
+// 只重建「var 的 transitive fanout ∩ f 的 fanin cone」，其餘節點原封不動共用。
 Sig Primitives::build_cofactor(Sig f, Sig var, bool val) {
     Ntk& A = aig();
 
     const Node vnode = A.get_node(var);
     const Sig  vsub  = A.get_constant(A.is_complemented(var) ? !val : val);
 
-    // f 就是 var 本身
-    if (A.get_node(f) == vnode)
+    if (A.get_node(f) == vnode)                  // f 就是 var 本身
         return vsub ^ A.is_complemented(f);
 
-    std::unordered_map<uint64_t, Sig> sub;    // node index -> 替換後的 signal
+    std::unordered_map<uint64_t, Sig> sub;       // node index -> 替換後的 signal
     sub[A.node_to_index(vnode)] = vsub;
 
-    // 收集 f 的 fanin cone（迭代 post-order）
     std::vector<Node> order;
     std::unordered_set<uint64_t> seen;
     {
@@ -547,11 +509,12 @@ Sig Primitives::build_cofactor(Sig f, Sig var, bool val) {
 SigRef Primitives::cofactor(SigRef rf, SigRef rvar, bool val) {
     ensure_fresh();
     require_usable_model();
+    require_trusted({rf, rvar});
     const Sig f   = unwrap(rf);
     const Sig var = unwrap(rvar);
 
     // 前置條件：var 必須是自由變數（PI，含 DFF-Q 的 pseudo-PI）。
-    // 對內部節點取 cofactor 在布林語意上沒有良好定義，這裡直接擋掉，
+    // 對內部節點取 cofactor 在布林語意上沒有良好定義，直接擋掉，
     // 避免高階 API 誤用後得到看似合理但錯誤的結果。
     if (!model_->is_free_var(var)) {
         std::cerr << "[Primitives] cofactor: 'var' must be a PI "
@@ -559,16 +522,17 @@ SigRef Primitives::cofactor(SigRef rf, SigRef rvar, bool val) {
         throw std::invalid_argument("Primitives::cofactor: var is not a free variable");
     }
 
+    // 污染傳播：兩個引數都乾淨（require_trusted 已保證），結果也乾淨。
     const CofactorKey key{f.data, var.data, val};
     auto it = cofactorCache_.find(key);
-    if (it != cofactorCache_.end()) return stamp(it->second);
+    if (it != cofactorCache_.end()) return stamp(it->second, false);
 
     const Sig r = build_cofactor(f, var, val);
     cofactorCache_.emplace(key, r);
 
     // AIG 可能長大了，讓 SAT 端有機會延展 node->var 表。
     if (sat_ != nullptr) sat_->sync();
-    return stamp(r);
+    return stamp(r, false);
 }
 
 EquivResult Primitives::equiv_under(
@@ -577,7 +541,12 @@ EquivResult Primitives::equiv_under(
     if (assumptions.empty()) return equiv_checked(ra, rb);
 
     ensure_fresh();
-    if (!model_can_prove()) return EquivResult::Unknown;
+    if (cfg_.strict_global_health && !model_can_prove())
+        return EquivResult::Unknown;
+    if (tainted_any({ra, rb})) return EquivResult::Unknown;
+    for (const auto& kv : assumptions)
+        if (tainted_any({kv.first})) return EquivResult::Unknown;
+
     const Sig a = unwrap(ra);
     const Sig b = unwrap(rb);
 
@@ -590,9 +559,8 @@ EquivResult Primitives::equiv_under(
     }
 
     // Phase A：沒有 assumption 機制，只能真的物化 cofactor 後再比。
-    // 慢，但語意等價 —— golden reference 的意義就在這裡。
-    // 這裡走 public cofactor()：它會做 free-var 前置檢查與快取，
-    // 而 ensure_fresh 此刻已經是 no-op（同一次呼叫內不會再 rebuild）。
+    //   這代表 Phase A 的 equiv_under 與明寫 cofactor 成本相同，並非零成本；
+    //   語意仍正確，Phase B 接上 incremental CaDiCaL 後才會變便宜。
     SigRef ca = ra, cb = rb;
     for (const auto& kv : assumptions) {
         ca = cofactor(ca, kv.first, kv.second);
@@ -605,7 +573,9 @@ EquivResult Primitives::is_const_under(
         SigRef ra, bool val,
         const std::vector<std::pair<SigRef, bool>>& assumptions) {
     ensure_fresh();
-    if (!model_can_prove()) return EquivResult::Unknown;
+    if (cfg_.strict_global_health && !model_can_prove())
+        return EquivResult::Unknown;
+    if (tainted_any({ra})) return EquivResult::Unknown;
     return equiv_under(ra, constant(val), assumptions);
 }
 
@@ -620,7 +590,10 @@ EquivResult Primitives::is_const_under(
 //   Unknown  = 不知道（絕不可當成任一邊）
 EquivResult Primitives::depends_on_checked(SigRef rf, SigRef rvar) {
     ensure_fresh();
-    if (!model_can_prove()) return EquivResult::Unknown;
+    if (cfg_.strict_global_health && !model_can_prove())
+        return EquivResult::Unknown;
+    if (tainted_any({rf, rvar})) return EquivResult::Unknown;
+
     const Sig f   = unwrap(rf);
     const Sig var = unwrap(rvar);
     Ntk& A = aig();
@@ -632,6 +605,7 @@ EquivResult Primitives::depends_on_checked(SigRef rf, SigRef rvar) {
 
     // 零成本預過濾：var 根本不在 f 的 structural fanin cone 裡 → 必定不相依。
     // structural support 是 functional support 的超集合，所以「不在」是可靠的否定。
+    // 這是本函式唯一真正免費的路徑；一旦 var 在 cone 內，下面一定會物化兩個 cofactor。
     if (!in_structural_cone(f, A.get_node(var)))
         return EquivResult::Equal;
 
@@ -651,13 +625,16 @@ EquivResult Primitives::depends_on_checked(SigRef rf, SigRef rvar) {
 bool Primitives::depends_on(SigRef f, SigRef var) {
     ensure_fresh();
     require_usable_model();
+    require_trusted({f, var});
+
     const auto r = depends_on_checked(f, var);
     switch (r) {
         case EquivResult::NotEqual: return true;    // cofactor 不同 → 相依
         case EquivResult::Equal:    return false;
         default:
             // Unknown：保守回 true（寧可多列一個 support，也不要漏掉真正的相依）。
-            // 這與 equiv 的保守方向相反 —— 這裡「漏報」才是危險的那一邊。
+            //   這與 equiv 的保守方向相反 —— 在 support 分析裡「漏報」才是危險的那一邊：
+            //   漏掉一個相依會讓 enable/hold 偵測整個失效，而且不容易察覺。
             switch (cfg_.unknown_policy) {
                 case UnknownPolicy::Throw: throw EngineUnknown{};
                 default:                   return true;
@@ -672,7 +649,7 @@ bool Primitives::in_structural_cone(Sig f, Node target) {
 
     // 快取整個 cone 的 node 集合：同一個 f 常被拿來對多個候選變數反覆詢問
     // （enable/hold 就是這個模式），重算 cone 會是 O(support × cone)。
-    //  rebuild 時 coneCache_ 必須清空（見 Session.cpp::rebuild）。
+    // rebuild 時 coneCache_ 必須清空（見 Session.cpp::rebuild）。
     auto it = coneCache_.find(rootIdx);
     if (it == coneCache_.end()) {
         std::unordered_set<uint64_t> cone;
@@ -699,13 +676,15 @@ std::vector<SigRef> Primitives::functional_support(
         SigRef f, const std::vector<SigRef>& candidates) {
     ensure_fresh();
     require_usable_model();
+    require_trusted({f});
 
     std::vector<SigRef> support;
     support.reserve(candidates.size());
 
     for (const SigRef var : candidates) {
-        const Sig raw = unwrap(var);
-        if (!model_->is_free_var(raw)) continue;      // 靜默略過非自由變數
+        if (var.tainted()) continue;                  // 靜默略過不可信的候選
+        const Sig rawVar = unwrap(var);
+        if (!model_->is_free_var(rawVar)) continue;   // 靜默略過非自由變數
         if (depends_on(f, var)) support.push_back(var);
     }
     return support;
@@ -714,11 +693,16 @@ std::vector<SigRef> Primitives::functional_support(
 std::vector<SigRef> Primitives::functional_support(SigRef rf) {
     ensure_fresh();
     require_usable_model();
+    require_trusted({rf});
     const Sig f = unwrap(rf);
     Ntk& A = aig();
 
     // 候選 = f 的 structural cone 內所有 PI。
     // structural support 是 functional support 的超集合，不會漏。
+    //
+    //   成本警告：這裡會對每個候選各跑一次 depends_on，
+    //   也就是最多 2 × |cone 內 PI 數| 個物化 cofactor。
+    //   寬 cone 上這是整組 API 最重的一個呼叫。
     std::vector<SigRef> candidates;
     std::unordered_set<uint64_t> seen;
     std::vector<Node> stk;
@@ -731,7 +715,8 @@ std::vector<SigRef> Primitives::functional_support(SigRef rf) {
         stk.pop_back();
         if (A.is_constant(n)) continue;
         if (A.is_pi(n)) {
-            candidates.push_back(stamp(A.make_signal(n)));
+            // PI 是自由變數，本身永遠可信（污染只會出現在有 driver 的 net 上）。
+            candidates.push_back(stamp(A.make_signal(n), false));
             continue;
         }
         A.foreach_fanin(n, [&](auto fi) {
@@ -748,6 +733,7 @@ std::vector<SigRef> Primitives::functional_support(SigRef rf) {
 bool Primitives::is_unate(SigRef f, SigRef var, bool positive) {
     ensure_fresh();
     require_usable_model();
+    require_trusted({f, var});
 
     const SigRef f0 = cofactor(f, var, false);
     const SigRef f1 = cofactor(f, var, true);
@@ -764,6 +750,7 @@ bool Primitives::is_unate(SigRef f, SigRef var, bool positive) {
 bool Primitives::is_symmetric(SigRef f, SigRef x, SigRef y) {
     ensure_fresh();
     require_usable_model();
+    require_trusted({f, x, y});
     Ntk& A = aig();
 
     if (A.get_node(unwrap(x)) == A.get_node(unwrap(y)))
@@ -786,6 +773,7 @@ bool Primitives::is_symmetric(SigRef f, SigRef x, SigRef y) {
 std::vector<Cut> Primitives::enumerate_cuts(SigRef rroot, int k) {
     ensure_fresh();
     require_usable_model();
+    require_trusted({rroot});
     const Sig root = unwrap(rroot);
     Ntk& A = aig();
 
@@ -801,9 +789,9 @@ std::vector<Cut> Primitives::enumerate_cuts(SigRef rroot, int k) {
     const Node rootNode = A.get_node(root);
     if (A.is_constant(rootNode) || A.is_pi(rootNode)) return out;
 
-    // mockturtle 的 cut_enumeration 是對「整顆網路」跑的。
-    // Phase A 直接照做（正確但重）；Phase B 應改成快取整份結果、
-    // 或用 window_view 只跑局部 —— 100 萬 gate 上這是明確的痛點。
+    //   Phase A 效能痛點：mockturtle 的 cut_enumeration 是對「整顆網路」跑的，
+    //   每次呼叫都重算一遍。大電路上不要把這個函式放進迴圈。
+    //   Phase B 應改成快取整份結果，或用 window_view 只跑局部。
     mockturtle::cut_enumeration_params ps;
     ps.cut_size  = static_cast<uint32_t>(k);
     ps.cut_limit = 12;
@@ -822,6 +810,8 @@ std::vector<Cut> Primitives::enumerate_cuts(SigRef rroot, int k) {
 
         // 蓋上 generation：Cut 裡的 Node 同樣依附於這一版 AIG。
         c.generation = generation_;
+        // root 已通過 require_trusted，故必為 false；顯式寫出以保持欄位語意一致。
+        c.tainted    = rroot.tainted();
         out.push_back(std::move(c));
     }
     return out;
@@ -831,6 +821,11 @@ std::vector<Cut> Primitives::enumerate_cuts(SigRef rroot, int k) {
 // rebuild 之後 node index 指向完全不同的節點，用舊 Cut 算真值表
 // 不會報錯，只會靜默算出一個看似合理的錯誤函數。
 void Primitives::check_cut(const Cut& cut) {
+    if (cut.tainted) {
+        if (cfg_.count_stats) ++stats_.tainted_rejected;
+        throw UnsoundModel(model_ ? model_->taint_summary()
+                                  : std::string("model not built"));
+    }
     if (cut.generation == generation_) return;
 
     if (cfg_.count_stats) ++stats_.stale_rejected;
@@ -850,7 +845,7 @@ void Primitives::check_cut(const Cut& cut) {
     }
 }
 
-// 私有：不做 generation 檢查，只算節點函數。
+// 私有：不做 generation / 污染檢查，只算節點函數。
 TruthTable Primitives::truth_of_raw(const Cut& cut) {
     Ntk& A = aig();
     const std::size_t n = cut.leaves.size();
@@ -946,6 +941,7 @@ TruthTable Primitives::truth_of(const Cut& cut) {
 TruthTable Primitives::truth_of(const Cut& cut, SigRef rroot) {
     ensure_fresh();
     require_usable_model();
+    require_trusted({rroot});
     check_cut(cut);
     const Sig root = unwrap(rroot);
     Ntk& A = aig();
@@ -959,11 +955,12 @@ TruthTable Primitives::truth_of(const Cut& cut, SigRef rroot) {
 }
 
 NpnClass Primitives::classify(const TruthTable& tt) {
-    // 只吃 TruthTable，與 AIG 版本無關 → 不需要 ensure_fresh。
+    // 只吃 TruthTable，與 AIG 版本無關 → 不需要 ensure_fresh、也無污染可言。
     NpnClass out;
     out.num_vars = tt.num_vars();
 
     // kitty 的 exact NPN 在 n <= 6 是可接受的；再大要改 heuristic。
+    // 回傳型別在 kitty 版本間變過，用 std::get 比 structured binding 穩定。
     const auto res   = kitty::exact_npn_canonization(tt);
     out.canonical    = std::get<0>(res);
     out.phase        = std::get<1>(res);
@@ -975,17 +972,16 @@ NpnClass Primitives::classify(const TruthTable& tt) {
 bool Primitives::npn_matches(const Cut& cut, const TruthTable& tmpl) {
     ensure_fresh();
     require_usable_model();
-    check_cut(cut);
+    check_cut(cut);                                    // 污染 / stale 都在這裡擋掉
 
     if (cut.leaves.size() != tmpl.num_vars()) return false;
 
     TruthTable f;
     try {
-        f = truth_of_raw(cut);
-    } catch (const std::exception&) {
-        return false;                                  // 無效 cut，視為不匹配
-    }
-
+        f = truth_of_raw(cut);                         // 不走 public 版本：
+    } catch (const std::exception&) {                  //   否則這個 catch 會把
+        return false;                                  //   StaleSignal / UnsoundModel
+    }                                                  //   一起吞成「不匹配」
     const auto a = classify(f);
     const auto b = classify(tmpl);
     return a.canonical == b.canonical;
@@ -999,7 +995,8 @@ SigRef Primitives::cut_leaf(const Cut& cut, std::size_t i) {
     if (i >= cut.leaves.size())
         throw std::out_of_range("Primitives::cut_leaf: index out of range");
 
-    return stamp(aig().make_signal(cut.leaves[i]));
+    // cut 已通過 check_cut（未污染），leaf 繼承同樣的可信度。
+    return stamp(aig().make_signal(cut.leaves[i]), cut.tainted);
 }
 
 std::vector<std::string> Primitives::cut_leaf_names(const Cut& cut) {
@@ -1012,7 +1009,7 @@ std::vector<std::string> Primitives::cut_leaf_names(const Cut& cut) {
     out.reserve(cut.leaves.size());
 
     for (const Node l : cut.leaves) {
-        auto nm = names_of(stamp(A.make_signal(l)));
+        auto nm = names_of(stamp(A.make_signal(l), cut.tainted));
         out.push_back(nm.empty() ? std::string("<unnamed>") : nm.front());
     }
     return out;
@@ -1022,18 +1019,25 @@ std::vector<std::string> Primitives::cut_leaf_names(const Cut& cut) {
 //  名字橋接
 // ============================================================
 
+//   這是污染進入系統的唯一源頭：
+//   從 AigModel 的 per-net taint 取得初始可信度，之後靠 SigRef 傳播。
 SigRef Primitives::resolve(const std::string& net) {
     ensure_fresh();
-    return stamp(names().resolve(net));       // 查無此 net 會丟例外
+    const Sig s  = names().resolve(net);       // 查無此 net 會丟例外
+    const int id = nl_.getNetId(net);
+    return stamp(s, !model_->is_net_trustworthy(id));
 }
 
 std::optional<SigRef> Primitives::try_resolve(const std::string& net) {
     ensure_fresh();
     auto s = names().try_resolve(net);
     if (!s) return std::nullopt;
-    return stamp(*s);
+    const int id = nl_.getNetId(net);
+    return stamp(*s, !model_->is_net_trustworthy(id));
 }
 
+// 純查名字，不做任何證明 → 不需要污染檢查。
+// 受污染的 net 仍然有正確的名字，只是它的「函數」不可信。
 std::vector<std::string> Primitives::names_of(SigRef rs) {
     ensure_fresh();
     const Sig s = unwrap(rs);
@@ -1046,6 +1050,13 @@ std::vector<std::string> Primitives::names_of(SigRef rs) {
         key = fraig_->representative(s);
     }
     return names().names_of(key);
+}
+
+bool Primitives::is_trustworthy(const std::string& net) {
+    ensure_fresh();
+    const int id = nl_.getNetId(net);
+    if (id < 0) return false;
+    return model_->is_net_trustworthy(id);
 }
 
 // ============================================================
@@ -1075,8 +1086,13 @@ std::vector<std::vector<std::string>> Primitives::equivalence_classes(int min_si
         nm.reserve(cls.size());
         for (const int netId : cls) {
             if (!nl.isValidNetId(netId)) continue;
+            //   受污染的 net 不得出現在等價類報告裡：
+            //   它跟代表節點指向同一個 signal，但那個 signal 是用替代值算出來的，
+            //   「等價」這件事本身就不成立。靜默納入會產生假的等價宣稱。
+            if (!model_->is_net_trustworthy(netId)) continue;
             nm.push_back(nl.getNet(netId).name);
         }
+        // 剔除污染成員後可能不足 min_size，重新檢查
         if (static_cast<int>(nm.size()) >= min_size) out.push_back(std::move(nm));
     }
     return out;

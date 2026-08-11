@@ -70,6 +70,7 @@ private:
     std::vector<Sig>         inputSigs_;
     std::vector<std::string> outputNames_;
     std::vector<Sig>         outputSigs_;
+    std::vector<char>        outputTrusted_;
     uint64_t                 revision_   = 0;
     uint32_t                 generation_ = kInvalidGeneration;
     bool                     valid_      = false;
@@ -84,6 +85,9 @@ struct CecResult {
     // 反例：輸入名 → 值，可直接餵回模擬重現。
     std::vector<std::pair<std::string, bool>> counterexample;
 
+    // 因污染而被排除、無法比較的比較點
+    std::vector<std::string> untrusted_outputs;
+
     // 介面差異。輸入只在單邊出現是允許的（另一邊沒用到而已，miter 仍成立）；
     // 輸出只在單邊出現則無從比較，屬於介面變更。
     std::vector<std::string> inputs_only_in_before;
@@ -95,7 +99,11 @@ struct CecResult {
     std::vector<std::string> compared_outputs;
     std::string              message;
 
-    bool ok() const { return status == EquivResult::Equal && !interface_mismatch; }
+    bool ok() const {
+        return status == EquivResult::Equal
+            && !interface_mismatch
+            && untrusted_outputs.empty();
+    }
 };
 
 struct CecOptions {
@@ -145,13 +153,17 @@ public:
         int  default_cut_size;
         bool count_stats;
         bool verbose_rebuild;
+        // true  = 全域閘門：health==Invalid 時整顆電路拒絕作答（舊行為）
+        // false = 預設：只拒絕受污染的訊號，乾淨區域照常證明
+        bool strict_global_health;
 
         Config()
         : unknown_policy(UnknownPolicy::AsNotEqual)
         , stale_sig_policy(StaleSigPolicy::Throw)
         , default_cut_size(6)
         , count_stats(true)
-        , verbose_rebuild(true) {}
+        , verbose_rebuild(true)
+        , strict_global_health(false) {}
     };
 
     struct Stats {
@@ -168,6 +180,7 @@ public:
         uint64_t snapshots_taken  = 0;
         uint64_t cec_runs         = 0;
         uint64_t stale_rejected   = 0;
+        uint64_t tainted_rejected = 0;   // 因污染而回 Unknown / 丟例外的次數
     };
 
     // 唯一建構方式。建構時不立刻建 AIG —— 等第一個 query 進來才建（lazy）。
@@ -189,9 +202,13 @@ public:
     const AigModel& model() const;
     ModelHealth model_health();
     std::string model_health_message();
+    uint32_t    num_tainted_nets();      
+    std::string taint_summary();         // 污染源的人可讀說明
     Ntk&      aig();
     NameMap&  names();
     const Netlist& netlist() const;
+    bool is_trustworthy(const std::string& net);
+    bool is_trustworthy(SigRef s) { return !s.tainted(); }
 
     // ---------- 名字橋接（唯一能「憑空」取得 SigRef 的入口）----------
     SigRef                   resolve(const std::string& net);
@@ -306,13 +323,15 @@ private:
     void ensure_fresh();
     void rebuild();
     bool model_can_prove() const;
-    void require_usable_model() const;
+    void require_usable_model();
 
     // 把 SigRef 解成 raw Sig，並檢查 generation。
     //   所有吃 SigRef 的 public method 都必須先 ensure_fresh()、再 unwrap()。
     //   順序不可顛倒：先重建才知道當前 generation。
     Sig  unwrap(SigRef s);
-    SigRef stamp(Sig s) const { return SigRef(s, generation_); }
+    SigRef stamp(Sig s, bool tainted = false) const {
+        return SigRef(s, generation_, tainted);
+    }
     void check_cut(const Cut& cut);
 
     // ---------- 既有內部 ----------
@@ -322,6 +341,10 @@ private:
     Sig         build_cofactor(Sig f, Sig var, bool val);
     bool        in_structural_cone(Sig f, Node target);
     TruthTable  truth_of_raw(const Cut& cut);
+    // 任何一個引數受污染 → true（並累計 stats）
+    bool tainted_any(std::initializer_list<SigRef> rs);
+    // 無三態回傳的 API 用：受污染就丟 UnsoundModel
+    void require_trusted(std::initializer_list<SigRef> rs);
 
     // ---------- CEC 內部 ----------
     CecResult run_cec(const AigSnapshot& before,
@@ -365,7 +388,7 @@ private:
         }
     };
 
-    // ★ rebuild 時必須全部清空：內容是舊 AIG 的 Sig 與 node index。
+    // rebuild 時必須全部清空：內容是舊 AIG 的 Sig 與 node index。
     std::unordered_map<CofactorKey, Sig, CofactorKeyHash> cofactorCache_;
     std::unordered_map<uint64_t, std::unordered_set<uint64_t>> coneCache_;
 };

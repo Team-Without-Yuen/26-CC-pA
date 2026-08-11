@@ -43,7 +43,7 @@ private:
     // revision 是 cache freshness 的正確性依據；dirty 只保留為共享診斷狀態。
     // 初值為 true：新建的 Netlist 還沒有對應的 AIG。
     mutable bool dirty_ = true;
-    uint64_t revision_ = 0;   // 每次 mutation 遞增；供 snapshot 檢查用
+    mutable uint64_t revision_ = 0;   // 每次 mutation 遞增；供 snapshot 檢查用
 
     // One Netlist owns at most one Boolean-analysis cache.  It is lazy and is
     // never copied or moved because Primitives is bound to this exact object.

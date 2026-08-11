@@ -27,12 +27,16 @@ namespace {
 // ------------------------------------------------------------
 //  比較點視圖：把一顆 AigModel 的輸入／輸出換算成「帶名字」的清單。
 //  before / after 靠這些名字對齊，絕不靠索引。
+//
+//    outputTrusted 是局部化的關鍵：一顆壞閘只會讓它下游的比較點不可信，
+//    其餘比較點照常比對。全域 health 只當診斷用。
 // ------------------------------------------------------------
 struct InterfaceView {
     std::vector<std::string> inputNames;
     std::vector<Sig>         inputSigs;
     std::vector<std::string> outputNames;
     std::vector<Sig>         outputSigs;
+    std::vector<char>        outputTrusted;   // 與 outputNames 對齊：1 = 可信
 };
 
 InterfaceView collect_interface(const AigModel& m) {
@@ -44,6 +48,8 @@ InterfaceView collect_interface(const AigModel& m) {
     const auto&    dffs   = m.dffs();
 
     // ---- 輸入：真實 PI → DFF Q → 懸空自由 PI（AigBuilder 凍結的順序）----
+    //   這段依賴 AigBuilder 的 PI 建立順序。若那邊改動而這裡沒同步，
+    //   名字會整批錯位，而 miter 仍然跑得出來、只是結論毫無意義。
     std::vector<Sig> piSigs;
     piSigs.reserve(piNets.size());
     A.foreach_pi([&](auto n) { piSigs.push_back(A.make_signal(n)); });
@@ -53,7 +59,7 @@ InterfaceView collect_interface(const AigModel& m) {
 
     for (std::size_t i = 0; i < piSigs.size(); ++i) {
         std::string name;
-        if (i >= nReal && i < nReal + nDff) {
+        if (i >= nReal && i < nReal + nDff && (i - nReal) < dffs.size()) {
             // DFF 的 Q：用 instance 名而非 Q net 名 ——
             // 最佳化重建 netlist 時 instance 名會保留，內部 net 名會被重新產生。
             const auto& d = dffs[i - nReal];
@@ -78,13 +84,17 @@ InterfaceView collect_interface(const AigModel& m) {
         if (!seenOut.insert(nm).second) continue;       // 同一條 net 被宣告成多個 PO
         v.outputNames.push_back(nm);
         v.outputSigs.push_back(poSigs[i]);
+        v.outputTrusted.push_back(m.is_net_trustworthy(poNets[i]) ? 1 : 0);
     }
 
-    for (const auto& d : dffs) {
+    for (std::size_t i = 0; i < dffs.size(); ++i) {
+        const auto& d = dffs[i];
         std::string nm = std::string(kDffDPrefix) + nl.getGate(d.gateId).instName;
         if (!seenOut.insert(nm).second) continue;
         v.outputNames.push_back(std::move(nm));
         v.outputSigs.push_back(d.d_eff);
+        // "$D:" 沒有對應的具名 net，可信度記在 dffTaint_ 裡。
+        v.outputTrusted.push_back(m.is_dff_trustworthy(static_cast<int>(i)) ? 1 : 0);
     }
     return v;
 }
@@ -194,8 +204,8 @@ Primitives::Primitives(const Netlist& nl, AigModel::Options bopt, Config cfg)
     // 刻意不在這裡建 AIG：等第一個 query 進來才建（lazy）。
     // 這樣「讀檔 → 一連串修改 → 第一次分析」只會重建一次。
     if (is_phase_a() && cfg_.verbose_rebuild) {
-        std::cerr << "[Primitives] Phase A: mockturtle equivalence_checking "
-                     "(correct but slow; this is the golden reference)\n";
+        std::cerr << "[Primitives] Phase A: direct CaDiCaL encoding "
+                     "(correct but non-incremental; this is the golden reference)\n";
     }
 }
 
@@ -203,9 +213,9 @@ Primitives::~Primitives() = default;
 
 // 髒了就整顆重建。Phase A 的笨版本 —— 不做任何增量。
 //
-//   Phase B 的「連續修改先累積、等 query 再重建一次」不是效能優化，
-//   而是讓這套機制在 100 萬 gate 下可用的前提。lazy 建構已經先做到一半：
-//   只要修改是連續發生的，中間不會有任何 rebuild。
+// 以 revision 比對而非只看 dirty：若有另一個 cache 搶先呼叫了 clearDirty()，
+// revision 仍會抓到不一致。這是「一個 Netlist 對應一個共用 Primitives」
+// 這條約定的最後一道保險。
 void Primitives::ensure_fresh() {
     if (model_ && builtRevision_ == nl_.revision()) return;
     rebuild();
@@ -248,19 +258,28 @@ void Primitives::rebuild() {
                   << " po=" << st.num_real_pos
                   << " in " << sec << "s\n";
     }
-    if (!model_->can_prove()) {
-        std::cerr << "[Primitives][ERROR] Boolean proof disabled: "
-                  << model_->health_message() << "\n";
+
+    // 污染是局部的：有壞閘不代表整顆電路不能作答，
+    // 只代表壞閘下游的訊號不可信。這裡只做診斷輸出，不設全域閘門。
+    if (model_->num_tainted_nets() > 0) {
+        std::cerr << "[Primitives][WARN] " << model_->num_tainted_nets()
+                  << " untrustworthy net(s); queries touching them will return "
+                     "Unknown. " << model_->taint_summary() << "\n";
     }
 }
 
+// 全域健康。預設「不」當作閘門 —— 只有 strict_global_health 開啟時才生效。
 bool Primitives::model_can_prove() const {
     return model_ != nullptr && model_->can_prove();
 }
 
-void Primitives::require_usable_model() const {
-    if (!model_can_prove())
-        throw UnsoundModel(model_ ? model_->health_message() : "model has not been built");
+// 只有在 strict_global_health 開啟時才擋整顆電路。
+// 預設模式下唯一的閘門是 per-signal 的 require_trusted()。
+void Primitives::require_usable_model() {
+    if (model_ == nullptr)
+        throw UnsoundModel("model has not been built");
+    if (cfg_.strict_global_health && !model_->can_prove())
+        throw UnsoundModel(model_->health_message());
 }
 
 // SigRef → raw Sig，並檢查 generation。
@@ -289,11 +308,12 @@ Sig Primitives::unwrap(SigRef s) {
 void Primitives::enable_phase_b(bool on) {
     if (wantPhaseB_ == on) return;
     wantPhaseB_ = on;
-    // Dependencies must be destroyed from the outermost user to the AIG owner.
+    // 銷毀順序與依賴相反。
     fraig_.reset();
     sat_.reset();
     model_.reset();
     builtRevision_ = std::numeric_limits<uint64_t>::max();
+    // generation_ 不重置：它只增不減，下次 rebuild 會 +1，舊 SigRef 正確失效。
 }
 
 void Primitives::reset_stats() { stats_ = Stats{}; }
@@ -319,53 +339,75 @@ std::string Primitives::model_health_message() {
     return model_->health_message();
 }
 
+uint32_t Primitives::num_tainted_nets() {
+    ensure_fresh();
+    return model_->num_tainted_nets();
+}
+
+std::string Primitives::taint_summary() {
+    ensure_fresh();
+    return model_->taint_summary();
+}
+
 Ntk&     Primitives::aig()   { ensure_fresh(); return model_->aig(); }
 NameMap& Primitives::names() { ensure_fresh(); return model_->names(); }
 const Netlist& Primitives::netlist() const { return nl_; }
 
 // ============================================================
 //  常數與建構（讓高階 API 不必碰 raw Sig 也能組電路）
+//
+//    污染必須沿著建構運算傳播：make_and(乾淨, 受污染) 的結果不可信。
+//    這裡若漏掉，污染鏈就斷了 —— 後續的 equiv 會拿到一個「看起來乾淨」
+//    但實際上是用替代值算出來的 signal，靜默給出錯誤的確定答案。
 // ============================================================
 
 SigRef Primitives::constant(bool val) {
     ensure_fresh();
     require_usable_model();
-    return stamp(model_->aig().get_constant(val));
+    return stamp(model_->aig().get_constant(val), false);   // 常數永遠可信
 }
 
 SigRef Primitives::make_and(SigRef a, SigRef b) {
     ensure_fresh();
     require_usable_model();
+    const bool tainted = a.tainted() || b.tainted();
     const Sig r = model_->aig().create_and(unwrap(a), unwrap(b));
     if (sat_) sat_->sync();
-    return stamp(r);
+    return stamp(r, tainted);
 }
 
 SigRef Primitives::make_or(SigRef a, SigRef b) {
     ensure_fresh();
     require_usable_model();
+    const bool tainted = a.tainted() || b.tainted();
     const Sig r = model_->aig().create_or(unwrap(a), unwrap(b));
     if (sat_) sat_->sync();
-    return stamp(r);
+    return stamp(r, tainted);
 }
 
 SigRef Primitives::make_xor(SigRef a, SigRef b) {
     ensure_fresh();
     require_usable_model();
+    const bool tainted = a.tainted() || b.tainted();
     const Sig r = model_->aig().create_xor(unwrap(a), unwrap(b));
     if (sat_) sat_->sync();
-    return stamp(r);
+    return stamp(r, tainted);
 }
 
 SigRef Primitives::make_mux(SigRef sel, SigRef onTrue, SigRef onFalse) {
     ensure_fresh();
     require_usable_model();
+    const bool tainted = sel.tainted() || onTrue.tainted() || onFalse.tainted();
     Ntk& A = aig();
     const Sig s = unwrap(sel), t = unwrap(onTrue), f = unwrap(onFalse);
     const Sig r = A.create_or(A.create_and(s, t), A.create_and(!s, f));
     if (sat_) sat_->sync();
-    return stamp(r);
+    return stamp(r, tainted);
 }
+
+// ---------- 結構性查詢：不做布林證明，因此不需要 require_trusted ----------
+// 「這個 signal 是不是 PI」與它的函數可不可信無關 ——
+// 受污染的 signal 仍然有明確的結構位置。
 
 bool Primitives::is_free_var(SigRef s) {
     ensure_fresh();
@@ -385,16 +427,22 @@ bool Primitives::is_complemented(SigRef s) {
     return model_->aig().is_complemented(unwrap(s));
 }
 
+// ---------- 逃生口 ----------
+// raw() 保留污染資訊無從表達（Sig 沒有欄位可放），所以受污染時直接擋下：
+// 拿一個不可信的 raw Sig 去直接操作 mockturtle，會完全繞過所有保護。
 Sig Primitives::raw(SigRef s) {
     ensure_fresh();
     require_usable_model();
+    require_trusted({s});
     return unwrap(s);
 }
 
+// wrap() 蓋上當下的 generation，並一律視為可信 ——
+// 呼叫端必須保證輸入是同一次呼叫裡剛從 raw() 拿到、且未混入不可信來源的值。
 SigRef Primitives::wrap(Sig s) {
     ensure_fresh();
     require_usable_model();
-    return stamp(s);
+    return stamp(s, false);
 }
 
 // ============================================================
@@ -407,34 +455,45 @@ std::vector<std::string> Primitives::comparison_points(bool include_dff_next_sta
 
     std::vector<std::string> out;
     for (const auto& nm : view.outputNames) {
-        if (!include_dff_next_state &&
-            nm.rfind(kDffDPrefix, 0) == 0) continue;
+        if (!include_dff_next_state && nm.rfind(kDffDPrefix, 0) == 0) continue;
         out.push_back(nm);
     }
     return out;
 }
 
 // 修改前的快照。
+//
 // 不用 mockturtle 的 clone()：把所有比較點的 cone 重建進一顆全新的 Ntk，
 // 天生就是深拷貝，也不受版本差異影響。
-// 快照完全自足（名字以字串保存），之後的 rebuild 完全影響不到它。
+// 快照完全自足（名字與可信度以值保存），之後的 rebuild 完全影響不到它。
+//
+// 局部化：不再因為全域 health == Invalid 就整份作廢。
+//   壞閘只會讓它下游的比較點不可信，其餘照樣拍進快照、照樣可以比對。
+//   valid_ = false 只保留給「連 cone 都複製不出來」這種真正無法使用的情況。
 AigSnapshot Primitives::snapshot() {
     ensure_fresh();
     ++stats_.snapshots_taken;
 
-    if (!model_can_prove()) {
-        AigSnapshot snap;
-        snap.revision_ = nl_.revision();
-        snap.generation_ = generation_;
+    AigSnapshot snap;
+    snap.revision_   = nl_.revision();
+    snap.generation_ = generation_;
+
+    if (model_ == nullptr) {
+        std::cerr << "[Primitives][WARN] snapshot: model has not been built\n";
+        return snap;                                   // valid_ 維持 false
+    }
+    if (cfg_.strict_global_health && !model_->can_prove()) {
+        std::cerr << "[Primitives][WARN] snapshot: strict_global_health is on and the "
+                     "model is Invalid -- snapshot marked unusable\n";
         return snap;
     }
 
     const auto view = collect_interface(*model_);
     const Ntk& src  = model_->aig();
 
-    AigSnapshot snap;
-    snap.inputNames_ = view.inputNames;
-    snap.outputNames_ = view.outputNames;
+    snap.inputNames_    = view.inputNames;
+    snap.outputNames_   = view.outputNames;
+    snap.outputTrusted_ = view.outputTrusted;
 
     // 在快照網路裡依同樣順序建 PI
     std::unordered_map<uint64_t, Sig> piMap;
@@ -449,18 +508,22 @@ AigSnapshot Primitives::snapshot() {
     snap.outputSigs_ = copy_cone(src, view.outputSigs, snap.ntk_, piMap, ok);
     for (const Sig o : snap.outputSigs_) snap.ntk_.create_po(o);
 
-    snap.revision_   = nl_.revision();
-    snap.generation_ = generation_;
-    snap.valid_      = ok;
+    snap.valid_ = ok;
 
     if (!ok)
         std::cerr << "[Primitives][WARN] snapshot: cone copy incomplete "
-                     "-- comparison results may be unreliable\n";
+                     "-- comparison results would be unreliable\n";
 
-    if (cfg_.verbose_rebuild)
+    if (cfg_.verbose_rebuild) {
+        std::size_t untrusted = 0;
+        for (const char t : snap.outputTrusted_) if (!t) ++untrusted;
         std::cerr << "[Primitives] snapshot: " << snap.inputNames_.size()
                   << " input(s), " << snap.outputNames_.size()
-                  << " comparison point(s), rev=" << snap.revision_ << "\n";
+                  << " comparison point(s)";
+        if (untrusted > 0)
+            std::cerr << " (" << untrusted << " untrustworthy)";
+        std::cerr << ", rev=" << snap.revision_ << "\n";
+    }
 
     return snap;
 }
@@ -483,9 +546,13 @@ CecResult Primitives::equiv_to_snapshot_only(const AigSnapshot& before,
 
 // 核心：建 name-based miter 再求解。
 //
-//   這裡一定要建 miter，不能用 FRAIG 查表：
+// 這裡一定要建 miter，不能用 FRAIG 查表：
 //   FRAIG 只在「單一 AIG 內部」找等價節點，修改前後是兩顆獨立的 AIG，
 //   節點空間完全不同，representative() 查不到跨網路的關係。
+//
+// 污染局部化：任一側不可信的比較點會被移進 untrusted_outputs 並排除，
+//   其餘照常比對。絕不靜默略過 —— CecResult::ok() 會把 untrusted_outputs
+//   納入判斷，否則「悄悄跳過三個點然後回 Equal」會讓使用者以為修改完全安全。
 CecResult Primitives::run_cec(const AigSnapshot& before,
                               const std::vector<std::string>* filter,
                               bool filterIsExclude,
@@ -495,20 +562,24 @@ CecResult Primitives::run_cec(const AigSnapshot& before,
 
     CecResult res;
 
-    if (!model_can_prove()) {
-        res.status = EquivResult::Unknown;
+    if (model_ == nullptr) {
+        res.status  = EquivResult::Unknown;
+        res.message = "AIG model has not been built";
+        return res;
+    }
+    if (cfg_.strict_global_health && !model_->can_prove()) {
+        res.status  = EquivResult::Unknown;
         res.message = "AIG model is not usable for proof: " + model_->health_message();
         return res;
     }
-
     if (!before.valid()) {
         res.status  = EquivResult::Unknown;
         res.message = "snapshot is invalid (taken before any build, or cone copy failed)";
         return res;
     }
 
-    const auto after   = collect_interface(*model_);
-    const Ntk& afterNtk = model_->aig();
+    const auto  after    = collect_interface(*model_);
+    const Ntk&  afterNtk = model_->aig();
 
     // ---- 名稱過濾 ----
     std::unordered_set<std::string> filterSet;
@@ -521,19 +592,31 @@ CecResult Primitives::run_cec(const AigSnapshot& before,
         return filterIsExclude ? !listed : listed;
     };
 
-    // ---- 輸出：交集比較，差集回報 ----
-    std::unordered_map<std::string, Sig> beforeOut, afterOut;
-    for (std::size_t i = 0; i < before.outputNames_.size(); ++i)
-        if (passes(before.outputNames_[i]))
-            beforeOut.emplace(before.outputNames_[i], before.outputSigs_[i]);
-    for (std::size_t i = 0; i < after.outputNames.size(); ++i)
-        if (passes(after.outputNames[i]))
-            afterOut.emplace(after.outputNames[i], after.outputSigs[i]);
+    // ---- 輸出：交集比較，差集回報；同時帶出兩側的可信度 ----
+    struct OutEntry { Sig sig; bool trusted; };
+    std::unordered_map<std::string, OutEntry> beforeOut, afterOut;
+
+    for (std::size_t i = 0; i < before.outputNames_.size(); ++i) {
+        if (!passes(before.outputNames_[i])) continue;
+        const bool trusted = i < before.outputTrusted_.size()
+                           ? before.outputTrusted_[i] != 0
+                           : true;                     // 舊快照沒有這欄時保守視為可信
+        beforeOut.emplace(before.outputNames_[i],
+                          OutEntry{before.outputSigs_[i], trusted});
+    }
+    for (std::size_t i = 0; i < after.outputNames.size(); ++i) {
+        if (!passes(after.outputNames[i])) continue;
+        const bool trusted = i < after.outputTrusted.size()
+                           ? after.outputTrusted[i] != 0
+                           : true;
+        afterOut.emplace(after.outputNames[i],
+                         OutEntry{after.outputSigs[i], trusted});
+    }
 
     std::vector<std::string> common;
     for (const auto& kv : beforeOut) {
         if (afterOut.count(kv.first)) common.push_back(kv.first);
-        else                           res.outputs_only_in_before.push_back(kv.first);
+        else                          res.outputs_only_in_before.push_back(kv.first);
     }
     for (const auto& kv : afterOut)
         if (!beforeOut.count(kv.first)) res.outputs_only_in_after.push_back(kv.first);
@@ -544,7 +627,6 @@ CecResult Primitives::run_cec(const AigSnapshot& before,
 
     res.interface_mismatch = !res.outputs_only_in_before.empty() ||
                              !res.outputs_only_in_after.empty();
-    res.compared_outputs   = common;
 
     if (res.interface_mismatch && opt.require_identical_outputs) {
         res.status  = EquivResult::Unknown;
@@ -554,9 +636,26 @@ CecResult Primitives::run_cec(const AigSnapshot& before,
                       " added); set require_identical_outputs=false to compare the intersection";
         return res;
     }
-    if (common.empty()) {
-        res.status  = EquivResult::Unknown;
-        res.message = "no comparison point selected -- nothing was verified";
+
+    // ---- 剔除任一側不可信的比較點 ----
+    // 受污染的比較點是用替代值算出來的，「等價」這件事本身就不成立，
+    // 比了只會得到假的確定答案。明確回報，不靜默略過。
+    std::vector<std::string> usable;
+    usable.reserve(common.size());
+    for (const auto& nm : common) {
+        if (beforeOut[nm].trusted && afterOut[nm].trusted) usable.push_back(nm);
+        else                                               res.untrusted_outputs.push_back(nm);
+    }
+    res.compared_outputs = usable;
+
+    if (usable.empty()) {
+        res.status = EquivResult::Unknown;
+        if (!res.untrusted_outputs.empty())
+            res.message = "every selected comparison point is untrustworthy (" +
+                          std::to_string(res.untrusted_outputs.size()) + " point(s)); " +
+                          model_->taint_summary();
+        else
+            res.message = "no comparison point selected -- nothing was verified";
         return res;
     }
 
@@ -582,6 +681,7 @@ CecResult Primitives::run_cec(const AigSnapshot& before,
     Ntk miter;
     std::vector<std::string> miterInputNames;
     std::unordered_map<std::string, Sig> miterIn;
+    miterInputNames.reserve(allIn.size());
 
     for (const auto& nm : allIn) {
         const Sig p = miter.create_pi();
@@ -598,11 +698,11 @@ CecResult Primitives::run_cec(const AigSnapshot& before,
             afterNtk.get_node(after.inputSigs[kv.second]))] = miterIn[kv.first];
 
     std::vector<Sig> beforeRoots, afterRoots;
-    beforeRoots.reserve(common.size());
-    afterRoots.reserve(common.size());
-    for (const auto& nm : common) {
-        beforeRoots.push_back(beforeOut[nm]);
-        afterRoots.push_back(afterOut[nm]);
+    beforeRoots.reserve(usable.size());
+    afterRoots.reserve(usable.size());
+    for (const auto& nm : usable) {
+        beforeRoots.push_back(beforeOut[nm].sig);
+        afterRoots.push_back(afterOut[nm].sig);
     }
 
     bool okB = true, okA = true;
@@ -617,8 +717,8 @@ CecResult Primitives::run_cec(const AigSnapshot& before,
 
     // 逐點 XOR，全部 OR 起來 → 單一 PO。miter 恆為 0 ⟺ 等價。
     std::vector<Sig> diffs;
-    diffs.reserve(common.size());
-    for (std::size_t i = 0; i < common.size(); ++i)
+    diffs.reserve(usable.size());
+    for (std::size_t i = 0; i < usable.size(); ++i)
         diffs.push_back(miter.create_xor(bSigs[i], aSigs[i]));
 
     Sig acc = miter.get_constant(false);
@@ -626,22 +726,33 @@ CecResult Primitives::run_cec(const AigSnapshot& before,
     miter.create_po(acc);
 
     // ---- 求解 ----
+    // miter 已經是單一 PO 的合法 miter，直接問「PO 是否恆為 0」，
+    // 不需要另外建 zero 網路再呼叫 miter<Ntk>()（那會多一次完整網路複製）。
+    //
     // Phase B 時這裡應改走自家 sweep + incremental CaDiCaL：
     // 兩邊沒改到的區域 strash 一進去就免費合併，SAT 只剩修改點附近的 cone。
     mockturtle::equivalence_checking_stats st;
     const auto r = mockturtle::equivalence_checking(miter, {}, &st);
 
+    auto tail = [&]() {
+        std::string s;
+        if (!res.untrusted_outputs.empty())
+            s += " (" + std::to_string(res.untrusted_outputs.size()) +
+                 " point(s) skipped as untrustworthy)";
+        return s;
+    };
+
     if (!r) {
         res.status  = EquivResult::Unknown;
         res.message = "solver hit its internal limit (Phase A). "
-                      "This is exactly what Phase B fixes.";
+                      "This is exactly what Phase B fixes." + tail();
         return res;
     }
 
     if (*r) {
         res.status  = EquivResult::Equal;
-        res.message = "equivalent on " + std::to_string(common.size()) +
-                      " comparison point(s)";
+        res.message = "equivalent on " + std::to_string(usable.size()) +
+                      " comparison point(s)" + tail();
         return res;
     }
 
@@ -655,19 +766,20 @@ CecResult Primitives::run_cec(const AigSnapshot& before,
             res.counterexample.emplace_back(miterInputNames[i], static_cast<bool>(ce[i]));
 
         // 用同一個反例做「一次」模擬，回推哪些比較點真的不同。
-        // 比逐點各跑一次 SAT 便宜非常多。
+        // 比逐點各跑一次 SAT 便宜非常多（幾千顆 DFF 時差距是數量級）。
         if (opt.identify_mismatches) {
             std::vector<bool> vals(ce.begin(), ce.end());
             const auto sim = simulate_all(miter, vals);
-            for (std::size_t i = 0; i < common.size(); ++i)
+            for (std::size_t i = 0; i < usable.size(); ++i)
                 if (sig_value(miter, sim, diffs[i]))
-                    res.mismatched_outputs.push_back(common[i]);
+                    res.mismatched_outputs.push_back(usable[i]);
 
             if (!res.mismatched_outputs.empty())
                 res.message += " at " + std::to_string(res.mismatched_outputs.size()) +
                                " point(s), first = " + res.mismatched_outputs.front();
         }
     }
+    res.message += tail();
     return res;
 }
 
