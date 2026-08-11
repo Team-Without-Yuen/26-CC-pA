@@ -120,6 +120,50 @@ void AigModel::mark_invalid(const std::string& reason) {
     }
 }
 
+bool AigModel::is_net_trustworthy(int netId) const {
+    if (netId < 0 || netId >= static_cast<int>(netTaint_.size())) return false;
+    return netTaint_[netId] == 0;
+}
+
+bool AigModel::is_dff_trustworthy(int dffIndex) const {
+    if (dffIndex < 0 || dffIndex >= static_cast<int>(dffTaint_.size())) return false;
+    return dffTaint_[dffIndex] == 0;
+}
+
+void AigModel::taint_root(int netId, const std::string& reason) {
+    mark_invalid(reason);                       // 全域健康仍照舊記錄
+    if (netId < 0 || netId >= static_cast<int>(netTaint_.size())) return;
+    if (netTaint_[netId] == 0) ++numTaintedNets_;
+    if (netTaint_[netId] != 1) {
+        netTaint_[netId] = 1;
+        if (taintRoots_.size() < kMaxTaintRoots) {
+            taintRoots_.push_back(netId);
+            taintReason_.emplace(netId, reason);
+        }
+    }
+}
+
+void AigModel::taint_derived(int netId) {
+    if (netId < 0 || netId >= static_cast<int>(netTaint_.size())) return;
+    if (netTaint_[netId] != 0) return;
+    netTaint_[netId] = 2;
+    ++numTaintedNets_;
+}
+
+std::string AigModel::taint_summary() const {
+    if (numTaintedNets_ == 0) return "no tainted nets";
+    std::string s = std::to_string(numTaintedNets_) + " tainted net(s); root cause(s): ";
+    for (size_t i = 0; i < taintRoots_.size(); ++i) {
+        if (i) s += "; ";
+        const int id = taintRoots_[i];
+        auto it = taintReason_.find(id);
+        s += nl_->isValidNetId(id) ? nl_->getNet(id).name : std::to_string(id);
+        if (it != taintReason_.end()) s += " (" + it->second + ")";
+    }
+    if (numTaintedNets_ > taintRoots_.size()) s += "; additional roots omitted";
+    return s;
+}
+
 void AigModel::do_build(const Options& opt) {
     const Netlist& nl   = *nl_;
     const int netCount  = static_cast<int>(nl.getNetCount());
@@ -128,6 +172,16 @@ void AigModel::do_build(const Options& opt) {
     std::vector<Sig>  netSig(netCount, aig_.get_constant(false));
     std::vector<char> hasSig(netCount, 0);
     std::vector<char> netReady(netCount, 0);
+
+    // ---- 0. 局部可信度（cone-local health）----
+    // 污染記在 net 上而非 AIG node 上。
+    // 理由：輸入無法解析時會塞 const0 進去，而 create_and(x, const0) 會塌成常數、
+    // create_xor(x, const0) 會塌成 x 本身。若把污染記在結果節點，前者會污染全電路
+    // 共用的常數節點，後者會污染 x 的整個 fanout —— 兩種都會造成大範圍誤判。
+    //
+    // 不變量：一條 net 未被污染 ⟺ 有唯一合法 driver、arity 正確、且所有輸入 net 皆未污染。
+    // 由歸納法，未污染的 net 其整個 fanin cone 必定乾淨，可以放心證明。
+    netTaint_.assign(netCount, 0);
 
     auto assign = [&](int netId, Sig s) {
         if (netId < 0 || netId >= netCount) return;
@@ -179,11 +233,14 @@ void AigModel::do_build(const Options& opt) {
             info.q = q;
             piNetIds_.push_back(gate.outputNetId);
         } else if (gate.outputNetId >= 0 && gate.outputNetId < netCount) {
-            mark_invalid("DFF '" + gate.instName + "' Q output has multiple drivers");
+            // Q 已經有 driver：這條 net 的函數不唯一，標為污染源。
+            taint_root(gate.outputNetId,
+                       "DFF '" + gate.instName + "' Q output has multiple drivers");
             info.q = netSig[gate.outputNetId];
         } else {
+            // 沒有有效的 Q net，無處可記污染，只能記全域。
             mark_invalid("DFF '" + gate.instName + "' has no valid Q output net");
-            info.q = aig_.create_pi();                    // Q 未接：仍需佔位維持索引一致
+            info.q = aig_.create_pi();                    // 佔位以維持 PI 索引一致
             piNetIds_.push_back(kNoNet);
         }
         dffs_.push_back(info);
@@ -192,6 +249,7 @@ void AigModel::do_build(const Options& opt) {
 
     // ---- 4. 懸空輸入 → 自由 PI（net id 遞增，順序穩定）----
     // 綁 const0 會讓行為不同的電路被誤判等價，所以預設造自由變數。
+    // 自由變數是保守但「正確」的建模，因此 **不算污染**，只把全域健康降為 Conservative。
     if (opt.undriven_as_free_pi) {
         std::vector<char> referenced(netCount, 0);
         for (int g = 0; g < gateCount; ++g) {
@@ -221,104 +279,130 @@ void AigModel::do_build(const Options& opt) {
     }
 
     // ---- 5. 組合閘（拓撲順序）----
-    auto sig_of_input = [&](const Gate& g, size_t idx) -> Sig {
-        if (idx >= g.inputNetIds.size()) {
-            ++stats_.num_unresolved;
-            mark_invalid("gate '" + g.instName + "' is missing required input " +
-                         std::to_string(idx));
-            return aig_.get_constant(false);
-        }
-        const int netId = g.inputNetIds[idx];
-        if (netId < 0 || netId >= netCount || !hasSig[netId]) {
-            ++stats_.num_unresolved;
-            mark_invalid("gate '" + g.instName + "' input " + std::to_string(idx) +
-                         " cannot be resolved");
-            if (opt.verbose)
-                std::cerr << "[AigBuilder][WARN] gate '" << g.instName
-                          << "' input " << idx << " unresolved; tied to const0\n";
-            return aig_.get_constant(false);
-        }
-        return netSig[netId];
-    };
-
+    //
+    // sig_of_input 必須放在迴圈「內部」：它要知道當前這顆閘是誰，
+    // 才能把污染記到這顆閘的輸出 net 上，並從輸入 net 繼承污染。
     const std::vector<int> order = topo_order(nl, netReady);
+
     for (const int gid : order) {
         const Gate& g = nl.getGate(gid);
+
+        // 這顆閘的輸出函數是否已被替代值或上游污染。
+        bool        tainted = false;      // 含「從上游繼承」
+        std::string taintReason;          // 非空 = 這顆閘本身就是污染源
+
+        auto note_root = [&](const std::string& r) {
+            tainted = true;
+            if (taintReason.empty()) taintReason = r;
+        };
+
+        auto sig_of_input = [&](size_t idx) -> Sig {
+            if (idx >= g.inputNetIds.size()) {
+                ++stats_.num_unresolved;
+                note_root("gate '" + g.instName + "' is missing required input " +
+                          std::to_string(idx));
+                return aig_.get_constant(false);
+            }
+            const int netId = g.inputNetIds[idx];
+            if (netId < 0 || netId >= netCount || !hasSig[netId]) {
+                ++stats_.num_unresolved;
+                note_root("gate '" + g.instName + "' input " + std::to_string(idx) +
+                          " cannot be resolved");
+                if (opt.verbose)
+                    std::cerr << "[AigBuilder][WARN] gate '" << g.instName
+                              << "' input " << idx << " unresolved; tied to const0\n";
+                return aig_.get_constant(false);
+            }
+            // ★ 污染沿 fanout 傳播：輸入不可信 → 輸出也不可信
+            if (netTaint_[netId] != 0) tainted = true;
+            return netSig[netId];
+        };
+
         auto invalid_arity = [&](const std::string& expected) {
-            mark_invalid(
-                "gate '" + g.instName + "' has " +
-                std::to_string(g.inputNetIds.size()) +
-                " input(s); expected " + expected);
+            note_root("gate '" + g.instName + "' has " +
+                      std::to_string(g.inputNetIds.size()) +
+                      " input(s); expected " + expected);
             return aig_.get_constant(false);
         };
-        auto fold_and = [&]() {
+
+        // 三個 fold 共用一份實作，避免重複。
+        auto fold = [&](auto op) -> Sig {
             if (g.inputNetIds.empty()) return invalid_arity("at least one");
-            Sig result = sig_of_input(g, 0);
-            for (size_t i = 1; i < g.inputNetIds.size(); ++i) {
-                result = aig_.create_and(result, sig_of_input(g, i));
-            }
+            Sig result = sig_of_input(0);
+            for (size_t i = 1; i < g.inputNetIds.size(); ++i)
+                result = op(result, sig_of_input(i));
             return result;
         };
-        auto fold_or = [&]() {
-            if (g.inputNetIds.empty()) return invalid_arity("at least one");
-            Sig result = sig_of_input(g, 0);
-            for (size_t i = 1; i < g.inputNetIds.size(); ++i) {
-                result = aig_.create_or(result, sig_of_input(g, i));
-            }
-            return result;
-        };
-        auto fold_xor = [&]() {
-            if (g.inputNetIds.empty()) return invalid_arity("at least one");
-            Sig result = sig_of_input(g, 0);
-            for (size_t i = 1; i < g.inputNetIds.size(); ++i) {
-                result = aig_.create_xor(result, sig_of_input(g, i));
-            }
-            return result;
-        };
+        auto op_and = [&](Sig a, Sig b) { return aig_.create_and(a, b); };
+        auto op_or  = [&](Sig a, Sig b) { return aig_.create_or (a, b); };
+        auto op_xor = [&](Sig a, Sig b) { return aig_.create_xor(a, b); };
 
         Sig out = aig_.get_constant(false);
         switch (g.type) {
-            case GateType::AND:  out = fold_and();              break;
-            case GateType::OR:   out = fold_or();               break;
-            case GateType::NAND: out = !fold_and();             break;
-            case GateType::NOR:  out = !fold_or();              break;
-            case GateType::XOR:  out = fold_xor();              break;
-            case GateType::XNOR: out = !fold_xor();             break;
+            case GateType::AND:  out =  fold(op_and); break;
+            case GateType::OR:   out =  fold(op_or);  break;
+            case GateType::NAND: out = !fold(op_and); break;
+            case GateType::NOR:  out = !fold(op_or);  break;
+            case GateType::XOR:  out =  fold(op_xor); break;
+            case GateType::XNOR: out = !fold(op_xor); break;
             case GateType::NOT:
                 out = g.inputNetIds.size() == 1
-                    ? !sig_of_input(g, 0)
+                    ? !sig_of_input(0)
                     : invalid_arity("exactly one");
                 break;
             case GateType::BUF:
                 out = g.inputNetIds.size() == 1
-                    ? sig_of_input(g, 0)
+                    ? sig_of_input(0)
                     : invalid_arity("exactly one");
                 break;
             default:
-                mark_invalid("gate '" + g.instName + "' has unsupported gate type");
+                note_root("gate '" + g.instName + "' has unsupported gate type");
                 break;
         }
+
         if (g.outputNetId < 0 || g.outputNetId >= netCount) {
+            // 沒有輸出 net：無處可記污染。下游因為讀不到這條 net，
+            // 會在各自的 sig_of_input 裡被標成 unresolved，所以不會漏。
             mark_invalid("gate '" + g.instName + "' has no valid output net");
         } else if (hasSig[g.outputNetId]) {
-            mark_invalid("gate '" + g.instName + "' output has multiple drivers");
+            taint_root(g.outputNetId,
+                       "net '" + nl.getNet(g.outputNetId).name + "' has multiple drivers");
         } else {
             assign(g.outputNetId, out);
+            if (tainted) {
+                if (!taintReason.empty()) taint_root(g.outputNetId, taintReason);
+                else                      taint_derived(g.outputNetId);   // 純繼承，不重複記全域
+            }
         }
         ++stats_.num_comb_gates;
     }
 
+    // 被拓撲排序丟掉的閘（組合迴路 / 斷掉的 fanin 鏈）：
+    // 逐一把輸出 net 標為污染源，讓診斷能指到具體位置，
+    // 而不是只給一個「有 N 顆閘排不進去」的總數。
     {
-        int combTotal = 0;
-        for (int g = 0; g < gateCount; ++g)
-            if (is_comb_gate(nl.getGate(g).type)) ++combTotal;
-        stats_.num_topo_dropped = static_cast<uint32_t>(combTotal - static_cast<int>(order.size()));
-        if (stats_.num_topo_dropped > 0) {
-            mark_invalid(std::to_string(stats_.num_topo_dropped) +
-                         " combinational gate(s) could not be topologically ordered");
-            std::cerr << "[AigBuilder][WARN] " << stats_.num_topo_dropped
-                      << " combinational gate(s) unresolved (combinational loop?)\n";
+        std::vector<char> inOrder(gateCount, 0);
+        for (const int gid : order) inOrder[gid] = 1;
+
+        int dropped = 0;
+        for (int g = 0; g < gateCount; ++g) {
+            if (!is_comb_gate(nl.getGate(g).type)) continue;
+            if (inOrder[g]) continue;
+            ++dropped;
+            const int outNet = nl.getGate(g).outputNetId;
+            if (outNet >= 0 && outNet < netCount) {
+                taint_root(outNet, "gate '" + nl.getGate(g).instName +
+                                   "' could not be topologically ordered "
+                                   "(combinational loop?)");
+            } else {
+                mark_invalid("gate '" + nl.getGate(g).instName +
+                             "' could not be topologically ordered");
+            }
         }
+        stats_.num_topo_dropped = static_cast<uint32_t>(dropped);
+        if (dropped > 0)
+            std::cerr << "[AigBuilder][WARN] " << dropped
+                      << " combinational gate(s) unresolved (combinational loop?)\n";
     }
 
     // ---- 6. 真實 PO ----
@@ -330,8 +414,8 @@ void AigModel::do_build(const Options& opt) {
             }
             if (!hasSig[netId]) {
                 ++stats_.num_unresolved;
-                mark_invalid("primary output net '" + nl.getNet(netId).name +
-                             "' cannot be resolved");
+                taint_root(netId, "primary output net '" + nl.getNet(netId).name +
+                                  "' cannot be resolved");
             }
             const Sig s = hasSig[netId] ? netSig[netId] : aig_.get_constant(false);
             aig_.create_po(s);
@@ -348,27 +432,39 @@ void AigModel::do_build(const Options& opt) {
     //   RN=1, SN=1      → D
     // RN/SN 未接時視為恆 1；此時 create_and/create_or 會被 mockturtle 直接摺掉，
     // 不會多出任何節點。
-    for (size_t i = 0; i < dffGateIds.size(); ++i) {
-        DffInfo& info = dffs_[i];
+    //
+    // DFF 的污染記在 dffTaint_（與 dffs_ 對齊）而非 net 上，
+    // 因為 "$D:inst" 這個比較點沒有對應的具名 net。
+    dffTaint_.assign(dffs_.size(), 0);
 
-        const Gate& dff = nl.getGate(info.gateId);
+    for (size_t i = 0; i < dffGateIds.size(); ++i) {
+        DffInfo&    info = dffs_[i];
+        const Gate& dff  = nl.getGate(info.gateId);
+        bool        tainted = false;
+
         auto ctrl_sig = [&](int netId, bool defaultVal, const char* pin) -> Sig {
+            // pin 本來就沒接：合法，依 cell 定義使用 inactive value，不算污染。
             if (netId == kNoNet)
                 return aig_.get_constant(defaultVal);
+            // pin 有接但解不出來：模型不完整。
             if (netId < 0 || netId >= netCount || !hasSig[netId]) {
                 ++stats_.num_unresolved;
                 mark_invalid("DFF '" + dff.instName + "' " + pin +
                              " input cannot be resolved");
+                tainted = true;
                 return aig_.get_constant(defaultVal);
             }
+            if (netTaint_[netId] != 0) tainted = true;
             return netSig[netId];
         };
 
         if (info.dNetId < 0 || info.dNetId >= netCount || !hasSig[info.dNetId]) {
             ++stats_.num_unresolved;
             mark_invalid("DFF '" + dff.instName + "' D input cannot be resolved");
+            tainted = true;
             info.d_raw = aig_.get_constant(false);
         } else {
+            if (netTaint_[info.dNetId] != 0) tainted = true;
             info.d_raw = netSig[info.dNetId];
         }
 
@@ -379,6 +475,12 @@ void AigModel::do_build(const Options& opt) {
         } else {
             info.d_eff = info.d_raw;
         }
+
+        // Q 本身不可信（多 driver）→ "$Q:" 與 "$D:" 都不可信。
+        if (info.qNetId >= 0 && info.qNetId < netCount && netTaint_[info.qNetId] != 0)
+            tainted = true;
+
+        dffTaint_[i] = tainted ? 1 : 0;
         aig_.create_po(info.d_eff);
     }
 
@@ -390,7 +492,10 @@ void AigModel::do_build(const Options& opt) {
                   << " freePI=" << stats_.num_free_pis
                   << " PO=" << stats_.num_real_pos
                   << " bound_nets=" << stats_.num_bound_nets
-                  << " aig_size=" << stats_.aig_size << "\n";
+                  << " aig_size=" << stats_.aig_size
+                  << " tainted_nets=" << numTaintedNets_ << "\n";
+        if (numTaintedNets_ > 0)
+            std::cerr << "[AigBuilder] " << taint_summary() << "\n";
     }
 }
 

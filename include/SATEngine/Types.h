@@ -26,6 +26,10 @@ public:
     bool     valid()      const { return gen_ != kInvalidGeneration; }
     uint32_t generation() const { return gen_; }
 
+    // 這個 signal 的函數是否已被「無法解析的輸入」污染。
+    // 污染會沿著 cofactor / make_* 等衍生運算傳播。
+    bool     tainted()    const { return tainted_; }
+
     // 取反：只翻 complement bit，generation 不變。
     SigRef operator!() const { return SigRef(!sig_, gen_); }
 
@@ -37,10 +41,12 @@ public:
 
 private:
     friend class Primitives;
-    SigRef(Sig s, uint32_t gen) : sig_(s), gen_(gen) {}
+    SigRef(Sig s, uint32_t gen, bool tainted = false)
+        : sig_(s), gen_(gen), tainted_(tainted) {}
 
     Sig      sig_{};
     uint32_t gen_ = kInvalidGeneration;
+    bool     tainted_ = false;
 };
 
 // k-feasible cut。
@@ -50,6 +56,7 @@ struct Cut {
     Node              root;
     std::vector<Node> leaves;
     uint32_t          generation = kInvalidGeneration;
+    bool              tainted    = false;   // 由 root 繼承
 };
 
 struct NpnClass {

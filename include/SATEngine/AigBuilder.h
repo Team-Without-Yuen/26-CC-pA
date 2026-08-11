@@ -3,6 +3,7 @@
 #include <cstdint>
 #include <memory>
 #include <string>
+#include <unordered_map>
 #include <vector>
 #include "Types.h"
 #include "NameMap.h"
@@ -78,10 +79,13 @@ public:
     const NameMap& names() const { return names_; }
     const Netlist& netlist() const { return *nl_; }
 
-    // PI 順序（反例解讀、cofactor 合法性檢查都靠它）：
+    // PI 順序（反例解讀、cofactor 合法性檢查、CEC 比較點命名都靠它）：
     //   [0, num_real_pis)                        → 宣告順序的真實 PI
     //   [num_real_pis, +num_dff)                 → DFF Q 的 pseudo-PI（gate id 遞增）
     //   之後                                      → 懸空輸入的自由 PI（net id 遞增）
+    // Session.cpp::collect_interface 依賴此順序切名字。
+    //   改動這裡而沒同步那邊，比較點名字會整批錯位，
+    //   而 miter 仍然跑得出來、只是結論毫無意義。
     const std::vector<int>& pi_net_ids() const { return piNetIds_; }
     bool                    is_free_var(Sig s) const;   // s 是否為 PI（cofactor 前置條件）
 
@@ -90,6 +94,22 @@ public:
     const std::vector<Sig>& po_signals() const { return poSigs_; }
     const std::vector<int>& po_net_ids() const { return poNetIds_; }
 
+    // ---- 局部可信度（cone-local health）----
+    //
+    // health() 是「整顆電路的最壞情況」，僅供診斷；
+    // 是否能證明某個查詢，一律以下列 per-net 判斷為準。
+    //
+    // 不變量：未污染的 net，其整個 fanin cone 必定乾淨。
+    // 因此一顆壞閘只會廢掉它下游的那一塊，不會廢掉整張電路。
+    bool is_net_trustworthy(int netId) const;
+    bool is_dff_trustworthy(int dffIndex) const;   // dffs() 的索引
+
+    uint32_t num_tainted_nets() const { return numTaintedNets_; }
+    // 污染源（root cause）的 net id，最多保留 kMaxTaintRoots 筆
+    const std::vector<int>& taint_roots() const { return taintRoots_; }
+    std::string taint_summary() const;
+
+    // 保留舊語意供診斷用；Primitives 不再拿它當全域閘門。
     const Stats& stats() const { return stats_; }
     ModelHealth  health() const { return health_; }
     bool         can_prove() const { return health_ != ModelHealth::Invalid; }
@@ -112,6 +132,16 @@ private:
     ModelHealth          health_ = ModelHealth::Sound;
     std::string          healthMessage_ = "sound";
     uint32_t             invalidIssueCount_ = 0;
+    static constexpr uint32_t kMaxTaintRoots = 32;
+
+    void taint_root(int netId, const std::string& reason);  // 污染源
+    void taint_derived(int netId);                          // 由上游傳播而來
+
+    std::vector<uint8_t> netTaint_;    // 0=clean, 1=root cause, 2=propagated
+    std::vector<uint8_t> dffTaint_;    // 與 dffs_ 對齊
+    std::vector<int>     taintRoots_;
+    std::unordered_map<int, std::string> taintReason_;
+    uint32_t             numTaintedNets_ = 0;
 };
 
 } // namespace eqeng
