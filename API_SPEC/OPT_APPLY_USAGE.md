@@ -55,7 +55,7 @@ NetlistEditReport report = netlist.runOptApply(request);
 | `allowedTypes` | vector | empty | 白名單；empty 表示不限制 |
 | `bannedTypes` | vector | empty | 黑名單優先，且不得與白名單重疊 |
 | `targetDepth` | int | `-1` | `-1` best effort；`0+` 為 hard acceptance target |
-| `timeLimitSeconds` | double | `240` | 必須為有限且大於 0；前置流程耗盡預算時不啟動 optimizer core |
+| `timeLimitSeconds` | double | `290.0` | 必須為有限且大於 0；前置、optimizer、mapping 與 final SAT 共用同一 deadline |
 | `requireDepthImprovement` | bool | true | baseline 合規而無改善時保留 original |
 | `verbose` | bool | false | 輸出 optimizer debug log |
 
@@ -155,7 +155,7 @@ request.passKind = OptPassKind::CriticalPathDepth;
 request.scope = TargetScope::WHOLE_NETLIST;
 request.depthObjective = OptDepthObjective::GlobalMaximum;
 request.requireDepthImprovement = true;
-request.timeLimitSeconds = 240.0;
+request.timeLimitSeconds = 290.0;
 
 NetlistEditReport report = netlist.runOptApply(request);
 ```

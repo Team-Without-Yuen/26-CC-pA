@@ -4,6 +4,7 @@
 #include <vector>
 
 #include "include/core/EditFlow.h"
+#include "include/core/RequestTimeBudget.h"
 
 enum class OptPassKind {
     Unknown,
@@ -57,7 +58,7 @@ struct OptApplyRequest {
     std::vector<GateType> allowedTypes;
     std::vector<GateType> bannedTypes;
     int targetDepth = -1;
-    double timeLimitSeconds = 240.0;
+    double timeLimitSeconds = request_time_budget::kGeneralToolBudgetSeconds;
     bool requireDepthImprovement = true;
     bool verbose = false;
 

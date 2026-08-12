@@ -5,6 +5,7 @@
 #include <vector>
 
 #include "include/core/NetlistTypes.h"
+#include "include/core/RequestTimeBudget.h"
 
 // Defines where a transformation/edit command is allowed to scan and rewrite.
 enum class TargetScope {
@@ -107,7 +108,7 @@ struct EditApplyRequest {
     int constValue = -1;
     int inputCount = -1;
     size_t simulationPatternCount = 256;
-    double timeLimitSeconds = 30.0;
+    double timeLimitSeconds = request_time_budget::kGeneralToolBudgetSeconds;
 
     GateType gateType = GateType::UNKNOWN;
     GateType targetGateType = GateType::UNKNOWN;

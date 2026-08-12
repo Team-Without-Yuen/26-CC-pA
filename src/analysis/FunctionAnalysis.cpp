@@ -9,6 +9,7 @@
 #include <map>
 #include <queue>
 #include <chrono>
+#include <cmath>
 #include <string>
 #include <vector>
 
@@ -219,7 +220,8 @@ void mergeSolverStatus(FunctionReport& report, const DetailedSatResult& result) 
 DetailedSatResult solveCanBeValueDetailed(const Netlist& netlist,
                                            const std::string& netName,
                                            int value,
-                                           double timeLimitSeconds = 30.0) {
+                                           double timeLimitSeconds =
+                                               request_time_budget::kGeneralToolBudgetSeconds) {
     if (value != 0 && value != 1) {
         return makeUnsupportedResult("CanBeValue requires constValue 0 or 1.");
     }
@@ -316,7 +318,8 @@ DetailedSatResult solveEquivalenceDetailed(const Netlist& netlist,
                                            const std::string& nameB,
                                            const std::string& conditionName = "",
                                            int conditionValue = -1,
-                                           double timeLimitSeconds = 30.0) {
+                                           double timeLimitSeconds =
+                                               request_time_budget::kGeneralToolBudgetSeconds) {
     const std::vector<int> netsA = netlist.expandNetToBits(nameA);
     const std::vector<int> netsB = netlist.expandNetToBits(nameB);
     const bool conditional = !conditionName.empty();
@@ -439,7 +442,7 @@ DetailedSatResult solveEquivalenceDetailed(const Netlist& netlist,
     }
     solver.add(0);
 
-    if (timeLimitSeconds <= 0.0) {
+    if (!std::isfinite(timeLimitSeconds) || timeLimitSeconds <= 0.0) {
         DetailedSatResult result;
         result.unknown = true;
         result.timedOut = true;
@@ -918,7 +921,8 @@ Netlist::FunctionReport Netlist::runFunctionQuery(const FunctionQuery& query) co
         query.type == FunctionQueryType::TruthStatus ||
         query.type == FunctionQueryType::FunctionalDependence ||
         query.type == FunctionQueryType::Symmetry;
-    if (usesConfigurableSatLimit && query.timeLimitSeconds <= 0.0) {
+    if (usesConfigurableSatLimit &&
+        (!std::isfinite(query.timeLimitSeconds) || query.timeLimitSeconds <= 0.0)) {
         report.status = "INVALID_ARGUMENT";
         report.message = "SAT timeLimitSeconds must be positive.";
         return report;
@@ -1671,7 +1675,7 @@ DetailedSatResult solveNandPairEquivalenceDetailed(const Netlist& netlist,
         !netlist.isValidNetId(netIdB)) {
         return makeUnsupportedResult("NAND pair equivalence requires valid scalar net IDs.");
     }
-    if (timeLimitSeconds <= 0.0) {
+    if (!std::isfinite(timeLimitSeconds) || timeLimitSeconds <= 0.0) {
         DetailedSatResult result;
         result.unknown = true;
         result.timedOut = true;
@@ -1947,6 +1951,7 @@ FunctionSearchReport searchEquivalentGatePairs(
         query.gateTypeFilter == GateType::XOR ||
         query.gateTypeFilter == GateType::XNOR;
     if (query.simulationPatternCount == 0 || query.simulationPatternCount > 4096 ||
+        !std::isfinite(query.timeLimitSeconds) ||
         query.timeLimitSeconds <= 0.0 || !validGateTypeFilter) {
         report.status = "INVALID_ARGUMENT";
         report.message = "Equivalent gate-pair search requires 1..4096 simulation patterns, "
@@ -2229,7 +2234,8 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
         return finish();
     }
     if (query.targetNetName.empty() || query.simulationPatternCount == 0 ||
-        query.simulationPatternCount > 4096 || query.timeLimitSeconds <= 0.0) {
+        query.simulationPatternCount > 4096 ||
+        !std::isfinite(query.timeLimitSeconds) || query.timeLimitSeconds <= 0.0) {
         report.status = "INVALID_ARGUMENT";
         report.message = "Function search requires a target, 1..4096 simulation patterns, "
                          "and positive timeLimitSeconds.";

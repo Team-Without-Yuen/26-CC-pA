@@ -32,12 +32,12 @@ struct SequentialPatternQuery {
     size_t maxFunctionalDataCandidatesPerMatch = 16;
     bool enableFunctionalSimulationFilter = true;
     size_t functionalSimulationPatternCount = 256;
-    double functionalPerDffTimeLimitSeconds = 0.25;
-    double functionalTimeLimitSeconds = 5.0;
+    double functionalPerDffTimeLimitSeconds = 0.0;
+    double functionalTimeLimitSeconds = 290.0;
 };
 ```
 
-`functionalTimeLimitSeconds` 是整次 query 共用的 wall-clock 預算；`functionalPerDffTimeLimitSeconds` 則避免單一大型 DFF 耗盡全部時間。候選數、每顆 DFF 的 match/data 候選數與時間都必須是正值。
+`functionalTimeLimitSeconds` 是整次 query 共用的 wall-clock 預算。`functionalPerDffTimeLimitSeconds = 0` 代表依剩餘總預算與剩餘 DFF 數量自動公平分配；有限正數代表 caller 明確指定的單顆上限。候選數、每顆 DFF 的 match/data 候選數與總時間必須是有限正值，per-DFF 時間必須有限且不可為負值。
 
 ## 3. 兩階段辨識
 

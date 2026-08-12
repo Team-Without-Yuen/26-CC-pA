@@ -71,7 +71,7 @@ Options：
 | `--all` | 否 | 完整搜尋，並自動把全部 records 寫到唯一檔案 |
 | `--max-results N` | 不限制 | 只有 prompt 明確要求前 N 筆時才使用 |
 | `--patterns N` | 256 | simulation prefilter patterns；通常不需指定 |
-| `--time-limit seconds` | 30 | simulation、enumeration、SAT 共用時間 |
+| `--time-limit seconds` | 290 | simulation、enumeration、SAT 共用 backend 預算；prompt 未指定時不要自行加入較短值 |
 | `--allow-same` | 否 | 僅 NAND mode；允許 `(a,a)` |
 | `--include-boundary-signals` | 否 | 僅 NAND mode；納入 PI/PO/boundary candidates |
 | `--gate-type type` | ANY | 僅 equivalent-pair mode；限制兩成員的 gate type |

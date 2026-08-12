@@ -5,6 +5,7 @@
 #include <unordered_set>
 #include <unordered_map>
 #include "include/core/Netlist.h"
+#include "include/core/RequestTimeBudget.h"
 
 // 定義優化目標
 enum class OptimizationGoal {
@@ -176,7 +177,9 @@ class TechMapper {
 public:
     std::vector<TechMapRule> rules;
 
-    TechMapper() {
+    explicit TechMapper(
+        const request_time_budget::RequestDeadline* requestDeadline = nullptr)
+        : requestDeadline_(requestDeadline) {
         // =======================================================
         // NOT 閘的替換規則
         // =======================================================
@@ -694,4 +697,11 @@ public:
                                                 TargetScope scope,
                                                 const std::string& name,
                                                 bool verbose);
+
+private:
+    const request_time_budget::RequestDeadline* requestDeadline_ = nullptr;
+    mutable bool requestTimedOut_ = false;
+
+    bool requestExpired() const;
+    double boundedStrategySeconds(double strategyCapSeconds) const;
 };

@@ -37,8 +37,8 @@ sequential_query enable_hold <all|dff_name> [options]
 | `--max-functional-data-candidates <N>` | 每筆 match 的 data net 搜尋上限 |
 | `--no-functional-simulation-filter` | 停用 simulation prefilter，僅供除錯或 A/B 驗證 |
 | `--functional-simulation-patterns <N>` | bit-parallel simulation patterns，範圍 1..4096 |
-| `--functional-per-dff-time-limit <SEC>` | 單顆 DFF 的 functional search 時間上限 |
-| `--functional-time-limit <SEC>` | 整次 sequential query 的 functional search 時間上限 |
+| `--functional-per-dff-time-limit <SEC>` | 明確指定單顆 DFF 上限；未指定時由總預算自動公平分配 |
+| `--functional-time-limit <SEC>` | 整次 sequential query 的 functional search 總預算；預設 290 秒 |
 
 `--summary-only` 不可搭配 offset/limit。全設計 `all` 不允許 `--verify-sat`，避免超過總時間限制。
 所有 functional cost/options 都必須搭配 opt-in `--functional-fallback`；未指定時維持原本 canonical fast path。
@@ -118,13 +118,13 @@ Read: complete、available_dff_record_count、artifact_record_count、output_fil
 
 ```text
 Prompt: Does ff1 have any functionally equivalent enable/hold implementation?
-Command: sequential_query enable_hold ff1 --functional-fallback --functional-find-any --no-resolve-functional-data --functional-time-limit 2
+Command: sequential_query enable_hold ff1 --functional-fallback --functional-find-any --no-resolve-functional-data
 Read: complete, matched_dff_count, functional_match_count, detection_method
 ```
 
 ```text
 Prompt: Identify all proven controls and named data signals for ff1.
-Command: sequential_query enable_hold ff1 --functional-fallback --resolve-functional-data --max-functional-matches 8 --functional-time-limit 5
+Command: sequential_query enable_hold ff1 --functional-fallback --resolve-functional-data --max-functional-matches 8
 Read: complete, per-DFF counters, enable/data/active/hold fields
 ```
 
@@ -135,7 +135,7 @@ Read: complete, per-DFF counters, enable/data/active/hold fields
   下界。正式競賽答案不可只回 unknown，應依 `LLM_NOTES.md` 的 Competition Answer Policy
   提交最可能數量或名單；推定項目不得混入 confirmed match 欄位。
 - 數量題讀 `matched_dff_count`，不要使用可能對同一 DFF 重複計數的 `functional_match_count`。
-- all-DFF functional search 必須設定合理的 candidate 與時間上限；預設不啟用。
+- all-DFF functional fallback 預設不啟用；啟用後若 prompt 未指定更短時限，沿用 290 秒總預算與自動 per-DFF 公平分配。
 - all-DFF detail 的完整 records 位於 `output_file`，正式答案回總數、完整性與路徑，不把
   artifact 全文貼回 response。
 - 明確使用 offset/limit 時保留 pagination compatibility；此時 envelope 尚有下一頁會回

@@ -103,7 +103,14 @@ scope、輸出模式或時間配置；仍無法完成才使用 best-effort infer
 
 - 除 prompt 明確要求前 N 筆、最多 N 筆或只取一個 witness 外，不得自行設定結果數量上限。
 - `max_print`、`limit` 等 display/page 參數不能改變「all」的語意；有下一頁就必須取完。
-- 時間限制只依題目給定的 budget 配置，不為了方便自行使用更短的 hard timeout。
+- 官方 read/write 等 basic operation 上限為 60 秒，其餘 query/edit/optimization 上限為
+  300 秒；backend 預設保留 55/290 秒供運算。prompt 未指定較短 budget 時，不為了方便
+  自行加入 `-time_limit`、`--time-limit` 或 equivalence budget。
+- 一個 edit/optimization prompt 只呼叫一次主要 `edit_apply` 或 `opt_apply`；不要用多次昂貴
+  apply 嘗試碰運氣。高階 apply 已在內部完成必要流程，後續確認優先使用 `report_query`、
+  `depth_query` 或其他輕量 query。
+- 官方時間由 runner/watchdog 管理。LLM 不負責計算跨 tool call 的剩餘秒數，也不要自行替
+  每次呼叫切割 budget。
 - 支援完整 file output 時，把大型結果寫入檔案；正式答案只回總數、是否完整、關鍵摘要與
   output file，不複製整份內容。
 - 若 backend 具有無法關閉的 hard result cap，必須把結果視為 incomplete，依該 tool 文件

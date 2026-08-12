@@ -3,6 +3,8 @@
 #include <string>
 #include <vector>
 
+#include "include/core/RequestTimeBudget.h"
+
 // =========================================================================
 // Path / Depth Analysis Types
 //
@@ -156,7 +158,8 @@ struct PathQuery {
     std::string outputFilePath;             // EnumerateAll 寫檔路徑；空字串時使用預設檔名
     size_t maxPrintedPaths = 20;            // CLI / report 顯示用；不限制 result.paths 的完整內容
     size_t maxEnumeratedPaths = 100000;     // Legacy compatibility；目前不限制 EnumerateAll
-    double enumerationTimeLimitSeconds = 55.0; // EnumerateAll wall-clock 上限；<=0 表示不限制
+    double enumerationTimeLimitSeconds =
+        request_time_budget::kGeneralToolBudgetSeconds;
     bool countOnly = false;                 // EnumerateAll 只計數，不保存每條 path
 };
 
@@ -217,7 +220,8 @@ struct RegisterPathQuery {
     std::string outputFilePath;             // EnumerateAll 寫檔路徑；空字串時使用預設檔名
     size_t maxPrintedPaths = 20;            // CLI / report 顯示用；不限制完整結果
     size_t maxEnumeratedPaths = 100000;     // Legacy compatibility；目前不限制 EnumerateAll
-    double enumerationTimeLimitSeconds = 55.0; // EnumerateAll wall-clock 上限；<=0 表示不限制
+    double enumerationTimeLimitSeconds =
+        request_time_budget::kGeneralToolBudgetSeconds;
     bool countOnly = false;                 // EnumerateAll 只計數，不保存每條 path
 };
 

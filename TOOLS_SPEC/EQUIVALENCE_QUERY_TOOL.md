@@ -23,7 +23,8 @@ equiv_query original [time_budget_seconds]
 equiv_query previous_edit [time_budget_seconds]
 ```
 
-時間預設 240 秒，必須是有限且大於 0 的數字。
+時間預設 290 秒，必須是有限且大於 0 的數字。prompt 沒有指定 budget 時省略此參數，
+不要自行縮短。
 
 | Mode | Baseline | 適用問題 |
 |---|---|---|
@@ -56,13 +57,13 @@ interface mismatch 是完整且明確的不等價結果，因此可能仍為 `st
 
 ```text
 Prompt: Is the current design equivalent to the original design?
-Command: equiv_query original 240
+Command: equiv_query original
 Read: complete, equivalent, mismatch/interface fields
 ```
 
 ```text
 Prompt: Did the previous edit preserve functionality?
-Command: equiv_query previous_edit 60
+Command: equiv_query previous_edit
 Read: complete, equivalent
 ```
 

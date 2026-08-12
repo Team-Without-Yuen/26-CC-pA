@@ -39,7 +39,7 @@ opt_apply critical_path_depth
 scope = whole
 objective = global
 target depth = 未指定
-time limit = 240 seconds
+time limit = 290 seconds
 require depth improvement = true
 ```
 

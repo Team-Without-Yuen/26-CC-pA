@@ -105,7 +105,7 @@ PathNode(PathNodeType::Gate, "g5")
 | `outputFilePath` | 空 | core fallback 為 `path_enumeration_output.txt` |
 | `maxPrintedPaths` | `20` | 只限制 report/sample 保存，不截斷完整列舉 |
 | `maxEnumeratedPaths` | legacy | 保留相容，不作為截斷條件 |
-| `enumerationTimeLimitSeconds` | `55.0` | `<=0` 表示不限制 |
+| `enumerationTimeLimitSeconds` | `290.0` | backend 預設工作預算；EnumerateAll 必須為有限正數，不提供 unlimited 語意 |
 | `countOnly` | `false` | 只計數，不保存或輸出每條 path |
 
 `tools.cpp` 的 CLI 會在未指定 `-out` 時建立唯一自動檔名；這是 CLI policy，不改變 core

@@ -2,6 +2,7 @@
 #include <algorithm>
 #include <charconv>
 #include <chrono>
+#include <cmath>
 #include <fstream>
 #include <iomanip>
 #include <limits>
@@ -1713,6 +1714,15 @@ Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
         result.checkedStartpointCount = graphReport.checkedPrimaryInputCount;
         result.checkedEndpointCount = graphReport.checkedPrimaryOutputCount;
     };
+
+    if (query.mode == PathQueryMode::EnumerateAll &&
+        (!std::isfinite(query.enumerationTimeLimitSeconds) ||
+         query.enumerationTimeLimitSeconds <= 0.0)) {
+        result.status = "INVALID_ARGUMENT";
+        result.message =
+            "EnumerateAll requires a finite, positive enumerationTimeLimitSeconds.";
+        return result;
+    }
 
     if (!query.combinationalOnly) {
         result.unsupported = true;

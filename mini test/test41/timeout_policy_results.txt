@@ -1,0 +1,34 @@
+Timeout Policy Regression
+=========================
+
+Scope
+-----
+- Official limits: basic operation 60 seconds, general request 300 seconds.
+- Backend reserves: basic operation 55 seconds, general request 290 seconds.
+- High-level request defaults for Function Query, Function Search, Path Query,
+  Register Path Query, EditApply, OptApply, and Sequential Pattern Query.
+- Sequential per-DFF default uses automatic fair-share allocation.
+- One shared request deadline bounds nested optimizer, mapper, and SAT stages.
+
+Result
+------
+- test41.cpp: 15 passed, 0 failed.
+- mini test/test31/test31.cpp: 24 passed, 0 failed, including technology
+  mapping timeout rollback.
+- mini test/test21/test21.ps1: 18 passed, 0 failed.
+- mini test/test14/test14.ps1: 16 passed, 0 failed.
+- mini test/test26/test26.ps1: 18 passed, 0 failed.
+- mini test/test9/test9.ps1: 24 passed, 0 failed.
+- mini test/test25/test25.ps1: 7 passed, 0 failed.
+- mini test/test35/test35.ps1: 7 passed, 0 failed.
+- NewTestCase/test33 whole-design probe: complete equivalence for 87 POs and
+  4,211 DFF.D endpoints, 0 skipped, 1.626 seconds with a 35-second budget.
+
+Notes
+-----
+- Timeout behavior is tested with explicit tiny budgets; the regression does
+  not wait for the 290-second default to expire.
+- Historical 30/55/240-second benchmark records remain labelled as old-version
+  measurements and are not current defaults.
+- Synchronous read/write calls still require the external 60-second watchdog;
+  general commands use the 300-second runner limit.

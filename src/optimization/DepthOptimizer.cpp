@@ -93,7 +93,8 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
                                                                    const ConeReport& targetConeReport,
                                                                    const std::vector<GateType>& allowedTypes,
                                                                    const std::vector<GateType>& bannedTypes,
-                                                                   bool verbose) {
+                                                                   bool verbose,
+                                                                   const request_time_budget::RequestDeadline* requestDeadline) {
     OptimizationResult result;
     result.passName = "Opt_CP";
     const Netlist originalSnapshot = netlist.cloneForRollback();
@@ -105,6 +106,25 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
     const auto oldGateTypeCounts = netlist.countGatesByType();
     for (const auto& pair : oldGateTypeCounts) oldTotal += pair.second;
     result.oldGateCount = oldTotal;
+
+    auto requestTimedOut = [&]() {
+        return requestDeadline != nullptr && requestDeadline->expired();
+    };
+    auto returnTimeout = [&](const std::string& message) {
+        netlist.restoreFrom(originalSnapshot);
+        result.status = OptimizationStatus::TIMEOUT;
+        result.changed = false;
+        result.depthImproved = false;
+        result.newDepth = result.oldDepth;
+        result.newGateCount = result.oldGateCount;
+        result.areaDelta = 0;
+        result.message = message;
+        return result;
+    };
+
+    if (requestTimedOut()) {
+        return returnTimeout("Depth optimization could not start because the request deadline expired.");
+    }
 
     if (verbose) {
         std::cout << "\n=================================================\n";
@@ -145,11 +165,18 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
     //   可中斷機制，只能在每輪 iteration 交界處檢查，超時就停在目前已知最佳解上。
     // ---------------------------------------------------------------------
     constexpr double kStage2TimeLimitSeconds = 120.0;
+    const double stage2BudgetSeconds = requestDeadline != nullptr
+        ? requestDeadline->boundedStageSeconds(kStage2TimeLimitSeconds)
+        : kStage2TimeLimitSeconds;
     const auto stage2Start = std::chrono::steady_clock::now();
     auto stage2TimeUp = [&]() {
         std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - stage2Start;
-        return elapsed.count() >= kStage2TimeLimitSeconds;
+        return requestTimedOut() || elapsed.count() >= stage2BudgetSeconds;
     };
+
+    if (stage2BudgetSeconds <= 0.0) {
+        return returnTimeout("Depth optimization could not enter Stage 2 because the request deadline expired.");
+    }
 
     if (useGlobalAIG) {
         if (verbose) std::cout << "[Step 2] Global AIG optimization...\n";
@@ -233,6 +260,10 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
         }
     }
 
+    if (requestTimedOut()) {
+        return returnTimeout("Depth optimization exhausted the request time budget during Stage 2.");
+    }
+
     netlist.trimDeadLogic();
 
     // ---------------------------------------------------------------------
@@ -243,6 +274,9 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
     //         此時代表「該 cone 內部」的約束。cone 以外不受限。
     // ---------------------------------------------------------------------
     if (hasLocalConeConstraint) {
+        if (requestTimedOut()) {
+            return returnTimeout("Depth optimization exhausted the request time budget before local cone enforcement.");
+        }
         if (verbose)
             std::cout << "[Step 3] Local cone enforcement on '"
                       << targetConeReport.sourceName << "'...\n";
@@ -304,6 +338,9 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
             netlist, coneGates, allowedTypes, bannedTypes, verbose);
 
         if (coneRep.status != TechMapStatus::SUCCESS) {
+            if (coneRep.status == TechMapStatus::TIMEOUT) {
+                return returnTimeout("Cone basis enforcement timed out: " + coneRep.message);
+            }
             result.status = OptimizationStatus::ERROR_CONSTRAINT_UNSATISFIED;
             result.message = "Cone basis enforcement failed: " + coneRep.message;
             return result;
@@ -315,6 +352,9 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
         if (verbose) std::cout << "[Step b] Executing Cone internal reverse absorption\n";
         coneGates = refreshConeGates();                 // (a) 產生新閘，範圍已變
         techMapper.absorbInvertersOnGateSet(netlist, coneGates, allowedTypes, bannedTypes, verbose);
+        if (requestTimedOut()) {
+            return returnTimeout("Depth optimization exhausted the request time budget during cone inverter absorption.");
+        }
         eliminateDoubleInverters(netlist);
         netlist.trimDeadLogic();
 
@@ -335,6 +375,9 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
 
         techMapper.absorbInvertersOnGateSet(
             netlist, outsideGates, kAllGates, {}, verbose);
+        if (requestTimedOut()) {
+            return returnTimeout("Depth optimization exhausted the request time budget during outside-cone inverter absorption.");
+        }
         eliminateDoubleInverters(netlist);
         netlist.trimDeadLogic();
     }
@@ -357,6 +400,9 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
     }
 
     if (needBasisEnforce && !hasLocalConeConstraint) {
+        if (requestTimedOut()) {
+            return returnTimeout("Depth optimization exhausted the request time budget before basis enforcement.");
+        }
         if (verbose) std::cout << "[Step 4] Basis enforcement (expand banned gates)...\n";
 
         TechMapReport rep = techMapper.convertToBasis(
@@ -370,6 +416,9 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
 
         // 合規失敗 = 直接放棄（殘留非法閘等於違規、零分），回報錯誤
         if (rep.status != TechMapStatus::SUCCESS) {
+            if (rep.status == TechMapStatus::TIMEOUT) {
+                return returnTimeout("Basis enforcement timed out: " + rep.message);
+            }
             result.status = OptimizationStatus::ERROR_CONSTRAINT_UNSATISFIED;
             result.message = "Basis enforcement failed: " + rep.message;
             return result;
@@ -392,8 +441,14 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
     //   放在基底強制「之後」：結構定案後再吸收，且只融出允許的閘。
     // ---------------------------------------------------------------------
     if (canAbsorbInverters && !hasLocalConeConstraint) {
+        if (requestTimedOut()) {
+            return returnTimeout("Depth optimization exhausted the request time budget before inverter absorption.");
+        }
         if (verbose) std::cout << "[Step 5] Inverter absorption...\n";
         techMapper.absorbInverters(netlist, allowedTypes, bannedTypes, verbose);
+        if (requestTimedOut()) {
+            return returnTimeout("Depth optimization exhausted the request time budget during inverter absorption.");
+        }
         eliminateDoubleInverters(netlist);
         netlist.trimDeadLogic();
         if (verbose)
@@ -406,6 +461,10 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
     //   trim 一次確保面積不含死閘，量最終深度與面積。
     // ---------------------------------------------------------------------
     netlist.trimDeadLogic();
+
+    if (requestTimedOut()) {
+        return returnTimeout("Depth optimization exhausted the request time budget before final evaluation.");
+    }
 
     DepthReport newGlobalPath = netlist.findGlobalCriticalPath();
     result.newDepth = newGlobalPath.depth;

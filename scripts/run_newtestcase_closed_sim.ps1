@@ -2,7 +2,8 @@ param(
     [string]$Executable = ".\tools.exe",
     [string]$InputRoot = ".\NewTestCase",
     [string]$OutputRoot = ".\testcase_toolans",
-    [int]$CommandTimeoutSeconds = 240,
+    [int]$CommandTimeoutSeconds = 300,
+    [int]$BasicCommandTimeoutSeconds = 60,
     [int]$StartTest = 1,
     [int]$EndTest = 40,
     [string[]]$TestNames = @(),
@@ -310,10 +311,22 @@ function Test-IsStateCommand([string]$command) {
     return $command -match "^(read|edit_apply|opt_apply|constraint_set|constraint_clear)\b"
 }
 
+function Get-CommandTimeoutSeconds([string]$command) {
+    if ($command -match "^(read|write)\b") {
+        return $BasicCommandTimeoutSeconds
+    }
+    return $CommandTimeoutSeconds
+}
+
 function Restore-ToolSession([string]$exe, $history, [int]$timeoutSeconds) {
     $restored = Start-ToolProcess $exe
     foreach ($command in $history) {
-        $result = Invoke-ToolCommand $restored $command $timeoutSeconds
+        $replayTimeoutSeconds = if ($command -match "^(read|write)\b") {
+            $BasicCommandTimeoutSeconds
+        } else {
+            $timeoutSeconds
+        }
+        $result = Invoke-ToolCommand $restored $command $replayTimeoutSeconds
         if (-not $result.Complete -or $result.Status -eq "error") {
             try { $restored.Kill($true) } catch {}
             throw "Failed to restore tool session with command: $command"
@@ -371,18 +384,20 @@ foreach ($testDir in Get-ChildItem -LiteralPath $InputRoot -Directory | Sort-Obj
                         $answerLines.Add("ROUTED: $command")
                         continue
                     }
-                    $result = Invoke-ToolCommand $process $command $CommandTimeoutSeconds
+                    $effectiveTimeoutSeconds = Get-CommandTimeoutSeconds $command
+                    $result = Invoke-ToolCommand $process $command $effectiveTimeoutSeconds
                     $callLines.Add("Call ${callNumber}:")
                     $callLines.Add("Raw command: $command")
                     $callLines.Add("Result status: $($result.Status)")
                     $callLines.Add("Complete: $($result.Complete.ToString().ToLowerInvariant())")
                     $callLines.Add("Elapsed: $($result.Elapsed)")
+                    $callLines.Add("Time limit: $effectiveTimeoutSeconds")
                     if ($result.Status -eq "timeout") {
                         ++$toolTimeouts
                     }
                     if ($result.TimedOut) {
                         ++$timeouts
-                        $answerLines.Add("TIMEOUT: command was terminated after $CommandTimeoutSeconds seconds.")
+                        $answerLines.Add("TIMEOUT: command was terminated after $effectiveTimeoutSeconds seconds.")
                         $callLines.Add("Timeout interrupted")
                         try { $process.Kill($true) } catch {}
                         $process = Restore-ToolSession $Executable $stateHistory $CommandTimeoutSeconds

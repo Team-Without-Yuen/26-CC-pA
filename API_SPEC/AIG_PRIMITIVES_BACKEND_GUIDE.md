@@ -141,3 +141,8 @@ mini test/test37/test37.cpp
 - test37：proof、cofactor cache、revision freshness、stale SigRef、deadline、任意 fan-in 與 Netlist value lifecycle（22 checks）。
 
 Function Query、Function Search 等高階 API 的 regression 應繼續呼叫唯一既有入口，不透過獨立 AIG facade。
+
+第一批 Function Query differential 位於 `mini test/test40/test40.cpp`。正常 budget
+25/25 語意一致，但 Phase-A AIG build + proof 總時間約為 legacy 的 2.67 倍；另有
+tiny-budget timeout contract 差異。因此目前 production Function Query 維持 legacy，
+owner 尚未接管正式 proof step。

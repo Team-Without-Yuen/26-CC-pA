@@ -3,6 +3,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <map>
 #include <set>
 #include <string>
@@ -312,7 +313,7 @@ BatchEndpointSatResult compareEndpointsBySat(
     const auto startTime = std::chrono::steady_clock::now();
     auto remainingSeconds = [&]() {
         if (totalTimeBudgetSeconds <= 0.0) {
-            return 30.0;
+            return request_time_budget::kGeneralToolBudgetSeconds;
         }
         const std::chrono::duration<double> elapsed =
             std::chrono::steady_clock::now() - startTime;
@@ -355,23 +356,28 @@ BatchEndpointSatResult compareEndpointsBySat(
 
     const int SAT = 10;
     const int UNSAT = 20;
-    auto solveWithAssumption = [&](int assumption) {
+    bool lastSolveTimedOut = false;
+    auto solveWithAssumption = [&](int assumption, double maximumSolveSeconds) {
+        lastSolveTimedOut = false;
         const double remaining = remainingSeconds();
         if (totalTimeBudgetSeconds > 0.0 && remaining <= 0.0) {
             return 0;
         }
-        const double solveLimit = totalTimeBudgetSeconds > 0.0
-            ? std::min(30.0, remaining)
-            : 30.0;
+        const double solveLimit = std::max(
+            0.001,
+            std::min(remaining, maximumSolveSeconds));
         TimeLimitTerminator terminator(solveLimit);
         ctx.solver.connect_terminator(&terminator);
         ctx.solver.assume(assumption);
         const int solveResult = ctx.solver.solve();
         ctx.solver.disconnect_terminator();
+        lastSolveTimedOut = terminator.wasTerminated();
         return solveResult;
     };
 
-    const int globalResult = solveWithAssumption(globalSelector);
+    const int globalResult = solveWithAssumption(
+        globalSelector,
+        remainingSeconds());
     if (globalResult == UNSAT) {
         result.ok = true;
         result.equivalent = true;
@@ -379,7 +385,8 @@ BatchEndpointSatResult compareEndpointsBySat(
         return result;
     }
     if (globalResult != SAT) {
-        result.timeBudgetExceeded = totalTimeBudgetSeconds > 0.0 && remainingSeconds() <= 0.0;
+        result.timeBudgetExceeded = lastSolveTimedOut ||
+            (totalTimeBudgetSeconds > 0.0 && remainingSeconds() <= 0.0);
         result.errors.push_back(
             result.timeBudgetExceeded
                 ? "Whole-design equivalence time budget exceeded during the global endpoint miter."
@@ -395,7 +402,12 @@ BatchEndpointSatResult compareEndpointsBySat(
             break;
         }
 
-        const int endpointResult = solveWithAssumption(diffLits[i]);
+        const size_t remainingEndpointCount = endpoints.size() - i;
+        const double endpointShare =
+            remainingSeconds() / static_cast<double>(remainingEndpointCount);
+        const int endpointResult = solveWithAssumption(
+            diffLits[i],
+            endpointShare);
         if (endpointResult == UNSAT) {
             result.matched.push_back(endpoints[i]);
         } else if (endpointResult == SAT) {
@@ -419,6 +431,12 @@ WholeDesignEquivalenceReport Netlist::checkWholeDesignEquivalence(
     WholeDesignEquivalenceReport report;
     report.method = EquivalenceCheckMethod::WholeDesignSat;
     report.timeBudgetSeconds = totalTimeBudgetSeconds;
+    if (!std::isfinite(totalTimeBudgetSeconds) || totalTimeBudgetSeconds <= 0.0) {
+        report.ok = false;
+        report.equivalent = false;
+        report.message = "Whole-design equivalence requires a finite, positive time budget.";
+        return report;
+    }
     const std::vector<NamedNet> originalInputs = collectPortBits(original, original.getPrimaryInputs());
     const std::vector<NamedNet> currentInputs = collectPortBits(*this, getPrimaryInputs());
     const std::vector<NamedNet> originalOutputs = collectPortBits(original, original.getPrimaryOutputs());
