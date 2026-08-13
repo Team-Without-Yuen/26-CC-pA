@@ -99,6 +99,10 @@ struct CecResult {
     std::vector<std::string> compared_outputs;
     std::string              message;
 
+    // 診斷:多少個比較點在建完 miter 的當下就被 strash 證明相等(完全沒進 solver)。
+    // 這個數字接近 compared_outputs.size() 時,代表修改的影響範圍很小 —— 是好事。
+    std::size_t resolved_by_strash = 0;
+
     bool ok() const {
         return status == EquivResult::Equal
             && !interface_mismatch
@@ -115,6 +119,23 @@ struct CecOptions {
     // 是否納入 DFF next-state 當比較點。
     // 關掉會漏掉「只改到暫存器輸入」的修改，預設開啟。
     bool include_dff_next_state = true;
+
+    // 求解的 wall-clock 預算(秒)。<=0 表示不限。
+    // Phase A 的 mockturtle 路徑吃不到這個,只有 Phase B 生效。
+    double time_limit_seconds = 0.0;
+
+    // 求解前先對 miter 跑一次 FRAIG sweep。
+    //
+    // 適用時機很明確:驗證「結構被改寫但功能不變」的最佳化。
+    // sweep 會把兩側功能相同的內部節點合併掉,頂端的 XOR 直接塌成常數 0,
+    // SAT 幾乎不用做事。
+    bool fraig_miter = false;
+
+    // 有任何比較點因污染而無法比對時,直接把 status 判為 Unknown。
+    //
+    // 需要「明知有污染,仍想知道乾淨區域是否相等」時才關掉,
+    // 並且務必改用 ok() 而不是 status。
+    bool untrusted_is_failure = true;
 };
 
 class UnsoundModel : public std::runtime_error {
@@ -156,6 +177,12 @@ public:
         // true  = 全域閘門：health==Invalid 時整顆電路拒絕作答（舊行為）
         // false = 預設：只拒絕受污染的訊號，乾淨區域照常證明
         bool strict_global_health;
+        // 同一版電路上累積多少次「必須走 SAT 的等價查詢」之後,自動觸發一次
+        // FRAIG sweep,之後同版的查詢全部變查表。
+        // 門檻不宜太低:只問三五條 net 的 session 不該付 sweep 的成本;
+        // 但比賽的 prompt 常常一次爆出上百個等價問題,那時 sweep 一定划算。
+        // 0 = 關閉自動觸發,只能靠 request_fraig_sweep()。
+        uint32_t fraig_auto_sweep_threshold;
 
         Config()
         : unknown_policy(UnknownPolicy::AsNotEqual)
@@ -163,7 +190,8 @@ public:
         , default_cut_size(6)
         , count_stats(true)
         , verbose_rebuild(true)
-        , strict_global_health(false) {}
+        , strict_global_health(false) 
+        , fraig_auto_sweep_threshold(32) {}
     };
 
     struct Stats {
@@ -181,6 +209,9 @@ public:
         uint64_t cec_runs         = 0;
         uint64_t stale_rejected   = 0;
         uint64_t tainted_rejected = 0;   // 因污染而回 Unknown / 丟例外的次數
+        uint64_t fraig_sweeps         = 0;
+        double   fraig_sweep_seconds  = 0.0;
+        uint64_t fraig_lookup_misses  = 0;   // 查表查不出來、退回 SAT 的次數
     };
 
     // 唯一建構方式。建構時不立刻建 AIG —— 等第一個 query 進來才建（lazy）。
@@ -196,6 +227,8 @@ public:
     uint32_t generation() const { return generation_; }
     bool     is_phase_a() const { return sat_ == nullptr; }
     void     enable_phase_b(bool on);   // 切換後下次 ensure_fresh 會重建引擎
+    // Phase B 引擎是否已就緒(SatEngine 存在)。
+    bool     phase_b_ready() const { return sat_ != nullptr; }
 
     // 診斷／測試用。會先 ensure_fresh()。一般高階 API 不需要。
     AigModel& model();
@@ -278,7 +311,10 @@ public:
     std::vector<std::string> cut_leaf_names(const Cut& cut);
 
     // ---------- 等價類報告 ----------
-    std::vector<std::vector<std::string>> equivalence_classes(int min_size = 2);
+    // 完整報告：等價類 + 常數類分開，並回報被排除的不可信 net 數。
+    // 建議新程式碼一律用這個 —— 「恆為 0」與「彼此等價」在回報給使用者時
+    // 是兩件不同的事，混在一起會讓 LLM 產生誤導性的敘述。
+    EquivClassReport equivalence_report(int min_size = 2);
 
     // ---------- 修改前後等價驗證 ----------
     //
@@ -318,6 +354,47 @@ public:
     void          reset_stats();
     const Config& config() const { return cfg_; }
 
+    // ---------- FRAIG ----------
+    // 診斷用的數值快照
+    struct FraigProfile {
+        bool     swept = false, complete = false;
+        uint64_t candidate_pairs = 0, merged_nodes = 0, const_nodes = 0;
+        uint64_t proved_equal = 0, refuted = 0, gave_up = 0, sim_rounds = 0;
+        double   sim_seconds = 0.0, sat_seconds = 0.0;
+        // SatEngine 的累計值。encoded_nodes 相對於 aig_size 就是 lazy encoding 的效益。
+        uint64_t sat_queries = 0, sat_encoded_nodes = 0, sat_clauses = 0;
+        double   sat_solve_seconds = 0.0;
+    };
+    FraigProfile fraig_profile() const;
+
+    // needVerified = false(預設):只做模擬與分類。
+    //     否定查詢立即可答,正面候選仍走 SAT。成本約完整驗證的 1/30。
+    // needVerified = true:額外跑完整 SAT 驗證。
+    //     只有 equivalence_report 真正需要它 —— 一般查詢不需要。
+    //
+    // 已經跑過較低層級時會**升級**(重跑模擬只要零點幾秒,
+    // 而 SatEngine 學到的子句全部保留,不會白費)。
+    bool request_fraig_sweep(bool needVerified = false);
+
+    // 硬上限:開啟後即使呼叫端要求驗證,也只做模擬分類。
+    // 給「電路太大,寧可回報不完整也不能超時」的情況用。
+    // equivalence_report 會誠實把 is_complete 標成 false。
+    void set_fraig_simulate_only(bool on);
+
+    bool fraig_swept()   const;    // 至少做過模擬分類
+    bool fraig_verified() const;   // 做過完整 SAT 驗證
+    bool fraig_complete() const;   // 驗證過、跑完、且沒有任何放棄
+    std::string fraig_summary() const;   // 診斷用
+
+    // 設定下一次 sweep 的預算。已經 sweep 過的不受影響。
+    // 刻意不直接吃 Fraig::Config —— 那會逼 Primitives.h include Fraig.h,
+    // 把 mockturtle 的相依性洩漏給所有引用 Primitives.h 的檔案。
+    void set_fraig_budget(double total_seconds,
+                          double per_query_seconds,
+                          int64_t per_query_conflicts,
+                          uint64_t sim_memory_bytes,
+                          uint32_t max_rounds = 0); // 0 = 沿用現值
+
 private:
     // ---------- dirty / rebuild ----------
     void ensure_fresh();
@@ -345,6 +422,12 @@ private:
     bool tainted_any(std::initializer_list<SigRef> rs);
     // 無三態回傳的 API 用：受污染就丟 UnsoundModel
     void require_trusted(std::initializer_list<SigRef> rs);
+    void        ensure_engines();
+    // want: 1 = Simulated, 2 = Verified
+    bool ensure_fraig(bool needVerified);
+    EquivResult fraig_lookup(Sig a, Sig b);
+    EquivResult fraig_lookup_const(Sig s, bool val);
+    void        arm_sat_budget(double remaining);
 
     // ---------- CEC 內部 ----------
     CecResult run_cec(const AigSnapshot& before,
@@ -364,6 +447,15 @@ private:
         std::numeric_limits<uint64_t>::max();
     Stats                      stats_;
     bool                       lastProofTimedOut_ = false;
+    uint64_t satEquivQueries_   = 0;      // 本 generation 內退回 SAT 的等價查詢數
+    double   fraigTotalBudget_  = 0.0;    // <=0 不限
+    double   fraigSatTimeLimit_ = 1.0;
+    int64_t  fraigSatConflicts_ = 10000;
+    uint64_t fraigSimMemory_    = 8ull * 1024ull * 1024ull * 1024ull; // 8GB
+    uint8_t  fraigLevel_       = 0;   // 目前這顆 Fraig 達到的層級
+    uint8_t  fraigTriedLevel_  = 0;   // 已嘗試過的最高層級(失敗也算,避免反覆重試)
+    bool     fraigSimOnlyCap_  = false;
+    uint32_t fraigMaxRounds_   = 64;
 
     struct CofactorKey {
         uint64_t functionData = 0;

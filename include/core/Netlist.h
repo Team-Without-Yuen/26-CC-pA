@@ -923,13 +923,24 @@ public:
     bool replaceAllLoadsOfNet(int oldNetId, int newNetId);
     NetlistEditReport replaceAllLoadsOfNetWithReport(int oldNetId, int newNetId);
 
+    // ----------------------並非給LLM的API------------------------------------------
     // 移除舊的 PO 中的一個 bit (oldNetId)，改為使用 newNetId
     bool swapPrimaryOutputNet(int oldNetId, int newNetId);
+
+    // 若把 oldNetId 併進 newNetId 會造出組合迴路,回傳 true。
+    // 不會修改任何東西,可安全地在決策前呼叫。
+    bool wouldCreateCombLoop(int oldNetId, int newNetId) const;
+
+    // 兩條 net 已知功能等價時,回傳一個安全的合併方向 {old, new}。
+    // 照這個順序呼叫 mergeNets 保證不會造出組合迴路,也不會毀掉 port 名稱。
+    // 兩個方向都不安全時回傳 {-1, -1}。
+    std::pair<int, int> safeMergeDirection(int netA, int netB) const;
 
     // 說明：將 oldNetId 完全短接到 newNetId。
     //       oldNetId 的所有負載 (Load Gates) 都會改接到 newNetId。
     //       如果 oldNetId 是 Primary Output，newNetId 將會繼承其 PO 身份與名稱。
-    void mergeNets(int oldNetId, int newNetId);
+    bool mergeNets(int oldNetId, int newNetId);
+    // -----------------------------------------------------------------------------
 
     // =========================================================================
     // 2.2 Buffer Insertion Transformation API

@@ -83,9 +83,19 @@ public:
     // 把「已證明等價」當成永久 binary clause 灌回 solver：(¬a∨b)(a∨¬b)。
     // 效果等同把節點 merge 掉、讓下游 cone 變小，但**不動 AIG 結構**，
     // 因此既有的 node->var 表與所有 Sig 全部保持有效。
-    // 前置條件：必須真的已由 SAT 證出 UNSAT，否則會污染整個 solver。
-    void assert_equal(Sig a, Sig b);
-    void assert_const(Sig a, bool val);
+    //
+    //    前置條件：必須是**無條件**的 UNSAT 結論（are_equal / is_const，
+    //    不帶 assumption）。
+    //
+    //    絕不可餵 are_equal_under 的結果 —— 那個 UNSAT 只在該組 assumption
+    //    下成立。灌成永久子句後 solver 從此被污染，之後所有查詢都可能靜默
+    //    回錯誤的 UNSAT：看起來像「證明成功」，不會 crash、不會有任何症狀。
+    //    這是本 class 最危險的一個 API。
+    //
+    //    Debug build 會用 lastSolveHadAssumptions_ 做一道自檢；
+    //    Release build 沒有保護，呼叫端必須自己遵守。
+    bool assert_equal(Sig a, Sig b);
+    bool assert_const(Sig a, bool val);
 
     // ---------- 編碼控制 ----------
     void ensure_encoded(Sig s);        // 把 s 的 fanin cone 補進 CNF（lazy 模式下用）
@@ -95,6 +105,8 @@ public:
 
     const Stats& stats() const;
     void reset_stats();
+
+    void set_limits(double time_limit_sec, int64_t conflict_limit);
 
 private:
     // CaDiCaL 常駐實例 + TimeLimitTerminator；

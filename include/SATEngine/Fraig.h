@@ -35,22 +35,34 @@ struct EquivClass {
 class Fraig {
 public:
     struct Config {
-        uint32_t sim_words_init;       // 初始隨機向量：32 * 64 = 2048 組
-        uint32_t sim_words_max;        // 反例回收累積的上限，避免記憶體爆掉
-        uint32_t max_rounds;           // refine 迴圈上限
-        double   sat_time_limit;       // 單一等價驗證的秒數上限
+        uint32_t sim_words_init;
+        uint32_t sim_words_max;
+        // 模擬向量的總記憶體上限;實際字數 = min(sim_words_max, 預算 / (8 * 節點數))。
+        // 0 = 不限,完全聽 sim_words_max 的。
+        uint64_t sim_memory_budget_bytes;
+        uint32_t max_rounds;
+        double   sat_time_limit;
         int64_t  sat_conflict_limit;
-        double   total_time_budget;    // 整個 sweep 的秒數預算；<=0 不限
-        bool     use_constant_class;   // 一併掃「恆為 0/1」（最便宜，多半模擬就解掉）
+        double   total_time_budget;
+        bool     use_constant_class;
+        // 只做模擬與分類,跳過整段 SAT 驗證。
+        bool simulate_only;
+        // 依實際候選數自動加碼向量:從 sim_words_init 起跳,倍增到
+        // 候選夠少或收斂為止,上限是 sim_words_max/2(另一半留給反例回收)。
+        // 關掉的話就固定用 sim_words_init。
+        bool adaptive_sim;
 
         Config()
         : sim_words_init(32)
-        , sim_words_max(256)
-        , max_rounds(8)
+        , sim_words_max(512)
+        , sim_memory_budget_bytes(8ull * 1024 * 1024 * 1024) // 8GB
+        , max_rounds(64)
         , sat_time_limit(1.0)
         , sat_conflict_limit(10000)
         , total_time_budget(0.0)
-        , use_constant_class(true) {}
+        , use_constant_class(true)
+        , simulate_only(false)
+        , adaptive_sim(true) {}
     };
 
     struct Stats {
@@ -92,6 +104,10 @@ public:
 
     // 全部等價類（含常數類；常數類的 representative 為 aig.get_constant(...)）。
     std::vector<EquivClass> classes(int min_size = 2) const;
+
+    // 兩者是否已被某組模擬向量分開。true ⇒ 必定不等價,且不需要 SAT。
+    // 與 sweep 是否完成無關,simulate_only 模式下同樣可信。
+    bool provably_different(Sig a, Sig b) const;
 
     // 給 NameMap::remap 使用：以 node index 為索引的代表 signal，
     // 未受影響的 node 填自身。長度 = sweep_watermark()。

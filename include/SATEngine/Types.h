@@ -77,4 +77,25 @@ inline const char* to_string(EquivResult r) {
     }
 }
 
+// 等價類報告。
+// 常數類與等價類分開回報，語意不同：
+//     「這些 net 恆為 0」  ≠  「這些 net 彼此等價」
+//   而且 FRAIG sweep 後常數類通常大到會淹沒真正有意思的等價類。
+struct EquivClassReport {
+    // 彼此功能等價的 net 分組（不含常數）。
+    // 一個 net 與其反相會落在不同組（各自等價於 f 與 !f）。
+    std::vector<std::vector<std::string>> equivalence_classes;
+
+    // 恆為 0 / 恆為 1 的 net。
+    std::vector<std::string> constant_zero;
+    std::vector<std::string> constant_one;
+
+    // 因建模不可信而被排除的 net 數（不列名字，避免大電路撐爆報告）。
+    // > 0 時代表這份報告不完整。
+    std::size_t excluded_untrusted = 0;
+
+    // Phase A = 只反映結構共享；Phase B sweep 後才是完整的功能等價類。
+    bool is_complete = false;
+};
+
 } // namespace eqeng
