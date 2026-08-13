@@ -232,9 +232,9 @@ Machine mode 每行接收一個 request object：
 ```json
 {"command":"structure_query","args":{"mode":"summary"}}
 {"command":"depth_query","args":{"mode":"gate_on_critical","gate_name":"g0"}}
-{"command":"path_query","args":{"mode":"enumerate","startpoints":["pi:n2"],"endpoints":["po:n12"],"max_enumerated_paths":100000,"time_limit_seconds":55,"count_only":false}}
+{"command":"path_query","args":{"mode":"enumerate","startpoints":["pi:n2"],"endpoints":["po:n12"],"max_enumerated_paths":100000,"time_limit_seconds":290,"count_only":false}}
 {"command":"edit_apply","args":{"mode":"insert_buffers_for_net","net_name":"n1","max_fanout":4}}
-{"command":"equiv_query","args":{"baseline":"original","time_budget_seconds":240}}
+{"command":"equiv_query","args":{"baseline":"original","time_budget_seconds":290}}
 ```
 
 ### 5.3 LLM tool schema 分法
@@ -565,7 +565,7 @@ output_file
 
 ```text
 maxPrintedPaths = 20
-enumerationTimeLimitSeconds = 55.0
+enumerationTimeLimitSeconds = 290.0
 countOnly = false
 ```
 
@@ -928,7 +928,7 @@ session.current.checkWholeDesignEquivalence(baseline, budget)
 預設 budget：
 
 ```text
-240 seconds
+290 seconds
 ```
 
 response 必須輸出完整 `WholeDesignEquivalenceReport`，尤其是：

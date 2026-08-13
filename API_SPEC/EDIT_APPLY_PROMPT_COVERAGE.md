@@ -143,7 +143,7 @@ structural duplicates:
 
 arbitrary functional-equivalent merge:
   use MergeFunctionallyEquivalentGates
-  CLI: edit_apply merge_functionally_equivalent_gates whole --time-limit 30
+  CLI: edit_apply merge_functionally_equivalent_gates whole
 ```
 
 ### 2.6 Buffer Insertion

@@ -2,7 +2,8 @@
 
 #include "include/core/Netlist.h"
 #include "include/core/MockturtleConverter.h"
-#include "include/core/TechMapper.h" 
+#include "include/core/TechMapper.h"
+#include "include/core/RequestTimeBudget.h"
 #include <vector>
 #include <algorithm>
 #include <mockturtle/networks/aig.hpp>
@@ -160,7 +161,8 @@ public:
                                                        const ConeReport& targetConeReport,
                                                        const std::vector<GateType>& allowedTypes = {},
                                                        const std::vector<GateType>& bannedTypes = {},
-                                                       bool verbose = false);
+                                                       bool verbose = false,
+                                                       const request_time_budget::RequestDeadline* requestDeadline = nullptr);
 
 private:
     friend struct DepthOptimizerTestAccess;

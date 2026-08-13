@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "include/core/NetlistTypes.h"
+#include "include/core/RequestTimeBudget.h"
 
 // =========================================================================
 // Unified Query / Report Types
@@ -221,7 +222,7 @@ struct FunctionQuery {
     int conditionValue = -1; // ConditionalEquivalence 使用；只能是 0 或 1
     int constValue = -1;    // CanBeValue / ConstantFunction 使用；只能是 0 或 1
     int maxExpressionDepth = 10; // SimplifiedBooleanExpression 使用；必須 >= 0
-    double timeLimitSeconds = 30.0; // SAT query wall-clock limit
+    double timeLimitSeconds = request_time_budget::kGeneralToolBudgetSeconds;
 };
 
 struct FunctionReport {
@@ -314,7 +315,7 @@ struct FunctionSearchQuery {
     size_t maxResults = 0; // 0 = 不限制完整搜尋；正值只供明確 result limit
     size_t maxStoredMatches = 256; // report.matches 最多保留的 samples；0 = 不保留
     size_t simulationPatternCount = 256;
-    double timeLimitSeconds = 30.0;
+    double timeLimitSeconds = request_time_budget::kGeneralToolBudgetSeconds;
     bool expandEquivalentPairs = true; // false 時只回傳 SAT-proven equivalenceClasses
     bool writeMatchesToFile = false; // FindAll 可將完整 records 以 streaming 寫檔
     std::string outputFilePath;       // 空字串時使用 backend 相容預設檔名
@@ -417,8 +418,10 @@ struct SequentialPatternQuery {
     size_t maxFunctionalDataCandidatesPerMatch = 16;
     bool enableFunctionalSimulationFilter = true;
     size_t functionalSimulationPatternCount = 256;
-    double functionalPerDffTimeLimitSeconds = 0.25;
-    double functionalTimeLimitSeconds = 5.0;
+    // 0 selects automatic fair-share allocation from the total request budget.
+    double functionalPerDffTimeLimitSeconds = 0.0;
+    double functionalTimeLimitSeconds =
+        request_time_budget::kGeneralToolBudgetSeconds;
 };
 
 struct DffInputPattern {

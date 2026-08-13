@@ -153,7 +153,7 @@ Read: mapping_delta.removed_count_by_type / added_count_by_type
 
 ```text
 Prompt: Find and merge all gate pairs that are functionally equivalent.
-Command: edit_apply merge_functionally_equivalent_gates whole --time-limit 30
+Command: edit_apply merge_functionally_equivalent_gates whole
 Read: functional_merge.merged_gate_count, merge records, validation.equivalence_method
 Require: report_success=true, rolled_back=false, whole_design_equivalent=true
 ```

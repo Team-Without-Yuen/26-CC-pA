@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <cmath>
 #include <queue>
 #include <unordered_set>
 
@@ -152,6 +153,21 @@ NetlistEditReport Netlist::mergeFunctionallyEquivalentGatesWithReport(
         return std::chrono::duration<double>(
             std::chrono::steady_clock::now() - startedAt).count();
     };
+
+    if (!std::isfinite(timeLimitSeconds) || timeLimitSeconds <= 0.0) {
+        FunctionalMergeSummary summary;
+        summary.scope = targetScopeName(scope);
+        summary.scopeName = scopeName;
+        summary.gateTypeFilter = gateTypeFilter;
+        summary.searchStatus = "TIMEOUT";
+        summary.searchComplete = false;
+        summary.searchTimedOut = true;
+        summary.totalElapsedSeconds = elapsedSeconds();
+        return makeSearchFailureReport(
+            *this,
+            std::move(summary),
+            "Functional gate merge was not applied because the request time budget expired before search.");
+    }
 
     FunctionSearchQuery searchQuery;
     searchQuery.type = FunctionSearchQueryType::EquivalentGatePairs;

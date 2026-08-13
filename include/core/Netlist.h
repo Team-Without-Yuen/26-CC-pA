@@ -13,6 +13,7 @@
 #include "include/core/EditFlow.h"
 #include "include/core/OptimizationFlow.h"
 #include "include/core/NetlistEditReport.h"
+#include "include/core/RequestTimeBudget.h"
 #include "TransformationReport.h"
 #include "include/SATEngine/SatTime.h"
 
@@ -1131,7 +1132,8 @@ public:
         const std::string& scopeName = "",
         GateType gateTypeFilter = GateType::UNKNOWN,
         size_t simulationPatternCount = 256,
-        double timeLimitSeconds = 30.0);
+        double timeLimitSeconds =
+            request_time_budget::kGeneralToolBudgetSeconds);
 
     // =========================================================================
     // B-5: Unique name generator
@@ -1516,7 +1518,8 @@ public:
     // 使用 combinational SAT miter；DFF Q 視為 sequential boundary leaf。
     WholeDesignEquivalenceReport checkWholeDesignEquivalence(
         const Netlist& original,
-        double totalTimeBudgetSeconds = 240.0) const;
+        double totalTimeBudgetSeconds =
+            request_time_budget::kGeneralToolBudgetSeconds) const;
 
     // =========================================================================
     // 統一 Cone Query API

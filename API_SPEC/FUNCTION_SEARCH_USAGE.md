@@ -49,7 +49,7 @@ func_search equivalent_pairs ...
 | `maxResults` | 0 | 0 表示不限量；正值表示明確 result limit |
 | `maxStoredMatches` | 256 | C++ report sample 上限；0 表示不保留 sample |
 | `simulationPatternCount` | 256 | 1..4096 |
-| `timeLimitSeconds` | 30 | 必須大於 0 |
+| `timeLimitSeconds` | 290 | 必須大於 0；保留 request 收尾時間 |
 | `expandEquivalentPairs` | true | 一般 query 保持 true；批次 merge 可設 false，只保留 classes 與總 pair count |
 | `writeMatchesToFile` | false | C++ caller 需要 streaming artifact 時設 true |
 | `outputFilePath` | 空字串 | C++ caller 可指定路徑；CLI 會自動指定唯一檔名 |
@@ -142,13 +142,13 @@ query.mode = Netlist::FunctionSearchMode::FindAny;
 query.targetNetName = "n25";
 query.internalSignalsOnly = true;
 query.allowSameSignalPair = false;
-query.timeLimitSeconds = 30.0;
+query.timeLimitSeconds = 290.0;
 
 const auto report = netlist.runFunctionSearchQuery(query);
 ```
 
 ```text
-func_search nand_pair n25 --time-limit 30
+func_search nand_pair n25
 func_search nand_pair n25 --all
 ```
 
@@ -165,13 +165,13 @@ query.maxResults = 0;
 query.maxStoredMatches = 0;
 query.writeMatchesToFile = true;
 query.outputFilePath = "equivalent_pairs.txt";
-query.timeLimitSeconds = 30.0;
+query.timeLimitSeconds = 290.0;
 
 const auto report = netlist.runFunctionSearchQuery(query);
 ```
 
 ```text
-func_search equivalent_pairs whole --all --time-limit 30
+func_search equivalent_pairs whole --all
 ```
 
 公開 CLI 讀取 `match_count` 與 `output_file`；完整 classes 與 pair records 在 artifact。C++ caller 若不寫檔，可從 `equivalenceClasses` 取得緊湊分組，但 `matches` 最多只含 `maxStoredMatches` 筆 sample。

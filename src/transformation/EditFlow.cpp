@@ -1,6 +1,8 @@
 #include "include/core/Netlist.h"
 #include "include/core/TechMapper.h"
 
+#include <cmath>
+
 namespace {
 
 struct EditRequestValidation {
@@ -307,8 +309,9 @@ EditRequestValidation validateEditApplyRequest(const Netlist& netlist, const Edi
                 return failedValidation(
                     "simulationPatternCount must be in the range 1..4096.");
             }
-            if (request.timeLimitSeconds <= 0.0) {
-                return failedValidation("timeLimitSeconds must be positive.");
+            if (!std::isfinite(request.timeLimitSeconds) ||
+                request.timeLimitSeconds <= 0.0) {
+                return failedValidation("timeLimitSeconds must be finite and positive.");
             }
             return okValidation();
         }
@@ -374,6 +377,10 @@ EditRequestValidation validateEditApplyRequest(const Netlist& netlist, const Edi
             if (request.allowedTypes.empty() && request.bannedTypes.empty()) {
                 return failedValidation("ConvertToBasis requires allowedTypes or bannedTypes.");
             }
+            if (!std::isfinite(request.timeLimitSeconds) ||
+                request.timeLimitSeconds <= 0.0) {
+                return failedValidation("timeLimitSeconds must be finite and positive.");
+            }
             if (EditRequestValidation allowedCheck = requireValidGateTypeList(request.allowedTypes, "allowedTypes", true); !allowedCheck.ok) return allowedCheck;
             return requireValidGateTypeList(request.bannedTypes, "bannedTypes", true);
         }
@@ -383,6 +390,10 @@ EditRequestValidation validateEditApplyRequest(const Netlist& netlist, const Edi
             if (!scopeCheck.ok) return scopeCheck;
             if (!isKnownCombinationalGateType(request.targetGateType)) {
                 return failedValidation("ReplaceGateType requires targetGateType.");
+            }
+            if (!std::isfinite(request.timeLimitSeconds) ||
+                request.timeLimitSeconds <= 0.0) {
+                return failedValidation("timeLimitSeconds must be finite and positive.");
             }
             return requireValidGateTypeList(request.allowedTypes, "allowedTypes", false);
         }
@@ -576,6 +587,7 @@ NetlistEditReport Netlist::runEditApply(const EditApplyRequest& request) {
     if (!requestValidation.ok) {
         return makeFailedEditApplyReport(*this, request.kind, requestValidation.message);
     }
+    const request_time_budget::RequestDeadline deadline(request.timeLimitSeconds);
 
     switch (request.kind) {
         // Rename commands preserve structure and only update names.
@@ -632,7 +644,7 @@ NetlistEditReport Netlist::runEditApply(const EditApplyRequest& request) {
                 request.scopeName,
                 request.gateType,
                 request.simulationPatternCount,
-                request.timeLimitSeconds);
+                deadline.remainingSeconds());
             break;
         case EditCommandKind::SimplifyConstants:
             report = simplifyGatesWithConstantsWithReport(
@@ -675,7 +687,7 @@ NetlistEditReport Netlist::runEditApply(const EditApplyRequest& request) {
 
         // Technology mapping commands.
         case EditCommandKind::ConvertToBasis: {
-            TechMapper mapper;
+            TechMapper mapper(&deadline);
             report = mapper.convertToBasisWithReport(
                 *this,
                 request.scope,
@@ -686,7 +698,7 @@ NetlistEditReport Netlist::runEditApply(const EditApplyRequest& request) {
             break;
         }
         case EditCommandKind::ReplaceGateType: {
-            TechMapper mapper;
+            TechMapper mapper(&deadline);
             report = mapper.replaceGateTypeWithReport(
                 *this,
                 request.targetGateType,

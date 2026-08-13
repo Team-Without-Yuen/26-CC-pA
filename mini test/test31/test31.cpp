@@ -190,6 +190,29 @@ int main(int argc, char** argv) {
         requestValidation.validateStructure(),
         "exhausted pre-core budget does not start an optimizer candidate");
 
+    Netlist mappingDeadlineNetlist;
+    tests.check(
+        loadCircuit(circuitPath, mappingDeadlineNetlist),
+        "mapping-deadline circuit loads");
+    const int mappingDepth = mappingDeadlineNetlist.findGlobalCriticalPath().depth;
+    const size_t mappingGateCount =
+        mappingDeadlineNetlist.collectNetlistStats().activeGateCount;
+    EditApplyRequest mappingDeadlineRequest;
+    mappingDeadlineRequest.kind = EditCommandKind::ConvertToBasis;
+    mappingDeadlineRequest.scope = TargetScope::WHOLE_NETLIST;
+    mappingDeadlineRequest.allowedTypes = {GateType::NOR, GateType::NOT};
+    mappingDeadlineRequest.timeLimitSeconds = 1.0e-12;
+    const NetlistEditReport mappingDeadlineReport =
+        mappingDeadlineNetlist.runEditApply(mappingDeadlineRequest);
+    tests.check(
+        !mappingDeadlineReport.success &&
+        mappingDeadlineReport.rolledBack &&
+        mappingDeadlineReport.message.find("time budget") != std::string::npos &&
+        mappingDeadlineNetlist.findGlobalCriticalPath().depth == mappingDepth &&
+        mappingDeadlineNetlist.collectNetlistStats().activeGateCount == mappingGateCount &&
+        mappingDeadlineNetlist.validateStructure(),
+        "technology mapping timeout rolls back the complete transaction");
+
     OptApplyRequest unsupportedLegacyRequest;
     unsupportedLegacyRequest.passKind = OptPassKind::CleanupBufferChain;
     unsupportedLegacyRequest.candidateIds = {0};

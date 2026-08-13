@@ -363,7 +363,7 @@ struct FunctionQuery {
     int conditionValue = -1;
     int constValue = -1;
     int maxExpressionDepth = 10;
-    double timeLimitSeconds = 30.0;
+    double timeLimitSeconds = 290.0;
 };
 
 struct FunctionReport {
@@ -456,7 +456,7 @@ SAT 類 report 欄位：
 | `solverStatus` | `SAT`、`UNSAT`、`NOT_NEEDED`、`TIMEOUT`、`UNKNOWN`、`UNSUPPORTED` |
 
 所有會啟動 SAT 的 FunctionQuery mode 都使用 `query.timeLimitSeconds`，包含
-`FunctionalDependence` 與 `Symmetry`。非正值會回 `INVALID_ARGUMENT`；不能由
+`FunctionalDependence` 與 `Symmetry`。非有限值或非正值會回 `INVALID_ARGUMENT`；不能由
 底層改用固定 30 秒而忽略呼叫端預算。
 
 ---

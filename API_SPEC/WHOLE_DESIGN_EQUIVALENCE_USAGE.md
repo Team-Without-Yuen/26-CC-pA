@@ -16,7 +16,7 @@ Whole-design equivalence 比較 current design 與一個 baseline，在所有同
 
 ```cpp
 Netlist::WholeDesignEquivalenceReport report =
-    current.checkWholeDesignEquivalence(original, 240.0);
+    current.checkWholeDesignEquivalence(original, 290.0);
 ```
 
 公開 CLI：
@@ -40,14 +40,14 @@ equiv_query previous_edit [time_budget_seconds]
 | 輸入 | 型別/預設 | 語意 |
 |---|---|---|
 | baseline mode | `original` 或 `previous_edit` | 決定比較對象 |
-| `time_budget_seconds` | 正數，預設 `240` | 所有 SAT solve 共用的整體時間 budget |
+| `time_budget_seconds` | 有限正數，預設 `290` | 所有 SAT solve 共用的整體 backend 時間 budget |
 
 必要條件：
 
 ```text
 original mode 需要先成功 read design。
 previous_edit mode 需要至少有一次成功進入 edit transaction。
-time budget 必須大於 0。
+time budget 必須為有限正數。
 ```
 
 ## 4. 回傳欄位與狀態判讀
@@ -77,20 +77,20 @@ ok=false                   -> interface mismatch、unsupported、timeout 或結�
 ```text
 read design.v
 edit_apply cleanup_buffers
-equiv_query original 240
+equiv_query original
 ```
 
 ### 5.2 驗證上一個 edit
 
 ```text
 edit_apply collapse_double_inverter
-equiv_query previous_edit 60
+equiv_query previous_edit
 ```
 
 ### 5.3 C++ 判讀
 
 ```cpp
-const auto report = current.checkWholeDesignEquivalence(original, 240.0);
+const auto report = current.checkWholeDesignEquivalence(original);
 if (report.ok && report.equivalent) {
     // All compared PO and DFF.D boundaries are equivalent.
 } else if (report.ok) {

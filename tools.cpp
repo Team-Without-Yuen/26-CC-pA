@@ -3699,7 +3699,8 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         }
         mode = toLower(mode);
 
-        double timeBudgetSeconds = 240.0;
+        double timeBudgetSeconds =
+            request_time_budget::kGeneralToolBudgetSeconds;
         std::string budgetToken;
         if (iss >> budgetToken) {
             std::istringstream budgetStream(budgetToken);

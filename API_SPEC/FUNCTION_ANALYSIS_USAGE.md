@@ -88,7 +88,7 @@ if (report.ok && report.exists) {
 | `conditionValue` | `int` | `-1` | `ConditionalEquivalence` 使用；只能是 0 或 1 |
 | `constValue` | `int` | `-1` | `CanBeValue` / `ConstantFunction` 使用；只能是 0 或 1 |
 | `maxExpressionDepth` | `int` | `10` | `SimplifiedBooleanExpression` 使用；必須 >= 0 |
-| `timeLimitSeconds` | `double` | `30.0` | SAT 類 query 的 wall-clock 上限；equivalence、conditional equivalence、truth/constant、functional dependence 與 symmetry 都會傳到底層 solver |
+| `timeLimitSeconds` | `double` | `290.0` | SAT 類 query 的 backend wall-clock 預算；equivalence、conditional equivalence、truth/constant、functional dependence 與 symmetry 都會傳到底層 solver |
 
 ---
 

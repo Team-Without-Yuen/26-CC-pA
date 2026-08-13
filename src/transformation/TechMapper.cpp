@@ -91,6 +91,25 @@ NetlistEditReport finalizeTechMapEditReport(
 
 }
 
+bool TechMapper::requestExpired() const {
+    if (requestDeadline_ == nullptr || !requestDeadline_->expired()) {
+        return false;
+    }
+    requestTimedOut_ = true;
+    return true;
+}
+
+double TechMapper::boundedStrategySeconds(double strategyCapSeconds) const {
+    if (requestDeadline_ == nullptr) {
+        return strategyCapSeconds;
+    }
+    const double bounded = requestDeadline_->boundedStageSeconds(strategyCapSeconds);
+    if (bounded <= 0.0) {
+        requestTimedOut_ = true;
+    }
+    return bounded;
+}
+
 // 輔助函式：走訪 PatternNode ，並計算計算最大輸入數
 int TechMapper::countPrimaryInputs(const std::shared_ptr<PatternNode>& root) const {
     if (!root) return 0;
@@ -627,6 +646,7 @@ bool TechMapper::executeMappingPass(Netlist& netlist,
                                     bool allowLogicDuplication,
                                     const std::unordered_set<int>* strictContainment) {
     if (validRules.empty()) return false;
+    if (requestExpired()) return false;
     bool actualChangesMade = false;
 
     // 候選 root 的合法範圍：scopeGates 給定就固定死在這個集合裡（cone 題不可擴張，
@@ -658,6 +678,8 @@ bool TechMapper::executeMappingPass(Netlist& netlist,
     }
 
     while (!worklist.empty()) {
+        if (requestExpired()) break;
+
         int rootId = worklist.front();
         worklist.pop();
         queued.erase(rootId);
@@ -667,6 +689,8 @@ bool TechMapper::executeMappingPass(Netlist& netlist,
 
         // 依序嘗試每一條合法的 Rule (已經按 Cost 優化程度排過序了)
         for (const auto& rule : validRules) {
+            if (requestExpired()) break;
+
             MatchContext ctx;
 
             // 形狀比對 (尋找 LHS)
@@ -780,7 +804,10 @@ TechMapReport TechMapper::mapTechnologyCore(Netlist& netlist,
     }
 
     // 狀態判定與回報
-    if (validRules.empty()) {
+    if (requestTimedOut_) {
+        report.status = TechMapStatus::TIMEOUT;
+        report.message = "Technology mapping exhausted the request time budget.";
+    } else if (validRules.empty()) {
         report.status = TechMapStatus::ERROR_RULE_NOT_FOUND;
         report.message = "Failed: No rules found matching the specified LHS/RHS constraints.";
     } else if (mappingChanged) {
@@ -1042,7 +1069,13 @@ bool TechMapper::synthesizeFromTruthTable(const std::vector<bool>& targetTruthTa
     // 也能確保我們從字典序最小的拓樸排列開始尋找。
     std::sort(baseGateArray.begin(), baseGateArray.end());
 
-    TimeLimitTerminator terminator(60.0); 
+    const double solveBudgetSeconds = boundedStrategySeconds(60.0);
+    if (solveBudgetSeconds <= 0.0) {
+        report.status = TechMapStatus::TIMEOUT;
+        report.message = "Exact synthesis could not start because the request deadline expired.";
+        return false;
+    }
+    TimeLimitTerminator terminator(solveBudgetSeconds);
 
     // 窮舉邏輯閘的所有拓樸排列 (Topological Permutations)
     // 解決 Enum 順序造成的有向無環圖 (DAG) 依賴性鎖死問題！
@@ -1239,7 +1272,8 @@ bool TechMapper::synthesizeFromTruthTable(const std::vector<bool>& targetTruthTa
             return true; // 找到了就立刻下班！
         } 
         else if (result == 0) { // TIMEOUT
-            report.status = TechMapStatus::ERROR_NOT_EQUIVALENT;
+            requestTimedOut_ = requestDeadline_ != nullptr;
+            report.status = TechMapStatus::TIMEOUT;
             report.message = "Failed: Solver timed out.";
             return false;
         }
@@ -1308,8 +1342,14 @@ std::vector<std::shared_ptr<PatternNode>> TechMapper::generateAllValidTopologies
     // 將積木排序 (群聚相同類型的閘，有助於 SAT 引擎的內部優化)
     std::sort(gateArray.begin(), gateArray.end());
 
-    // 全局的時間限制器 (例如設定為 40 秒)
-    TimeLimitTerminator terminator(40.0);
+    // The local strategy cap may only consume the remaining request budget.
+    const double solveBudgetSeconds = boundedStrategySeconds(40.0);
+    if (solveBudgetSeconds <= 0.0) {
+        report.status = TechMapStatus::TIMEOUT;
+        report.message = "LHS topology generation could not start because the request deadline expired.";
+        return validTopologies;
+    }
+    TimeLimitTerminator terminator(solveBudgetSeconds);
 
     // 單一的陣列順序，搭配 "後面可以接前面" 的接線策略，已經足夠產生該組合下所有的圖形拓樸！
     // 這可以避免產生海量 (M!) 的同構重複解。
@@ -1441,6 +1481,8 @@ std::vector<std::shared_ptr<PatternNode>> TechMapper::generateAllValidTopologies
         } 
         else if (result == 0) { 
             // UNKNOWN: 被 Terminator 強制中斷
+            requestTimedOut_ = requestDeadline_ != nullptr;
+            report.status = TechMapStatus::TIMEOUT;
             report.message = "Warning: LHS Topology generation timed out! Returning " + std::to_string(validTopologies.size()) + " topologies found so far.";
             if (verbose) std::cout << "[Warning] " << report.message << "\n";
             return validTopologies; 
@@ -1939,7 +1981,13 @@ bool TechMapper::synthesizeFromTruthTableWithFence(const std::vector<bool>& targ
 
     std::sort(baseGateArray.begin(), baseGateArray.end());
 
-    TimeLimitTerminator terminator(5.0); 
+    const double solveBudgetSeconds = boundedStrategySeconds(5.0);
+    if (solveBudgetSeconds <= 0.0) {
+        report.status = TechMapStatus::TIMEOUT;
+        report.message = "Fence synthesis could not start because the request deadline expired.";
+        return false;
+    }
+    TimeLimitTerminator terminator(solveBudgetSeconds);
 
     // 預先計算每一顆 Gate 合法的最大輸入來源索引 (Max Source Index)
     // 概念：位於第 L 層的 Gate，其輸入只能來自 PI (索引 0~N-1) 或位於第 0~(L-1) 層的 Gate。
@@ -2092,7 +2140,8 @@ bool TechMapper::synthesizeFromTruthTableWithFence(const std::vector<bool>& targ
             return true;
         } 
         else if (result == 0) { // TIMEOUT
-            report.status = TechMapStatus::ERROR_NOT_EQUIVALENT;
+            requestTimedOut_ = requestDeadline_ != nullptr;
+            report.status = TechMapStatus::TIMEOUT;
             report.message = "Failed: Solver timed out.";
             return false;
         }
@@ -2516,6 +2565,12 @@ TechMapReport TechMapper::absorbInverters(Netlist& netlist,
     // 全域扫描、不允许 logic duplication
     bool changed = executeMappingPass(netlist, nullptr, absorbRules, report, verbose, false, nullptr);
 
+    if (requestTimedOut_) {
+        report.status = TechMapStatus::TIMEOUT;
+        report.message = "Inverter absorption exhausted the request time budget.";
+        return report;
+    }
+
     report.status = TechMapStatus::SUCCESS;
     report.message = changed
         ? "Absorption applied."
@@ -2561,6 +2616,12 @@ TechMapReport TechMapper::absorbInvertersOnGateSet(
         /*strictContainment=*/&scopeGates  // 子圖也必須完全落在範圍內
     );
 
+    if (requestTimedOut_) {
+        report.status = TechMapStatus::TIMEOUT;
+        report.message = "Scoped inverter absorption exhausted the request time budget.";
+        return report;
+    }
+
     report.status = TechMapStatus::SUCCESS;   // 有沒有吸到都算成功（機會型優化）
     report.message = changed ? "Absorption applied." : "No absorbable pattern in scope.";
     return report;
@@ -2574,6 +2635,11 @@ TechMapReport TechMapper::convertToBasisOnGateSet(Netlist& netlist,
                                                   const std::vector<GateType>& bannedTypes,
                                                   bool verbose) {
     TechMapReport finalReport;
+    if (requestExpired()) {
+        finalReport.status = TechMapStatus::TIMEOUT;
+        finalReport.message = "Cone basis conversion could not start because the request time budget expired.";
+        return finalReport;
+    }
     finalReport.status = TechMapStatus::SUCCESS;
     finalReport.message = "Cone basis conversion succeeded.";
 
@@ -2639,8 +2705,10 @@ TechMapReport TechMapper::convertToBasisOnGateSet(Netlist& netlist,
         if (stepReport.status != TechMapStatus::SUCCESS || stillExists) {
             finalReport.status = (stepReport.status != TechMapStatus::SUCCESS)
                                ? stepReport.status : TechMapStatus::ERROR_NOT_EQUIVALENT;
-            finalReport.message = "Cone basis conversion failed: type "
-                                + std::to_string((int)targetType) + " remains.";
+            finalReport.message = stepReport.status == TechMapStatus::TIMEOUT
+                ? stepReport.message
+                : "Cone basis conversion failed: type "
+                    + std::to_string((int)targetType) + " remains.";
             return finalReport;
         }
 
@@ -2663,6 +2731,11 @@ TechMapReport TechMapper::convertToBasis(Netlist& netlist,
                                          bool verbose) {
 
     TechMapReport finalReport;
+    if (requestExpired()) {
+        finalReport.status = TechMapStatus::TIMEOUT;
+        finalReport.message = "Basis conversion could not start because the request time budget expired.";
+        return finalReport;
+    }
     finalReport.status = TechMapStatus::SUCCESS;
     finalReport.message = "Successfully converted circuit to the specified basis.";
 
@@ -2772,7 +2845,9 @@ TechMapReport TechMapper::convertToBasis(Netlist& netlist,
         const int remainingInScope = countGateTypeInScope(netlist, scope, name, targetType);
         if (stepReport.status != TechMapStatus::SUCCESS || remainingInScope > 0) {
             finalReport.status = (stepReport.status != TechMapStatus::SUCCESS) ? stepReport.status : TechMapStatus::ERROR_NOT_EQUIVALENT;
-            finalReport.message = "Basis conversion failed! Remaining gates of type: " + std::to_string((int)targetType);
+            finalReport.message = stepReport.status == TechMapStatus::TIMEOUT
+                ? stepReport.message
+                : "Basis conversion failed! Remaining gates of type: " + std::to_string((int)targetType);
             return finalReport;
         }
 
@@ -2829,6 +2904,15 @@ NetlistEditReport TechMapper::replaceGateTypeWithReport(
     bool verbose)
 {
     Netlist before = netlist.cloneForRollback();
+
+    if (requestExpired()) {
+        TechMapReport timeoutReport;
+        timeoutReport.status = TechMapStatus::TIMEOUT;
+        timeoutReport.message =
+            "Gate-type replacement could not start because the request time budget expired.";
+        return finalizeTechMapEditReport(
+            netlist, before, timeoutReport, "replaceGateType");
+    }
 
     std::map<GateType, int> allowedConstraints;
     for (GateType type : allowedTypes) {

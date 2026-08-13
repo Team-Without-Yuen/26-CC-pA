@@ -43,10 +43,10 @@ Netlist::WholeDesignEquivalenceReport report =
 
 ```cpp
 Netlist::WholeDesignEquivalenceReport report =
-    current.checkWholeDesignEquivalence(original, 240.0);
+    current.checkWholeDesignEquivalence(original, 290.0);
 ```
 
-預設 `totalTimeBudgetSeconds = 240.0`。官方非 basic request 時限為 300 秒，因此這裡保留約 60 秒給 parsing、routing、report formatting 與其他工具流程。
+預設 `totalTimeBudgetSeconds = 290.0`，且必須為有限正數。官方非 basic request 時限為 300 秒，保留約 10 秒給 parsing、report formatting、artifact 收尾與 request terminator。
 
 語意：
 
@@ -104,7 +104,7 @@ current : 修改後或目前正在回答的 design
 1. original/current 各只編碼一次，所有 PO 與 DFF.D 共用同一個 SAT context。
 2. 先用單一 global endpoint miter 檢查是否存在任何 mismatch；UNSAT 可一次證明全部 endpoints。
 3. 只有 global miter 為 SAT 時，才逐 endpoint 求解以定位 mismatch。
-4. 每次 SAT solve 最多 30 秒，且所有 solves 共用 `totalTimeBudgetSeconds`。
+4. global miter 可使用全部剩餘 budget；只有找到 mismatch 後的逐 endpoint diagnosis，才依剩餘 endpoints 公平分配剩餘時間。
 5. budget 或 solver 無法完成的 endpoints 會進入 skipped list；此時 `report.ok = false`，不可宣稱已證明等價。
 ```
 

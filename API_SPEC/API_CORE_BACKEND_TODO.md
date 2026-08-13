@@ -25,6 +25,9 @@ API_SPEC/TOOLS待更新表.md
 - [ ] snapshot CEC、cofactor/`equiv_under()` 與首次 lazy AIG rebuild 尚未接收同一套 cooperative deadline。
 - [ ] `SatEngine` 與 `Fraig` 仍為 Phase B stub，不可啟用。
 - [x] FunctionalDependence / Symmetry 統一遵守 `query.timeLimitSeconds`；非正值回 `INVALID_ARGUMENT`。
+- [x] Function Query 第一批 legacy/AIG differential：正常 budget 25/25 語意一致。
+- [x] benchmark 決議 production 維持 legacy：Phase-A AIG 總時間約為 legacy 2.67 倍，且 tiny-budget timeout contract 不同。
+- [ ] Phase B/shared incremental SAT、bus equivalence miter 與統一 timeout contract 完成後，再評估 Function Query AIG 接入。
 
 ## 已完成：DFF.Q fanin scope 停在 boundary
 

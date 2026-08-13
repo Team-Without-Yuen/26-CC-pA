@@ -567,7 +567,7 @@ try {
         if ($script:buildPassed) {
             $test31Command = @'
 set -e
-sources=$(find src/core src/io src/analysis src/optimization src/transformation include/lib/abcsat include/lib/abcesop -name "*.cpp" -print)
+sources=$(find src/core src/io src/analysis src/optimization src/transformation src/SATEngine include/lib/abcsat include/lib/abcesop -name "*.cpp" -print)
 g++ -DFMT_HEADER_ONLY -DWIN64 -DWIN32_LEAN_AND_MEAN -DNOMINMAX \
     -DABC_USE_STDINT_H -DNUNLOCKED -DFMT_USE_WINDOWS_H=0 \
     -I. -Iinclude -Iinclude/lib -Iinclude/lib/nauty \

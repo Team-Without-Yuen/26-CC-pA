@@ -53,8 +53,8 @@ query.resolveFunctionalDataNets = true;
 query.maxFunctionalDataCandidatesPerMatch = 16;
 query.enableFunctionalSimulationFilter = true;
 query.functionalSimulationPatternCount = 256;
-query.functionalPerDffTimeLimitSeconds = 0.25;
-query.functionalTimeLimitSeconds = 5.0;
+query.functionalPerDffTimeLimitSeconds = 0.0; // auto fair-share
+query.functionalTimeLimitSeconds = 290.0;
 
 const auto report = netlist.runSequentialPatternQuery(query);
 ```

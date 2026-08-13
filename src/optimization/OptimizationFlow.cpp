@@ -31,6 +31,8 @@ std::string optimizationStatusName(OptimizationStatus status) {
             return "SUCCESS";
         case OptimizationStatus::NO_IMPROVEMENT:
             return "NO_IMPROVEMENT";
+        case OptimizationStatus::TIMEOUT:
+            return "TIMEOUT";
         case OptimizationStatus::ERROR_INVALID_REQUEST:
             return "ERROR_INVALID_REQUEST";
         case OptimizationStatus::ERROR_CONSTRAINT_UNSATISFIED:
@@ -546,10 +548,9 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
             report.operationName = "opt_apply:local_simplification_fixpoint";
             break;
         case OptPassKind::CriticalPathDepth: {
-            const auto startedAt = std::chrono::steady_clock::now();
+            const request_time_budget::RequestDeadline deadline(request.timeLimitSeconds);
             auto elapsedSeconds = [&]() {
-                return std::chrono::duration<double>(
-                    std::chrono::steady_clock::now() - startedAt).count();
+                return deadline.elapsedSeconds();
             };
 
             if (!std::isfinite(request.timeLimitSeconds) ||
@@ -743,7 +744,7 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                 return makePreCoreTimeoutReport();
             }
 
-            TechMapper techMapper;
+            TechMapper techMapper(&deadline);
             DepthOptimizer optimizer;
             const OptimizationResult core = optimizer.executeCriticalPathOptimization(
                 working,
@@ -751,7 +752,8 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                 coneReport,
                 request.allowedTypes,
                 request.bannedTypes,
-                request.verbose);
+                request.verbose,
+                &deadline);
 
             summary.coreStatus = optimizationStatusName(core.status);
             summary.coreMessage = core.message;
@@ -877,8 +879,7 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                     "The candidate did not improve depth, but it is eligible because the original design violated a hard gate constraint.");
             }
 
-            const double remainingTime =
-                request.timeLimitSeconds - elapsedSeconds();
+            const double remainingTime = deadline.remainingSeconds();
             if (remainingTime <= 0.0) {
                 summary.wholeDesignTimedOut = true;
                 report.success = false;

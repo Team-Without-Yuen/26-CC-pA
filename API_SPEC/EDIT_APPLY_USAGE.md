@@ -116,7 +116,7 @@ if (report.success) {
 | `inputCount` | `int` | `-1` | `SimplifyConstants`：`-1` 不限、正整數指定 gate fanin 數 |
 | `gateType` | `GateType` | `UNKNOWN` | gate-type buffer、`SimplifyConstants` 或 functional merge filter；`UNKNOWN` 表示不限 |
 | `simulationPatternCount` | `size_t` | `256` | functional merge simulation prefilter，合法範圍 1..4096 |
-| `timeLimitSeconds` | `double` | `30.0` | functional search、mutation 與 whole-design SAT 共用總時間 |
+| `timeLimitSeconds` | `double` | `290.0` | functional merge 或 technology mapping 的巢狀流程共用同一總 deadline |
 | `targetGateType` | `GateType` | `UNKNOWN` | `ReplaceGateType` 要移除/替換的 gate 類型 |
 | `allowedTypes` | `std::vector<GateType>` | `{}` | `ConvertToBasis` / `ReplaceGateType` 允許生成的 gate basis |
 | `bannedTypes` | `std::vector<GateType>` | `{}` | `ConvertToBasis` 額外禁止的 gate 類型 |
@@ -202,7 +202,7 @@ validation.messages 會包含同一個錯誤訊息
 | DFF control buffer | `processClock` / `processReset` 至少一個為 true |
 | by-gate-type buffer | `gateType != UNKNOWN`，且至少選擇 input/output 其中一種 |
 | constant simplification | `gateType` 必須為 combinational type 或 `UNKNOWN`；`constValue` 只能是 `-1/0/1`；`inputCount` 只能是 `-1` 或正整數 |
-| technology mapping | scope target 存在、gate type 合法、`allowedTypes` / `bannedTypes` 足夠明確 |
+| technology mapping | scope target 存在、gate type 合法、`allowedTypes` / `bannedTypes` 足夠明確、`timeLimitSeconds` 為 finite positive |
 
 範例：
 
@@ -635,7 +635,7 @@ request.kind = Netlist::EditCommandKind::MergeFunctionallyEquivalentGates;
 request.scope = TargetScope::WHOLE_NETLIST;
 request.gateType = GateType::UNKNOWN;
 request.simulationPatternCount = 256;
-request.timeLimitSeconds = 30.0;
+request.timeLimitSeconds = 290.0;
 request.validateEquivalence = true;
 request.rollbackOnFailure = true;
 
@@ -645,7 +645,7 @@ const Netlist::NetlistEditReport report = netlist.runEditApply(request);
 CLI：
 
 ```text
-edit_apply merge_functionally_equivalent_gates whole --time-limit 30
+edit_apply merge_functionally_equivalent_gates whole
 edit_apply merge_functionally_equivalent_gates net_fanin n10 --gate-type AND
 ```
 

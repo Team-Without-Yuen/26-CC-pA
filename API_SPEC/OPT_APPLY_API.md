@@ -97,7 +97,7 @@ basis、time、equivalence 或 rollback 條件，會在 mutation 前明確失敗
 | `allowedTypes` | empty | 非空時為 combinational gate 白名單 |
 | `bannedTypes` | empty | combinational gate 黑名單；不得與白名單重疊 |
 | `targetDepth` | `-1` | `-1` 表示 best effort；非負值表示候選必須達成 |
-| `timeLimitSeconds` | `240.0` | 必須為 finite positive；涵蓋 scope/前置作業，mockturtle 單次 primitive 尚不可搶占 |
+| `timeLimitSeconds` | `290.0` | 必須為 finite positive；scope、optimizer、mapping 與 final SAT 共用；mockturtle 單次 primitive 尚不可搶占 |
 | `requireDepthImprovement` | `true` | baseline 已合規時，無改善就保留 original |
 | `verbose` | `false` | 內部 optimizer log |
 | `validateEquivalence` | `false` | CriticalPathDepth 仍固定驗證等價；graph identity 以 `StructuralIdentity`，其餘候選執行 whole-design SAT |

@@ -4,7 +4,9 @@
 
 跨工具的判讀規則、輸出量控制與 session constraint 注意事項見 [`LLM_NOTES.md`](LLM_NOTES.md)。
 
-除 prompt 明確要求前 N 筆外，不得自行設定結果數量上限。時間限制使用題目指定的 budget。
+除 prompt 明確要求前 N 筆外，不得自行設定結果數量上限。官方 read/write 等 basic
+operation 上限為 60 秒，其餘 query/edit/optimization 上限為 300 秒；工具內部預設分別
+保留 55/290 秒工作預算。prompt 未指定較短 budget 時，不要自行加入 time-limit 參數。
 支援完整 file output 的大型結果應直接寫檔，正式答案只回必要摘要，不搬運檔案內容。
 
 ## 使用流程

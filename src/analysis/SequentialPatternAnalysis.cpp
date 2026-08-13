@@ -5,6 +5,7 @@
 #include <algorithm>
 #include <array>
 #include <chrono>
+#include <cmath>
 #include <optional>
 #include <unordered_set>
 
@@ -455,18 +456,25 @@ Netlist::SequentialPatternReportSet Netlist::runSequentialPatternQuery(
         result.elapsedSeconds = elapsedSeconds(queryStart);
         return result;
     }
-    if (query.enableFunctionalFallback &&
+    const bool invalidFunctionalSearchLimits = query.enableFunctionalFallback &&
         (query.maxFunctionalCandidates == 0 ||
          query.maxFunctionalMatchesPerDff == 0 ||
          (query.resolveFunctionalDataNets &&
           query.maxFunctionalDataCandidatesPerMatch == 0) ||
          (query.enableFunctionalSimulationFilter &&
           (query.functionalSimulationPatternCount == 0 ||
-           query.functionalSimulationPatternCount > 4096)) ||
-         query.functionalPerDffTimeLimitSeconds <= 0.0 ||
-         query.functionalTimeLimitSeconds <= 0.0)) {
+           query.functionalSimulationPatternCount > 4096)));
+    const bool invalidFunctionalTimeLimits =
+        (query.enableFunctionalFallback || query.verifyCanonicalMatchesWithSat) &&
+        (!std::isfinite(query.functionalPerDffTimeLimitSeconds) ||
+         !std::isfinite(query.functionalTimeLimitSeconds) ||
+         query.functionalPerDffTimeLimitSeconds < 0.0 ||
+         query.functionalTimeLimitSeconds <= 0.0);
+    if (invalidFunctionalSearchLimits || invalidFunctionalTimeLimits) {
         result.status = "INVALID_ARGUMENT";
-        result.message = "Functional fallback requires positive candidate, match, and time limits.";
+        result.message =
+            "Functional analysis requires positive candidate and total time "
+            "limits; the per-DFF limit may be zero for automatic allocation.";
         result.complete = false;
         result.elapsedSeconds = elapsedSeconds(queryStart);
         return result;
@@ -499,7 +507,22 @@ Netlist::SequentialPatternReportSet Netlist::runSequentialPatternQuery(
     bool partial = false;
     FunctionalPatternEngine functionalEngine;
     std::optional<BitParallelSimulationResult> functionalSimulation;
-    for (const std::string& dffName : targets) {
+    for (size_t targetIndex = 0; targetIndex < targets.size(); ++targetIndex) {
+        const std::string& dffName = targets[targetIndex];
+        const size_t remainingTargetCount = targets.size() - targetIndex;
+        auto currentPerDffBudget = [&]() {
+            const double remaining =
+                query.functionalTimeLimitSeconds - elapsedSeconds(queryStart);
+            if (remaining <= 0.0) {
+                return 0.0;
+            }
+            if (query.functionalPerDffTimeLimitSeconds > 0.0) {
+                return std::min(
+                    remaining,
+                    query.functionalPerDffTimeLimitSeconds);
+            }
+            return remaining / static_cast<double>(remainingTargetCount);
+        };
         DffInputPatternReport report;
         report.dffName = dffName;
         report.dffGateId = getGateId(dffName);
@@ -524,6 +547,7 @@ Netlist::SequentialPatternReportSet Netlist::runSequentialPatternQuery(
 
             if (query.verifyCanonicalMatchesWithSat) {
                 const int holdValue = 1 - muxPattern.activeLevel;
+                const double verificationBudget = currentPerDffBudget();
 
                 FunctionQuery holdQuery;
                 holdQuery.type = FunctionQueryType::ConditionalEquivalence;
@@ -531,6 +555,9 @@ Netlist::SequentialPatternReportSet Netlist::runSequentialPatternQuery(
                 holdQuery.netNameB = report.qNetName;
                 holdQuery.conditionNetName = muxPattern.enableNetName;
                 holdQuery.conditionValue = holdValue;
+                holdQuery.timeLimitSeconds = std::max(
+                    0.001,
+                    verificationBudget / 2.0);
 
                 FunctionQuery loadQuery = holdQuery;
                 loadQuery.netNameB = muxPattern.dataBranchNetName;
@@ -540,6 +567,9 @@ Netlist::SequentialPatternReportSet Netlist::runSequentialPatternQuery(
                     muxPattern,
                     runFunctionQuery(holdQuery),
                     runFunctionQuery(loadQuery));
+                if (muxPattern.solverTimedOut) {
+                    result.timedOut = true;
+                }
                 if (!muxPattern.confirmed) {
                     partial = true;
                 }
@@ -563,9 +593,8 @@ Netlist::SequentialPatternReportSet Netlist::runSequentialPatternQuery(
                 result.functionalSimulationSeconds =
                     elapsedSeconds(simulationStart);
             }
-            const double remaining =
-                query.functionalTimeLimitSeconds - elapsedSeconds(queryStart);
-            if (remaining <= 0.0) {
+            const double perDffBudget = currentPerDffBudget();
+            if (perDffBudget <= 0.0) {
                 report.functionalFallbackComplete = false;
                 report.functionalFallbackTimedOut = true;
                 result.timedOut = true;
@@ -578,9 +607,7 @@ Netlist::SequentialPatternReportSet Netlist::runSequentialPatternQuery(
                 options.resolveDataNets = query.resolveFunctionalDataNets;
                 options.maxDataCandidatesPerMatch =
                     query.maxFunctionalDataCandidatesPerMatch;
-                options.timeLimitSeconds = std::min(
-                    remaining,
-                    query.functionalPerDffTimeLimitSeconds);
+                options.timeLimitSeconds = perDffBudget;
                 FunctionalPatternContext context = buildSequentialPatternContext(
                     *this,
                     report.dffGateId,

@@ -82,7 +82,7 @@ enum class FunctionSearchScope {
 | `maxResults` | `0` | `0` 表示不限制；正值只用於題意明確要求前 N 筆時 |
 | `maxStoredMatches` | `256` | `matches` 在記憶體中保留的 sample 數；`0` 表示不保留 |
 | `simulationPatternCount` | `256` | deterministic bit-parallel patterns，合法範圍 1..4096 |
-| `timeLimitSeconds` | `30.0` | simulation、分類與 SAT 共用總時間 |
+| `timeLimitSeconds` | `290.0` | 必須為有限正數；simulation、分類與 SAT 共用總時間，保留 10 秒供 request 收尾 |
 | `expandEquivalentPairs` | `true` | false 時只回 equivalence classes，不展開平方級 pair records；functional merge 內部使用 |
 | `writeMatchesToFile` | `false` | 是否以 streaming 將 pair records 寫到檔案 |
 | `outputFilePath` | 空字串 | 指定 artifact 路徑；公開 CLI 會自動提供不覆寫的檔名 |
