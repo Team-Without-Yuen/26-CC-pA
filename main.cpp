@@ -257,14 +257,14 @@ void cmd_names(Session& s, const std::string& net) {
 }
 
 void cmd_classes(Session& s, int minSize) {
-    Timer t;
+    /*Timer t;
     auto cls = s.prim.equivalence_classes(minSize);
     const double sec = t.lap();
     std::cout << "  -> " << cls.size() << " group(s)  (" << sec << "s)\n";
     for (std::size_t i = 0; i < cls.size() && i < 10; ++i)
         std::cout << "     [" << cls[i].size() << "] " << join(cls[i]) << "\n";
     if (cls.size() > 10)
-        std::cout << "     ... (" << cls.size() - 10 << " more)\n";
+        std::cout << "     ... (" << cls.size() - 10 << " more)\n";*/
 }
 
 void cmd_points(Session& s) {

@@ -497,50 +497,145 @@ NetlistEditReport Netlist::removeGateWithReport(int gateId) {
         gateId >= 0 ? std::vector<int>{gateId} : std::vector<int>{});
 }
 
-// 說明：將 oldNetId 完全短接到 newNetId。
-//       oldNetId 的所有負載 (Load Gates) 都會改接到 newNetId。
-//       如果 oldNetId 是 Primary Output，newNetId 將會繼承其 PO 身份與名稱。
-void Netlist::mergeNets(int oldNetId, int newNetId) {
-    /*std::cout << "\n[Debug Merge] Merging " << getNet(oldNetId).name 
-          << " into " << getNet(newNetId).name 
-          << ". Old net has " << getNet(oldNetId).loadGateIds.size() << " loads.\n";*/
+// 判斷「把 oldNetId 併進 newNetId」會不會造出組合迴路。
+bool Netlist::wouldCreateCombLoop(int oldNetId, int newNetId) const {
+    if (oldNetId == newNetId) return false;
+    if (!isValidNetId(oldNetId) || !isValidNetId(newNetId)) return false;
 
-    // 防呆：如果兩條線根本是同一條，什麼都不做
-    if (oldNetId == newNetId || oldNetId == -1 || newNetId == -1) {
-        return;
+    // 將暫存狀態移至此處，使用 thread_local 保持記憶體配置與執行緒安全
+    thread_local std::vector<uint32_t> visitStamp_;
+    thread_local uint32_t              visitEpoch_ = 0;
+    thread_local std::vector<int>      visitStack_;
+
+    // old 沒有任何負載 → merge 不會改接任何東西 → 不可能形成迴路。
+    if (nets[oldNetId].loadGateIds.empty()) return false;
+
+    // new 沒有 driver(PI / 常數 / 懸空)→ fanin cone 是空的 → 永遠安全。
+    // 這是最常見的安全情形(併進 PI),值得一條 O(1) 捷徑。
+    if (nets[newNetId].driverGateId < 0) return false;
+
+    if (visitStamp_.size() < nets.size()) visitStamp_.resize(nets.size(), 0);
+    ++visitEpoch_;
+    if (visitEpoch_ == 0) {                        // 32-bit 溢位:重置一次
+        std::fill(visitStamp_.begin(), visitStamp_.end(), 0);
+        visitEpoch_ = 1;
     }
 
-    const Net& oldNet = getNet(oldNetId);
-    const Net& newNet = getNet(newNetId);
+    visitStack_.clear();
+    visitStack_.push_back(newNetId);
+    visitStamp_[newNetId] = visitEpoch_;
 
-    bool isOldPO = isPrimaryOutputNet(oldNetId);
-    // (注意：如果你需要嚴格禁止 PI 直連 PO，可以在這裡加上判斷，
-    //  但通常 mergeNets 作為底層 API，只負責執行，策略面由呼叫端決定)
-    
-    // 步驟 1：負載轉移 (Load Reconnection)
-    // 將所有以 oldNetId 作為輸入的 Gate，其輸入腳位改為 newNetId。
+    while (!visitStack_.empty()) {
+        const int netId = visitStack_.back();
+        visitStack_.pop_back();
+
+        const int gid = nets[netId].driverGateId;
+        if (gid < 0 || !isValidGateId(gid)) continue;      // PI / 常數 / 懸空
+
+        const Gate& gate = gates[gid];
+        if (gate.type == GateType::DFF)     continue;      // 時序邊界
+        if (gate.type == GateType::UNKNOWN) continue;      // 已被 removeGate 標死
+
+        for (const int fin : gate.inputNetIds) {
+            if (fin < 0 || fin >= static_cast<int>(nets.size())) continue;
+            // 先比對再看 visited:oldNetId 可能從多條路徑到達,
+            // 若先做 visited 檢查會在第二條路徑上漏掉它。
+            if (fin == oldNetId) return true;
+            if (visitStamp_[fin] == visitEpoch_) continue;
+            visitStamp_[fin] = visitEpoch_;
+            visitStack_.push_back(fin);
+        }
+    }
+    return false;
+}
+
+// 兩條 net 已知功能等價時,挑一個安全的合併方向。
+std::pair<int, int> Netlist::safeMergeDirection(int netA, int netB) const {
+    if (netA == netB) return {netA, netB};
+    if (!isValidNetId(netA) || !isValidNetId(netB)) return {-1, -1};
+
+    auto isPort = [&](int id) {
+        return nets[id].isPI || isPrimaryOutputNet(id);
+    };
+
+    // 優先把「非 port」那一側當成被併掉的 old:
+    // port 被併掉就要走名稱繼承,而名稱繼承在對面也是 port 時無解(見 mergeNets)。
+    int first = netA, second = netB;
+    if (isPort(netA) && !isPort(netB)) { first = netB; second = netA; }
+
+    if (!wouldCreateCombLoop(first,  second)) return {first,  second};
+    if (!wouldCreateCombLoop(second, first))  return {second, first};
+    return {-1, -1};
+}
+
+// 將 oldNetId 完全短接到 newNetId。
+//   oldNetId 的所有負載改接到 newNetId。
+//   如果 oldNetId 是 Primary Output,newNetId 會繼承其 PO 身份與名稱。
+// 回傳 false 表示被拒絕,此時 netlist **完全沒有被改動**。
+bool Netlist::mergeNets(int oldNetId, int newNetId) {
+    if (oldNetId == newNetId) return true;                  // 已經是同一條
+    if (!isValidNetId(oldNetId) || !isValidNetId(newNetId)) {
+        std::cerr << "[Netlist] mergeNets: invalid net id ("
+                  << oldNetId << " -> " << newNetId << ")\n";
+        return false;
+    }
+
+    // ---- 防呆 1:組合迴路 ----
+    if (wouldCreateCombLoop(oldNetId, newNetId)) {
+        std::cerr << "[Netlist] mergeNets refused: '" << nets[oldNetId].name
+                  << "' lies in the fanin cone of '" << nets[newNetId].name
+                  << "'; merging would create a combinational loop.\n"
+                     "           Use safeMergeDirection() to pick the safe "
+                     "direction, or merge into a net that does not depend on it.\n";
+        return false;
+    }
+
+    // ---- 防呆 2:名稱繼承會不會毀掉一個 port ----
+    const bool oldIsPO = isPrimaryOutputNet(oldNetId);
+    if (oldIsPO && (nets[newNetId].isPI || isPrimaryOutputNet(newNetId))) {
+        std::cerr << "[Netlist] mergeNets refused: '" << nets[oldNetId].name
+                  << "' is a primary output and '" << nets[newNetId].name
+                  << "' is already a port; inheriting the PO name would destroy "
+                     "the existing port name.\n"
+                     "           Insert a buffer instead: "
+                  << nets[oldNetId].name << " = BUF(" << nets[newNetId].name
+                  << ").\n";
+        return false;
+    }
+
+    // ---- 執行 ----
     replaceAllLoadsOfNet(oldNetId, newNetId);
 
-    // 步驟 2：Primary Output 屬性與名稱繼承
-    // 如果即將被拔掉的 (oldNet) 是一根對外的輸出腳位，
-    // 新的線 (newNet) 必須接管這根腳位的名字，並被標記為 PO。
-    if (isOldPO) {
-        std::string oldPoName = oldNet.name;
-        std::string newNetName = newNet.name;
+    if (oldIsPO) {
+        // 先複製成值再改名:renameNet 會動到 nets[] 裡的字串,
+        // 拿著 const Net& 讀名字會在第一次 rename 之後失效。
+        const std::string oldPoName  = nets[oldNetId].name;
+        const std::string newNetName = nets[newNetId].name;
 
-        // 避免名字衝突，先把舊線改名為垃圾名字
-        // 使用系統時間或唯一 ID 避免名稱重複
-        std::string trashName = oldPoName + "_merged_to_" + std::to_string(newNetId);
-        renameNet(oldPoName, trashName);
-        
-        // 讓新線繼承原本 PO 的光榮名稱
-        renameNet(newNetName, oldPoName);
+        // 產生保證不衝突的暫名。舊實作只拼一次,
+        // 同一組 merge 做兩次、或電路裡剛好有同名 net 時會撞到 ——
+        // renameNet 失敗會靜默留下兩條同名 net。
+        std::string trash = oldPoName + "_merged_to_" + std::to_string(newNetId);
+        if (getNetId(trash) >= 0) {
+            int suffix = 1;
+            std::string cand;
+            do {
+                cand = trash + "_" + std::to_string(suffix++);
+            } while (getNetId(cand) >= 0);
+            trash = std::move(cand);
+        }
 
-        // 屬性繼承與內部列表更新 (將 PO 列表中的 oldNetId 替換為 newNetId)
+        if (!renameNet(oldPoName, trash) || !renameNet(newNetName, oldPoName)) {
+            std::cerr << "[Netlist] mergeNets: rename failed while transferring PO "
+                         "name '" << oldPoName << "'; netlist may be inconsistent\n";
+            markDirty();
+            return false;
+        }
         swapPrimaryOutputNet(oldNetId, newNetId);
     }
 
     markDirty();
+    return true;
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

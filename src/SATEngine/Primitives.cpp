@@ -56,6 +56,251 @@ constexpr double kNoTimeLimit = 1e9;
 //  在單次呼叫中途觸發 rebuild 會讓手上的 raw Sig 全部失效。
 // ============================================================
 
+// =============================================================================
+//  Phase B —— 引擎生命週期
+// =============================================================================
+//
+//  拆除順序是唯一不能寫錯的地方:
+//        Fraig 持有 SatEngine& 與 Ntk&
+//        SatEngine 持有 const Ntk&
+//    所以永遠是 fraig_ → sat_ → model_。
+//
+//    header 的宣告順序(model_, sat_, fraig_)已經讓解構子自動正確,
+//    但 rebuild() 是手動的,寫反了不會 crash(兩者的解構子都不碰 aig),
+//    只會在某天有人改動解構子時變成無法重現的記憶體錯誤。
+
+void Primitives::ensure_engines() {
+    if (!model_) return;
+
+    if (!wantPhaseB_) {
+        fraig_.reset();
+        sat_.reset();
+        return;
+    }
+
+    if (!sat_) {
+        SatEngine::Config scfg;
+        scfg.lazy_encode    = true;   // 100 萬 gate 不可能全 encode
+        scfg.time_limit_sec = 0.0;    // 每次查詢前由 arm_sat_budget 明確設定
+        scfg.conflict_limit = 0;
+        sat_ = std::make_unique<SatEngine>(model_->aig(), scfg);
+    }
+}
+
+// =============================================================================
+//  延遲 FRAIG sweep
+// =============================================================================
+//
+//  為什麼不在 rebuild 時就 sweep:100 萬 gate 的 sweep 是秒級到十秒級的成本。
+//  若這一版電路只被問三五個等價問題,那是純虧;而比賽的 prompt 也確實有
+//  「只問一兩件事就改電路」的模式。所以策略是:
+//
+//    - 累積到 fraig_auto_sweep_threshold 次「退回 SAT 的等價查詢」→ 自動 sweep
+//    - 呼叫端知道要來一大批 → 明確呼叫 request_fraig_sweep()
+//    - equivalence_report() 一定需要完整類 → 內部強制呼叫
+//
+//  fraigTriedLevel_ 防止「sweep 失敗後每次查詢都重試」—— 一版只試一次。
+
+bool Primitives::ensure_fraig(bool needVerified) {
+    if (!wantPhaseB_ || !model_) return false;
+    ensure_engines();
+    if (!sat_) return false;
+
+    // 硬上限:要求驗證也降級成模擬。
+    if (fraigSimOnlyCap_) needVerified = false;
+
+    const uint8_t want = needVerified ? 2u : 1u;
+
+    if (fraigLevel_      >= want) return true;    // 現有的層級已經夠用
+    if (fraigTriedLevel_ >= want) return false;   // 這一版試過了,不重試
+    fraigTriedLevel_ = want;
+
+    const auto t0 = std::chrono::steady_clock::now();
+
+    // 升級時直接重建 Fraig,不試圖沿用舊的模擬結果。
+    //   重跑模擬只要零點幾秒,而 SatEngine 是同一顆 —— 先前所有查詢與
+    //   模擬階段學到的子句全部保留,真正昂貴的部分沒有白費。
+    //   相對地,讓 Fraig 支援「中途改設定再續跑」會多出一整組狀態機,
+    //   而它能省下的只有那零點幾秒。
+    Fraig::Config fcfg;
+    fcfg.simulate_only           = !needVerified;
+    fcfg.max_rounds              = fraigMaxRounds_;
+    fcfg.total_time_budget       = fraigTotalBudget_;
+    fcfg.sat_time_limit          = fraigSatTimeLimit_;
+    fcfg.sat_conflict_limit      = fraigSatConflicts_;
+    fcfg.sim_memory_budget_bytes = fraigSimMemory_;
+
+    fraig_.reset();                                  // 先拆舊的,再建新的
+    fraig_ = std::make_unique<Fraig>(model_->aig(), *sat_, fcfg);
+    fraig_->sweep();
+
+    if (!fraig_->is_swept()) { fraigLevel_ = 0; return false; }
+    fraigLevel_ = want;
+
+    // 只有真的合併了東西才需要 remap。
+    //   simulate_only 模式下 representatives_by_node() 全是自身,
+    //   remap 會白白重建整張反向索引(112k net 上是幾十毫秒的浪費)。
+    if (fraig_->stats().merged_nodes > 0) {
+        model_->names().remap(fraig_->representatives_by_node());
+    }
+
+    // Fraig 為了 sweep 改過 solver 的 limit,還原成「由呼叫端逐次指定」。
+    sat_->set_limits(0.0, 0);
+
+    ++stats_.fraig_sweeps;
+    stats_.fraig_sweep_seconds +=
+        std::chrono::duration<double>(std::chrono::steady_clock::now() - t0).count();
+
+    if (cfg_.verbose_rebuild)
+        std::cerr << "[Primitives] " << fraig_summary() << "\n";
+
+    return true;
+}
+
+Primitives::FraigProfile Primitives::fraig_profile() const {
+    FraigProfile p;
+    if (fraig_ && fraig_->is_swept()) {
+        const auto& s = fraig_->stats();
+        p.swept = true;
+        p.complete        = s.completed && s.gave_up == 0;
+        p.candidate_pairs = s.candidate_pairs;
+        p.merged_nodes    = s.merged_nodes;
+        p.const_nodes     = s.const_nodes;
+        p.proved_equal    = s.proved_equal;
+        p.refuted         = s.refuted;
+        p.gave_up         = s.gave_up;
+        p.sim_rounds      = s.sim_rounds;
+        p.sim_seconds     = s.sim_seconds;
+        p.sat_seconds     = s.sat_seconds;
+    }
+    if (sat_) {
+        const auto& s = sat_->stats();
+        p.sat_queries       = s.queries;
+        p.sat_encoded_nodes = s.encoded_nodes;
+        p.sat_clauses       = s.clauses;
+        p.sat_solve_seconds = s.solve_seconds;
+    }
+    return p;
+}
+
+bool Primitives::request_fraig_sweep(bool needVerified) {
+    ensure_fresh();
+    return ensure_fraig(needVerified);
+}
+
+void Primitives::set_fraig_simulate_only(bool on) {
+    if (fraigSimOnlyCap_ == on) return;
+    fraigSimOnlyCap_ = on;
+    // 放寬上限時要讓「之前被降級而失敗的驗證請求」有機會重試。
+    if (!on && fraigTriedLevel_ > fraigLevel_) fraigTriedLevel_ = fraigLevel_;
+}
+
+bool Primitives::fraig_swept()    const { return fraigLevel_ >= 1; }
+bool Primitives::fraig_verified() const { return fraigLevel_ >= 2; }
+
+// 只有這個為 true 時,「不同類」才可以被解讀成「不等價」。
+//   simulate_only 模式下必為 false —— 候選根本沒被驗證過。
+//   那時的否定結論一律走 provably_different(),不走這條路。
+bool Primitives::fraig_complete() const {
+    if (fraigLevel_ < 2 || !fraig_ || !fraig_->is_swept()) return false;
+    const auto& s = fraig_->stats();
+    return s.completed && s.gave_up == 0;
+}
+
+std::string Primitives::fraig_summary() const {
+    if (fraigLevel_ == 0 || !fraig_ || !fraig_->is_swept())
+        return "fraig: not swept";
+    const auto& s = fraig_->stats();
+    std::string out =
+        std::string("fraig[") + (fraigLevel_ >= 2 ? "verified" : "simulated") + "]: " +
+        "cand=" + std::to_string(s.candidate_pairs) +
+        " merged=" + std::to_string(s.merged_nodes) +
+        " const="  + std::to_string(s.const_nodes) +
+        " refuted=" + std::to_string(s.refuted) +
+        " gave_up=" + std::to_string(s.gave_up) +
+        " | sim=" + std::to_string(s.sim_seconds) +
+        "s sat="   + std::to_string(s.sat_seconds) + "s";
+    if (fraigLevel_ < 2)          out += "  [simulate-only: negatives OK, "
+                                         "classes unverified]";
+    else if (!s.completed)        out += "  [INCOMPLETE: budget exhausted]";
+    else if (s.gave_up > 0)       out += "  [INCOMPLETE: solver limits hit]";
+    else                          out += "  [complete]";
+    return out;
+}
+
+void Primitives::set_fraig_budget(double total_seconds,
+                                  double per_query_seconds,
+                                  int64_t per_query_conflicts,
+                                  uint64_t sim_memory_bytes,
+                                  uint32_t max_rounds) {
+    fraigTotalBudget_  = total_seconds;
+    fraigSatTimeLimit_ = per_query_seconds;
+    fraigSatConflicts_ = per_query_conflicts;
+    if (sim_memory_bytes > 0) fraigSimMemory_ = sim_memory_bytes;
+    if (max_rounds > 0) fraigMaxRounds_ = max_rounds;
+}
+
+// =============================================================================
+//  FRAIG 查表的可信度界線
+// =============================================================================
+//  sweep 打到 sat_time_limit / sat_conflict_limit(stats.gave_up > 0),
+//  或 total_time_budget / max_rounds 用盡(stats.completed == false)時,
+//  真正等價的一對會被保守地留在不同類。
+//
+//  只有在 sweep 完整跑完且沒有任何放棄時,「不同類」才真的等於「不等價」:
+//  那種情況下每一對候選都被 SAT 判決過,而落在不同 signature 的節點
+//  必定有一組模擬向量為證。
+//
+//  回傳 Unknown = 「查不出來,請走 SAT」。
+
+EquivResult Primitives::fraig_lookup(Sig a, Sig b) {
+    if (fraig_ == nullptr || !fraig_->is_swept()) return EquivResult::Unknown;
+
+    const Ntk& A = model_->aig();
+    if (!fraig_->is_swept_node(A.get_node(a))) return EquivResult::Unknown;
+    if (!fraig_->is_swept_node(A.get_node(b))) return EquivResult::Unknown;
+
+    if (fraig_->same_class(a, b)) return EquivResult::Equal;
+
+    // 模擬反例。不需要 SAT,也不需要 sweep 跑完 ——
+    //   兩者在某組向量下取值不同,那組向量就是反例。
+    //   這是絕大多數查詢的答案,必須排在 fraig_complete() 之前才吃得到。
+    if (fraig_->provably_different(a, b)) return EquivResult::NotEqual;
+
+    if (fraig_complete()) return EquivResult::NotEqual;
+
+    if (cfg_.count_stats) ++stats_.fraig_lookup_misses;
+    return EquivResult::Unknown;
+}
+
+EquivResult Primitives::fraig_lookup_const(Sig s, bool val) {
+    if (fraig_ == nullptr || !fraig_->is_swept()) return EquivResult::Unknown;
+
+    const Ntk& A = model_->aig();
+    if (!fraig_->is_swept_node(A.get_node(s))) return EquivResult::Unknown;
+
+    bool known = false;
+    if (fraig_->is_known_const(s, known))
+        return (known == val) ? EquivResult::Equal : EquivResult::NotEqual;
+
+    // 同樣先試模擬反例:有一組向量讓 s 取到 !val,就證明它不恆為 val。
+    if (fraig_->provably_different(s, A.get_constant(val)))
+        return EquivResult::NotEqual;
+
+    if (fraig_complete()) return EquivResult::NotEqual;
+
+    if (cfg_.count_stats) ++stats_.fraig_lookup_misses;
+    return EquivResult::Unknown;
+}
+
+// SatEngine 的 limit 是常駐設定,而 Fraig sweep 會改它。
+// 因此每次查詢前一律明確設定,絕不依賴上一次留下的值。
+void Primitives::arm_sat_budget(double remaining) {
+    if (!sat_) return;
+    const double t = (remaining >= kNoTimeLimit || remaining <= 0.0) ? 0.0 : remaining;
+    sat_->set_limits(t, 0);
+}
+
 // ============================================================
 //  污染閘門
 // ============================================================
@@ -317,24 +562,34 @@ EquivResult Primitives::equiv_checked(
         return EquivResult::NotEqual;
     }
 
-    // ---- 1. Phase B：FRAIG 查表 ----
-    // 前置條件：兩者都必須是 sweep 當下就存在的節點。
-    // cofactor 物化出來的新節點在 watermark 之後沒被 sweep 過，
-    // 查表會恆回「不同類」→ 靜默的錯誤答案，必須退回 SAT。
-    if (fraig_ != nullptr && fraig_->is_swept()) {
-        const Node na = A.get_node(a);
-        const Node nb = A.get_node(b);
-        if (fraig_->is_swept_node(na) && fraig_->is_swept_node(nb)) {
-            if (cfg_.count_stats) ++stats_.equiv_by_lookup;
-            return fraig_->same_class(a, b) ? EquivResult::Equal
-                                            : EquivResult::NotEqual;
+    // ---- 1. Phase B:FRAIG 查表 ----
+    if (const EquivResult hit = fraig_lookup(a, b); hit != EquivResult::Unknown) {
+        if (cfg_.count_stats) ++stats_.equiv_by_lookup;
+        return hit;
+    }
+
+    // ---- 1b. 自動 sweep ----
+    // 這一版累積了夠多次必須走 SAT 的等價查詢 → 一次掃完,之後全部變查表。
+    // 只在還沒 sweep 過時觸發,且一版只試一次(fraigTriedLevel_)。
+    if (wantPhaseB_ && fraigLevel_ == 0 &&
+        cfg_.fraig_auto_sweep_threshold > 0 &&
+        satEquivQueries_ >= cfg_.fraig_auto_sweep_threshold) {
+        if (ensure_fraig(false)) {                       // ← false
+            if (const EquivResult hit = fraig_lookup(a, b);
+                hit != EquivResult::Unknown) {
+                if (cfg_.count_stats) ++stats_.equiv_by_lookup;
+                return hit;
+            }
         }
     }
 
     // ---- 2. SAT ----
+    ++satEquivQueries_;
     EquivResult r;
     if (sat_ != nullptr) {
-        r = sat_->are_equal(a, b);          // Phase B（尚未支援 deadline）
+        arm_sat_budget(remaining);
+        r = sat_->are_equal(a, b);
+        if (r == EquivResult::Unknown) lastProofTimedOut_ = true;
     } else {
         if (cfg_.count_stats) ++stats_.miters_built;
         r = equiv_via_cadical(a, b, remaining);
@@ -381,17 +636,18 @@ EquivResult Primitives::is_const_checked(
         return (actual == val) ? EquivResult::Equal : EquivResult::NotEqual;
     }
 
-    if (fraig_ != nullptr && fraig_->is_swept() && fraig_->is_swept_node(node)) {
-        bool known = false;
-        if (fraig_->is_known_const(signal, known)) {
-            if (cfg_.count_stats) ++stats_.equiv_by_lookup;
-            return (known == val) ? EquivResult::Equal : EquivResult::NotEqual;
-        }
+    if (const EquivResult hit = fraig_lookup_const(signal, val);
+        hit != EquivResult::Unknown) {
+        if (cfg_.count_stats) ++stats_.equiv_by_lookup;
+        return hit;
     }
 
+    ++satEquivQueries_;
     EquivResult result;
     if (sat_ != nullptr) {
+        arm_sat_budget(remaining);
         result = sat_->is_const(signal, val);
+        if (result == EquivResult::Unknown) lastProofTimedOut_ = true;
     } else {
         if (cfg_.count_stats) ++stats_.miters_built;
         result = equiv_via_cadical(signal, network.get_constant(val), remaining);
@@ -550,12 +806,22 @@ EquivResult Primitives::equiv_under(
     const Sig a = unwrap(ra);
     const Sig b = unwrap(rb);
 
+    // 前置條件：assumption 的變數必須是自由變數（PI，含 DFF-Q 的 pseudo-PI）。
+    std::vector<std::pair<Sig, bool>> rawAssumptions;
+    rawAssumptions.reserve(assumptions.size());
+    for (const auto& kv : assumptions) {
+        const Sig var = unwrap(kv.first);
+        if (!model_->is_free_var(var)) {
+            std::cerr << "[Primitives] equiv_under: assumption variable must be a PI "
+                         "(free variable). Got an internal node.\n";
+            throw std::invalid_argument(
+                "Primitives::equiv_under: assumption variable is not a free variable");
+        }
+        rawAssumptions.emplace_back(var, kv.second);
+    }
+
     if (sat_ != nullptr) {
-        std::vector<std::pair<Sig, bool>> raw;
-        raw.reserve(assumptions.size());
-        for (const auto& kv : assumptions)
-            raw.emplace_back(unwrap(kv.first), kv.second);
-        return sat_->are_equal_under(a, b, raw);
+        return sat_->are_equal_under(a, b, rawAssumptions);
     }
 
     // Phase A：沒有 assumption 機制，只能真的物化 cofactor 後再比。
@@ -1040,16 +1306,7 @@ std::optional<SigRef> Primitives::try_resolve(const std::string& net) {
 // 受污染的 net 仍然有正確的名字，只是它的「函數」不可信。
 std::vector<std::string> Primitives::names_of(SigRef rs) {
     ensure_fresh();
-    const Sig s = unwrap(rs);
-
-    // FRAIG sweep 之後，NameMap 內的 signal 已被 canonical 化，
-    // 所以查詢前也必須把 s 正規化，否則會查不到（拿舊 signal 查新表）。
-    Sig key = s;
-    if (fraig_ != nullptr && fraig_->is_swept() &&
-        fraig_->is_swept_node(aig().get_node(s))) {
-        key = fraig_->representative(s);
-    }
-    return names().names_of(key);
+    return names().names_of(unwrap(rs));   // canonicalize 在 NameMap 內部完成
 }
 
 bool Primitives::is_trustworthy(const std::string& net) {
@@ -1063,39 +1320,98 @@ bool Primitives::is_trustworthy(const std::string& net) {
 //  等價類報告
 // ============================================================
 
-std::vector<std::vector<std::string>> Primitives::equivalence_classes(int min_size) {
+// 兩層處理，順序不可顛倒：
+//   1. 濾掉不可信的 net —— 受污染的 net 是用替代值（const0）算出來的，
+//      它會跟真正恆 0 的 net 落在同一類，被報成「恆為 0」。
+//      那是個看起來完全合理的假答案，濾網不做就會直接送到使用者面前。
+//   2. 拆出常數類 —— 「恆為 0」與「彼此等價」語意不同，
+//      而且 sweep 後常數類通常大到會淹沒真正有意思的等價類。
+EquivClassReport Primitives::equivalence_report(int min_size) {
     ensure_fresh();
     require_usable_model();
 
-    // Phase A：只反映 structural sharing（strash 合併、BUF/NOT alias）。
-    // Phase B：Fraig::sweep + NameMap::remap 之後，同一個 API 回完整功能等價類。
-    // 呼叫端不需要知道差別 —— 這正是介面凍結的意義。
+    EquivClassReport report;
+
+    // 報告一定需要完整的功能等價類 —— 強制 sweep(已 sweep 過則是 no-op)。
+    ensure_fraig(true);                     // ← true
+    report.is_complete = fraig_complete();
+
     if (is_phase_a()) {
-        std::cerr << "[Primitives] equivalence_classes: Phase A reports structural "
-                     "sharing only (run FRAIG sweep for full functional classes)\n";
+        std::cerr << "[Primitives] equivalence_report: Phase A reports structural "
+                     "sharing only (enable Phase B for full functional classes)\n";
+    } else if (!report.is_complete) {
+        std::cerr << "[Primitives] equivalence_report: " << fraig_summary()
+                  << " -- some equivalences may be missing\n";
     }
 
-    const auto     idClasses = names().equivalence_classes(min_size);
-    const Netlist& nl        = model_->netlist();
+    const Ntk&     A  = model_->aig();
+    const Netlist& nl = model_->netlist();
 
-    std::vector<std::vector<std::string>> out;
-    out.reserve(idClasses.size());
+    // 常數節點的兩個 signal（canonical 形式）。
+    const Sig zero = names().canonicalize(A.get_constant(false));
+    const Sig one  = names().canonicalize(A.get_constant(true));
+
+    // min_size 只套用在「等價類」上；常數類即使只有一條 net 也值得回報
+    // （「這條 net 恆為 0」本身就是有用的結論），所以這裡先全收。
+    const auto idClasses = names().equivalence_classes(1);
 
     for (const auto& cls : idClasses) {
-        std::vector<std::string> nm;
-        nm.reserve(cls.size());
+        // ---- 1. 濾掉不可信的 net ----
+        std::vector<std::string> trusted;
+        trusted.reserve(cls.size());
         for (const int netId : cls) {
             if (!nl.isValidNetId(netId)) continue;
-            //   受污染的 net 不得出現在等價類報告裡：
-            //   它跟代表節點指向同一個 signal，但那個 signal 是用替代值算出來的，
-            //   「等價」這件事本身就不成立。靜默納入會產生假的等價宣稱。
-            if (!model_->is_net_trustworthy(netId)) continue;
-            nm.push_back(nl.getNet(netId).name);
+            if (!model_->is_net_trustworthy(netId)) {
+                ++report.excluded_untrusted;
+                continue;
+            }
+            trusted.push_back(nl.getNet(netId).name);
         }
-        // 剔除污染成員後可能不足 min_size，重新檢查
-        if (static_cast<int>(nm.size()) >= min_size) out.push_back(std::move(nm));
+        if (trusted.empty()) continue;
+
+        // ---- 2. 判斷這一類是不是常數類 ----
+        // 用類裡第一條 net 的 signal 來判斷（同一類的 signal 必然相同）。
+        // 注意不能只看 cls[0] —— 它可能已經被濾掉了，所以重新找一條可信的。
+        std::optional<Sig> repr;
+        for (const int netId : cls) {
+            if (!nl.isValidNetId(netId)) continue;
+            if (!model_->is_net_trustworthy(netId)) continue;
+            repr = names().try_resolve(netId);
+            if (repr) break;
+        }
+        if (!repr) continue;
+
+        if (*repr == zero) {
+            report.constant_zero.insert(report.constant_zero.end(),
+                                        trusted.begin(), trusted.end());
+        } else if (*repr == one) {
+            report.constant_one.insert(report.constant_one.end(),
+                                       trusted.begin(), trusted.end());
+        } else if (static_cast<int>(trusted.size()) >= min_size) {
+            // 濾掉不可信成員後可能不足 min_size —— 只剩一條 net 的「等價類」
+            // 沒有意義，不該回報。
+            report.equivalence_classes.push_back(std::move(trusted));
+        }
     }
-    return out;
+
+    // 輸出順序穩定：Phase B 要能跟 Phase A 的 golden 逐字比對。
+    std::sort(report.constant_zero.begin(), report.constant_zero.end());
+    std::sort(report.constant_one.begin(),  report.constant_one.end());
+    for (auto& cls : report.equivalence_classes)
+        std::sort(cls.begin(), cls.end());
+    std::sort(report.equivalence_classes.begin(), report.equivalence_classes.end(),
+              [](const std::vector<std::string>& a, const std::vector<std::string>& b) {
+                  if (a.size() != b.size()) return a.size() > b.size();   // 大類在前
+                  return a < b;                                           // 字典序
+              });
+
+    if (report.excluded_untrusted > 0) {
+        std::cerr << "[Primitives] equivalence_report: excluded "
+                  << report.excluded_untrusted
+                  << " untrustworthy net(s); the report is incomplete. "
+                  << model_->taint_summary() << "\n";
+    }
+    return report;
 }
 
 } // namespace eqeng

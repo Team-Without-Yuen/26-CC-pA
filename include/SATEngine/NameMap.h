@@ -63,6 +63,10 @@ public:
     // reprByNode 以 node index 為索引，未受影響的 node 填自身。
     void remap(const std::vector<Sig>& reprByNode);
 
+    // 把 signal 轉成 FRAIG sweep 後的 canonical 形式。
+    // 未 remap、或該節點未被合併時原值回傳,所以呼叫端不需要知道有沒有 sweep 過。
+    Sig canonicalize(Sig s) const;
+
     std::size_t size() const { return netToSig_.size(); }
 
 private:
@@ -71,6 +75,9 @@ private:
 
     std::unordered_map<int, Sig>                   netToSig_;    // net id -> signal
     std::unordered_map<uint64_t, std::vector<int>> nodeToNets_;  // node index -> net ids
+    // 只存「真的被 FRAIG 合併掉」的節點。未合併的不佔空間,
+    // 所以這張表遠小於 reprByNode 全長。
+    std::unordered_map<uint64_t, Sig> nodeRemap_;
 };
 
 } // namespace eqeng

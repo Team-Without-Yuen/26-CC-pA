@@ -228,20 +228,23 @@ void AigModel::do_build(const Options& opt) {
         info.snNetId = pin_net(gate, "SN");
 
         if (gate.outputNetId >= 0 && gate.outputNetId < netCount && !hasSig[gate.outputNetId]) {
+            // 正常：Q 是自由變數
+            info.qPiIndex = static_cast<int>(piNetIds_.size());
             Sig q = aig_.create_pi();
             assign(gate.outputNetId, q);
             info.q = q;
             piNetIds_.push_back(gate.outputNetId);
         } else if (gate.outputNetId >= 0 && gate.outputNetId < netCount) {
-            // Q 已經有 driver：這條 net 的函數不唯一，標為污染源。
+            // Q 已經有 driver：不建 pseudo-PI。
+            // 組合抽象要求 Q 是自由變數，這裡不成立 —— 硬塞一個 PI 反而會
+            // 讓 miter 拿到一個與實際電路無關的變數。qPiIndex 維持 -1。
             taint_root(gate.outputNetId,
                        "DFF '" + gate.instName + "' Q output has multiple drivers");
             info.q = netSig[gate.outputNetId];
         } else {
-            // 沒有有效的 Q net，無處可記污染，只能記全域。
+            // 沒有有效的 Q net：同樣不建 PI，也不佔位。
             mark_invalid("DFF '" + gate.instName + "' has no valid Q output net");
-            info.q = aig_.create_pi();                    // 佔位以維持 PI 索引一致
-            piNetIds_.push_back(kNoNet);
+            info.q = aig_.get_constant(false);
         }
         dffs_.push_back(info);
         ++stats_.num_dff;
@@ -496,6 +499,14 @@ void AigModel::do_build(const Options& opt) {
                   << " tainted_nets=" << numTaintedNets_ << "\n";
         if (numTaintedNets_ > 0)
             std::cerr << "[AigBuilder] " << taint_summary() << "\n";
+    }
+
+    // 自檢：pi_net_ids 必須與 AIG 的 PI 數一致。
+    // 不一致代表某條路徑建了 PI 卻沒登記（或反之），
+    // 而後果是反例解讀與比較點命名整批錯位 —— 不會 crash，只會靜默給錯答案。
+    if (piNetIds_.size() != aig_.num_pis()) {
+        mark_invalid("internal: pi_net_ids size " + std::to_string(piNetIds_.size()) +
+                     " != aig.num_pis " + std::to_string(aig_.num_pis()));
     }
 }
 

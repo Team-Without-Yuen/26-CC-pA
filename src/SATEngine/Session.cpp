@@ -47,30 +47,30 @@ InterfaceView collect_interface(const AigModel& m) {
     const auto&    piNets = m.pi_net_ids();
     const auto&    dffs   = m.dffs();
 
-    // ---- 輸入：真實 PI → DFF Q → 懸空自由 PI（AigBuilder 凍結的順序）----
-    //   這段依賴 AigBuilder 的 PI 建立順序。若那邊改動而這裡沒同步，
-    //   名字會整批錯位，而 miter 仍然跑得出來、只是結論毫無意義。
+    // ---- 輸入：先全部按 net 名命名，再用 dffs() 覆寫 DFF Q ----
+    //   不用 [num_real_pis, +num_dff) 切片 —— Q 有多重 driver 的 DFF
+    //   不會建 pseudo-PI，切片會塌陷、名字整批錯位。
     std::vector<Sig> piSigs;
     piSigs.reserve(piNets.size());
     A.foreach_pi([&](auto n) { piSigs.push_back(A.make_signal(n)); });
 
-    const std::size_t nReal = st.num_real_pis;
-    const std::size_t nDff  = st.num_dff;
+    v.inputNames.resize(piSigs.size());
+    v.inputSigs = piSigs;
 
     for (std::size_t i = 0; i < piSigs.size(); ++i) {
-        std::string name;
-        if (i >= nReal && i < nReal + nDff && (i - nReal) < dffs.size()) {
-            // DFF 的 Q：用 instance 名而非 Q net 名 ——
-            // 最佳化重建 netlist 時 instance 名會保留，內部 net 名會被重新產生。
-            const auto& d = dffs[i - nReal];
-            name = std::string(kDffQPrefix) + nl.getGate(d.gateId).instName;
-        } else if (i < piNets.size() && piNets[i] >= 0 && nl.isValidNetId(piNets[i])) {
-            name = nl.getNet(piNets[i]).name;
-        } else {
-            name = "$PI:" + std::to_string(i);          // 理論上不會發生
-        }
-        v.inputNames.push_back(std::move(name));
-        v.inputSigs.push_back(piSigs[i]);
+        if (i < piNets.size() && piNets[i] >= 0 && nl.isValidNetId(piNets[i]))
+            v.inputNames[i] = nl.getNet(piNets[i]).name;
+        else
+            v.inputNames[i] = "$PI:" + std::to_string(i);
+    }
+
+    // DFF 的 Q 改用 instance 名 —— 最佳化重建 netlist 時 instance 名會保留，
+    // 內部 net 名會被重新產生。
+    for (const auto& d : dffs) {
+        if (d.qPiIndex < 0) continue;                       // 非自由變數，不當比較點
+        if (static_cast<std::size_t>(d.qPiIndex) >= v.inputNames.size()) continue;
+        v.inputNames[d.qPiIndex] =
+            std::string(kDffQPrefix) + nl.getGate(d.gateId).instName;
     }
 
     // ---- 輸出：真實 PO + DFF next-state（已折進 RN/SN 的 eff_D）----
@@ -217,22 +217,28 @@ Primitives::~Primitives() = default;
 // revision 仍會抓到不一致。這是「一個 Netlist 對應一個共用 Primitives」
 // 這條約定的最後一道保險。
 void Primitives::ensure_fresh() {
-    if (model_ && builtRevision_ == nl_.revision()) return;
+    if (model_ && builtRevision_ == nl_.revision()) {
+        ensure_engines();          // 處理「電路沒變但引擎被拆掉」
+        return;
+    }
     rebuild();
 }
 
+// 不再急切建 Fraig。
+// Phase B 實際上只有 incremental SatEngine 在運作。
+// 改成延遲觸發,真正需要時才付 sweep 的成本。
 void Primitives::rebuild() {
     const auto t0 = std::chrono::steady_clock::now();
 
-    // 銷毀順序與依賴相反：Fraig 依賴 SatEngine，SatEngine 依賴 AIG。
+    // 銷毀順序與依賴相反:Fraig 依賴 SatEngine,SatEngine 依賴 AIG。
     fraig_.reset();
     sat_.reset();
     model_.reset();
 
     model_ = AigModel::build(nl_, bopt_);
 
-    //   快取內容是舊 AIG 的 Sig 與 node index，必須全部清空。
-    //   漏掉這一步會讓 cofactor 回傳指向舊節點的 Sig —— 不會報錯，只會算錯。
+    //   快取內容是舊 AIG 的 Sig 與 node index,必須全部清空。
+    //   漏掉這一步會讓 cofactor 回傳指向舊節點的 Sig —— 不會報錯,只會算錯。
     cofactorCache_.clear();
     coneCache_.clear();
 
@@ -240,10 +246,13 @@ void Primitives::rebuild() {
     builtRevision_ = nl_.revision();
     nl_.clearDirty();
 
-    if (wantPhaseB_) {
-        sat_   = std::make_unique<SatEngine>(model_->aig());
-        fraig_ = std::make_unique<Fraig>(model_->aig(), *sat_);
-    }
+    // 每一版電路都要重新累積、重新 sweep。
+    satEquivQueries_ = 0;
+    fraigLevel_      = 0;
+    fraigTriedLevel_ = 0;
+
+    // 只建 SatEngine。Fraig 交給 ensure_fraig() 延遲處理。
+    ensure_engines();
 
     const double sec = std::chrono::duration<double>(
                            std::chrono::steady_clock::now() - t0).count();
@@ -259,8 +268,6 @@ void Primitives::rebuild() {
                   << " in " << sec << "s\n";
     }
 
-    // 污染是局部的：有壞閘不代表整顆電路不能作答，
-    // 只代表壞閘下游的訊號不可信。這裡只做診斷輸出，不設全域閘門。
     if (model_->num_tainted_nets() > 0) {
         std::cerr << "[Primitives][WARN] " << model_->num_tainted_nets()
                   << " untrustworthy net(s); queries touching them will return "
@@ -308,12 +315,16 @@ Sig Primitives::unwrap(SigRef s) {
 void Primitives::enable_phase_b(bool on) {
     if (wantPhaseB_ == on) return;
     wantPhaseB_ = on;
-    // 銷毀順序與依賴相反。
     fraig_.reset();
     sat_.reset();
     model_.reset();
     builtRevision_ = std::numeric_limits<uint64_t>::max();
-    // generation_ 不重置：它只增不減，下次 rebuild 會 +1，舊 SigRef 正確失效。
+    satEquivQueries_ = 0;      
+    fraigLevel_      = 0;
+    fraigTriedLevel_ = 0; 
+    // generation_ 不重置:它只增不減,下次 rebuild 會 +1,舊 SigRef 正確失效。
+    // 注意:這個函式會強迫整顆 AIG 重建 → 所有既有的 SigRef 立刻失效。
+    // 建議在第一個 query 之前就設定好,不要在會期中途切換。
 }
 
 void Primitives::reset_stats() { stats_ = Stats{}; }
@@ -659,6 +670,24 @@ CecResult Primitives::run_cec(const AigSnapshot& before,
         return res;
     }
 
+    std::sort(res.untrusted_outputs.begin(), res.untrusted_outputs.end());
+    // 有污染就不給確定答案。
+    //   已經算好的 compared_outputs / untrusted_outputs 都保留在結果裡,
+    //   呼叫端仍看得到「哪些點被排除、哪些點本來要比」,只是不會拿到
+    //   一個看起來安全的 Equal。
+    if (opt.untrusted_is_failure && !res.untrusted_outputs.empty()) {
+        res.status  = EquivResult::Unknown;
+        res.message = std::to_string(res.untrusted_outputs.size()) +
+                      " of " +
+                      std::to_string(res.untrusted_outputs.size() + usable.size()) +
+                      " comparison point(s) are untrustworthy, so the result is "
+                      "inconclusive (first: " + res.untrusted_outputs.front() +
+                      "). " + model_->taint_summary() +
+                      "  Set CecOptions::untrusted_is_failure=false to compare the "
+                      "clean subset anyway.";
+        return res;
+    }
+
     // ---- 輸入：取聯集。只出現在單邊的輸入不是錯誤（另一邊沒用到而已）----
     std::unordered_map<std::string, std::size_t> beforeIn, afterIn;
     for (std::size_t i = 0; i < before.inputNames_.size(); ++i)
@@ -726,61 +755,162 @@ CecResult Primitives::run_cec(const AigSnapshot& before,
     miter.create_po(acc);
 
     // ---- 求解 ----
-    // miter 已經是單一 PO 的合法 miter，直接問「PO 是否恆為 0」，
-    // 不需要另外建 zero 網路再呼叫 miter<Ntk>()（那會多一次完整網路複製）。
+    // copy_cone 把 before / after 兩側都建進同一顆 Ntk,而 create_and 內建
+    // strash —— 兩側結構相同的區域會直接共用同一個節點,對應的 create_xor
+    // 於是塌成常數 0。一個只改了三顆閘的修改,幾千個比較點裡可能有
+    // 99.9% 在「建完 miter 的當下」就已經證明完畢,連 solver 都不用進。
     //
-    // Phase B 時這裡應改走自家 sweep + incremental CaDiCaL：
-    // 兩邊沒改到的區域 strash 一進去就免費合併，SAT 只剩修改點附近的 cone。
-    mockturtle::equivalence_checking_stats st;
-    const auto r = mockturtle::equivalence_checking(miter, {}, &st);
+    // 所以第一件事永遠是檢查 acc 是不是已經是常數 0,而不是急著送 SAT。
+    // resolved_by_strash 這個統計就是在量這件事。
+
+    // ---- D1. strash 已經解決了多少 ----
+    for (const Sig d : diffs) {
+        if (miter.is_constant(miter.get_node(d)) && !miter.is_complemented(d))
+            ++res.resolved_by_strash;
+    }
+
+    // 反例值(以 miter 的 pi index 為索引),兩條求解路徑共用。
+    std::vector<bool> cexVals;
+
+    // 用反例做「一次」模擬,回推哪些比較點真的不同。
+    // 比逐點各跑一次 SAT 便宜非常多(幾千顆 DFF 時差距是數量級)。
+    auto identify = [&]() {
+        if (!opt.identify_mismatches || cexVals.empty()) return;
+        const auto sim = simulate_all(miter, cexVals);
+        for (std::size_t i = 0; i < usable.size(); ++i)
+            if (sig_value(miter, sim, diffs[i]))
+                res.mismatched_outputs.push_back(usable[i]);
+    };
 
     auto tail = [&]() {
         std::string s;
+        if (res.resolved_by_strash > 0)
+            s += " [" + std::to_string(res.resolved_by_strash) + "/" +
+                 std::to_string(usable.size()) + " resolved structurally]";
         if (!res.untrusted_outputs.empty())
             s += " (" + std::to_string(res.untrusted_outputs.size()) +
                  " point(s) skipped as untrustworthy)";
         return s;
     };
 
-    if (!r) {
-        res.status  = EquivResult::Unknown;
-        res.message = "solver hit its internal limit (Phase A). "
-                      "This is exactly what Phase B fixes." + tail();
-        return res;
-    }
-
-    if (*r) {
+    // ---- D2. 零成本捷徑:strash 已經全部解決 ----
+    if (miter.is_constant(miter.get_node(acc)) && !miter.is_complemented(acc)) {
         res.status  = EquivResult::Equal;
         res.message = "equivalent on " + std::to_string(usable.size()) +
-                      " comparison point(s)" + tail();
+                      " comparison point(s), proved structurally" + tail();
         return res;
     }
 
-    // ---- 不等價：解讀反例 ----
-    res.status  = EquivResult::NotEqual;
-    res.message = "NOT equivalent";
+    // ---- D3. Phase B:對 miter 開一顆專屬的 incremental solver ----
+    if (sat_ != nullptr) {
+        // ★★ 絕對不能用成員的 sat_ ★★
+        //   sat_ 綁在主 AIG 上,它的 node -> CNF var 表是主 AIG 的節點編號。
+        //   miter 是一顆獨立的 Ntk,節點編號空間完全不同 ——
+        //   拿主 AIG 的變數編號去解讀 miter 的節點,會得到一個
+        //   語法上完全合法、語意上毫無意義的答案,而且不會有任何錯誤訊息。
+        //   這是 Phase B 打開之後最容易被「順手優化」踩到的地雷。
+        SatEngine::Config mcfg;
+        mcfg.lazy_encode    = true;
+        mcfg.time_limit_sec = opt.time_limit_seconds;
+        mcfg.conflict_limit = 0;
+        SatEngine msat(miter, mcfg);
 
-    const auto& ce = st.counter_example;
-    if (!ce.empty()) {
-        for (std::size_t i = 0; i < miterInputNames.size() && i < ce.size(); ++i)
-            res.counterexample.emplace_back(miterInputNames[i], static_cast<bool>(ce[i]));
+        // 選用:先 sweep miter。
+        //   對「結構被改寫但功能不變」的最佳化驗證特別有效 —— sweep 會把兩側
+        //   功能相同的內部節點證成等價並灌成永久子句,頂端的 XOR 於是
+        //   靠 unit propagation 就塌掉,SAT 幾乎不用做事。
+        if (opt.fraig_miter) {
+            Fraig::Config fc;
+            fc.total_time_budget       = opt.time_limit_seconds;
+            fc.sat_time_limit          = fraigSatTimeLimit_;
+            fc.sat_conflict_limit      = fraigSatConflicts_;
+            fc.sim_memory_budget_bytes = fraigSimMemory_;
 
-        // 用同一個反例做「一次」模擬，回推哪些比較點真的不同。
-        // 比逐點各跑一次 SAT 便宜非常多（幾千顆 DFF 時差距是數量級）。
-        if (opt.identify_mismatches) {
-            std::vector<bool> vals(ce.begin(), ce.end());
-            const auto sim = simulate_all(miter, vals);
-            for (std::size_t i = 0; i < usable.size(); ++i)
-                if (sig_value(miter, sim, diffs[i]))
-                    res.mismatched_outputs.push_back(usable[i]);
+            Fraig mfr(miter, msat, fc);
+            mfr.sweep();
+            msat.set_limits(opt.time_limit_seconds, 0);   // sweep 改過,還原
 
+            bool constVal = false;
+            if (mfr.is_swept_node(miter.get_node(acc)) &&
+                mfr.is_known_const(acc, constVal) && constVal == false) {
+                res.status  = EquivResult::Equal;
+                res.message = "equivalent on " + std::to_string(usable.size()) +
+                              " comparison point(s), proved by FRAIG sweep" + tail();
+                return res;
+            }
+            // 就算沒直接證出來,sweep 灌進去的永久子句仍會讓下面的 solve 快很多。
+        }
+
+        const EquivResult r = msat.is_const(acc, false);
+
+        if (r == EquivResult::Equal) {
+            res.status  = EquivResult::Equal;
+            res.message = "equivalent on " + std::to_string(usable.size()) +
+                          " comparison point(s)" + tail();
+            return res;
+        }
+        if (r == EquivResult::Unknown) {
+            res.status  = EquivResult::Unknown;
+            res.message = "solver hit the time limit (" +
+                          std::to_string(opt.time_limit_seconds) + "s)" + tail();
+            return res;
+        }
+
+        // NotEqual:讀反例。SatEngine 的反例以 miter 的 pi index 為索引,
+        // 而 miter 的 PI 是依 allIn 順序建的 → 與 miterInputNames 一一對應。
+        res.status  = EquivResult::NotEqual;
+        res.message = "NOT equivalent";
+
+        const auto& cx = msat.last_counterexample();
+        if (cx.valid) {
+            cexVals.assign(cx.values.begin(), cx.values.end());
+            for (std::size_t i = 0; i < miterInputNames.size() && i < cexVals.size(); ++i)
+                res.counterexample.emplace_back(miterInputNames[i], cexVals[i]);
+            identify();
             if (!res.mismatched_outputs.empty())
                 res.message += " at " + std::to_string(res.mismatched_outputs.size()) +
                                " point(s), first = " + res.mismatched_outputs.front();
         }
+        res.message += tail();
+        return res;
     }
-    res.message += tail();
-    return res;
+
+    // ---- D4. Phase A:維持 mockturtle 路徑當 golden ----
+    //   刻意不改:Phase B 的輸出要能跟 Phase A 的 golden 逐字比對,
+    //   兩條路徑都換掉的話就沒有對照組了。
+    {
+        mockturtle::equivalence_checking_stats st;
+        const auto r = mockturtle::equivalence_checking(miter, {}, &st);
+
+        if (!r) {
+            res.status  = EquivResult::Unknown;
+            res.message = "solver hit its internal limit (Phase A). "
+                          "This is exactly what Phase B fixes." + tail();
+            return res;
+        }
+        if (*r) {
+            res.status  = EquivResult::Equal;
+            res.message = "equivalent on " + std::to_string(usable.size()) +
+                          " comparison point(s)" + tail();
+            return res;
+        }
+
+        res.status  = EquivResult::NotEqual;
+        res.message = "NOT equivalent";
+
+        const auto& ce = st.counter_example;
+        if (!ce.empty()) {
+            cexVals.assign(ce.begin(), ce.end());
+            for (std::size_t i = 0; i < miterInputNames.size() && i < cexVals.size(); ++i)
+                res.counterexample.emplace_back(miterInputNames[i], cexVals[i]);
+            identify();
+            if (!res.mismatched_outputs.empty())
+                res.message += " at " + std::to_string(res.mismatched_outputs.size()) +
+                               " point(s), first = " + res.mismatched_outputs.front();
+        }
+        res.message += tail();
+        return res;
+    }
 }
 
 } // namespace eqeng

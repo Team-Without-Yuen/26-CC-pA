@@ -75,7 +75,7 @@ CFLAGS   = -O3 -Wall $(PLATFORM_DEF) $(ABC_DEFS) \
 # 3. 原始碼與目的檔
 # =============================================================
 # 在這裡新增了 $(wildcard src/SATEngine/*.cpp)
-SRCS_CPP = main.cpp \
+SRCS_CPP = test_phaseb_gaps.cpp \
 		   $(wildcard src/core/*.cpp) \
 		   $(wildcard src/io/*.cpp) \
 		   $(wildcard src/analysis/*.cpp) \

@@ -25,7 +25,10 @@ struct DffInfo {
     int dNetId   = -1;      // D pin 接的 net（未折 RN/SN 前）
     int rnNetId  = -1;      // -1 表示未接 → 視為恆 1（無 reset）
     int snNetId  = -1;
-    Sig q;                  // pseudo-PI
+    // Q 對應的 PI 索引（aig.pi_at(qPiIndex)）。
+    //   -1 = 這顆 DFF 的 Q 不是自由變數（多 driver 等異常）
+    int qPiIndex = -1;
+    Sig q;                  // pseudo-PI（qPiIndex < 0 時無意義）
     Sig d_raw;              // D pin 的函數
     Sig d_eff;              // 折進 async set/reset 後的 next-state
 };
@@ -79,13 +82,12 @@ public:
     const NameMap& names() const { return names_; }
     const Netlist& netlist() const { return *nl_; }
 
-    // PI 順序（反例解讀、cofactor 合法性檢查、CEC 比較點命名都靠它）：
-    //   [0, num_real_pis)                        → 宣告順序的真實 PI
-    //   [num_real_pis, +num_dff)                 → DFF Q 的 pseudo-PI（gate id 遞增）
-    //   之後                                      → 懸空輸入的自由 PI（net id 遞增）
-    // Session.cpp::collect_interface 依賴此順序切名字。
-    //   改動這裡而沒同步那邊，比較點名字會整批錯位，
-    //   而 miter 仍然跑得出來、只是結論毫無意義。
+    // PI 的 net id，與 aig.pi_at(i) 對齊。反例解讀靠這張表。
+    //
+    //   建立順序是「真實 PI → DFF Q → 懸空自由 PI」，但不要用
+    //   [num_real_pis, num_real_pis + num_dff) 去切 DFF 區段：
+    //   Q 有多重 driver 的 DFF 不會建 pseudo-PI，區段會塌陷、後面整批錯位。
+    //   要拿某顆 DFF 的 Q，一律查 dffs()[i].qPiIndex。
     const std::vector<int>& pi_net_ids() const { return piNetIds_; }
     bool                    is_free_var(Sig s) const;   // s 是否為 PI（cofactor 前置條件）
 

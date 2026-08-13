@@ -29,6 +29,7 @@ NameMap::NameMap(const Ntk& aig, const Netlist& nl)
 void NameMap::clear() {
     netToSig_.clear();
     nodeToNets_.clear();
+    nodeRemap_.clear();
 }
 
 void NameMap::bind(int netId, Sig s) {
@@ -106,6 +107,7 @@ std::optional<Sig> NameMap::try_resolve(int netId) const {
 // 因此不會被混為一談 —— 這是功能等價的正確語意。
 
 std::vector<int> NameMap::net_ids_of(Sig s) const {
+    s = canonicalize(s);
     std::vector<int> out;
 
     const uint64_t node = aig_->node_to_index(aig_->get_node(s));
@@ -181,6 +183,13 @@ std::vector<std::vector<int>> NameMap::equivalence_classes(int min_size) const {
 void NameMap::remap(const std::vector<Sig>& reprByNode) {
     if (reprByNode.empty()) return;
 
+    // 建立節點層級的對照,供 canonicalize 使用
+    nodeRemap_.clear();
+    for (uint32_t i = 0; i < reprByNode.size(); ++i) {
+        const Sig self = aig_->make_signal(aig_->index_to_node(i));
+        if (!(reprByNode[i] == self)) nodeRemap_.emplace(i, reprByNode[i]);
+    }
+
     std::size_t remapped = 0, skipped = 0;
 
     for (auto& kv : netToSig_) {
@@ -204,6 +213,13 @@ void NameMap::remap(const std::vector<Sig>& reprByNode) {
         std::cerr << "[NameMap] remap: " << remapped << " net(s) canonicalized, "
                   << skipped << " beyond sweep watermark\n";
     }
+}
+
+Sig NameMap::canonicalize(Sig s) const {
+    if (nodeRemap_.empty()) return s;
+    auto it = nodeRemap_.find(aig_->node_to_index(aig_->get_node(s)));
+    if (it == nodeRemap_.end()) return s;
+    return it->second ^ aig_->is_complemented(s);
 }
 
 } // namespace eqeng
