@@ -24,6 +24,13 @@ enum class OptimizationStatus {
     ERROR_AREA_EXCEEDED      // 最佳化雖達成，但超過了面積限制 (應 Rollback)
 };
 
+enum class EquivalenceStatus {
+    NotChecked,     // 本 pass 沒驗（預設）
+    Verified,       // 證明等價
+    Refuted,        // 找到反例（此時一定已回滾，不會出現在成功結果裡）
+    Inconclusive    // 驗了但預算不足以下結論
+};
+
 // 保存單次 optimization pass 嘗試的結果。
 //
 // 注意：
@@ -31,6 +38,14 @@ enum class OptimizationStatus {
 // - 後續若導入 NetlistEditReport，這個 struct 應被 NetlistEditReport 取代或包進其中。
 struct OptimizationResult {
     OptimizationStatus status = OptimizationStatus::NO_IMPROVEMENT;
+
+    EquivalenceStatus equivalenceStatus = EquivalenceStatus::NotChecked;
+
+    // 只驗了乾淨子集合（原始 netlist 有污染的 net）。Verified 時仍為 true，
+    // 但涵蓋率不是 100%，回報時要講出來。
+    bool equivalencePartial = false;
+    std::size_t equivalenceComparedPoints  = 0;
+    std::size_t equivalenceUntrustedPoints = 0;
     
     bool changed = false;            // netlist 是否真的被修改
     bool depthImproved = false;      // 修改後 depth 是否變小
@@ -46,7 +61,23 @@ struct OptimizationResult {
     
     std::string passName;            // pass 名稱
     std::string message;             // 給 debug / LLM response 的說明
+
+    std::string costMetricName;      // 例如 "depth of cone 'n14'"
+    int oldGlobalDepth = -1;         // 不論 cost 是什麼，一律附帶回報
+    int newGlobalDepth = -1;
+    int oldConeDepth   = -1;         // request 沒指定 cost cone 時為 -1
+    int newConeDepth   = -1;
 };
+
+inline const char* toString(EquivalenceStatus s) {
+    switch (s) {
+        case EquivalenceStatus::NotChecked:   return "not_checked";
+        case EquivalenceStatus::Verified:     return "verified";
+        case EquivalenceStatus::Inconclusive: return "inconclusive";
+        case EquivalenceStatus::Refuted:      return "refuted";
+    }
+    return "?";
+}
 
 // 保存單一 depth optimization candidate。
 //

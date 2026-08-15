@@ -1547,6 +1547,8 @@ void printEditReport(const Netlist& netlist, const Netlist::NetlistEditReport& r
         std::cout << "    scope: " << summary.scope << "\n";
         std::cout << "    requested_scope_name: "
                   << summary.requestedScopeName << "\n";
+        std::cout << "    basis_scope: " << summary.basisScope << "\n";
+        std::cout << "    basis_scope_name: " << summary.basisScopeName << "\n";
         std::cout << "    resolved_root_net_name: "
                   << summary.resolvedRootNetName << "\n";
         std::cout << "    core_status: " << summary.coreStatus << "\n";
@@ -2406,6 +2408,24 @@ bool parsePublicOptApply(const Netlist& netlist,
                 return false;
             }
             request.scopeName = args[i++];
+        } else if (option == "--basis-scope" || option == "--basis_scope" ||
+                   option == "-basis_scope") {
+            if (++i >= args.size() || !parseTargetScope(args[i], request.basisScope)) {
+                error = "--basis-scope requires whole, net_fanin, net_fanout, gate_fanin, or gate_fanout.";
+                return false;
+            }
+            ++i;
+            if (scopeNeedsName(request.basisScope) &&
+                i < args.size() && !isCliOptionToken(args[i])) {
+                request.basisScopeName = args[i++];
+            }
+        } else if (option == "--basis-name" || option == "--basis_name" ||
+                   option == "-basis_name") {
+            if (++i >= args.size() || isCliOptionToken(args[i])) {
+                error = "--basis-name requires a scope target name.";
+                return false;
+            }
+            request.basisScopeName = args[i++];
         } else if (option == "--objective" || option == "-objective") {
             if (++i >= args.size()) {
                 error = "--objective requires global or cone.";
@@ -2490,6 +2510,20 @@ bool parsePublicOptApply(const Netlist& netlist,
         request.scope != TargetScope::NET_FANIN &&
         request.scope != TargetScope::GATE_FANIN) {
         error = "Cone depth objective requires net_fanin or gate_fanin scope.";
+        return false;
+    }
+    if (scopeNeedsName(request.basisScope) && request.basisScopeName.empty()) {
+        error = "--basis-scope requires --basis-name <net_or_gate>, or the name "
+                "immediately after --basis-scope.";
+        return false;
+    }
+    if (!scopeNeedsName(request.basisScope) && !request.basisScopeName.empty()) {
+        error = "Whole-netlist basis scope does not accept --basis-name.";
+        return false;
+    }
+    if (request.basisScope != TargetScope::WHOLE_NETLIST &&
+        request.allowedTypes.empty() && request.bannedTypes.empty()) {
+        error = "--basis-scope only makes sense together with --allowed and/or --banned.";
         return false;
     }
     for (GateType type : request.allowedTypes) {
@@ -2847,12 +2881,14 @@ void printHelp() {
         << "  opt_query critical_path_depth\n"
         << "  opt_apply critical_path_depth [--scope <scope> [scope_name]]\n"
         << "            [--name <scope_name>] [--objective global|cone]\n"
+        << "            [--basis-scope <scope> [scope_name]] [--basis-name <name>]\n"
         << "            [--allowed <type...>] [--banned <type...>]\n"
         << "            [--target-depth N] [--time-limit seconds]\n"
         << "            [--allow-no-improvement] [--verbose]\n"
+        << "  --scope/--objective select the cost function; --basis-scope selects where\n"
+        << "  the gate-type constraint applies (default: the whole netlist)\n"
         << "  gate-type lists accept spaces or commas, for example NOR NOT or nor,not\n"
-        << "  CriticalPathDepth commits only after constraints and equivalence validation\n"
-        << "  graph-identity no-op uses StructuralIdentity; changed candidates use whole-design SAT\n"
+        << "  this pass does not run whole-design SAT; use equiv_query for that\n"
         << "\nEdit apply\n"
         << "  edit_apply rename_gate <old> <new> | rename_net <old> <new>\n"
         << "  edit_apply cleanup_buffers | collapse_double_inverter | local_simplification_fixpoint\n"
@@ -3662,8 +3698,7 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
 
         const bool optimizationTimedOut =
             report.depthOptimization &&
-            (report.depthOptimization->wholeDesignTimedOut ||
-             report.depthOptimization->coreStatus == "TIMEOUT");
+            report.depthOptimization->coreStatus == "TIMEOUT";
         const bool equivalenceComplete =
             report.validation.equivalenceChecked &&
             report.validation.functionallyEquivalent;
@@ -3674,16 +3709,13 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             response.status = ToolStatus::Timeout;
         } else if (!report.success) {
             response.status = ToolStatus::Error;
-        } else if (!equivalenceComplete) {
-            response.status = ToolStatus::Partial;
         } else {
-            response.status =
-                report.changed ? ToolStatus::Ok : ToolStatus::NoChange;
+            response.status = report.changed ? ToolStatus::Ok : ToolStatus::NoChange;
         }
         response.command = command;
         response.mode = toLower(mode);
         response.message = report.message;
-        response.complete = report.success && equivalenceComplete;
+        response.complete = report.success;
         emitToolResponse(session, response, [&]() {
             printEditReport(session.current, report);
         });

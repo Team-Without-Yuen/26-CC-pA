@@ -653,37 +653,57 @@ CecResult Primitives::run_cec(const AigSnapshot& before,
     // 比了只會得到假的確定答案。明確回報，不靜默略過。
     std::vector<std::string> usable;
     usable.reserve(common.size());
+
+    std::size_t untrustedFromBefore = 0;
+    std::size_t untrustedFromAfter  = 0;
+
     for (const auto& nm : common) {
-        if (beforeOut[nm].trusted && afterOut[nm].trusted) usable.push_back(nm);
-        else                                               res.untrusted_outputs.push_back(nm);
+        const bool tb = beforeOut[nm].trusted;
+        const bool ta = afterOut[nm].trusted;
+        if (tb && ta) { usable.push_back(nm); continue; }
+        if (!tb) ++untrustedFromBefore;
+        if (!ta) ++untrustedFromAfter;
+        res.untrusted_outputs.push_back(nm);
     }
     res.compared_outputs = usable;
+
+    // 順序穩定,方便逐字比對。
+    std::sort(res.untrusted_outputs.begin(), res.untrusted_outputs.end());
+
+    // 污染來源的可讀說明,兩條訊息共用。
+    auto taint_origin = [&]() {
+        std::string s = "(" + std::to_string(untrustedFromBefore) +
+                        " already unusable in the snapshot, " +
+                        std::to_string(untrustedFromAfter) +
+                        " in the current netlist). ";
+        s += (untrustedFromAfter > 0)
+           ? model_->taint_summary()
+           : std::string("the current netlist itself is clean, so the problem predates "
+                         "this modification");
+        return s;
+    };
 
     if (usable.empty()) {
         res.status = EquivResult::Unknown;
         if (!res.untrusted_outputs.empty())
             res.message = "every selected comparison point is untrustworthy (" +
-                          std::to_string(res.untrusted_outputs.size()) + " point(s)); " +
-                          model_->taint_summary();
+                          std::to_string(res.untrusted_outputs.size()) + " point(s)) " +
+                          taint_origin();
         else
             res.message = "no comparison point selected -- nothing was verified";
         return res;
     }
 
-    std::sort(res.untrusted_outputs.begin(), res.untrusted_outputs.end());
-    // 有污染就不給確定答案。
-    //   已經算好的 compared_outputs / untrusted_outputs 都保留在結果裡,
-    //   呼叫端仍看得到「哪些點被排除、哪些點本來要比」,只是不會拿到
-    //   一個看起來安全的 Equal。
+    // 有污染就不給確定答案(可由 CecOptions::untrusted_is_failure 關掉)。
+    //   關掉的話,「三個點被跳過、其餘全部相等」會回 status = Equal ——
+    //   只檢查 status 的呼叫端就會誤判「這個修改是安全的」。
     if (opt.untrusted_is_failure && !res.untrusted_outputs.empty()) {
         res.status  = EquivResult::Unknown;
-        res.message = std::to_string(res.untrusted_outputs.size()) +
-                      " of " +
+        res.message = std::to_string(res.untrusted_outputs.size()) + " of " +
                       std::to_string(res.untrusted_outputs.size() + usable.size()) +
-                      " comparison point(s) are untrustworthy, so the result is "
-                      "inconclusive (first: " + res.untrusted_outputs.front() +
-                      "). " + model_->taint_summary() +
-                      "  Set CecOptions::untrusted_is_failure=false to compare the "
+                      " comparison point(s) are untrustworthy " + taint_origin() +
+                      "  First: " + res.untrusted_outputs.front() +
+                      ".  Set CecOptions::untrusted_is_failure=false to compare the "
                       "clean subset anyway.";
         return res;
     }
@@ -764,23 +784,25 @@ CecResult Primitives::run_cec(const AigSnapshot& before,
     // resolved_by_strash 這個統計就是在量這件事。
 
     // ---- D1. strash 已經解決了多少 ----
-    for (const Sig d : diffs) {
-        if (miter.is_constant(miter.get_node(d)) && !miter.is_complemented(d))
-            ++res.resolved_by_strash;
-    }
+    // copy_cone 把 before / after 兩側建進同一顆 Ntk,create_and 內建 strash,
+    // 兩側結構相同的區域直接共用節點 → 對應的 XOR 塌成常數 0。
+    // 只改幾顆閘的修改,絕大多數比較點在這裡就已經證完。
+    std::vector<std::size_t> pending;          // 還需要求解的比較點索引
+    pending.reserve(diffs.size());
 
-    // 反例值(以 miter 的 pi index 為索引),兩條求解路徑共用。
-    std::vector<bool> cexVals;
-
-    // 用反例做「一次」模擬,回推哪些比較點真的不同。
-    // 比逐點各跑一次 SAT 便宜非常多(幾千顆 DFF 時差距是數量級)。
-    auto identify = [&]() {
-        if (!opt.identify_mismatches || cexVals.empty()) return;
-        const auto sim = simulate_all(miter, cexVals);
-        for (std::size_t i = 0; i < usable.size(); ++i)
-            if (sig_value(miter, sim, diffs[i]))
+    for (std::size_t i = 0; i < diffs.size(); ++i) {
+        const Node dn = miter.get_node(diffs[i]);
+        if (miter.is_constant(dn)) {
+            if (miter.is_complemented(diffs[i])) {
+                // XOR 恆為 1 → 結構上就確定不同(例如一側常數 0、另一側常數 1)
                 res.mismatched_outputs.push_back(usable[i]);
-    };
+            } else {
+                ++res.resolved_by_strash;
+            }
+            continue;
+        }
+        pending.push_back(i);
+    }
 
     auto tail = [&]() {
         std::string s;
@@ -793,8 +815,8 @@ CecResult Primitives::run_cec(const AigSnapshot& before,
         return s;
     };
 
-    // ---- D2. 零成本捷徑:strash 已經全部解決 ----
-    if (miter.is_constant(miter.get_node(acc)) && !miter.is_complemented(acc)) {
+    // ---- D2. 全部被 strash 解掉 ----
+    if (pending.empty() && res.mismatched_outputs.empty()) {
         res.status  = EquivResult::Equal;
         res.message = "equivalent on " + std::to_string(usable.size()) +
                       " comparison point(s), proved structurally" + tail();
@@ -804,80 +826,120 @@ CecResult Primitives::run_cec(const AigSnapshot& before,
     // ---- D3. Phase B:對 miter 開一顆專屬的 incremental solver ----
     if (sat_ != nullptr) {
         // ★★ 絕對不能用成員的 sat_ ★★
-        //   sat_ 綁在主 AIG 上,它的 node -> CNF var 表是主 AIG 的節點編號。
-        //   miter 是一顆獨立的 Ntk,節點編號空間完全不同 ——
-        //   拿主 AIG 的變數編號去解讀 miter 的節點,會得到一個
-        //   語法上完全合法、語意上毫無意義的答案,而且不會有任何錯誤訊息。
-        //   這是 Phase B 打開之後最容易被「順手優化」踩到的地雷。
+        //   sat_ 綁在主 AIG 上,node -> CNF var 表是主 AIG 的節點編號。
+        //   miter 是獨立的 Ntk,編號空間完全不同 —— 拿主 AIG 的變數編號去
+        //   解讀 miter 的節點,會得到語法合法、語意毫無意義的答案,而且不報錯。
         SatEngine::Config mcfg;
         mcfg.lazy_encode    = true;
-        mcfg.time_limit_sec = opt.time_limit_seconds;
+        mcfg.time_limit_sec = 0.0;      // 由下面的全域 deadline 逐次指定
         mcfg.conflict_limit = 0;
         SatEngine msat(miter, mcfg);
 
-        // 選用:先 sweep miter。
-        //   對「結構被改寫但功能不變」的最佳化驗證特別有效 —— sweep 會把兩側
-        //   功能相同的內部節點證成等價並灌成永久子句,頂端的 XOR 於是
-        //   靠 unit propagation 就塌掉,SAT 幾乎不用做事。
+        // 全域 deadline。逐點求解會呼叫很多次,若讓每次各吃一份
+        // opt.time_limit_seconds,總時間會變成 N 倍。
+        const auto  solveStart = std::chrono::steady_clock::now();
+        const bool  bounded    = (opt.time_limit_seconds > 0.0);
+        auto remaining = [&]() -> double {
+            if (!bounded) return 0.0;   // 0 = SatEngine 的「不限」
+            const double used = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - solveStart).count();
+            return opt.time_limit_seconds - used;
+        };
+        auto out_of_time = [&]() { return bounded && remaining() <= 0.0; };
+
+        // ---- 選用:先 sweep miter ----
+        //
+        // 對「結構被大幅改寫但功能不變」的最佳化(例如 XAG round-trip)特別有效:
+        // sweep 把兩側功能相同的內部節點證成等價並灌成永久子句,
+        // 頂端的 XOR 於是靠 unit propagation 就塌掉。
+        // 只給部分預算。原本 fc.total_time_budget = opt.time_limit_seconds,
+        //   sweep 可以吃光整份預算,之後求解又重新武裝一份 → 最壞兩倍。
+        std::unique_ptr<Fraig> mfr;
         if (opt.fraig_miter) {
             Fraig::Config fc;
-            fc.total_time_budget       = opt.time_limit_seconds;
+            fc.total_time_budget       = bounded ? opt.time_limit_seconds * 0.6 : 0.0;
             fc.sat_time_limit          = fraigSatTimeLimit_;
             fc.sat_conflict_limit      = fraigSatConflicts_;
             fc.sim_memory_budget_bytes = fraigSimMemory_;
+            fc.max_rounds              = fraigMaxRounds_;
 
-            Fraig mfr(miter, msat, fc);
-            mfr.sweep();
-            msat.set_limits(opt.time_limit_seconds, 0);   // sweep 改過,還原
-
-            bool constVal = false;
-            if (mfr.is_swept_node(miter.get_node(acc)) &&
-                mfr.is_known_const(acc, constVal) && constVal == false) {
-                res.status  = EquivResult::Equal;
-                res.message = "equivalent on " + std::to_string(usable.size()) +
-                              " comparison point(s), proved by FRAIG sweep" + tail();
-                return res;
-            }
-            // 就算沒直接證出來,sweep 灌進去的永久子句仍會讓下面的 solve 快很多。
+            mfr = std::make_unique<Fraig>(miter, msat, fc);
+            mfr->sweep();
+            msat.set_limits(0.0, 0);         // sweep 改過,還原
         }
 
-        const EquivResult r = msat.is_const(acc, false);
+        // ---- 逐點求解 ----
+        std::size_t byLookup = 0, bySat = 0;
+        bool timedOut = false;
 
-        if (r == EquivResult::Equal) {
+        for (const std::size_t i : pending) {
+            // FRAIG 查表:sweep 已經證過的點連 solver 都不用進
+            if (mfr && mfr->is_swept_node(miter.get_node(diffs[i]))) {
+                bool v = false;
+                if (mfr->is_known_const(diffs[i], v)) {
+                    ++byLookup;
+                    if (v) res.mismatched_outputs.push_back(usable[i]);
+                    continue;
+                }
+            }
+
+            // SAT
+            if (out_of_time()) { timedOut = true; break; }
+            msat.set_limits(remaining(), 0);
+
+            const EquivResult one = msat.is_const(diffs[i], false);
+            ++bySat;
+
+            if (one == EquivResult::NotEqual) {
+                res.mismatched_outputs.push_back(usable[i]);
+                // 反例只在第一次不同時記錄一份,供呼叫端重現。
+                if (res.counterexample.empty()) {
+                    const auto& cx = msat.last_counterexample();
+                    if (cx.valid) {
+                        for (std::size_t k = 0;
+                             k < miterInputNames.size() && k < cx.values.size(); ++k)
+                            res.counterexample.emplace_back(miterInputNames[k],
+                                                            cx.values[k] != 0);
+                    }
+                }
+                // 不提早結束:呼叫端要的是完整的不同點清單。
+                // 若清單已經夠長,再問下去對診斷沒有幫助。
+                if (res.mismatched_outputs.size() >= 64) { timedOut = false; break; }
+            } else if (one == EquivResult::Unknown) {
+                timedOut = true;
+                break;
+            }
+        }
+
+        if (timedOut) {
+            res.status  = EquivResult::Unknown;
+            res.message = "solver ran out of budget after checking " +
+                          std::to_string(byLookup + bySat) + " of " +
+                          std::to_string(pending.size()) + " unresolved point(s)";
+            if (!res.mismatched_outputs.empty())
+                res.message += "; " + std::to_string(res.mismatched_outputs.size()) +
+                               " mismatch(es) already found, so the circuits are "
+                               "very likely NOT equivalent";
+            res.message += tail();
+            return res;
+        }
+
+        if (res.mismatched_outputs.empty()) {
             res.status  = EquivResult::Equal;
             res.message = "equivalent on " + std::to_string(usable.size()) +
-                          " comparison point(s)" + tail();
-            return res;
+                          " comparison point(s) [" + std::to_string(byLookup) +
+                          " by FRAIG lookup, " + std::to_string(bySat) + " by SAT]" + tail();
+        } else {
+            res.status  = EquivResult::NotEqual;
+            res.message = "NOT equivalent at " +
+                          std::to_string(res.mismatched_outputs.size()) +
+                          " point(s), first = " + res.mismatched_outputs.front() + tail();
         }
-        if (r == EquivResult::Unknown) {
-            res.status  = EquivResult::Unknown;
-            res.message = "solver hit the time limit (" +
-                          std::to_string(opt.time_limit_seconds) + "s)" + tail();
-            return res;
-        }
-
-        // NotEqual:讀反例。SatEngine 的反例以 miter 的 pi index 為索引,
-        // 而 miter 的 PI 是依 allIn 順序建的 → 與 miterInputNames 一一對應。
-        res.status  = EquivResult::NotEqual;
-        res.message = "NOT equivalent";
-
-        const auto& cx = msat.last_counterexample();
-        if (cx.valid) {
-            cexVals.assign(cx.values.begin(), cx.values.end());
-            for (std::size_t i = 0; i < miterInputNames.size() && i < cexVals.size(); ++i)
-                res.counterexample.emplace_back(miterInputNames[i], cexVals[i]);
-            identify();
-            if (!res.mismatched_outputs.empty())
-                res.message += " at " + std::to_string(res.mismatched_outputs.size()) +
-                               " point(s), first = " + res.mismatched_outputs.front();
-        }
-        res.message += tail();
         return res;
     }
 
     // ---- D4. Phase A:維持 mockturtle 路徑當 golden ----
-    //   刻意不改:Phase B 的輸出要能跟 Phase A 的 golden 逐字比對,
-    //   兩條路徑都換掉的話就沒有對照組了。
+    //   刻意不改:Phase B 的輸出要能跟 Phase A 的 golden 逐字比對。
     {
         mockturtle::equivalence_checking_stats st;
         const auto r = mockturtle::equivalence_checking(miter, {}, &st);
@@ -900,13 +962,19 @@ CecResult Primitives::run_cec(const AigSnapshot& before,
 
         const auto& ce = st.counter_example;
         if (!ce.empty()) {
-            cexVals.assign(ce.begin(), ce.end());
-            for (std::size_t i = 0; i < miterInputNames.size() && i < cexVals.size(); ++i)
-                res.counterexample.emplace_back(miterInputNames[i], cexVals[i]);
-            identify();
-            if (!res.mismatched_outputs.empty())
-                res.message += " at " + std::to_string(res.mismatched_outputs.size()) +
-                               " point(s), first = " + res.mismatched_outputs.front();
+            std::vector<bool> vals(ce.begin(), ce.end());
+            for (std::size_t k = 0; k < miterInputNames.size() && k < vals.size(); ++k)
+                res.counterexample.emplace_back(miterInputNames[k], vals[k]);
+
+            if (opt.identify_mismatches) {
+                const auto sim = simulate_all(miter, vals);
+                for (std::size_t i = 0; i < usable.size(); ++i)
+                    if (sig_value(miter, sim, diffs[i]))
+                        res.mismatched_outputs.push_back(usable[i]);
+                if (!res.mismatched_outputs.empty())
+                    res.message += " at " + std::to_string(res.mismatched_outputs.size()) +
+                                   " point(s), first = " + res.mismatched_outputs.front();
+            }
         }
         res.message += tail();
         return res;

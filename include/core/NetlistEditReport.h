@@ -163,6 +163,8 @@ struct DepthOptimizationSummary {
     std::string objectiveMetric;
     std::string scope;
     std::string requestedScopeName;
+    std::string basisScope;       // targetScopeName(basisScope.scope)
+    std::string basisScopeName;
     std::string resolvedRootNetName;
     std::string coreStatus;
     std::string coreMessage;
