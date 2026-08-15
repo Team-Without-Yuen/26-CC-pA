@@ -1,5 +1,7 @@
 #include "include/core/DepthOptimizer.h"
 #include "include/SATEngine/SatTime.h"
+#include "include/SATEngine/Primitives.h"
+#include <limits>
 #include <string>
 #include <iostream>
 #include <functional>
@@ -62,6 +64,175 @@ bool sameNetlistGraph(const Netlist& lhs, const Netlist& rhs) {
     return true;
 }
 
+// ---------------------------------------------------------------------------
+// 對「進入本 pass 前的快照」做一次組合等價驗證。
+//
+// 比較點靠名字對齊:真實 PI/PO 用 net 名,DFF 用 "$Q:"/"$D:" + instance 名。
+// GenericLowering 保留了 PI/PO port 宣告與 DFF instance 名,所以兩側對得上;
+// 內部 net 名被重新產生不影響比對。
+// ---------------------------------------------------------------------------
+struct EquivalenceOutcome {
+    bool ran          = false;   // 驗證真的跑了
+    bool equivalent   = false;   // 證明等價
+    bool inconclusive = false;   // 跑了但下不了結論(逾時 / 污染 / 介面不符)
+    bool skipped      = false;   // 根本沒開始(沒預算)—— 與「跑了但沒結論」分開
+    // 只驗了乾淨子集合。equivalent 仍為 true,但涵蓋率不是 100%。
+    bool partial      = false;
+    std::size_t comparedPoints  = 0;
+    std::size_t untrustedPoints = 0;
+    std::string message;
+};
+
+EquivalenceOutcome verifyAgainstSnapshot(const Netlist& before,
+                                         const Netlist& after,
+                                         double budgetSeconds,
+                                         bool verbose) {
+    EquivalenceOutcome out;
+
+    if (budgetSeconds <= 0.0) {
+        out.skipped = true;                     // 不是 inconclusive
+        out.message = "skipped: no time budget left for equivalence checking";
+        return out;
+    }
+
+    const auto started = std::chrono::steady_clock::now();
+    auto elapsed = [&] {
+        return std::chrono::duration<double>(
+                   std::chrono::steady_clock::now() - started).count();
+    };
+
+    try {
+        // Primitives 預設 verbose_rebuild=true,會把 rebuild / remap / fraig
+        //   每一行都印到 stderr,跟呼叫端的 verbose 完全脫鉤。
+        eqeng::Primitives::Config pcfg;
+        pcfg.verbose_rebuild = verbose;
+
+        // 兩側各自建模。AigSnapshot 是自足的(比較點的 cone 重建進自己的 Ntk、
+        // 名字以字串保存),所以 before 的快照可以拿到 after 的 Primitives 上比對。
+        // primBefore 不需要 Phase B:snapshot() 只做 collect_interface +
+        // copy_cone,完全不碰 SAT 或 FRAIG。
+        eqeng::Primitives primBefore(before, {}, pcfg);
+        eqeng::AigSnapshot snap = primBefore.snapshot();
+        if (!snap.valid()) {
+            out.inconclusive = true;
+            out.message = "could not build a reference snapshot of the pre-optimization netlist";
+            return out;
+        }
+
+        eqeng::Primitives primAfter(after, {}, pcfg);
+        primAfter.enable_phase_b(true);
+
+        {
+            const auto ptsB = primBefore.comparison_points(true);
+            const auto ptsA = primAfter.comparison_points(true);
+            const std::unordered_set<std::string> setB(ptsB.begin(), ptsB.end());
+
+            std::size_t common = 0;
+            for (const auto& n : ptsA) if (setB.count(n)) ++common;
+
+            if (common == 0 && !ptsB.empty()) {
+                out.inconclusive = true;
+                out.message = "comparison points do not overlap at all (" +
+                              std::to_string(ptsB.size()) + " before, " +
+                              std::to_string(ptsA.size()) + " after). "
+                              "The optimizer most likely regenerated DFF instance names -- "
+                              "equivalence checking needs them preserved.";
+                return out;
+            }
+            if (verbose) {
+                std::cout << "  comparison points: " << common << " common, "
+                          << ptsB.size() << " before, " << ptsA.size() << " after\n";
+            }
+        }
+
+        // 污染來源判別。
+        //   before 髒、after 乾淨 → 原始電路本來就有問題,最佳化沒有讓它變糟
+        //   after 比 before 髒     → 修改引入了新污染,這時絕不能給確定答案
+        const uint32_t taintBefore = primBefore.num_tainted_nets();
+        const uint32_t taintAfter  = primAfter.num_tainted_nets();
+        const bool modificationIntroducedTaint = (taintAfter > taintBefore);
+
+        if (verbose && (taintBefore || taintAfter)) {
+            std::cout << "  tainted nets: " << taintBefore << " before, "
+                      << taintAfter << " after"
+                      << (modificationIntroducedTaint ? "  [the edit made it worse]"
+                                                      : "  [pre-existing]") << "\n";
+        }
+
+        eqeng::CecOptions opt;
+        opt.require_identical_outputs = true;
+        opt.include_dff_next_state    = true;   // 只改到 DFF 輸入的錯誤不能漏掉
+        opt.identify_mismatches       = true;
+        opt.untrusted_is_failure      = true;
+        // 「結構被大幅改寫但功能不變」正是 FRAIG 的適用情境:
+        // 兩側功能相同的內部節點合併後,頂端的 XOR 直接塌成常數 0,SAT 幾乎不用做事。
+        opt.fraig_miter               = true;
+        // 修改引入新污染才嚴格。原始電路本來就髒的話,比乾淨子集合並回報涵蓋率。
+        opt.untrusted_is_failure      = modificationIntroducedTaint;
+
+        // 預算自保。
+        //   time_limit_seconds 只管 CEC 內部的求解,不含建兩顆 AIG、
+        //   兩次 copy_cone、建 miter —— 那些在 112k gate 上約 0.3~0.5 秒。
+        //   而且 fraig_miter=true 時,miter sweep 拿 total_time_budget 一份,
+        //   之後求解又重新武裝一份,最壞是兩倍。這裡先扣已耗時間再折半。
+        const double left = budgetSeconds - elapsed();
+        if (left <= 0.0) {
+            out.inconclusive = true;
+            out.message = "budget consumed while building the models; no time left to solve";
+            return out;
+        }
+        opt.time_limit_seconds = left;
+
+        const eqeng::CecResult r = primAfter.equiv_to_snapshot(snap, opt);
+        out.ran             = true;
+        out.comparedPoints  = r.compared_outputs.size();
+        out.untrustedPoints = r.untrusted_outputs.size();
+
+        if (r.status == eqeng::EquivResult::Equal && !r.interface_mismatch) {
+            out.equivalent = true;
+            out.partial    = !r.untrusted_outputs.empty();
+
+            out.message = "verified equivalent over " +
+                          std::to_string(r.compared_outputs.size()) + " comparison points (" +
+                          std::to_string(r.resolved_by_strash) + " resolved structurally)";
+
+            if (out.partial) {
+                // 涵蓋率一定要講出來。「驗過了」和「驗過 88% 」對使用者
+                //   是不同的結論,而 LLM 只會照字面轉述。
+                out.message += "; " + std::to_string(r.untrusted_outputs.size()) +
+                               " further point(s) could NOT be compared because the "
+                               "ORIGINAL netlist is not a faithful model there (" +
+                               std::to_string(taintBefore) + " tainted nets before the edit, "
+                               "first unverifiable point: " + r.untrusted_outputs.front() + ")";
+            }
+            return out;
+        }
+
+        if (r.status == eqeng::EquivResult::NotEqual) {
+            out.message = "NOT equivalent";
+            if (!r.mismatched_outputs.empty()) {
+                out.message += "; first mismatching point: " + r.mismatched_outputs.front();
+                if (r.mismatched_outputs.size() > 1)
+                    out.message += " (+" + std::to_string(r.mismatched_outputs.size() - 1) + " more)";
+            }
+            return out;
+        }
+
+        out.inconclusive = true;
+        out.message = "inconclusive: " +
+            (r.message.empty() ? std::string("solver returned unknown") : r.message);
+        if (r.interface_mismatch) out.message += " [interface mismatch]";
+        if (!r.untrusted_outputs.empty())
+            out.message += " [" + std::to_string(r.untrusted_outputs.size()) + " untrusted points]";
+        return out;
+
+    } catch (const std::exception& e) {
+        out.inconclusive = true;
+        out.message = std::string("equivalence check threw: ") + e.what();
+        return out;
+    }
+}
+
 } // namespace
 
 DepthOptimizer::DepthOptimizer(const DepthOptimizerConfig& config)
@@ -88,38 +259,85 @@ bool isGateAllowed(GateType type,
 }
 
 // Critical Path 最佳化主控流程
-OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netlist, 
-                                                                   TechMapper& techMapper,
-                                                                   const ConeReport& targetConeReport,
-                                                                   const std::vector<GateType>& allowedTypes,
-                                                                   const std::vector<GateType>& bannedTypes,
-                                                                   bool verbose,
-                                                                   const request_time_budget::RequestDeadline* requestDeadline) {
+OptimizationResult DepthOptimizer::executeCriticalPathOptimization(
+        Netlist& netlist,
+        TechMapper& techMapper,
+        const depth_opt::OptimizationRequest& request,
+        bool verbose,
+        const request_time_budget::RequestDeadline* requestDeadline) {
+
+    using namespace depth_opt;
+
     OptimizationResult result;
     result.passName = "Opt_CP";
+
+    // =====================================================================
+    // 階段 0：Request 驗證（在碰 netlist 之前，失敗就零副作用返回）
+    // =====================================================================
+    const RequestValidation validation = validateRequest(request);
+    if (!validation.ok) {
+        result.status  = OptimizationStatus::ERROR_INVALID_REQUEST;
+        result.message = "Invalid optimization request: " + validation.message;
+        return result;
+    }
+
+    static const BasisConstraint kNoBasis{};
+    const BasisConstraint& basis = request.basisConstraints.empty()
+        ? kNoBasis
+        : request.basisConstraints.front();
+
+    const bool hasLocalBasisScope = !basis.isWholeNetlist();
+    const std::vector<GateType>& allowedTypes = basis.allowed;
+    const std::vector<GateType>& bannedTypes  = basis.banned;
+
     const Netlist originalSnapshot = netlist.cloneForRollback();
 
-    // 紀錄優化前深度與面積
-    DepthReport oldGlobalPath = netlist.findGlobalCriticalPath();
-    result.oldDepth = oldGlobalPath.depth;
-    int oldTotal = 0;
-    const auto oldGateTypeCounts = netlist.countGatesByType();
-    for (const auto& pair : oldGateTypeCounts) oldTotal += pair.second;
-    result.oldGateCount = oldTotal;
+    // =====================================================================
+    // 量測優化前的 cost
+    // =====================================================================
+    result.costMetricName = describeCost(request.cost);
+
+    const CostMeasurement before = measureCost(netlist, request.cost);
+    if (!before.ok) {
+        result.status  = OptimizationStatus::ERROR_INVALID_REQUEST;
+        result.message = "Cannot evaluate the cost function: " + before.message;
+        return result;
+    }
+    result.oldDepth       = before.primary(request.cost.metric);
+    result.oldGlobalDepth = before.globalDepth;
+    result.oldConeDepth   = before.coneDepth;
+    result.oldGateCount   = before.gateCount;
 
     auto requestTimedOut = [&]() {
         return requestDeadline != nullptr && requestDeadline->expired();
     };
-    auto returnTimeout = [&](const std::string& message) {
+    auto remainingSeconds = [&]() -> double {
+        return requestDeadline != nullptr ? requestDeadline->remainingSeconds()
+                                          : std::numeric_limits<double>::max();
+    };
+
+    auto returnFailure = [&](OptimizationStatus status, const std::string& message) {
         netlist.restoreFrom(originalSnapshot);
-        result.status = OptimizationStatus::TIMEOUT;
-        result.changed = false;
-        result.depthImproved = false;
-        result.newDepth = result.oldDepth;
-        result.newGateCount = result.oldGateCount;
-        result.areaDelta = 0;
+        result.status         = status;
+        result.changed        = false;
+        result.depthImproved  = false;
+        result.newDepth       = result.oldDepth;
+        result.newGlobalDepth = result.oldGlobalDepth;
+        result.newConeDepth   = result.oldConeDepth;
+        result.newGateCount   = result.oldGateCount;
+        result.areaDelta      = 0;
+
+        // 已經驗出結果的話要保留 —— 尤其 Refuted，那是回滾的原因本身。
+        // 其餘失敗路徑（timeout / constraint）在階段 7 之前就返回了，
+        // 此時 equivalenceStatus 仍是初值 NotChecked，不需要特別處理。
+        result.equivalenceChecked = (result.equivalenceStatus != EquivalenceStatus::NotChecked);
+        result.equivalent         = (result.equivalenceStatus == EquivalenceStatus::Verified);
+
         result.message = message;
         return result;
+    };
+    auto returnTimeout = [&](const std::string& message) {
+        return returnFailure(OptimizationStatus::TIMEOUT, message);
     };
 
     if (requestTimedOut()) {
@@ -128,244 +346,372 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
 
     if (verbose) {
         std::cout << "\n=================================================\n";
-        std::cout << "[Flow Start] Old Global Depth: " << result.oldDepth
-                  << " | Old Gate Count: " << result.oldGateCount << "\n";
+        std::cout << "[Flow Start] cost metric: " << result.costMetricName << "\n";
+        std::cout << "             basis scope: " << describeBasis(basis) << "\n";
+        std::cout << "             old cost: "    << result.oldDepth
+                  << " | global depth: "          << result.oldGlobalDepth
+                  << " | gate count: "            << result.oldGateCount << "\n";
+        std::cout << "             time budget: " << remainingSeconds() << "s\n";
     }
 
-    // ---------------------------------------------------------------------
-    // 階段 1：約束分類 (Constraint Classification)
-    // ---------------------------------------------------------------------
+    // =====================================================================
+    // 階段 1：Lowering 計畫 + 約束分類
+    // =====================================================================
+    lowering::LoweringSpec loweringSpec;
+    bool   loweringUsable = false;
+    std::string loweringSkipReason;
+
+    {
+        // Lowering 的 cone 標記是「從某個 PO 往回的 transitive fanin」。
+        // fanout 方向的 scope 表達不了,直接退回舊路徑。
+        auto scopeIsFaninCone = [](ConeQueryType t) {
+            return t == ConeQueryType::NetTransitiveFanin  ||
+                   t == ConeQueryType::GateTransitiveFanin ||
+                   t == ConeQueryType::LargestOutputCone;
+        };
+
+        if (!hasLocalBasisScope) {
+            loweringSpec.defaultBasis =
+                lowering::LoweringBasis::fromLists(allowedTypes, bannedTypes);
+            loweringUsable = loweringSpec.defaultBasis.complete();
+            if (!loweringUsable)
+                loweringSkipReason = "target basis {" +
+                    loweringSpec.defaultBasis.describe() + "} is not functionally complete";
+
+        } else if (!scopeIsFaninCone(basis.scope->type)) {
+            loweringSkipReason = "basis scope is a fanout cone; lowering only supports fanin cones";
+
+        } else {
+            const ConeResolution cr = resolveConeGates(netlist, *basis.scope);
+            if (!cr.ok) {
+                loweringSkipReason = "cannot resolve the basis cone root: " + cr.message;
+            } else if (cr.rootNetName.empty()) {
+                loweringSkipReason = "basis cone root has no resolvable net name";
+            } else {
+                loweringSpec.defaultBasis = lowering::LoweringBasis::fromLists({}, {});
+                loweringSpec.coneBasis    =
+                    lowering::LoweringBasis::fromLists(allowedTypes, bannedTypes);
+                loweringSpec.coneRootName = cr.rootNetName;
+                loweringUsable = loweringSpec.coneBasis->complete();
+                if (!loweringUsable)
+                    loweringSkipReason = "cone basis {" +
+                        loweringSpec.coneBasis->describe() + "} is not functionally complete";
+            }
+        }
+    }
+
+    if (verbose) {
+        if (loweringUsable)
+            std::cout << "             lowering  : enabled, basis {"
+                      << loweringSpec.defaultBasis.describe() << "}"
+                      << (loweringSpec.hasCone()
+                            ? (", cone '" + loweringSpec.coneRootName + "' {" +
+                               loweringSpec.coneBasis->describe() + "}")
+                            : "")
+                      << "\n";
+        else
+            std::cout << "             lowering  : disabled (" << loweringSkipReason
+                      << "); falling back to the legacy basis-enforcement path\n";
+    }
+
     std::unordered_set<GateType> allowedSet(allowedTypes.begin(), allowedTypes.end());
-
-    bool isPureAIG = bannedTypes.empty() && allowedSet.size() == 2 &&
-                     allowedSet.count(GateType::AND) && allowedSet.count(GateType::NOT);
-    bool isPureXAG = bannedTypes.empty() && allowedSet.size() == 3 &&
-                     allowedSet.count(GateType::XOR) && allowedSet.count(GateType::AND) &&
-                     allowedSet.count(GateType::NOT);
-
-    // 局部 cone 限制？
-    bool hasLocalConeConstraint = targetConeReport.ok && targetConeReport.exists;
-
-    // 是否允許把 NOT 吸收進複合閘（NAND/NOR/XNOR 至少一種可用）
-    bool canAbsorbInverters =
+    const bool isPureAIG = bannedTypes.empty() && allowedSet.size() == 2 &&
+                           allowedSet.count(GateType::AND) && allowedSet.count(GateType::NOT);
+    const bool canAbsorbInverters =
         isGateAllowed(GateType::NAND, allowedTypes, bannedTypes) ||
         isGateAllowed(GateType::NOR,  allowedTypes, bannedTypes) ||
         isGateAllowed(GateType::XNOR, allowedTypes, bannedTypes);
+    const bool useGlobalAIG = !hasLocalBasisScope && isPureAIG;
 
-    // 是否有基礎閘被禁（需要基底強制轉換）
-    bool needBasisEnforce = false;
+    bool loweringActive = loweringUsable;
 
-    // 全域決定用哪種 mockturtle 網路：純 AIG 題用 AIG，其餘一律先用 XAG 壓深度
-    bool useGlobalAIG = !hasLocalConeConstraint && isPureAIG;
+    auto toNetlistXag = [&](const mockturtle::xag_network& n, const Netlist& t) -> Netlist {
+        if (loweringActive) {
+            lowering::LoweringResult r = lowering::LowerXag(n, t, loweringSpec);
+            if (r.ok) return std::move(r.netlist);
+            loweringActive = false;
+            if (verbose) std::cout << "  [warn] lowering failed at runtime: " << r.message << "\n";
+        }
+        return XagToNetlist(n, t);
+    };
+    auto toNetlistAig = [&](const mockturtle::aig_network& n, const Netlist& t) -> Netlist {
+        if (loweringActive) {
+            lowering::LoweringResult r = lowering::LowerAig(n, t, loweringSpec);
+            if (r.ok) return std::move(r.netlist);
+            loweringActive = false;
+            if (verbose) std::cout << "  [warn] lowering failed at runtime: " << r.message << "\n";
+        }
+        return AigToNetlist(n, t);
+    };
 
-    // ---------------------------------------------------------------------
-    // 階段 2：全域深度壓縮 (Global Depth Optimization via mockturtle)
-    //   純 AIG → AIG 流；其餘 → XAG 流（含 cone 限制題，先自由壓深度）
-    //   加上 2 分鐘總時間上限：balancing/cut_rewriting/resubstitution 本身沒有
-    //   可中斷機制，只能在每輪 iteration 交界處檢查，超時就停在目前已知最佳解上。
-    // ---------------------------------------------------------------------
+    // =====================================================================
+    // 階段 2：全域深度壓縮（deadline-aware）
+    //
+    // 時間預留:離開迴圈後還要做「最終 lowering + 結算量測 + 等價驗證」。
+    // 這些都不能被砍,所以迴圈的可用時間是
+    //     min(request 剩餘 - reserve, stage2 上限剩餘)
+    // reserve 依閘數縮放:大電路的 lowering 與 CEC 都比較久。
+    // =====================================================================
     constexpr double kStage2TimeLimitSeconds = 120.0;
     const double stage2BudgetSeconds = requestDeadline != nullptr
         ? requestDeadline->boundedStageSeconds(kStage2TimeLimitSeconds)
         : kStage2TimeLimitSeconds;
     const auto stage2Start = std::chrono::steady_clock::now();
-    auto stage2TimeUp = [&]() {
-        std::chrono::duration<double> elapsed = std::chrono::steady_clock::now() - stage2Start;
-        return requestTimedOut() || elapsed.count() >= stage2BudgetSeconds;
+    auto stage2Elapsed = [&]() {
+        return std::chrono::duration<double>(std::chrono::steady_clock::now() - stage2Start).count();
     };
+
+    const double perGateSeconds   = 0.0003;
+    const double finalizeReserve = std::max(3.0, result.oldGateCount * 0.00009); // 26k→3.0s, 112k→10.1s
+    const double equivReserve = config.verifyEquivalence
+                                ? config.equivalenceReserveSeconds   // 預設 15.0
+                                : 0.0;
+    const double totalReserve     = finalizeReserve + equivReserve;
+    const double firstIterEstimate = 6.0 + result.oldGateCount * 0.00013;      // 26k→9.4s, 112k→20.6s
+
+    if (verbose) {
+        std::cout << "             reserve   : finalize " << finalizeReserve
+                  << "s + equiv " << equivReserve << "s\n";
+    }
 
     if (stage2BudgetSeconds <= 0.0) {
         return returnTimeout("Depth optimization could not enter Stage 2 because the request deadline expired.");
     }
 
+    // 一輪迭代放不放得下。lastIterSeconds <= 0 表示還沒有歷史資料。
+    auto iterationFits = [&](double lastIterSeconds, std::string& why) {
+        const double predicted = (lastIterSeconds > 0.0) ? lastIterSeconds * 1.3
+                                                         : firstIterEstimate;
+        const double byRequest = remainingSeconds() - totalReserve;
+        const double byStage2   = stage2BudgetSeconds - stage2Elapsed();
+        const double available  = std::min(byRequest, byStage2);
+        if (predicted <= available) return true;
+        why = "next iteration needs ~" + std::to_string(predicted) +
+              "s but only " + std::to_string(available) + "s is available";
+        return false;
+    };
+
+    bool haveCandidate = false;
+
     if (useGlobalAIG) {
         if (verbose) std::cout << "[Step 2] Global AIG optimization...\n";
 
-        mockturtle::aig_network aig0 = mockturtle::cleanup_dangling(NetlistToAig(netlist));
-        mockturtle::aig_network candA = aig0, best = aig0;
-        int best_real = INT_MAX;
+        const IterationPolicy policy = config.stage2Policy;
+        BestCandidateTracker<mockturtle::aig_network> tracker(request.cost.metric, policy);
 
-        for (int i = 0; i < 10; ++i) {
-            if (stage2TimeUp()) {
-                if (verbose) std::cout << "  -> Stage 2 time limit (" << kStage2TimeLimitSeconds
-                                       << "s) reached, stopping early at iteration " << i << ".\n";
+        mockturtle::aig_network cand = mockturtle::cleanup_dangling(NetlistToAig(netlist));
+        tracker.consider(cand, evaluateCandidate(cand, netlist, toNetlistAig, request.cost));
+
+        double lastIterSeconds = 0.0;
+        for (int i = 0; i < policy.maxIterations; ++i) {
+            std::string why;
+            if (!iterationFits(lastIterSeconds, why)) {
+                if (verbose) std::cout << "  -> stopping at iteration " << i << ": " << why << ".\n";
                 break;
             }
+            const auto iterStart = std::chrono::steady_clock::now();
+
             mockturtle::sop_rebalancing<mockturtle::aig_network> reb;
             mockturtle::balancing_params bps; bps.cut_enumeration_ps.cut_size = 6u;
-            candA = mockturtle::cleanup_dangling(mockturtle::balancing(candA, {reb}, bps));
+            cand = mockturtle::cleanup_dangling(mockturtle::balancing(cand, {reb}, bps));
 
             mockturtle::cut_rewriting_params cr;
             cr.cut_enumeration_ps.cut_size = 4; cr.preserve_depth = true; cr.allow_zero_gain = true;
             mockturtle::xag_npn_resynthesis<mockturtle::aig_network> resyn;
-            candA = mockturtle::cleanup_dangling(mockturtle::cut_rewriting(candA, resyn, cr));
+            cand = mockturtle::cleanup_dangling(mockturtle::cut_rewriting(cand, resyn, cr));
 
-            Netlist probe = AigToNetlist(candA, netlist);
-            eliminateDoubleInverters(probe);
-            int real_d = probe.findGlobalCriticalPath().depth;
-            if (real_d < best_real) { best_real = real_d; best = candA; } else break;
+            const CostMeasurement m = evaluateCandidate(cand, netlist, toNetlistAig, request.cost);
+            const bool improved = tracker.consider(cand, m);
+
+            lastIterSeconds = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - iterStart).count();
+
+            if (verbose) {
+                std::cout << "  -> iter " << i
+                          << ": global=" << m.globalDepth
+                          << " cone="    << m.coneDepth
+                          << " gates="   << m.gateCount
+                          << " (" << lastIterSeconds << "s)"
+                          << (improved ? "  [best]" : "") << "\n";
+            }
+
+            if (tracker.shouldStop()) {
+                if (verbose) std::cout << "  -> no improvement for "
+                                       << tracker.stagnantRounds() << " rounds, stopping.\n";
+                break;
+            }
         }
-        netlist = AigToNetlist(best, netlist);
-        eliminateDoubleInverters(netlist);
-        if (verbose) std::cout << "  -> AIG netlist depth: "
-                               << netlist.findGlobalCriticalPath().depth << "\n";
+
+        if (tracker.hasBest()) {
+            netlist = toNetlistAig(tracker.best(), netlist);
+            eliminateDoubleInverters(netlist);
+            haveCandidate = true;
+            if (verbose)
+                std::cout << "  -> AIG best: global=" << tracker.bestCost().globalDepth
+                          << " cone="  << tracker.bestCost().coneDepth
+                          << " gates=" << tracker.bestCost().gateCount << "\n";
+        }
 
     } else {
         if (verbose) std::cout << "[Step 2] Global XAG optimization...\n";
 
-        mockturtle::xag_network xag = mockturtle::cleanup_dangling(NetlistToXag(netlist));
-        mockturtle::xag_network best = xag;
-        Netlist initialProbe = XagToNetlist(xag, netlist);
-        eliminateDoubleInverters(initialProbe);
-        int bestRealDepth = initialProbe.findGlobalCriticalPath().depth;
+        const IterationPolicy policy = config.stage2Policy;
+        BestCandidateTracker<mockturtle::xag_network> tracker(request.cost.metric, policy);
 
-        for (int iter = 0; iter < 10; ++iter) {
-            if (stage2TimeUp()) {
-                if (verbose) std::cout << "  -> Stage 2 time limit (" << kStage2TimeLimitSeconds
-                                       << "s) reached, stopping early at iteration " << iter << ".\n";
+        mockturtle::xag_network cand = mockturtle::cleanup_dangling(NetlistToXag(netlist));
+        tracker.consider(cand, evaluateCandidate(cand, netlist, toNetlistXag, request.cost));
+
+        double lastIterSeconds = 0.0;
+        for (int iter = 0; iter < policy.maxIterations; ++iter) {
+            std::string why;
+            if (!iterationFits(lastIterSeconds, why)) {
+                if (verbose) std::cout << "  -> stopping at iteration " << iter << ": " << why << ".\n";
                 break;
             }
+            const auto iterStart = std::chrono::steady_clock::now();
+
             mockturtle::esop_rebalancing<mockturtle::xag_network> reb;
             mockturtle::balancing_params bps; bps.cut_enumeration_ps.cut_size = 6u;
-            xag = mockturtle::cleanup_dangling(mockturtle::balancing(xag, {reb}, bps));
+            cand = mockturtle::cleanup_dangling(mockturtle::balancing(cand, {reb}, bps));
 
             mockturtle::cut_rewriting_params cr_ps;
             cr_ps.cut_enumeration_ps.cut_size = 4; cr_ps.preserve_depth = true; cr_ps.allow_zero_gain = true;
             mockturtle::xag_npn_resynthesis<mockturtle::xag_network> resyn;
-            xag = mockturtle::cleanup_dangling(mockturtle::cut_rewriting(xag, resyn, cr_ps));
+            cand = mockturtle::cleanup_dangling(mockturtle::cut_rewriting(cand, resyn, cr_ps));
 
             {
                 mockturtle::resubstitution_params rp;
-                mockturtle::fanout_view fv{xag};
-                mockturtle::depth_view dv{fv};
+                mockturtle::fanout_view fv{cand};
+                mockturtle::depth_view  dv{fv};
                 mockturtle::xag_resubstitution(dv, rp);
-                xag = mockturtle::cleanup_dangling(xag);
+                cand = mockturtle::cleanup_dangling(cand);
             }
 
-            Netlist probe = XagToNetlist(xag, netlist);
-            eliminateDoubleInverters(probe);
-            const int realDepth = probe.findGlobalCriticalPath().depth;
-            if (realDepth < bestRealDepth) {
-                bestRealDepth = realDepth;
-                best = xag;
-            } else {
+            const CostMeasurement m = evaluateCandidate(cand, netlist, toNetlistXag, request.cost);
+            const bool improved = tracker.consider(cand, m);
+
+            lastIterSeconds = std::chrono::duration<double>(
+                std::chrono::steady_clock::now() - iterStart).count();
+
+            if (verbose) {
+                std::cout << "  -> iter " << iter
+                          << ": global=" << m.globalDepth
+                          << " cone="    << m.coneDepth
+                          << " gates="   << m.gateCount
+                          << " (" << lastIterSeconds << "s)"
+                          << (improved ? "  [best]" : "") << "\n";
+            }
+
+            if (tracker.shouldStop()) {
+                if (verbose) std::cout << "  -> no improvement for "
+                                       << tracker.stagnantRounds() << " rounds, stopping.\n";
                 break;
             }
         }
-        netlist = XagToNetlist(best, netlist);
-        eliminateDoubleInverters(netlist);
-        if (verbose) {
-            std::cout << "  -> XAG best depth (Problem A metric): "
-                      << bestRealDepth << "\n";
-        }
-    }
 
-    if (requestTimedOut()) {
-        return returnTimeout("Depth optimization exhausted the request time budget during Stage 2.");
+        if (tracker.hasBest()) {
+            netlist = toNetlistXag(tracker.best(), netlist);
+            eliminateDoubleInverters(netlist);
+            haveCandidate = true;
+            if (verbose)
+                std::cout << "  -> XAG best: global=" << tracker.bestCost().globalDepth
+                          << " cone="  << tracker.bestCost().coneDepth
+                          << " gates=" << tracker.bestCost().gateCount << "\n";
+        }
     }
 
     netlist.trimDeadLogic();
 
-    // ---------------------------------------------------------------------
-    // 階段 3：局部 Cone 限制處理 (Local Cone Constrained Resynthesis)
-    //   只在「某個 cone 內部有基底限制」時執行。
-    //   流程：切出 cone（K-feasible cut 界定範圍）→ 依受限基底重合成 → 縫回
-    //   語意：targetConeReport 指定「哪個 cone」；allowedTypes/bannedTypes
-    //         此時代表「該 cone 內部」的約束。cone 以外不受限。
-    // ---------------------------------------------------------------------
-    if (hasLocalConeConstraint) {
+    const bool loweringApplied = loweringActive && haveCandidate;
+
+    // -----------------------------------------------------------------
+    // 超時處理:lowering 產出的候選 by construction 就滿足目標 basis,
+    // 所以任何時間點交出它都合法 —— 不需要回滾。
+    // 沒有 lowering 的話電路還沒合規,只能回滾。
+    // -----------------------------------------------------------------
+    bool budgetExhausted = requestTimedOut();
+    if (budgetExhausted && !loweringApplied) {
+        return returnTimeout("Depth optimization exhausted the request time budget during Stage 2 "
+                             "before the netlist could be brought into the target basis.");
+    }
+    if (budgetExhausted && verbose) {
+        std::cout << "  [note] request budget exhausted; returning the best compliant "
+                     "candidate found so far.\n";
+    }
+
+    if (loweringApplied && verbose) {
+        std::cout << "[Step 3-5] skipped: lowering already enforced the basis "
+                     "and absorbed inverters.\n";
+    }
+
+    // =====================================================================
+    // 階段 3：局部基底約束（legacy path）
+    // =====================================================================
+    if (!loweringApplied && hasLocalBasisScope) {
+        const ConeRef& basisCone = *basis.scope;
+
         if (requestTimedOut()) {
             return returnTimeout("Depth optimization exhausted the request time budget before local cone enforcement.");
         }
         if (verbose)
-            std::cout << "[Step 3] Local cone enforcement on '"
-                      << targetConeReport.sourceName << "'...\n";
+            std::cout << "[Step 3] Local basis enforcement on cone '"
+                      << basisCone.sourceName << "'...\n";
 
-        const int depthBeforeCone = netlist.findGlobalCriticalPath().depth;
+        auto refreshCone = [&]() { return resolveConeGates(netlist, basisCone); };
 
-        // 依 ConeQueryType 分派重查，取得「當下最新」的 rewrite cone 閘集合。
-        // NET_FANIN scopes keep DFF.Q as a sequential boundary. If the caller
-        // explicitly targets a DFF gate fanin, resolveRewriteScope may select
-        // the D-pin data cone.
-        auto refreshConeGates = [&]() -> std::unordered_set<int> {
-            TargetScope rewriteScope = TargetScope::NET_FANIN;
-            switch (targetConeReport.type) {
-                case ConeQueryType::NetTransitiveFanin:
-                    rewriteScope = TargetScope::NET_FANIN;
-                    break;
-                case ConeQueryType::NetTransitiveFanout:
-                    rewriteScope = TargetScope::NET_FANOUT;
-                    break;
-                case ConeQueryType::GateTransitiveFanin:
-                    rewriteScope = TargetScope::GATE_FANIN;
-                    break;
-                case ConeQueryType::GateTransitiveFanout:
-                    rewriteScope = TargetScope::GATE_FANOUT;
-                    break;
-                default:
-                    rewriteScope = TargetScope::NET_FANIN;
-                    break;
-            }
-
-            const RewriteScopeResolution resolved =
-                resolveRewriteScope(netlist, rewriteScope, targetConeReport.sourceName);
-            if (!resolved.ok) {
-                return {};
-            }
-
-            std::unordered_set<int> s;
-            for (int g : netlist.getConeGateIds(resolved.cone)) {
-                if (g < 0 || !netlist.isValidGateId(g)) continue;
-                GateType t = netlist.getGate(g).type;
-                if (t == GateType::UNKNOWN || t == GateType::DFF) continue;
-                s.insert(g);   // root 閘已由 cone 函式本身納入
-            }
-            return s;
-        };
-
-        std::unordered_set<int> coneGates = refreshConeGates();
-        if (coneGates.empty()) {
-            result.status = OptimizationStatus::ERROR_INVALID_REQUEST;
-            result.message = "Cone gate set empty; cannot enforce local basis.";
-            return result;
+        ConeResolution cone = refreshCone();
+        if (!cone.ok) {
+            return returnFailure(OptimizationStatus::ERROR_INVALID_REQUEST,
+                                 "Cannot resolve the basis scope cone: " + cone.message);
         }
-        if (verbose)
-            std::cout << "  -> cone size: " << coneGates.size() << " gates\n";
+        if (cone.gateIds.empty()) {
+            return returnFailure(OptimizationStatus::ERROR_INVALID_REQUEST,
+                                 "Basis scope cone contains no combinational gates; "
+                                 "cannot enforce a local basis.");
+        }
+        if (verbose) std::cout << "  -> cone size: " << cone.gateIds.size() << " gates\n";
 
-        // (a) cone 內基底強制（合規，失敗即放棄
-        if (verbose) std::cout << "[Step a] Executing cone inner base forced\n";
+        if (verbose) std::cout << "[Step a] Cone-internal basis enforcement\n";
         TechMapReport coneRep = techMapper.convertToBasisOnGateSet(
-            netlist, coneGates, allowedTypes, bannedTypes, verbose);
+            netlist, cone.gateIds, allowedTypes, bannedTypes, verbose);
 
         if (coneRep.status != TechMapStatus::SUCCESS) {
             if (coneRep.status == TechMapStatus::TIMEOUT) {
                 return returnTimeout("Cone basis enforcement timed out: " + coneRep.message);
             }
-            result.status = OptimizationStatus::ERROR_CONSTRAINT_UNSATISFIED;
-            result.message = "Cone basis enforcement failed: " + coneRep.message;
-            return result;
+            return returnFailure(OptimizationStatus::ERROR_CONSTRAINT_UNSATISFIED,
+                                 "Cone basis enforcement failed: " + coneRep.message);
         }
         eliminateDoubleInverters(netlist);
         netlist.trimDeadLogic();
 
-        // (b) cone 內反相吸收：RHS 限定 cone 允許的閘
-        if (verbose) std::cout << "[Step b] Executing Cone internal reverse absorption\n";
-        coneGates = refreshConeGates();                 // (a) 產生新閘，範圍已變
-        techMapper.absorbInvertersOnGateSet(netlist, coneGates, allowedTypes, bannedTypes, verbose);
+        if (verbose) std::cout << "[Step b] Cone-internal inverter absorption\n";
+        cone = refreshCone();
+        if (!cone.ok) {
+            return returnFailure(OptimizationStatus::ERROR_INVALID_REQUEST,
+                                 "Basis scope cone became unresolvable after enforcement: " + cone.message);
+        }
+        techMapper.absorbInvertersOnGateSet(netlist, cone.gateIds,
+                                            allowedTypes, bannedTypes, verbose);
         if (requestTimedOut()) {
             return returnTimeout("Depth optimization exhausted the request time budget during cone inverter absorption.");
         }
         eliminateDoubleInverters(netlist);
         netlist.trimDeadLogic();
 
-        // (c) cone 外反相吸收：任意閘合法 
-        if (verbose) std::cout << "[Step c] Executing cone external reverse absorption\n";
-        coneGates = refreshConeGates();                 // (b) 又改了結構，重查後才能正確排除
+        if (verbose) std::cout << "[Step c] Outside-cone inverter absorption\n";
+        cone = refreshCone();
+        if (!cone.ok) {
+            return returnFailure(OptimizationStatus::ERROR_INVALID_REQUEST,
+                                 "Basis scope cone became unresolvable after absorption: " + cone.message);
+        }
+
         std::unordered_set<int> outsideGates;
         for (int g = 0; g < (int)netlist.getGateCount(); ++g) {
-            GateType t = netlist.getGate(g).type;
+            if (netlist.isGateRemoved(g)) continue;
+            const GateType t = netlist.getGate(g).type;
             if (t == GateType::UNKNOWN || t == GateType::DFF) continue;
-            if (coneGates.count(g)) continue;           // 排除 cone 內，保護受限基底
+            if (cone.gateIds.count(g)) continue;
             outsideGates.insert(g);
         }
 
@@ -373,8 +719,7 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
             GateType::AND, GateType::OR, GateType::NAND, GateType::NOR,
             GateType::NOT, GateType::XOR, GateType::XNOR };
 
-        techMapper.absorbInvertersOnGateSet(
-            netlist, outsideGates, kAllGates, {}, verbose);
+        techMapper.absorbInvertersOnGateSet(netlist, outsideGates, kAllGates, {}, verbose);
         if (requestTimedOut()) {
             return returnTimeout("Depth optimization exhausted the request time budget during outside-cone inverter absorption.");
         }
@@ -382,112 +727,194 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(Netlist& netl
         netlist.trimDeadLogic();
     }
 
-    // ---------------------------------------------------------------------
-    // 階段 4：全域基底強制 (Global Basis Enforcement)
-    //   只在「有基礎閘被禁」時執行（合規，不可選）。
-    //   把電路中殘留的被禁閘（如 AND/XOR）換成允許的等價組合。
-    //   注意：這一步在「反相吸收」之前 —— 先讓結構合規，再吸收 NOT。
-    // ---------------------------------------------------------------------
-
-    // 只有「電路裡真的存在被禁的閘」才需要基底強制
-    if (!hasLocalConeConstraint) {
-        std::vector<GateType> allComb = {GateType::AND, GateType::OR, GateType::NAND,
-            GateType::NOR, GateType::NOT, GateType::BUF, GateType::XOR, GateType::XNOR};
-        for (GateType t : allComb) {
+    // =====================================================================
+    // 階段 4：全域基底強制（legacy path）
+    // =====================================================================
+    bool needBasisEnforce = false;
+    if (!loweringApplied && !hasLocalBasisScope && basis.constrains()) {
+        static const std::vector<GateType> kAllComb = {
+            GateType::AND, GateType::OR, GateType::NAND, GateType::NOR,
+            GateType::NOT, GateType::BUF, GateType::XOR, GateType::XNOR };
+        for (GateType t : kAllComb) {
             if (!isGateAllowed(t, allowedTypes, bannedTypes) &&
                 netlist.getGateCountByType(t) > 0) { needBasisEnforce = true; break; }
         }
     }
 
-    if (needBasisEnforce && !hasLocalConeConstraint) {
+    if (needBasisEnforce) {
         if (requestTimedOut()) {
             return returnTimeout("Depth optimization exhausted the request time budget before basis enforcement.");
         }
-        if (verbose) std::cout << "[Step 4] Basis enforcement (expand banned gates)...\n";
+        if (verbose) std::cout << "[Step 4] Global basis enforcement...\n";
 
         TechMapReport rep = techMapper.convertToBasis(
-            netlist,
-            TargetScope::WHOLE_NETLIST,   // 全域
-            "",                            // 全域不需要指定 net/gate 名
-            allowedTypes,
-            bannedTypes,
-            verbose
-        );
+            netlist, TargetScope::WHOLE_NETLIST, "", allowedTypes, bannedTypes, verbose);
 
-        // 合規失敗 = 直接放棄（殘留非法閘等於違規、零分），回報錯誤
         if (rep.status != TechMapStatus::SUCCESS) {
             if (rep.status == TechMapStatus::TIMEOUT) {
                 return returnTimeout("Basis enforcement timed out: " + rep.message);
             }
-            result.status = OptimizationStatus::ERROR_CONSTRAINT_UNSATISFIED;
-            result.message = "Basis enforcement failed: " + rep.message;
-            return result;
+            return returnFailure(OptimizationStatus::ERROR_CONSTRAINT_UNSATISFIED,
+                                 "Basis enforcement failed: " + rep.message);
         }
 
-        // 展開後可能產生可消的雙反相（例如 NOT_to_XXX 疊出 NOT-NOT），先清一次
         eliminateDoubleInverters(netlist);
         netlist.trimDeadLogic();
-
         if (verbose)
-            std::cout << "  -> after basis enforcement depth: "
+            std::cout << "  -> after basis enforcement, global depth: "
                       << netlist.findGlobalCriticalPath().depth << "\n";
     }
 
-    // ---------------------------------------------------------------------
-    // 階段 5：反相吸收 (Inverter Absorption)
-    //   只在「允許 NAND/NOR/XNOR」時執行（省深度，機會型）。
-    //   把 NOT(AND)→NAND、NOT(OR)→NOR、NOT(XOR)→XNOR，
-    //   以及輸入端德摩根 AND(NOT,NOT)→NOR 等，融掉 NOT 省一層。
-    //   放在基底強制「之後」：結構定案後再吸收，且只融出允許的閘。
-    // ---------------------------------------------------------------------
-    if (canAbsorbInverters && !hasLocalConeConstraint) {
+    // =====================================================================
+    // 階段 5：全域反相吸收（legacy path）
+    // =====================================================================
+    if (!loweringApplied && canAbsorbInverters && !hasLocalBasisScope) {
         if (requestTimedOut()) {
             return returnTimeout("Depth optimization exhausted the request time budget before inverter absorption.");
         }
         if (verbose) std::cout << "[Step 5] Inverter absorption...\n";
         techMapper.absorbInverters(netlist, allowedTypes, bannedTypes, verbose);
-        if (requestTimedOut()) {
-            return returnTimeout("Depth optimization exhausted the request time budget during inverter absorption.");
-        }
         eliminateDoubleInverters(netlist);
         netlist.trimDeadLogic();
         if (verbose)
-            std::cout << "  -> after absorption depth: "
+            std::cout << "  -> after absorption, global depth: "
                       << netlist.findGlobalCriticalPath().depth << "\n";
     }
 
-    // ---------------------------------------------------------------------
-    // 階段 6：結算 (Depth & Area Evaluation)
-    //   trim 一次確保面積不含死閘，量最終深度與面積。
-    // ---------------------------------------------------------------------
+    // =====================================================================
+    // 階段 6：結算
+    // =====================================================================
     netlist.trimDeadLogic();
 
-    if (requestTimedOut()) {
-        return returnTimeout("Depth optimization exhausted the request time budget before final evaluation.");
+    const CostMeasurement after = measureCost(netlist, request.cost);
+    if (!after.ok) {
+        return returnFailure(OptimizationStatus::ERROR_INVALID_REQUEST,
+                             "Cost function became unmeasurable after optimization: " + after.message);
+    }
+    result.newDepth       = after.primary(request.cost.metric);
+    result.newGlobalDepth = after.globalDepth;
+    result.newConeDepth   = after.coneDepth;
+    result.newGateCount   = after.gateCount;
+    result.depthImproved  = (result.newDepth < result.oldDepth);
+    result.areaDelta      = result.newGateCount - result.oldGateCount;
+    result.changed        = !sameNetlistGraph(originalSnapshot, netlist);
+
+    // =====================================================================
+    // 階段 7：等價驗證
+    //   GenericLowering 繞過了所有已驗證的 rewriting 路徑,極性算錯會靜默
+    //   產生「深度漂亮但功能錯誤」的電路。這一步是唯一的防線。
+    // =====================================================================
+    result.equivalenceStatus  = EquivalenceStatus::NotChecked;
+    result.equivalenceChecked = false;
+    result.equivalent         = false;
+    std::string equivNote;
+
+    if (config.verifyEquivalence && result.changed) {
+        const double left = std::max(0.0, remainingSeconds() - 3.0);
+        const double budget = (requestDeadline != nullptr)
+            ? std::min(left, std::max(config.equivalenceReserveSeconds, left * 0.4))
+            : config.equivalenceReserveSeconds;
+
+        if (verbose) std::cout << "[Step 7] Equivalence check (budget " << budget << "s)...\n";
+        const EquivalenceOutcome eq =
+            verifyAgainstSnapshot(originalSnapshot, netlist, budget, verbose);
+
+        equivNote = eq.message;
+        result.equivalencePartial         = eq.partial;
+        result.equivalenceComparedPoints  = eq.comparedPoints;
+        result.equivalenceUntrustedPoints = eq.untrustedPoints;
+
+        // EquivalenceOutcome 的四種狀態映射：
+        //   equivalent            -> Verified
+        //   ran && !equiv && !inc -> Refuted（唯一會回滾的）
+        //   inconclusive          -> Inconclusive
+        //   skipped               -> NotChecked（沒預算，根本沒開始）
+        if (eq.equivalent) {
+            result.equivalenceStatus = EquivalenceStatus::Verified;
+        } else if (eq.ran && !eq.inconclusive) {
+            result.equivalenceStatus = EquivalenceStatus::Refuted;
+        } else if (eq.inconclusive) {
+            result.equivalenceStatus = EquivalenceStatus::Inconclusive;
+        } else {
+            result.equivalenceStatus = EquivalenceStatus::NotChecked;   // skipped
+        }
+
+        result.equivalenceChecked = (result.equivalenceStatus != EquivalenceStatus::NotChecked);
+        result.equivalent         = (result.equivalenceStatus == EquivalenceStatus::Verified);
+
+        if (verbose) std::cout << "  -> " << eq.message << "\n";
+
+        if (result.equivalenceStatus == EquivalenceStatus::Refuted) {
+            return returnFailure(OptimizationStatus::ERROR_NOT_EQUIVALENT,
+                "Depth optimization produced a non-equivalent netlist and was rolled back: "
+                + eq.message);
+        }
+
+        if ((eq.inconclusive || eq.skipped) && config.rollbackOnInconclusiveEquivalence) {
+            return returnFailure(OptimizationStatus::ERROR_NOT_EQUIVALENT,
+                "Equivalence could not be established and the result was rolled back: "
+                + eq.message);
+        }
+
+        if (eq.partial && verbose) {
+            std::cout << "  [warn] equivalence verified on the clean subset only ("
+                      << eq.comparedPoints << " of "
+                      << (eq.comparedPoints + eq.untrustedPoints) << " points)\n";
+        }
     }
 
-    DepthReport newGlobalPath = netlist.findGlobalCriticalPath();
-    result.newDepth = newGlobalPath.depth;
-    result.depthImproved = (result.newDepth < result.oldDepth);
+    // =====================================================================
+    // 收尾
+    // =====================================================================
+    result.status = result.changed ? OptimizationStatus::SUCCESS
+                                   : OptimizationStatus::NO_IMPROVEMENT;
 
-    int newTotal = 0;
-    const auto newGateTypeCounts = netlist.countGatesByType();
-    for (const auto& pair : newGateTypeCounts) newTotal += pair.second;
-    result.newGateCount = newTotal;
-    result.areaDelta = result.newGateCount - result.oldGateCount;
+    if (result.changed) {
+        result.message = "Generated a depth-optimization candidate measured by "
+                       + result.costMetricName + " using the "
+                       + (loweringApplied ? "direct-lowering" : "legacy basis-enforcement")
+                       + " path";
+        if (budgetExhausted)
+            result.message += "; the request time budget ran out, so this is the best "
+                              "compliant candidate found before the deadline";
 
-    result.changed = !sameNetlistGraph(originalSnapshot, netlist);
-    result.equivalenceChecked = false;
-    result.equivalent = false;
-    result.status = result.changed
-        ? OptimizationStatus::SUCCESS
-        : OptimizationStatus::NO_IMPROVEMENT;
-    result.message = result.changed
-        ? "Generated a depth-optimization candidate; whole-design equivalence is not checked by the core pass."
-        : "Optimization completed without a measurable depth, area, or gate-type change.";
+        // 依三態產生敘述。最重要的是 NotChecked 不能被讀成「不等價」——
+        // 那是呼叫端最容易犯的錯，而兩者對使用者的意義完全相反。
+        switch (result.equivalenceStatus) {
+            case EquivalenceStatus::Verified:
+                result.message += "; equivalence verified";
+                if (result.equivalencePartial)
+                    result.message += " on the trustworthy subset only ("
+                                    + std::to_string(result.equivalenceComparedPoints) + " of "
+                                    + std::to_string(result.equivalenceComparedPoints +
+                                                     result.equivalenceUntrustedPoints)
+                                    + " comparison points)";
+                break;
+            case EquivalenceStatus::Inconclusive:
+                result.message += "; equivalence checking found no counterexample but "
+                                  "could not complete within the time budget";
+                break;
+            case EquivalenceStatus::NotChecked:
+            default:
+                result.message += "; this pass did not run an equivalence check";
+                break;
+        }
+        result.message += ".";
+    } else {
+        result.message = "Optimization completed without a measurable depth, area, "
+                         "or gate-type change.";
+    }
 
     if (verbose) {
-        std::cout << "[Success] Depth: " << result.oldDepth << " -> " << result.newDepth << "\n";
+        std::cout << "[Done] " << result.costMetricName << ": "
+                  << result.oldDepth << " -> " << result.newDepth
+                  << " | global depth: " << result.oldGlobalDepth
+                  << " -> " << result.newGlobalDepth
+                  << " | gates: " << result.oldGateCount
+                  << " -> " << result.newGateCount
+                  << " | equivalent: " << (result.equivalent ? "yes"
+                                          : (result.equivalenceChecked ? "UNPROVEN" : "unchecked"))
+                  << "\n";
         std::cout << "=================================================\n";
     }
     return result;
@@ -1040,4 +1467,16 @@ int DepthOptimizer::eliminateDoubleInverters(Netlist& netlist) {
         for (int loadGateId : rewiredLoads) enqueue(loadGateId);
     }
     return removed;
+}
+
+template <typename NtkT, typename ToNetlistFn>
+depth_opt::CostMeasurement DepthOptimizer::evaluateCandidate(
+        const NtkT& ntk,
+        const Netlist& templateNetlist,
+        ToNetlistFn&& toNetlist,
+        const depth_opt::CostTarget& cost) {
+    Netlist probe = toNetlist(ntk, templateNetlist);
+    eliminateDoubleInverters(probe);
+    probe.trimDeadLogic();          // 讓 gateCount tie-break 有意義
+    return depth_opt::measureCost(probe, cost);
 }

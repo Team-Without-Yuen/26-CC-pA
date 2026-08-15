@@ -546,3 +546,674 @@ void detachGate(Netlist& netlist, int gid) {
     g.type = GateType::UNKNOWN;
     netlist.markDirty();
 }
+
+// ============================================================================
+// GenericLowering — 把 mockturtle 的 AIG/XAG 直接轉成「任意目標 basis」的 Netlist
+// ============================================================================
+//
+// 取代原本的兩段式流程:
+//     XagToNetlist (每條反相邊插一顆 NOT)  →  convertToBasis (逐閘 pattern 展開)
+// 這兩段各自無條件加一層,關鍵路徑上最多 +2 層/節點。
+//
+// 本檔案改用 dual-rail bubble pushing:
+//   每個節點同時追蹤「正相」與「反相」兩個到達層數。一個 AND 節點
+//   F = A·B 有四種等價實現,分別產生不同極性:
+//
+//       AND(A, B)      → F      需要輸入極性 (c0, c1)
+//       NOR(!A, !B)    → F      需要輸入極性 (!c0, !c1)
+//       NAND(A, B)     → !F     需要輸入極性 (c0, c1)
+//       OR(!A, !B)     → !F     需要輸入極性 (!c0, !c1)
+//
+//   四者都是 1 層。所以「反相輸出免費」不是 NAND 的特權,而是
+//   {NAND, OR} 這組的性質;{AND, NOR} 那組則是正相免費。
+//   DP 在拓撲序上選最淺的組合,對深度是最佳的。
+//
+// 這個函式同時吃掉了舊流程的 Stage 4 (basis enforcement) 與
+// Stage 5 (inverter absorption):輸出 by construction 就是合規的,
+// 而 bubble pushing 本身就是全域最佳版本的 inverter absorption。
+//
+// XagToNetlist / AigToNetlist 變成特例:
+//     allowed = {AND, XOR, NOT}  等價於  XagToNetlist
+//     allowed = {AND, NOT}       等價於  AigToNetlist
+// ============================================================================
+
+namespace lowering {
+
+// ============================================================================
+// 1. LoweringBasis
+// ============================================================================
+
+LoweringBasis LoweringBasis::fromLists(const std::vector<GateType>& allowed,
+                                       const std::vector<GateType>& banned) {
+    LoweringBasis b;
+    static const GateType kComb[] = {
+        GateType::AND, GateType::OR, GateType::NAND, GateType::NOR,
+        GateType::NOT, GateType::BUF, GateType::XOR, GateType::XNOR };
+
+    for (GateType t : kComb) {
+        bool ok = allowed.empty() ||
+                  std::find(allowed.begin(), allowed.end(), t) != allowed.end();
+        if (ok && std::find(banned.begin(), banned.end(), t) != banned.end()) ok = false;
+        b.allow[static_cast<int>(t)] = ok;
+    }
+    return b;
+}
+
+bool LoweringBasis::canInvert() const {
+    return has(GateType::NOT)  || has(GateType::NAND) || has(GateType::NOR) ||
+           has(GateType::XOR)  || has(GateType::XNOR);
+}
+
+bool LoweringBasis::hasAndForm() const {
+    return has(GateType::AND) || has(GateType::NOR) ||
+           has(GateType::NAND) || has(GateType::OR);
+}
+
+bool LoweringBasis::hasXorForm() const {
+    return has(GateType::XOR) || has(GateType::XNOR);
+}
+
+bool LoweringBasis::needsConstForInvert() const {
+    return !has(GateType::NOT) && !has(GateType::NAND) && !has(GateType::NOR);
+}
+
+bool LoweringBasis::complete() const {
+    return canInvert() && hasAndForm();
+}
+
+std::string LoweringBasis::describe() const {
+    static const std::pair<GateType, const char*> kNames[] = {
+        {GateType::AND,"AND"}, {GateType::OR,"OR"}, {GateType::NAND,"NAND"},
+        {GateType::NOR,"NOR"}, {GateType::NOT,"NOT"}, {GateType::BUF,"BUF"},
+        {GateType::XOR,"XOR"}, {GateType::XNOR,"XNOR"} };
+    std::string s;
+    for (const auto& [t, n] : kNames)
+        if (has(t)) { if (!s.empty()) s += ","; s += n; }
+    return s.empty() ? "<empty>" : s;
+}
+
+// ============================================================================
+// 2. 內部表示 (Lowering Graph) — 僅本編譯單元可見
+// ============================================================================
+namespace {
+
+constexpr int kInf = INT_MAX / 4;
+
+// 指向 LNode 的參照,帶極性
+struct LRef {
+    uint32_t node = 0;
+    bool     comp = false;
+};
+
+struct LNode {
+    enum class Kind : uint8_t { CONST, PI, AND, XOR };
+
+    Kind     kind = Kind::AND;
+    uint32_t fanin[2] = {0, 0};
+    bool     comp[2]  = {false, false};
+    uint8_t  basisId  = 0;      // 0 = default, 1 = cone
+    int      extNet   = -1;     // PI / CONST 用:外部已存在的 net id
+};
+
+// 一個 slot (node, polarity) 的實現方式
+enum class Impl : uint8_t {
+    NONE,
+    EXTERNAL,   // PI / DFF.Q / 常數,net 已存在
+    AND_POS,    // AND(f0@c0, f1@c1)        → 正相
+    NOR_POS,    // NOR(f0@!c0, f1@!c1)      → 正相
+    NAND_NEG,   // NAND(f0@c0, f1@c1)       → 反相
+    OR_NEG,     // OR(f0@!c0, f1@!c1)       → 反相
+    XOR_G,      // XOR(f0@q0, f1@q1)
+    XNOR_G,     // XNOR(f0@q0, f1@q1)
+    INVERT,     // 從同一節點的另一個 slot 反相過來
+};
+
+struct SlotPlan {
+    Impl kind  = Impl::NONE;
+    bool q0    = false;   // fanin 0 需要的極性
+    bool q1    = false;   // fanin 1 需要的極性
+    int  depth = kInf;
+};
+
+// ---------------------------------------------------------------------------
+// 找出 cone root 對應的 PO index。
+// PO 順序與 DoMockturtleToNetlist 一致:先所有真實 PO bit,再所有 DFF 的 D。
+// ---------------------------------------------------------------------------
+int findPoIndexByName(const Netlist& old_nl, const std::string& name) {
+    int idx = 0;
+    for (const auto& port : old_nl.getPrimaryOutputs()) {
+        for (int netId : port.netIds) {
+            if (old_nl.isValidNetId(netId) && old_nl.getNet(netId).name == name) return idx;
+            ++idx;
+        }
+    }
+    // pseudo PO:DFF 的 D 端
+    for (size_t i = 0; i < old_nl.getGateCount(); ++i) {
+        const auto& g = old_nl.getGate(i);
+        if (g.type != GateType::DFF) continue;
+        for (size_t p = 0; p < g.inputPinNames.size(); ++p) {
+            if (g.inputPinNames[p] != "D") continue;
+            const int netId = g.inputNetIds[p];
+            if (old_nl.isValidNetId(netId) && old_nl.getNet(netId).name == name) return idx;
+        }
+        // 也接受直接指名 DFF instance
+        if (g.instName == name) return idx;
+        ++idx;
+    }
+    return -1;
+}
+
+// 從某個 PO 往回標記 transitive fanin(在 mockturtle 網路上)
+template <typename Ntk>
+std::vector<uint8_t> markConeNodes(const Ntk& ntk, int poIndex) {
+    std::vector<uint8_t> inCone(ntk.size(), 0);
+    if (poIndex < 0 || poIndex >= (int)ntk.num_pos()) return inCone;
+
+    std::vector<uint64_t> stack;
+    const auto root = ntk.get_node(ntk.po_at(poIndex));
+    stack.push_back(root);
+    inCone[root] = 1;
+
+    while (!stack.empty()) {
+        const auto n = stack.back();
+        stack.pop_back();
+        if (ntk.is_pi(n) || ntk.is_constant(n)) continue;
+        ntk.foreach_fanin(ntk.index_to_node(n), [&](auto const& f) {
+            const auto fn = ntk.get_node(f);
+            if (!inCone[fn]) { inCone[fn] = 1; stack.push_back(fn); }
+        });
+    }
+    return inCone;
+}
+
+} // anonymous namespace
+
+// ============================================================================
+// 3. 主函式
+// ============================================================================
+
+template <typename Ntk>
+LoweringResult DoLowerToNetlist(const Ntk& ntk,
+                                const Netlist& old_nl,
+                                const LoweringSpec& spec) {
+    LoweringResult out;
+
+    // -----------------------------------------------------------------------
+    // 0. 功能完備性檢查 —— 在動任何東西之前
+    // -----------------------------------------------------------------------
+    std::array<LoweringBasis, 2> bases{ spec.defaultBasis,
+                                        spec.coneBasis.value_or(spec.defaultBasis) };
+    const int numBases = spec.hasCone() ? 2 : 1;
+
+    for (int i = 0; i < numBases; ++i) {
+        if (!bases[i].complete()) {
+            out.message = std::string("basis {") + bases[i].describe() +
+                "} is not functionally complete: " +
+                (!bases[i].canInvert() ? "cannot realize inversion"
+                                       : "cannot realize a two-input product");
+            return out;
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 1. Cone 標記
+    // -----------------------------------------------------------------------
+    std::vector<uint8_t> inCone;
+    if (spec.hasCone()) {
+        const int poIdx = findPoIndexByName(old_nl, spec.coneRootName);
+        if (poIdx < 0) {
+            out.message = "cone root '" + spec.coneRootName +
+                          "' is not a primary output or a DFF D-pin net.";
+            return out;
+        }
+        inCone = markConeNodes(ntk, poIdx);
+        for (uint8_t v : inCone) out.coneNodeCount += v;
+    }
+    auto basisIdOf = [&](uint64_t nodeIdx) -> uint8_t {
+        return (!inCone.empty() && inCone[nodeIdx]) ? 1 : 0;
+    };
+
+    // -----------------------------------------------------------------------
+    // 2. 建立 Lowering Graph
+    //    XOR 節點在「該節點的 basis 沒有 XOR/XNOR」時展開成 3 個 AND:
+    //        p = AND(x, y)         q = AND(!x, !y)         r = AND(!p, !q)
+    //    r = !(x·y) · !(!x·!y) = x XOR y
+    //    展開後三個節點各自參與極性最佳化,通常比寫死的 4-NAND 樹(3 層)好。
+    // -----------------------------------------------------------------------
+    std::vector<LNode> nodes;
+    nodes.reserve(ntk.size() * 2);
+    std::vector<LRef> ntkToL(ntk.size());
+
+    auto addNode = [&](LNode::Kind kind, uint32_t f0, bool c0,
+                       uint32_t f1, bool c1, uint8_t basisId) -> uint32_t {
+        LNode n;
+        n.kind = kind;
+        n.fanin[0] = f0; n.comp[0] = c0;
+        n.fanin[1] = f1; n.comp[1] = c1;
+        n.basisId  = basisId;
+        nodes.push_back(n);
+        return (uint32_t)(nodes.size() - 1);
+    };
+
+    // 常數節點
+    const uint32_t lConst = [&] {
+        LNode n; n.kind = LNode::Kind::CONST;
+        nodes.push_back(n);
+        return (uint32_t)(nodes.size() - 1);
+    }();
+    ntkToL[ntk.get_node(ntk.get_constant(false))] = LRef{lConst, false};
+
+    // PI 節點(含 DFF.Q 的 pseudo PI)照 mockturtle 的 PI 順序建立
+    std::vector<uint32_t> piL(ntk.num_pis(), 0);
+    for (uint32_t i = 0; i < ntk.num_pis(); ++i) {
+        LNode n; n.kind = LNode::Kind::PI;
+        nodes.push_back(n);
+        piL[i] = (uint32_t)(nodes.size() - 1);
+        ntkToL[ntk.pi_at(i)] = LRef{piL[i], false};
+    }
+
+    // 邏輯節點(mockturtle 的 foreach_gate 是拓撲序)
+    ntk.foreach_gate([&](auto const& n) {
+        const uint64_t nIdx = ntk.node_to_index(n);
+        const uint8_t  bid  = basisIdOf(nIdx);
+
+        LRef f[2];
+        int k = 0;
+        ntk.foreach_fanin(n, [&](auto const& s) {
+            const LRef base = ntkToL[ntk.get_node(s)];
+            f[k++] = LRef{ base.node, (bool)(base.comp ^ ntk.is_complemented(s)) };
+        });
+
+        const bool isAnd = ntk.is_and(n);
+
+        if (isAnd) {
+            ntkToL[nIdx] = LRef{
+                addNode(LNode::Kind::AND, f[0].node, f[0].comp,
+                                          f[1].node, f[1].comp, bid), false };
+            return;
+        }
+
+        // ---- XOR 節點 ----
+        // XOR 的補數可以自由外提:XOR(!a,b) = !XOR(a,b)
+        const bool cx = f[0].comp ^ f[1].comp;
+
+        if (bases[bid].hasXorForm()) {
+            ntkToL[nIdx] = LRef{
+                addNode(LNode::Kind::XOR, f[0].node, false,
+                                          f[1].node, false, bid), cx };
+            return;
+        }
+
+        // 展開成 3 個 AND
+        const uint32_t p = addNode(LNode::Kind::AND, f[0].node, false, f[1].node, false, bid);
+        const uint32_t q = addNode(LNode::Kind::AND, f[0].node, true,  f[1].node, true,  bid);
+        const uint32_t r = addNode(LNode::Kind::AND, p, true, q, true, bid);
+        ntkToL[nIdx] = LRef{ r, cx };
+    });
+
+    const uint32_t numL = (uint32_t)nodes.size();
+
+    // -----------------------------------------------------------------------
+    // 3. Forward DP — 每個節點兩個 slot 的最小到達層數
+    // -----------------------------------------------------------------------
+    std::vector<std::array<SlotPlan, 2>> plan(numL);
+
+    // PI / CONST 的 slot0 是現成的
+    plan[lConst][0] = SlotPlan{Impl::EXTERNAL, false, false, 0};
+    plan[lConst][1] = SlotPlan{Impl::EXTERNAL, false, false, 0};  // 常數兩極性都免費
+    for (uint32_t pi : piL) plan[pi][0] = SlotPlan{Impl::EXTERNAL, false, false, 0};
+
+    auto consider = [](SlotPlan& slot, Impl kind, bool q0, bool q1, int depth) {
+        if (depth < slot.depth) slot = SlotPlan{kind, q0, q1, depth};
+    };
+
+    for (uint32_t i = 0; i < numL; ++i) {
+        const LNode& n = nodes[i];
+        const LoweringBasis& B = bases[n.basisId];
+
+        if (n.kind == LNode::Kind::AND) {
+            const int a0 = plan[n.fanin[0]][n.comp[0] ? 1 : 0].depth;   // f0 @ c0
+            const int a1 = plan[n.fanin[1]][n.comp[1] ? 1 : 0].depth;   // f1 @ c1
+            const int b0 = plan[n.fanin[0]][n.comp[0] ? 0 : 1].depth;   // f0 @ !c0
+            const int b1 = plan[n.fanin[1]][n.comp[1] ? 0 : 1].depth;   // f1 @ !c1
+
+            const int dSame = (a0 >= kInf || a1 >= kInf) ? kInf : std::max(a0, a1) + 1;
+            const int dFlip = (b0 >= kInf || b1 >= kInf) ? kInf : std::max(b0, b1) + 1;
+
+            // 正相
+            if (B.has(GateType::AND)) consider(plan[i][0], Impl::AND_POS, n.comp[0], n.comp[1], dSame);
+            if (B.has(GateType::NOR)) consider(plan[i][0], Impl::NOR_POS, !n.comp[0], !n.comp[1], dFlip);
+            // 反相
+            if (B.has(GateType::NAND)) consider(plan[i][1], Impl::NAND_NEG, n.comp[0], n.comp[1], dSame);
+            if (B.has(GateType::OR))   consider(plan[i][1], Impl::OR_NEG,   !n.comp[0], !n.comp[1], dFlip);
+
+        } else if (n.kind == LNode::Kind::XOR) {
+            // fanin 的 comp 已在建圖時正規化為 false。
+            // XOR(f0@q0, f1@q1) 的值 = f0 ^ f1 ^ q0 ^ q1
+            //   → slot p 需要 q0^q1 == p
+            // XNOR 則需要 q0^q1 == !p
+            for (int p = 0; p < 2; ++p) {
+                for (int q0 = 0; q0 < 2; ++q0) {
+                    for (int q1 = 0; q1 < 2; ++q1) {
+                        const int d0 = plan[n.fanin[0]][q0].depth;
+                        const int d1 = plan[n.fanin[1]][q1].depth;
+                        if (d0 >= kInf || d1 >= kInf) continue;
+                        const int d = std::max(d0, d1) + 1;
+                        const int parity = q0 ^ q1;
+                        if (B.has(GateType::XOR)  && parity == p)
+                            consider(plan[i][p], Impl::XOR_G, q0, q1, d);
+                        if (B.has(GateType::XNOR) && parity == (p ^ 1))
+                            consider(plan[i][p], Impl::XNOR_G, q0, q1, d);
+                    }
+                }
+            }
+        }
+
+        // 反相鬆弛:從另一個 slot 插一顆 NOT(等價閘)過來。
+        // 做兩次就收斂 —— 若 slot A 是由 slot B 反相而來,B 不可能再由 A 反相
+        // 而改善(那需要 d+2 < d)。
+        if (B.canInvert()) {
+            for (int r = 0; r < 2; ++r) {
+                for (int p = 0; p < 2; ++p) {
+                    const int other = plan[i][1 - p].depth;
+                    if (other < kInf) consider(plan[i][p], Impl::INVERT, false, false, other + 1);
+                }
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 4. Backward marking — 只有真正被消費的 slot 才會被生成
+    //    少了這一趟,兩個極性都生 = 面積直接翻倍。
+    // -----------------------------------------------------------------------
+    std::vector<std::array<uint8_t, 2>> need(numL, {0, 0});
+
+    std::vector<std::pair<uint32_t, int>> stack;
+    auto require = [&](uint32_t node, int pol) {
+        if (need[node][pol]) return;
+        need[node][pol] = 1;
+        stack.emplace_back(node, pol);
+    };
+
+    // 從所有 PO(含 pseudo PO / DFF.D)出發
+    std::vector<std::pair<uint32_t, int>> poNeed(ntk.num_pos());
+    for (uint32_t i = 0; i < ntk.num_pos(); ++i) {
+        const auto sig  = ntk.po_at(i);
+        const LRef base = ntkToL[ntk.get_node(sig)];
+        const int  pol  = (base.comp ^ ntk.is_complemented(sig)) ? 1 : 0;
+        poNeed[i] = {base.node, pol};
+        require(base.node, pol);
+    }
+
+    while (!stack.empty()) {
+        const auto [i, p] = stack.back();
+        stack.pop_back();
+
+        const SlotPlan& sp = plan[i][p];
+        const LNode& n = nodes[i];
+
+        switch (sp.kind) {
+            case Impl::INVERT:
+                require(i, 1 - p);
+                break;
+            case Impl::AND_POS: case Impl::NOR_POS:
+            case Impl::NAND_NEG: case Impl::OR_NEG:
+            case Impl::XOR_G: case Impl::XNOR_G:
+                require(n.fanin[0], sp.q0 ? 1 : 0);
+                require(n.fanin[1], sp.q1 ? 1 : 0);
+                break;
+            default:
+                break;   // EXTERNAL / NONE
+        }
+    }
+
+    // 檢查有沒有無法實現的 slot(理論上完備性檢查過就不會發生)
+    for (uint32_t i = 0; i < numL; ++i) {
+        for (int p = 0; p < 2; ++p) {
+            if (need[i][p] && plan[i][p].kind == Impl::NONE) {
+                out.message = "internal error: unrealizable slot under the given basis "
+                              "(node " + std::to_string(i) + ", polarity " + std::to_string(p) + ").";
+                return out;
+            }
+        }
+    }
+
+    // -----------------------------------------------------------------------
+    // 5. Emit — 建立實際的 Netlist
+    //    PI / PO / DFF / 常數的處理與 DoMockturtleToNetlist 保持一致。
+    // -----------------------------------------------------------------------
+    Netlist nl;
+    std::unordered_map<int, int> oldNetToNewNet;
+
+    const int const0Net = nl.addNet("1'b0");
+    nl.setNetConst(const0Net, true, 0);
+    const int const1Net = nl.addNet("1'b1");
+    nl.setNetConst(const1Net, true, 1);
+
+    for (size_t i = 0; i < old_nl.getNetCount(); ++i) {
+        if (!old_nl.getNet(i).isConst) continue;
+        if (old_nl.getNet(i).constVal == 0) oldNetToNewNet[i] = const0Net;
+        if (old_nl.getNet(i).constVal == 1) oldNetToNewNet[i] = const1Net;
+    }
+
+    // slot → net id
+    std::vector<std::array<int, 2>> slotNet(numL, {-1, -1});
+    slotNet[lConst][0] = const0Net;
+    slotNet[lConst][1] = const1Net;
+
+    // ---- 5a. 真實 PI ----
+    int piIndex = 0;
+    for (const auto& port : old_nl.getPrimaryInputs()) {
+        nl.addPrimaryInput(port.name, port.msb, port.lsb);
+        const auto& newPort = nl.getPrimaryInputs().back();
+        for (size_t i = 0; i < port.netIds.size(); ++i) {
+            oldNetToNewNet[port.netIds[i]] = newPort.netIds[i];
+            slotNet[piL[piIndex++]][0] = newPort.netIds[i];
+        }
+    }
+    const int numRealPis = piIndex;
+
+    // ---- 5b. PO port 宣告 ----
+    std::vector<std::pair<int, int>> poNetMappings;   // <old_net, new_net>
+    for (const auto& oldPort : old_nl.getPrimaryOutputs()) {
+        nl.addPrimaryOutput(oldPort.name, oldPort.msb, oldPort.lsb);
+        const auto& newPort = nl.getPrimaryOutputs().back();
+        for (size_t i = 0; i < oldPort.netIds.size(); ++i)
+            poNetMappings.push_back({oldPort.netIds[i], newPort.netIds[i]});
+    }
+
+    // ---- 5c. slot 直通 PO 的認領表 ----
+    // 讓一個 slot 的產生閘直接把輸出接到 PO net 上,省掉一顆 BUF。
+    // 只有「真正的邏輯閘」能認領:PI 與常數不能改名。
+    std::unordered_map<uint64_t, int> slotClaimsPo;
+    auto slotKey = [](uint32_t node, int pol) -> uint64_t {
+        return ((uint64_t)node << 1) | (uint64_t)pol;
+    };
+    for (uint32_t i = 0; i < poNetMappings.size() && i < poNeed.size(); ++i) {
+        const auto [ln, pol] = poNeed[i];
+        if (nodes[ln].kind == LNode::Kind::PI || nodes[ln].kind == LNode::Kind::CONST) continue;
+        const uint64_t key = slotKey(ln, pol);
+        if (slotClaimsPo.count(key)) continue;          // 已被別的 PO 認領
+        slotClaimsPo[key] = poNetMappings[i].second;
+    }
+
+    // ---- 5d. DFF ----
+    int gateCounter = 0, netCounter = 0;
+    auto newGateName = [&] { return "g_lo_" + std::to_string(gateCounter++); };
+    auto newNetName  = [&] { return "n_lo_" + std::to_string(netCounter++); };
+
+    std::vector<int> newDffIds;
+    for (size_t i = 0; i < old_nl.getGateCount(); ++i) {
+        const auto& oldGate = old_nl.getGate(i);
+        if (oldGate.type != GateType::DFF) continue;
+
+        const int dffId = nl.addGate(oldGate.instName, GateType::DFF);
+        newDffIds.push_back(dffId);
+
+        for (size_t p = 0; p < oldGate.inputPinNames.size(); ++p) {
+            if (oldGate.inputPinNames[p] == "D") continue;
+            const int oldNet = oldGate.inputNetIds[p];
+            auto it = oldNetToNewNet.find(oldNet);
+            if (it != oldNetToNewNet.end())
+                nl.connectGateInput(dffId, it->second, oldGate.inputPinNames[p]);
+        }
+
+        const uint32_t qL = piL[piIndex++];
+        const uint64_t key = slotKey(qL, 0);
+        int qNet = -1;
+        auto claim = slotClaimsPo.find(key);
+        if (claim != slotClaimsPo.end()) {
+            qNet = claim->second;              // Q 直接當 PO
+            slotClaimsPo.erase(claim);
+        } else {
+            qNet = nl.addNet(oldGate.instName + "_Q");
+        }
+        nl.connectGateOutput(dffId, qNet);
+        slotNet[qL][0] = qNet;
+    }
+    (void)numRealPis;
+
+    // ---- 5e. 產生邏輯閘 ----
+    auto emitGate = [&](GateType type, int inA, int inB, int outNet) -> int {
+        const int gid = nl.addGate(newGateName(), type);
+        const int nid = (outNet >= 0) ? outNet : nl.addNet(newNetName());
+        nl.connectGateInput(gid, inA);
+        if (inB >= 0) nl.connectGateInput(gid, inB);
+        nl.connectGateOutput(gid, nid);
+        return nid;
+    };
+
+    // 依 basis 挑一種「反相」實現,全都是 1 層
+    auto emitInvert = [&](const LoweringBasis& B, int inNet, int outNet) -> int {
+        if (B.has(GateType::NOT))  return emitGate(GateType::NOT,  inNet, -1,        outNet);
+        if (B.has(GateType::NAND)) return emitGate(GateType::NAND, inNet, inNet,     outNet);
+        if (B.has(GateType::NOR))  return emitGate(GateType::NOR,  inNet, inNet,     outNet);
+        if (B.has(GateType::XOR))  return emitGate(GateType::XOR,  inNet, const1Net, outNet);
+        return emitGate(GateType::XNOR, inNet, const0Net, outNet);   // XNOR(a, 1'b0)
+    };
+
+    auto emitSlot = [&](uint32_t i, int p) {
+        if (slotNet[i][p] >= 0) return;
+        const SlotPlan& sp = plan[i][p];
+        const LNode& n = nodes[i];
+        const LoweringBasis& B = bases[n.basisId];
+
+        auto claimed = slotClaimsPo.find(slotKey(i, p));
+        const int outNet = (claimed != slotClaimsPo.end()) ? claimed->second : -1;
+
+        int result = -1;
+        switch (sp.kind) {
+            case Impl::INVERT:
+                result = emitInvert(B, slotNet[i][1 - p], outNet);
+                break;
+            case Impl::AND_POS:
+                result = emitGate(GateType::AND,  slotNet[n.fanin[0]][sp.q0],
+                                                  slotNet[n.fanin[1]][sp.q1], outNet);
+                break;
+            case Impl::NOR_POS:
+                result = emitGate(GateType::NOR,  slotNet[n.fanin[0]][sp.q0],
+                                                  slotNet[n.fanin[1]][sp.q1], outNet);
+                break;
+            case Impl::NAND_NEG:
+                result = emitGate(GateType::NAND, slotNet[n.fanin[0]][sp.q0],
+                                                  slotNet[n.fanin[1]][sp.q1], outNet);
+                break;
+            case Impl::OR_NEG:
+                result = emitGate(GateType::OR,   slotNet[n.fanin[0]][sp.q0],
+                                                  slotNet[n.fanin[1]][sp.q1], outNet);
+                break;
+            case Impl::XOR_G:
+                result = emitGate(GateType::XOR,  slotNet[n.fanin[0]][sp.q0],
+                                                  slotNet[n.fanin[1]][sp.q1], outNet);
+                break;
+            case Impl::XNOR_G:
+                result = emitGate(GateType::XNOR, slotNet[n.fanin[0]][sp.q0],
+                                                  slotNet[n.fanin[1]][sp.q1], outNet);
+                break;
+            default:
+                return;   // EXTERNAL 已經有 net 了
+        }
+        slotNet[i][p] = result;
+    };
+
+    // 拓撲序走一次。同一節點若兩個 slot 都要,先生非 INVERT 的那個。
+    for (uint32_t i = 0; i < numL; ++i) {
+        const bool inv0 = plan[i][0].kind == Impl::INVERT;
+        if (need[i][0] && !inv0) emitSlot(i, 0);
+        if (need[i][1]) emitSlot(i, 1);
+        if (need[i][0] && inv0)  emitSlot(i, 0);
+    }
+
+    // ---- 5f. PO 收尾 ----
+    // 沒被認領的 PO(由 PI/常數驅動、或多個 PO 共用同一訊號)需要橋接。
+    // BUF 不在 basis 裡時用兩顆反相閘代替。
+    const LoweringBasis& topB = bases[0];
+    for (uint32_t i = 0; i < poNetMappings.size() && i < poNeed.size(); ++i) {
+        const int oldNetId = poNetMappings[i].first;
+        const int extNetId = poNetMappings[i].second;
+
+        const Net& oldPoNet = old_nl.getNet(oldNetId);
+        if (oldPoNet.driverGateId == -1 && !oldPoNet.isPI) continue;   // 懸空
+
+        const auto [ln, pol] = poNeed[i];
+        const int src = slotNet[ln][pol];
+        if (src < 0 || src == extNetId) continue;                      // 已直通
+
+        if (topB.has(GateType::BUF)) {
+            emitGate(GateType::BUF, src, -1, extNetId);
+        } else {
+            const int mid = emitInvert(topB, src, -1);
+            emitInvert(topB, mid, extNetId);
+        }
+    }
+
+    // ---- 5g. DFF.D ----
+    {
+        uint32_t poIdx = (uint32_t)poNetMappings.size();
+        for (int dffId : newDffIds) {
+            if (poIdx >= poNeed.size()) break;
+            const auto [ln, pol] = poNeed[poIdx++];
+            const int d = slotNet[ln][pol];
+            nl.connectGateInput(dffId, (d >= 0 ? d : const0Net), "D");
+        }
+    }
+
+    mergeDuplicateInverters(nl);
+    nl.trimDeadLogic();
+
+    out.netlist   = std::move(nl);
+    out.depth     = out.netlist.findGlobalCriticalPath().depth;
+    out.gateCount = 0;
+    for (const auto& kv : out.netlist.countGatesByType()) out.gateCount += kv.second;
+    out.ok        = true;
+    out.message   = "lowered to basis {" + bases[0].describe() + "}" +
+                    (spec.hasCone() ? (", cone {" + bases[1].describe() + "}") : "");
+    return out;
+}
+
+// ============================================================================
+// 4. 顯式實例化
+// ============================================================================
+
+template LoweringResult DoLowerToNetlist<mockturtle::xag_network>(
+    const mockturtle::xag_network&, const Netlist&, const LoweringSpec&);
+template LoweringResult DoLowerToNetlist<mockturtle::aig_network>(
+    const mockturtle::aig_network&, const Netlist&, const LoweringSpec&);
+
+// ============================================================================
+// 5. 便利包裝
+// ============================================================================
+
+LoweringResult LowerXag(const mockturtle::xag_network& xag,
+                        const Netlist& old_nl,
+                        const LoweringSpec& spec) {
+    return DoLowerToNetlist<mockturtle::xag_network>(xag, old_nl, spec);
+}
+
+LoweringResult LowerAig(const mockturtle::aig_network& aig,
+                        const Netlist& old_nl,
+                        const LoweringSpec& spec) {
+    return DoLowerToNetlist<mockturtle::aig_network>(aig, old_nl, spec);
+}
+
+} // namespace lowering

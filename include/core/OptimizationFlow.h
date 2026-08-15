@@ -52,9 +52,18 @@ struct OptApplyRequest {
     OptPassKind passKind = OptPassKind::Unknown;
     std::vector<int> candidateIds;
 
+    // 成本函數的作用域（= prompt 裡 "The cost function is ..." 那句）
     TargetScope scope = TargetScope::WHOLE_NETLIST;
     std::string scopeName;
     OptDepthObjective depthObjective = OptDepthObjective::GlobalMaximum;
+    // 基底約束的作用域（= prompt 裡 "ensuring ... only ... gates" 那句）。
+    // WHOLE_NETLIST = 約束整張 netlist；設成 cone = 只約束該 cone，cone 外不受限。
+    // 與 scope/scopeName 完全獨立，例如：
+    //   "Optimize the logic cone of n14 ... cost is the depth of the cone of n14"
+    //   + "ensuring the netlist remains NAND and NOT only"
+    //   → scope = NET_FANIN/"n14"，basisScope = WHOLE_NETLIST
+    TargetScope basisScope = TargetScope::WHOLE_NETLIST;
+    std::string basisScopeName;
     std::vector<GateType> allowedTypes;
     std::vector<GateType> bannedTypes;
     int targetDepth = -1;
