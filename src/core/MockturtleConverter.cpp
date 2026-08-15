@@ -1181,6 +1181,21 @@ LoweringResult DoLowerToNetlist(const Ntk& ntk,
     mergeDuplicateInverters(nl);
     nl.trimDeadLogic();
 
+     // debug: 統計各種 gate 的數量
+    int cnt[10] = {0};
+    for (uint32_t i = 0; i < numL; ++i)
+        for (int p = 0; p < 2; ++p)
+            if (need[i][p]) cnt[(int)plan[i][p].kind]++;
+    std::cout << "  [lowering] AND_POS=" << cnt[(int)Impl::AND_POS]
+              << " NOR_POS="  << cnt[(int)Impl::NOR_POS]
+              << " NAND_NEG=" << cnt[(int)Impl::NAND_NEG]
+              << " OR_NEG="   << cnt[(int)Impl::OR_NEG]
+              << " XOR_G="    << cnt[(int)Impl::XOR_G]
+              << " INVERT="   << cnt[(int)Impl::INVERT]
+              << " / LNodes=" << numL
+              << " xag.size=" << ntk.size() << "\n";
+    
+
     out.netlist   = std::move(nl);
     out.depth     = out.netlist.findGlobalCriticalPath().depth;
     out.gateCount = 0;

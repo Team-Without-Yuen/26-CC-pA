@@ -118,7 +118,7 @@ int main(int argc, char** argv) {
             "  --basis <types>     comma-separated allowed types, e.g. NAND,NOT\n"
             "  --ban <types>       comma-separated banned types\n"
             "  --basis-cone <net>  restrict the basis to this cone only (default: whole netlist)\n"
-            "  --patience N        override patience for the second run (default 3)\n"
+            "  --patience N        override patience for the second run (default 1)\n"
             "  --iters N           max iterations (default 10)\n"
             "  --budget SEC        request time budget (default 290)\n"
             "  --out <file.v>      write the best result\n"
@@ -129,7 +129,7 @@ int main(int argc, char** argv) {
     const std::string inputPath = argv[1];
     std::string costConeName, basisConeName, outPath = "out.v";
     std::vector<GateType> allowed, banned;
-    int  patience = 3, iters = 10;
+    int  patience = 1, iters = 10;
     double budget = request_time_budget::kGeneralToolBudgetSeconds;
     bool verbose = false;
 
@@ -193,7 +193,6 @@ int main(int argc, char** argv) {
 
     // ---- 兩組設定：baseline(patience=1，等同舊行為) vs 新設定 ----
     std::vector<RunConfig> configs = {
-        { "baseline(p=1)", IterationPolicy{ iters, 1 } },
         { "patience(p=" + std::to_string(patience) + ")", IterationPolicy{ iters, patience } },
     };
 

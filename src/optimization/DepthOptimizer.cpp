@@ -11,6 +11,7 @@
 #include <unordered_set>
 #include <unordered_map>
 #include <chrono>
+#include <type_traits>
 
 namespace {
 
@@ -415,209 +416,150 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(
     }
 
     std::unordered_set<GateType> allowedSet(allowedTypes.begin(), allowedTypes.end());
-    const bool isPureAIG = bannedTypes.empty() && allowedSet.size() == 2 &&
-                           allowedSet.count(GateType::AND) && allowedSet.count(GateType::NOT);
     const bool canAbsorbInverters =
         isGateAllowed(GateType::NAND, allowedTypes, bannedTypes) ||
         isGateAllowed(GateType::NOR,  allowedTypes, bannedTypes) ||
         isGateAllowed(GateType::XNOR, allowedTypes, bannedTypes);
-    const bool useGlobalAIG = !hasLocalBasisScope && isPureAIG;
-
-    bool loweringActive = loweringUsable;
-
-    auto toNetlistXag = [&](const mockturtle::xag_network& n, const Netlist& t) -> Netlist {
-        if (loweringActive) {
-            lowering::LoweringResult r = lowering::LowerXag(n, t, loweringSpec);
-            if (r.ok) return std::move(r.netlist);
-            loweringActive = false;
-            if (verbose) std::cout << "  [warn] lowering failed at runtime: " << r.message << "\n";
-        }
-        return XagToNetlist(n, t);
-    };
-    auto toNetlistAig = [&](const mockturtle::aig_network& n, const Netlist& t) -> Netlist {
-        if (loweringActive) {
-            lowering::LoweringResult r = lowering::LowerAig(n, t, loweringSpec);
-            if (r.ok) return std::move(r.netlist);
-            loweringActive = false;
-            if (verbose) std::cout << "  [warn] lowering failed at runtime: " << r.message << "\n";
-        }
-        return AigToNetlist(n, t);
-    };
 
     // =====================================================================
-    // 階段 2：全域深度壓縮（deadline-aware）
-    //
-    // 時間預留:離開迴圈後還要做「最終 lowering + 結算量測 + 等價驗證」。
-    // 這些都不能被砍,所以迴圈的可用時間是
-    //     min(request 剩餘 - reserve, stage2 上限剩餘)
-    // reserve 依閘數縮放:大電路的 lowering 與 CEC 都比較久。
+    // 階段 2：全域深度壓縮（AIG / XAG 雙路徑 + warm-start）
     // =====================================================================
-    constexpr double kStage2TimeLimitSeconds = 120.0;
+    constexpr double kStage2TimeLimitSeconds = 200.0;
     const double stage2BudgetSeconds = requestDeadline != nullptr
         ? requestDeadline->boundedStageSeconds(kStage2TimeLimitSeconds)
         : kStage2TimeLimitSeconds;
     const auto stage2Start = std::chrono::steady_clock::now();
     auto stage2Elapsed = [&]() {
-        return std::chrono::duration<double>(std::chrono::steady_clock::now() - stage2Start).count();
+        return std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - stage2Start).count();
     };
 
-    const double perGateSeconds   = 0.0003;
-    const double finalizeReserve = std::max(3.0, result.oldGateCount * 0.00009); // 26k→3.0s, 112k→10.1s
-    const double equivReserve = config.verifyEquivalence
-                                ? config.equivalenceReserveSeconds   // 預設 15.0
-                                : 0.0;
-    const double totalReserve     = finalizeReserve + equivReserve;
-    const double firstIterEstimate = 6.0 + result.oldGateCount * 0.00013;      // 26k→9.4s, 112k→20.6s
+    const double finalizeReserve = std::max(3.0, result.oldGateCount * 0.00009);
+    const double equivReserve    = config.verifyEquivalence
+                                 ? config.equivalenceReserveSeconds : 0.0;
+    const double totalReserve    = finalizeReserve + equivReserve;
+    const double firstIterEstimate = 6.0 + result.oldGateCount * 0.00013;
 
     if (verbose) {
         std::cout << "             reserve   : finalize " << finalizeReserve
                   << "s + equiv " << equivReserve << "s\n";
     }
-
     if (stage2BudgetSeconds <= 0.0) {
-        return returnTimeout("Depth optimization could not enter Stage 2 because the request deadline expired.");
+        return returnTimeout("Depth optimization could not enter Stage 2 because "
+                             "the request deadline expired.");
     }
 
-    // 一輪迭代放不放得下。lastIterSeconds <= 0 表示還沒有歷史資料。
-    auto iterationFits = [&](double lastIterSeconds, std::string& why) {
-        const double predicted = (lastIterSeconds > 0.0) ? lastIterSeconds * 1.3
-                                                         : firstIterEstimate;
-        const double byRequest = remainingSeconds() - totalReserve;
-        const double byStage2   = stage2BudgetSeconds - stage2Elapsed();
-        const double available  = std::min(byRequest, byStage2);
-        if (predicted <= available) return true;
-        why = "next iteration needs ~" + std::to_string(predicted) +
-              "s but only " + std::to_string(available) + "s is available";
-        return false;
+    bool loweringActive = loweringUsable;
+
+    Stage2Context ctx;
+    ctx.templateNetlist   = &originalSnapshot;
+    ctx.request           = &request;
+    ctx.loweringSpec      = &loweringSpec;
+    ctx.loweringActive    = &loweringActive;
+    ctx.policy            = config.stage2Policy;
+    ctx.deadline          = requestDeadline;
+    ctx.reserveSeconds    = totalReserve;
+    ctx.firstIterEstimate = firstIterEstimate;
+    ctx.verbose           = verbose;
+
+    auto stage2Left = [&]() -> double {
+        const double byStage2  = stage2BudgetSeconds - stage2Elapsed();
+        const double byRequest = (requestDeadline != nullptr)
+            ? requestDeadline->remainingSeconds() - totalReserve
+            : std::numeric_limits<double>::max();
+        return std::max(0.0, std::min(byStage2, byRequest));
+    };
+    auto worthRunning = [&](double budget) {
+        return budget > firstIterEstimate * 2.0;
     };
 
+    const bool xorAvailable = hasLocalBasisScope
+        ? true
+        : (isGateAllowed(GateType::XOR,  allowedTypes, bannedTypes) ||
+           isGateAllowed(GateType::XNOR, allowedTypes, bannedTypes));
+    const bool aigFirst = !xorAvailable;
+
+    if (verbose) {
+        std::cout << "[Step 2] Dual-path optimization (first: "
+                  << (aigFirst ? "AIG" : "XAG") << ", target basis "
+                  << (xorAvailable ? "has" : "lacks") << " XOR/XNOR)"
+                  << " budget=" << stage2Left() << "s\n";
+    }
+
+    // ---- 1. 兩條路徑的保底預算 ----
+    Stage2PathResult first = aigFirst
+        ? runStage2Path<mockturtle::aig_network>(ctx, "AIG", stage2Left() * 0.45)
+        : runStage2Path<mockturtle::xag_network>(ctx, "XAG", stage2Left() * 0.45);
+
+    Stage2PathResult second;
+    if (worthRunning(stage2Left() * 0.8)) {
+        second = aigFirst
+            ? runStage2Path<mockturtle::xag_network>(ctx, "XAG", stage2Left() * 0.8)
+            : runStage2Path<mockturtle::aig_network>(ctx, "AIG", stage2Left() * 0.8);
+    } else if (verbose) {
+        std::cout << "  -> skipping the second path: only " << stage2Left()
+                  << "s left\n";
+    }
+
+    // ---- 2. 挑贏家 ----
+    Stage2PathResult best;
+    if (first.ok) best = std::move(first);
+    if (second.ok &&
+        (!best.ok || second.cost.betterThan(best.cost, request.cost.metric))) {
+        if (verbose && best.ok)
+            std::cout << "  -> " << second.name << " wins ("
+                      << second.cost.globalDepth << " vs "
+                      << best.cost.globalDepth << ")\n";
+        best = std::move(second);
+    } else if (verbose && second.ok && best.ok) {
+        std::cout << "  -> " << second.name << " did not improve on " << best.name
+                  << " (" << second.cost.globalDepth << " vs "
+                  << best.cost.globalDepth << ")\n";
+    }
+
+    // ---- 3. 剩餘時間給贏家續跑 ----
+    //
+    // 保底預算切完之後通常還剩不少。
+    // 全部餵給表現最好的那條軌跡，從它的 best 繼續探索。
+    if (best.ok && best.resumable() && worthRunning(stage2Left())) {
+        const double resumeBudget = stage2Left();
+        if (verbose)
+            std::cout << "  -> resuming " << best.name << " with the remaining "
+                      << resumeBudget << "s\n";
+
+        Stage2PathResult resumed;
+        if (best.aigState.has_value()) {
+            resumed = runStage2Path<mockturtle::aig_network>(
+                ctx, (best.name + "+").c_str(), resumeBudget, &*best.aigState);
+        } else if (best.xagState.has_value()) {
+            resumed = runStage2Path<mockturtle::xag_network>(
+                ctx, (best.name + "+").c_str(), resumeBudget, &*best.xagState);
+        }
+
+        if (resumed.ok && resumed.cost.betterThan(best.cost, request.cost.metric)) {
+            if (verbose)
+                std::cout << "  -> resume improved " << best.cost.globalDepth
+                          << " -> " << resumed.cost.globalDepth << "\n";
+            best = std::move(resumed);
+        } else if (verbose && resumed.ok) {
+            std::cout << "  -> resume did not improve (" << resumed.cost.globalDepth
+                      << " vs " << best.cost.globalDepth << ")\n";
+        }
+    }
+
     bool haveCandidate = false;
-
-    if (useGlobalAIG) {
-        if (verbose) std::cout << "[Step 2] Global AIG optimization...\n";
-
-        const IterationPolicy policy = config.stage2Policy;
-        BestCandidateTracker<mockturtle::aig_network> tracker(request.cost.metric, policy);
-
-        mockturtle::aig_network cand = mockturtle::cleanup_dangling(NetlistToAig(netlist));
-        tracker.consider(cand, evaluateCandidate(cand, netlist, toNetlistAig, request.cost));
-
-        double lastIterSeconds = 0.0;
-        for (int i = 0; i < policy.maxIterations; ++i) {
-            std::string why;
-            if (!iterationFits(lastIterSeconds, why)) {
-                if (verbose) std::cout << "  -> stopping at iteration " << i << ": " << why << ".\n";
-                break;
-            }
-            const auto iterStart = std::chrono::steady_clock::now();
-
-            mockturtle::sop_rebalancing<mockturtle::aig_network> reb;
-            mockturtle::balancing_params bps; bps.cut_enumeration_ps.cut_size = 6u;
-            cand = mockturtle::cleanup_dangling(mockturtle::balancing(cand, {reb}, bps));
-
-            mockturtle::cut_rewriting_params cr;
-            cr.cut_enumeration_ps.cut_size = 4; cr.preserve_depth = true; cr.allow_zero_gain = true;
-            mockturtle::xag_npn_resynthesis<mockturtle::aig_network> resyn;
-            cand = mockturtle::cleanup_dangling(mockturtle::cut_rewriting(cand, resyn, cr));
-
-            const CostMeasurement m = evaluateCandidate(cand, netlist, toNetlistAig, request.cost);
-            const bool improved = tracker.consider(cand, m);
-
-            lastIterSeconds = std::chrono::duration<double>(
-                std::chrono::steady_clock::now() - iterStart).count();
-
-            if (verbose) {
-                std::cout << "  -> iter " << i
-                          << ": global=" << m.globalDepth
-                          << " cone="    << m.coneDepth
-                          << " gates="   << m.gateCount
-                          << " (" << lastIterSeconds << "s)"
-                          << (improved ? "  [best]" : "") << "\n";
-            }
-
-            if (tracker.shouldStop()) {
-                if (verbose) std::cout << "  -> no improvement for "
-                                       << tracker.stagnantRounds() << " rounds, stopping.\n";
-                break;
-            }
-        }
-
-        if (tracker.hasBest()) {
-            netlist = toNetlistAig(tracker.best(), netlist);
-            eliminateDoubleInverters(netlist);
-            haveCandidate = true;
-            if (verbose)
-                std::cout << "  -> AIG best: global=" << tracker.bestCost().globalDepth
-                          << " cone="  << tracker.bestCost().coneDepth
-                          << " gates=" << tracker.bestCost().gateCount << "\n";
-        }
-
-    } else {
-        if (verbose) std::cout << "[Step 2] Global XAG optimization...\n";
-
-        const IterationPolicy policy = config.stage2Policy;
-        BestCandidateTracker<mockturtle::xag_network> tracker(request.cost.metric, policy);
-
-        mockturtle::xag_network cand = mockturtle::cleanup_dangling(NetlistToXag(netlist));
-        tracker.consider(cand, evaluateCandidate(cand, netlist, toNetlistXag, request.cost));
-
-        double lastIterSeconds = 0.0;
-        for (int iter = 0; iter < policy.maxIterations; ++iter) {
-            std::string why;
-            if (!iterationFits(lastIterSeconds, why)) {
-                if (verbose) std::cout << "  -> stopping at iteration " << iter << ": " << why << ".\n";
-                break;
-            }
-            const auto iterStart = std::chrono::steady_clock::now();
-
-            mockturtle::esop_rebalancing<mockturtle::xag_network> reb;
-            mockturtle::balancing_params bps; bps.cut_enumeration_ps.cut_size = 6u;
-            cand = mockturtle::cleanup_dangling(mockturtle::balancing(cand, {reb}, bps));
-
-            mockturtle::cut_rewriting_params cr_ps;
-            cr_ps.cut_enumeration_ps.cut_size = 4; cr_ps.preserve_depth = true; cr_ps.allow_zero_gain = true;
-            mockturtle::xag_npn_resynthesis<mockturtle::xag_network> resyn;
-            cand = mockturtle::cleanup_dangling(mockturtle::cut_rewriting(cand, resyn, cr_ps));
-
-            {
-                mockturtle::resubstitution_params rp;
-                mockturtle::fanout_view fv{cand};
-                mockturtle::depth_view  dv{fv};
-                mockturtle::xag_resubstitution(dv, rp);
-                cand = mockturtle::cleanup_dangling(cand);
-            }
-
-            const CostMeasurement m = evaluateCandidate(cand, netlist, toNetlistXag, request.cost);
-            const bool improved = tracker.consider(cand, m);
-
-            lastIterSeconds = std::chrono::duration<double>(
-                std::chrono::steady_clock::now() - iterStart).count();
-
-            if (verbose) {
-                std::cout << "  -> iter " << iter
-                          << ": global=" << m.globalDepth
-                          << " cone="    << m.coneDepth
-                          << " gates="   << m.gateCount
-                          << " (" << lastIterSeconds << "s)"
-                          << (improved ? "  [best]" : "") << "\n";
-            }
-
-            if (tracker.shouldStop()) {
-                if (verbose) std::cout << "  -> no improvement for "
-                                       << tracker.stagnantRounds() << " rounds, stopping.\n";
-                break;
-            }
-        }
-
-        if (tracker.hasBest()) {
-            netlist = toNetlistXag(tracker.best(), netlist);
-            eliminateDoubleInverters(netlist);
-            haveCandidate = true;
-            if (verbose)
-                std::cout << "  -> XAG best: global=" << tracker.bestCost().globalDepth
-                          << " cone="  << tracker.bestCost().coneDepth
-                          << " gates=" << tracker.bestCost().gateCount << "\n";
-        }
+    if (best.ok) {
+        netlist = std::move(best.netlist);
+        haveCandidate = true;
+        if (verbose)
+            std::cout << "  -> Stage 2 winner: " << best.name
+                      << " global=" << best.cost.globalDepth
+                      << " cone="   << best.cost.coneDepth
+                      << " gates="  << best.cost.gateCount
+                      << " (" << best.iterationsRun << " iterations, "
+                      << best.elapsedSeconds << "s)"
+                      << " | stage2 used " << stage2Elapsed() << "s of "
+                      << stage2BudgetSeconds << "s\n";
     }
 
     netlist.trimDeadLogic();
@@ -919,6 +861,215 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(
     }
     return result;
 }
+
+template <typename Ntk>
+DepthOptimizer::Stage2PathResult DepthOptimizer::runStage2Path(
+        const Stage2Context& ctx,
+        const char* pathName,
+        double pathBudgetSeconds,
+        const Ntk* warmStart) {
+
+    using namespace depth_opt;
+    constexpr bool kIsXag = std::is_same_v<Ntk, mockturtle::xag_network>;
+
+    Stage2PathResult out;
+    out.name = pathName;
+
+    const auto pathStart = std::chrono::steady_clock::now();
+    auto pathElapsed = [&]() {
+        return std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - pathStart).count();
+    };
+    auto remainingSeconds = [&]() -> double {
+        return ctx.deadline != nullptr ? ctx.deadline->remainingSeconds()
+                                       : std::numeric_limits<double>::max();
+    };
+
+    // ---- 型別分派 ----
+    auto lowerNtk = [&](const Ntk& n, const Netlist& t) {
+        if constexpr (kIsXag) return lowering::LowerXag(n, t, *ctx.loweringSpec);
+        else                  return lowering::LowerAig(n, t, *ctx.loweringSpec);
+    };
+    auto legacyToNetlist = [&](const Ntk& n, const Netlist& t) -> Netlist {
+        if constexpr (kIsXag) return XagToNetlist(n, t);
+        else                  return AigToNetlist(n, t);
+    };
+
+    // 兩條路徑共用同一個 lowering spec，所以候選的分數直接可比。
+    auto toNetlist = [&](const Ntk& n, const Netlist& t) -> Netlist {
+        if (*ctx.loweringActive) {
+            lowering::LoweringResult r = lowerNtk(n, t);
+            if (r.ok) return std::move(r.netlist);
+            *ctx.loweringActive = false;
+            if (ctx.verbose)
+                std::cout << "  [warn] lowering failed at runtime: " << r.message << "\n";
+        }
+        return legacyToNetlist(n, t);
+    };
+
+    auto buildNtk = [&]() -> Ntk {
+        if constexpr (kIsXag)
+            return mockturtle::cleanup_dangling(NetlistToXag(*ctx.templateNetlist));
+        else
+            return mockturtle::cleanup_dangling(NetlistToAig(*ctx.templateNetlist));
+    };
+
+    // 一輪的最佳化 pass。兩條路徑的差別集中在這裡。
+    auto runPasses = [&](Ntk& cand) {
+        // 1) balancing —— 唯一真正在壓深度的 pass
+        {
+            mockturtle::balancing_params bps;
+            bps.cut_enumeration_ps.cut_size = 6u;
+            if constexpr (kIsXag) {
+                mockturtle::esop_rebalancing<Ntk> reb;
+                cand = mockturtle::cleanup_dangling(mockturtle::balancing(cand, {reb}, bps));
+            } else {
+                mockturtle::sop_rebalancing<Ntk> reb;
+                cand = mockturtle::cleanup_dangling(mockturtle::balancing(cand, {reb}, bps));
+            }
+        }
+
+        // 2) cut rewriting —— 面積導向，preserve_depth 保證不會變深
+        {
+            mockturtle::cut_rewriting_params cr;
+            cr.cut_enumeration_ps.cut_size = 4;
+            cr.preserve_depth  = true;
+            cr.allow_zero_gain = true;
+            mockturtle::xag_npn_resynthesis<Ntk> resyn;
+            cand = mockturtle::cleanup_dangling(mockturtle::cut_rewriting(cand, resyn, cr));
+        }
+
+        // 3) resubstitution —— 只有 XAG 有對應實作。
+        //    預設是面積導向，會把 balancing 壓下來的深度換回去。
+        if constexpr (kIsXag) {
+            mockturtle::resubstitution_params rp;
+            rp.preserve_depth = true;
+            mockturtle::fanout_view fv{cand};
+            mockturtle::depth_view  dv{fv};
+            mockturtle::xag_resubstitution(dv, rp);
+            cand = mockturtle::cleanup_dangling(cand);
+        }
+    };
+
+    // ---- 起點 ----
+    BestCandidateTracker<Ntk> tracker(ctx.request->cost.metric, ctx.policy);
+
+    const bool isWarmStart = (warmStart != nullptr);
+    Ntk cand = isWarmStart ? *warmStart : buildNtk();
+
+    {
+        const CostMeasurement m0 =
+            evaluateCandidate(cand, *ctx.templateNetlist, toNetlist, ctx.request->cost);
+        tracker.consider(cand, m0);
+        if (ctx.verbose) {
+            std::cout << "  [" << pathName << "] "
+                      << (isWarmStart ? "resuming from" : "round-trip only")
+                      << ": global=" << m0.globalDepth
+                      << " cone="    << m0.coneDepth
+                      << " gates="   << m0.gateCount << "\n";
+        }
+    }
+
+    // ---- 迭代 ----
+    double lastIterSeconds = 0.0;
+    bool   hitHardPatience = false;
+    out.stopReason = Stage2StopReason::IterationCap;
+
+    for (int iter = 0; iter < ctx.policy.maxIterations; ++iter) {
+        const double predicted =
+            (lastIterSeconds > 0.0) ? lastIterSeconds * 1.3 : ctx.firstIterEstimate;
+        const double byPath    = pathBudgetSeconds - pathElapsed();
+        const double byRequest = remainingSeconds() - ctx.reserveSeconds;
+        const double available = std::min(byPath, byRequest);
+
+        if (predicted > available) {
+            out.stopReason = Stage2StopReason::BudgetOut;
+            if (ctx.verbose)
+                std::cout << "  [" << pathName << "] stopping at iteration " << iter
+                          << ": needs ~" << predicted << "s, only " << available
+                          << "s available\n";
+            break;
+        }
+
+        const auto iterStart = std::chrono::steady_clock::now();
+        runPasses(cand);
+        const CostMeasurement m =
+            evaluateCandidate(cand, *ctx.templateNetlist, toNetlist, ctx.request->cost);
+        const bool improved = tracker.consider(cand, m);
+        lastIterSeconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - iterStart).count();
+
+        if (improved) out.lastImprovedIteration = out.iterationsRun;
+        ++out.iterationsRun;
+
+        if (ctx.verbose) {
+            std::cout << "  [" << pathName << "] iter " << iter
+                      << ": global=" << m.globalDepth
+                      << " cone="    << m.coneDepth
+                      << " gates="   << m.gateCount
+                      << " (" << lastIterSeconds << "s)"
+                      << (improved ? "  [best]" : "") << "\n";
+        }
+
+        // ---- 停止判斷 ----
+        // 注意：這裡刻意「不」把 cand 重置回 tracker.best()。
+        // mockturtle 的 pass 是決定性的，從 best 重跑會產生完全相同的
+        // 結果，變成無窮迴圈。從漂移後的 cand 繼續才有新狀態可探索。
+        if (tracker.shouldStop()) {
+            if (tracker.stagnantRounds() >= ctx.policy.hardPatience) {
+                hitHardPatience = true;
+                out.stopReason = Stage2StopReason::Converged;
+                if (ctx.verbose)
+                    std::cout << "  [" << pathName << "] no improvement for "
+                              << tracker.stagnantRounds()
+                              << " rounds (hard cap), stopping\n";
+                break;
+            }
+
+            const double nextPredicted = lastIterSeconds * 1.3;
+            const double slackNeeded   = nextPredicted * ctx.policy.explorationSlack;
+            const double stillHave     = std::min(pathBudgetSeconds - pathElapsed(),
+                                                  remainingSeconds() - ctx.reserveSeconds);
+            if (stillHave < slackNeeded) {
+                out.stopReason = Stage2StopReason::Converged;
+                if (ctx.verbose)
+                    std::cout << "  [" << pathName << "] no improvement for "
+                              << tracker.stagnantRounds() << " rounds and only "
+                              << stillHave << "s left, stopping\n";
+                break;
+            }
+
+            if (ctx.verbose)
+                std::cout << "  [" << pathName << "] no improvement for "
+                          << tracker.stagnantRounds() << " rounds but "
+                          << stillHave << "s left, continuing to explore\n";
+        }
+    }
+
+    // ---- 收尾 ----
+    if (tracker.hasBest()) {
+        // 打到 hardPatience 代表這條軌跡已經死了，續跑沒有意義
+        if (!hitHardPatience) {
+            if constexpr (kIsXag) out.xagState = tracker.best();
+            else                  out.aigState = tracker.best();
+        }
+
+        out.netlist = toNetlist(tracker.best(), *ctx.templateNetlist);
+        eliminateDoubleInverters(out.netlist);
+        out.netlist.trimDeadLogic();
+        out.cost = measureCost(out.netlist, ctx.request->cost);
+        out.ok   = out.cost.ok;
+    }
+    out.elapsedSeconds = pathElapsed();
+    return out;
+}
+
+template DepthOptimizer::Stage2PathResult
+DepthOptimizer::runStage2Path<mockturtle::aig_network>(
+    const Stage2Context&, const char*, double, const mockturtle::aig_network*);
+template DepthOptimizer::Stage2PathResult
+DepthOptimizer::runStage2Path<mockturtle::xag_network>(
+    const Stage2Context&, const char*, double, const mockturtle::xag_network*);
 
 // 輔助函式：給定 Root 與 Cut 邊界，從 Netlist 走訪並建立 PatternNode (AST)，同時收集 TargetCone
 std::shared_ptr<PatternNode> DepthOptimizer::extractLhsFromCut(Netlist& netlist, 
