@@ -1,16 +1,20 @@
 #include "include/core/Netlist.h"
 #include "include/core/BitParallelSimulation.h"
+#include "include/SATEngine/Primitives.h"
 #include "include/SATEngine/SatTime.h"
 #include <algorithm>
 #include <cstdint>
+#include <exception>
 #include <unordered_set>
 #include <functional>
 #include <fstream>
 #include <map>
+#include <optional>
 #include <queue>
 #include <chrono>
 #include <cmath>
 #include <string>
+#include <unordered_map>
 #include <vector>
 
 // 把邏輯閘轉換為 CNF 格式
@@ -920,7 +924,9 @@ Netlist::FunctionReport Netlist::runFunctionQuery(const FunctionQuery& query) co
         query.type == FunctionQueryType::AlwaysOne ||
         query.type == FunctionQueryType::TruthStatus ||
         query.type == FunctionQueryType::FunctionalDependence ||
-        query.type == FunctionQueryType::Symmetry;
+        query.type == FunctionQueryType::Symmetry ||
+        (query.type == FunctionQueryType::BooleanExpression &&
+         query.writeExpressionToFile);
     if (usesConfigurableSatLimit &&
         (!std::isfinite(query.timeLimitSeconds) || query.timeLimitSeconds <= 0.0)) {
         report.status = "INVALID_ARGUMENT";
@@ -1350,6 +1356,37 @@ Netlist::FunctionReport Netlist::runFunctionQuery(const FunctionQuery& query) co
         }
 
         {
+        const PrimaryInputSupport support = getPrimaryInputSupportBreakdown(query.netNameA);
+        report.supportPrimaryInputs = support.all;
+        report.supportRealPrimaryInputs = support.realPrimaryInputs;
+        report.supportDffPseudoInputs = support.dffPseudoInputs;
+        report.supportUndrivenLeaves = support.undrivenLeaves;
+
+        if (query.writeExpressionToFile) {
+            const BooleanEquationArtifactResult artifact =
+                writeBooleanEquationArtifact(
+                    query.netNameA,
+                    query.expressionOutputFilePath,
+                    query.timeLimitSeconds);
+            report.ok = artifact.ok;
+            report.exists = artifact.complete;
+            report.netIdA = getNetId(query.netNameA);
+            report.wroteExpressionToFile = artifact.fileCreated;
+            report.expressionArtifactComplete = artifact.complete;
+            report.expressionArtifactTimedOut = artifact.timedOut;
+            report.expressionEquationCount = artifact.equationCount;
+            report.expressionBoundaryCount = artifact.boundaryCount;
+            report.expressionArtifactFormat = artifact.format;
+            report.expressionOutputFilePath = artifact.outputFilePath;
+            report.message = artifact.message;
+            report.status = artifact.complete
+                ? "BOOLEAN_EQUATION_ARTIFACT"
+                : (artifact.timedOut
+                    ? "BOOLEAN_EQUATION_ARTIFACT_TIMEOUT"
+                    : "BOOLEAN_EQUATION_ARTIFACT_INCOMPLETE");
+            return report;
+        }
+
         bool expressionTruncated = false;
         report.ok = true;
         report.exists = true;
@@ -1362,11 +1399,6 @@ Netlist::FunctionReport Netlist::runFunctionQuery(const FunctionQuery& query) co
         // 爆炸。expressionTruncated 反映這次是否真的觸發了該上限；如實回報，
         // 不能一律回 false，否則呼叫端會誤以為拿到的是完整、忠實的展開。
         report.expressionDepthLimited = expressionTruncated;
-        const PrimaryInputSupport support = getPrimaryInputSupportBreakdown(query.netNameA);
-        report.supportPrimaryInputs = support.all;
-        report.supportRealPrimaryInputs = support.realPrimaryInputs;
-        report.supportDffPseudoInputs = support.dffPseudoInputs;
-        report.supportUndrivenLeaves = support.undrivenLeaves;
         report.message = expressionTruncated
             ? "Boolean expression generated, but an internal expansion safety limit was reached; "
               "some deep sub-expressions are shown as net names instead of being fully expanded."
@@ -1918,9 +1950,11 @@ void finalizeFunctionSearchOutput(std::ofstream& output,
     }
 }
 
+template <typename GetPrimitives>
 FunctionSearchReport searchEquivalentGatePairs(
     const Netlist& netlist,
-    const FunctionSearchQuery& query) {
+    const FunctionSearchQuery& query,
+    GetPrimitives&& getPrimitives) {
     FunctionSearchReport report;
     report.queryType = query.type;
     report.scope = query.scope;
@@ -2028,6 +2062,27 @@ FunctionSearchReport searchEquivalentGatePairs(
     }
     report.candidatePairsRejectedBySimulation = allEligiblePairs - sameBucketPairs;
 
+    eqeng::Primitives* primitives = nullptr;
+    std::unordered_map<int, std::optional<eqeng::SigRef>> signalCache;
+    auto resolveGateOutput = [&](int gateId) -> std::optional<eqeng::SigRef> {
+        const auto cached = signalCache.find(gateId);
+        if (cached != signalCache.end()) {
+            return cached->second;
+        }
+
+        if (primitives == nullptr) {
+            primitives = &getPrimitives();
+        }
+        const Gate& gate = netlist.getGate(gateId);
+        const std::string& name = netlist.getNet(gate.outputNetId).name;
+        std::optional<eqeng::SigRef> signal = primitives->try_resolve(name);
+        if (signal && !primitives->is_trustworthy(*signal)) {
+            signal.reset();
+        }
+        signalCache.emplace(gateId, signal);
+        return signal;
+    };
+
     std::vector<std::vector<int>> provenClasses;
     bool stop = false;
     for (const auto& bucketEntry : buckets) {
@@ -2048,31 +2103,42 @@ FunctionSearchReport searchEquivalentGatePairs(
             bool unresolved = false;
             for (std::vector<int>& equivalentClass : bucketClasses) {
                 const int representativeGateId = equivalentClass.front();
-                const Gate& representative = netlist.getGate(representativeGateId);
-                const Gate& candidate = netlist.getGate(candidateGateId);
                 ++report.candidatePairsConsidered;
-
-                const double remaining = query.timeLimitSeconds - elapsedSeconds();
-                const DetailedSatResult proof = solveEquivalenceDetailed(
-                    netlist,
-                    netlist.getNet(representative.outputNetId).name,
-                    netlist.getNet(candidate.outputNetId).name,
-                    "",
-                    -1,
-                    remaining);
                 ++report.satChecks;
-                if (!proof.conclusive()) {
-                    ++report.satUnknownCount;
-                    report.timedOut = report.timedOut || proof.timedOut;
-                    report.unsupported = report.unsupported || proof.unsupported;
-                    unresolved = true;
-                    if (proof.timedOut) {
+
+                std::optional<eqeng::SigRef> representativeSignal;
+                std::optional<eqeng::SigRef> candidateSignal;
+                eqeng::EquivResult proof = eqeng::EquivResult::Unknown;
+                try {
+                    representativeSignal = resolveGateOutput(representativeGateId);
+                    candidateSignal = resolveGateOutput(candidateGateId);
+                    const double remaining =
+                        query.timeLimitSeconds - elapsedSeconds();
+                    if (remaining <= 0.0) {
+                        report.timedOut = true;
                         stop = true;
-                        break;
+                    } else if (!representativeSignal || !candidateSignal) {
+                        report.unsupported = true;
+                    } else {
+                        proof = primitives->equiv_checked(
+                            *representativeSignal, *candidateSignal, remaining);
                     }
+                } catch (const std::exception&) {
+                    report.unsupported = true;
+                    stop = true;
+                }
+
+                if (proof == eqeng::EquivResult::Unknown) {
+                    ++report.satUnknownCount;
+                    if (primitives != nullptr && primitives->last_proof_timed_out()) {
+                        report.timedOut = true;
+                        stop = true;
+                    }
+                    unresolved = true;
+                    if (stop) break;
                     continue;
                 }
-                if (!proof.unsat) {
+                if (proof == eqeng::EquivResult::NotEqual) {
                     continue;
                 }
 
@@ -2225,7 +2291,10 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
     };
 
     if (query.type == FunctionSearchQueryType::EquivalentGatePairs) {
-        return searchEquivalentGatePairs(*this, query);
+        return searchEquivalentGatePairs(
+            *this,
+            query,
+            [this]() -> eqeng::Primitives& { return booleanPrimitives(); });
     }
     if (query.type != FunctionSearchQueryType::NandEquivalentInputPairs) {
         report.status = "UNSUPPORTED_QUERY_TYPE";

@@ -144,7 +144,7 @@ function Resolve-LiteralCommands([string]$prompt, [string]$testName) {
     if ($l -match "list all gates with one or more inputs tied to 1'b1") {
         return @("structure_query const_input_gates all 1")
     }
-    if ($l -match "list all (nand|xor) gates") {
+    if ($l -match "list all (and|or|not|nand|nor|xor|xnor|buf|dff) gates") {
         return @("structure_query gates_by_type $($matches[1].ToUpperInvariant())")
     }
     if ($l -match "what type of gate is ([^? ]+)") {
@@ -170,7 +170,10 @@ function Resolve-LiteralCommands([string]$prompt, [string]$testName) {
     if ($l -match "gates shared between the fanin cones of ([^ ]+) and ([^ ]+)") {
         return @("cone_query shared_fanin $(Clean-Name $matches[1]) $(Clean-Name $matches[2])")
     }
-    if ($l -match "number of each gate type in the cone of ([^ ]+)|how many gates are in the logic cone of (?:output )?([^ ]+)|how many gates are in the fanin cone of primary output ([^ ]+)") {
+    if ($l -match "which (?:primary )?output has the largest fanin (?:logic )?cone") {
+        return @("cone_query largest_output")
+    }
+    if ($l -match "number of each gate type in (?:the )?(?:logic )?cone of (?:output )?([^ ]+)|how many gates are in the logic cone of (?:output )?([^ ]+)|how many gates are in the fanin cone of primary output ([^ ]+)") {
         $n = @($matches[1],$matches[2],$matches[3]) | Where-Object {$_} | Select-Object -First 1
         return @("cone_query net_fanin $(Clean-Name $n)")
     }
@@ -182,9 +185,18 @@ function Resolve-LiteralCommands([string]$prompt, [string]$testName) {
         $n = @($matches[1],$matches[2],$matches[3]) | Where-Object {$_} | Select-Object -First 1
         return @("cone_query net_fanout $(Clean-Name $n)")
     }
+    if ($l -match "which output \(([^ )]+) or ([^) ]+)\) has the largest fanin logic cone") {
+        return @(
+            "cone_query net_fanin $(Clean-Name $matches[1])",
+            "cone_query net_fanin $(Clean-Name $matches[2])"
+        )
+    }
     if ($l -match "which output has the largest fanin cone") { return @("cone_query largest_output") }
 
     if ($l -match "path.*from (?:primary input |input )?([^ ]+) to (?:primary output |output )?([^ ]+).*avoid(?:s)?(?: node)? ([^ ]+)") {
+        return @("path_query exists net:$(Clean-Name $matches[1]) net:$(Clean-Name $matches[2]) -avoid net:$(Clean-Name $matches[3])")
+    }
+    if ($l -match "path from (?:primary input |input )?([^ ]+) to (?:primary output |output )?([^ ]+) exists that does not traverse node ([^ ]+)") {
         return @("path_query exists net:$(Clean-Name $matches[1]) net:$(Clean-Name $matches[2]) -avoid net:$(Clean-Name $matches[3])")
     }
     if ($l -match "path connecting input ([^ ]+) to output ([^ ]+).*avoiding ([^ ]+)") {
@@ -204,7 +216,7 @@ function Resolve-LiteralCommands([string]$prompt, [string]$testName) {
         return @("path_query pi_po_cut $(Clean-Name $matches[1])")
     }
     if ($l -match "articulation points.*between ([^ ]+) and ([^ ]+)") {
-        return @("path_query mandatory_nodes net:$(Clean-Name $matches[1]) net:$(Clean-Name $matches[2])")
+        return @("path_query articulation_between net:$(Clean-Name $matches[1]) net:$(Clean-Name $matches[2])")
     }
     if ($l -match "list every path originating at primary input ([^ ]+) and terminating at primary output ([^ ]+)|all combinational paths from primary input ([^ ]+) to primary output ([^ ]+)") {
         $a = @($matches[1],$matches[3]) | Where-Object {$_} | Select-Object -First 1
@@ -220,7 +232,7 @@ function Resolve-LiteralCommands([string]$prompt, [string]$testName) {
         return @("path_query max_depth net:$(Clean-Name $a) net:$(Clean-Name $b)")
     }
     if ($l -match "register-to-register paths") { return @("path_query enumerate all_dff_q all_dff_d") }
-    if ($l -match "maximum combinational depth on any register-to-register path") { return @("path_query max_depth all_dff_q all_dff_d") }
+    if ($l -match "maximum combinational (?:logic )?depth on any register-to-register path") { return @("path_query max_depth all_dff_q all_dff_d") }
     if ($l -match "maximum logic depth from any primary input to any dff d-pin") { return @("path_query max_depth all_pi all_dff_d") }
 
     if ($l -match "maximum logic depth of the fanin cone of output ([^ ]+)|depth of the cone of ([^ ]+) now") {
@@ -248,7 +260,7 @@ function Resolve-LiteralCommands([string]$prompt, [string]$testName) {
         return @("func_query boolean_expression $(Clean-Name $n)")
     }
     if ($l -match "pair of internal signals.*nand\(a, b\).*equivalent to ([^ ]+)") {
-        return @("func_search nand_pair $(Clean-Name $matches[1]) --all")
+        return @("func_search nand_pair $(Clean-Name $matches[1])")
     }
 
     if ($l -match "d input logic of the flip-flops") { return @("sequential_query enable_hold all") }

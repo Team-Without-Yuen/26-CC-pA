@@ -176,6 +176,10 @@ func_search equivalent_pairs whole --all
 
 公開 CLI 讀取 `match_count` 與 `output_file`；完整 classes 與 pair records 在 artifact。C++ caller 若不寫檔，可從 `equivalenceClasses` 取得緊湊分組，但 `matches` 最多只含 `maxStoredMatches` 筆 sample。
 
+此 mode 內部使用 private lazy Phase B owner 重用 equivalence proof；呼叫方式、參數與
+`FunctionSearchReport` 不因 backend 改變。caller 不需也不能指定 backend。NAND pair
+mode 仍使用 legacy SAT，兩者都遵守同一個 `timeLimitSeconds` 與 partial-report 契約。
+
 ### 5.3 限制在 cone
 
 ```cpp
@@ -271,7 +275,7 @@ Equivalent gate-pair search + functional merge C++ API / CLI：mini test/test26
 
 目前兩種 public modes 均只回 SAT-proven matches；simulation-only 結果不會出現在 `matches`、artifact 或 `equivalenceClasses`。沒有有效 driver 的 net 目前視為 unconstrained Boolean leaf。官方 netlist 只包含題目規定的 gate types；prompt 中的 MUX 等語意屬合法 gates 所形成的 Boolean pattern，不以 direct MUX primitive 處理。
 
-`test24` 為 9/9 通過，`test26` 為 18/18 通過；NewTestCase test29/test30 的 FindAll artifact 分別為 7/7 與 1/1 records，test35 FindAny 回完整 SAT witness。
+`test24` 為 9/9 通過，`test26` 為 18/18 通過；NewTestCase test29/test30 原始設計的 FindAll artifact 分別為 7/7 與 1/1 records，test35 FindAny 回完整 SAT witness。`mini test/test45` 另驗證官方前序 edit session 後的 oracle 與 functional merge，test29/test30 分別完整移除 361/494 顆，且 report、gate delta、CEC 與 write/readback 一致。
 
 `Blup/function_search_runs/candidate_scope_probe` 另驗證 PI、PO、internal、DFF.Q、floating、
 target exclusion、unordered/self pair、whole/net_fanin scope 與 BUF gate-type filter。

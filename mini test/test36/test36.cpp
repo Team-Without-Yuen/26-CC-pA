@@ -112,6 +112,8 @@ void testMissingGateInput(TestReport& report) {
                  "invalid model reports the n-ary gate arity problem");
     report.check(prim.is_const_checked(y, false) == EquivResult::Unknown,
                  "checked constant query returns Unknown on invalid model");
+    report.check(y.tainted() && (!y).tainted(),
+                 "signal complement preserves the untrusted taint flag");
 
     bool boolRejected = false;
     try {
@@ -193,9 +195,11 @@ void testCombinationalLoopAndCec(TestReport& report) {
 
     auto before = prim.snapshot();
     const auto cec = prim.equiv_to_snapshot(before);
-    report.check(!before.valid() && cec.status == EquivResult::Unknown &&
-                     cec.message.find("not usable for proof") != std::string::npos,
-                 "CEC returns Unknown instead of proving an invalid model");
+    report.check(before.valid() && !cec.ok() &&
+                     cec.status == EquivResult::Unknown &&
+                     cec.untrusted_outputs.size() == 1 &&
+                     cec.untrusted_outputs.front() == "y",
+                 "CEC localizes an invalid cone and returns Unknown");
 }
 
 } // namespace

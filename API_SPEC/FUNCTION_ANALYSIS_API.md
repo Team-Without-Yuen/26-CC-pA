@@ -65,13 +65,14 @@ SAT-based query 的基本流程：
 7. 根據 SAT / UNSAT 判斷功能性質。
 ```
 
-Boolean expression query 的基本流程：
+Boolean expression 有兩種內部輸出流程：
 
 ```text
-1. 從指定 net 往 fanin 方向遞迴展開。
-2. PI / constant / DFF.Q 視為 leaf。
-3. combinational gate 轉成 AND(a, b)、NOT(x)、XOR(a, b) 等字串。
-4. 需要避免過長輸出時，可用 depth-limited expression。
+1. Public tool / artifact mode：迭代走訪 target fanin DAG，每個具名 net 只輸出一次，
+   以拓撲順序 streaming 寫入檔案；沒有 gate/depth/字元上限。
+2. Legacy C++ inline helper：遞迴產生單一平面字串，保留 depth/size safety limit。
+3. PI / constant / DFF.Q / undriven net 視為明確 leaf boundary。
+4. caller 明確要求 manageable/depth-limited 時使用 SimplifiedBooleanExpression。
 ```
 
 重要概念：
@@ -143,6 +144,7 @@ PrimaryInputSupport getPrimaryInputSupportBreakdown(const std::string& netName) 
 | `isNetAlwaysZero(net)` | 檢查 scalar net 是否永遠為 0 |
 | `isNetAlwaysOne(net)` | 檢查 scalar net 是否永遠為 1 |
 | `getBooleanExpression(net, wasTruncated)` | 展開 Boolean expression；安全上限被觸發時可回報截斷 |
+| `writeBooleanEquationArtifact(net, path, timeLimit)` | 以線性 named-DAG 格式完整 streaming 寫檔 |
 | `getSimplifiedBooleanExpression(net, maxDepth)` | 產生 depth-limited Boolean expression |
 | `getPrimaryInputsOfNet(net)` | 回報 fanin cone 的 PI / DFF.Q pseudo-PI leaves |
 | `getPrimaryInputSupportBreakdown(net)` | 將 support 分成 real PI、DFF.Q 與 undriven leaf |
@@ -346,9 +348,21 @@ FunctionReport runFunctionQuery(const FunctionQuery& query) const;
 | `TruthStatus` | 分類 scalar net 是 always 0、always 1，或 non-constant |
 | `FunctionalDependence` | exact SAT/cofactor 檢查 target 是否依賴某 PI / pseudo-PI |
 | `Symmetry` | exact SAT/cofactor 檢查交換兩個 PI / pseudo-PI 後 target 是否不變 |
-| `BooleanExpression` | 展開完整 Boolean expression |
+| `BooleanExpression` | tools mode 完整寫入 named-DAG artifact；C++ 未指定 artifact 時保留 inline helper |
 | `SimplifiedBooleanExpression` | 展開 depth-limited Boolean expression |
 | `PrimaryInputsOfNet` | 回報 fanin cone 的 PI / pseudo-PI leaves |
+
+Backend 劃分：
+
+```text
+Equivalence / ConditionalEquivalence / CanBeValue / ConstantFunction /
+AlwaysZero / AlwaysOne / TruthStatus / FunctionalDependence / Symmetry
+  -> 既有 combined-cone legacy SAT backend
+```
+
+Phase B 已保留為內部研究與未來 batch 類功能的候選 backend，但 NewTestCase benchmark
+顯示大型電路少量查詢的首次建模成本較高，因此目前 production Function Query 不啟用。
+呼叫端不提供 backend 選項。
 
 核心資料結構：
 
@@ -364,6 +378,8 @@ struct FunctionQuery {
     int constValue = -1;
     int maxExpressionDepth = 10;
     double timeLimitSeconds = 290.0;
+    bool writeExpressionToFile = false;
+    std::string expressionOutputFilePath;
 };
 
 struct FunctionReport {
@@ -405,6 +421,13 @@ struct FunctionReport {
     size_t expressionLength = 0;
     int maxExpressionDepth = -1;
     bool expressionDepthLimited = false;
+    bool wroteExpressionToFile = false;
+    bool expressionArtifactComplete = false;
+    bool expressionArtifactTimedOut = false;
+    size_t expressionEquationCount = 0;
+    size_t expressionBoundaryCount = 0;
+    std::string expressionArtifactFormat;
+    std::string expressionOutputFilePath;
     std::vector<std::string> supportPrimaryInputs;
     std::vector<std::string> supportRealPrimaryInputs;
     std::vector<std::string> supportDffPseudoInputs;
@@ -436,6 +459,9 @@ struct FunctionReport {
 | `CONDITIONALLY_EQUIVALENT` | condition 固定後兩個 function 等價 |
 | `NOT_CONDITIONALLY_EQUIVALENT` | condition 固定後仍存在差異 assignment |
 | `BOOLEAN_EXPRESSION` | 已產生完整 Boolean expression |
+| `BOOLEAN_EQUATION_ARTIFACT` | 完整 named-DAG equations 已寫入 artifact |
+| `BOOLEAN_EQUATION_ARTIFACT_TIMEOUT` | deadline 前未完成；artifact footer 為 incomplete |
+| `BOOLEAN_EQUATION_ARTIFACT_INCOMPLETE` | I/O、結構或 unsupported gate 使 artifact 不完整 |
 | `SIMPLIFIED_BOOLEAN_EXPRESSION` | 已產生 depth-limited Boolean expression |
 | `PRIMARY_INPUT_SUPPORT` | 已回報 fanin support leaves |
 | `SCALAR_NET_REQUIRED` | 此 query 需要 existing scalar net |
@@ -455,9 +481,9 @@ SAT 類 report 欄位：
 | `unsupported` | 是否因不支援而無法建模 |
 | `solverStatus` | `SAT`、`UNSAT`、`NOT_NEEDED`、`TIMEOUT`、`UNKNOWN`、`UNSUPPORTED` |
 
-所有會啟動 SAT 的 FunctionQuery mode 都使用 `query.timeLimitSeconds`，包含
-`FunctionalDependence` 與 `Symmetry`。非有限值或非正值會回 `INVALID_ARGUMENT`；不能由
-底層改用固定 30 秒而忽略呼叫端預算。
+所有會啟動 SAT 的 FunctionQuery mode 都使用 `query.timeLimitSeconds`。constant/truth
+family 對 can-be-0 與 can-be-1 各使用最多一半預算；`FunctionalDependence` 與
+`Symmetry` 也沿用 query budget。非有限值或非正值會回 `INVALID_ARGUMENT`。
 
 ---
 
@@ -469,10 +495,11 @@ SAT 類 report 欄位：
 
 ```text
 1. canNetBeValue / isNetConstantFunction / TruthStatus 只支援 scalar net。
-2. Equivalence 支援 bus，但 ConstantFunction 類還沒支援整個 bus 常數分類。
+2. Equivalence 支援 scalar/bus，皆走 legacy combined-cone miter；ConstantFunction 類還沒支援整個 bus 常數分類。
 3. Symmetry 會回傳非對稱 counterexample；其他 SAT query 目前不一定回傳 witness assignment。
 4. Boolean expression 只做固定 local identity，不做一般 algebraic minimization。
-5. Boolean expression 有內部 size/depth safety limit；大型 cone 仍建議使用 SimplifiedBooleanExpression。
+5. `getBooleanExpression()` legacy inline helper 仍有 size/depth safety limit；public tool 的
+   named-DAG artifact 無 gate/depth/字元上限，只受 deadline 與 I/O 錯誤限制。
 6. 目前不是 sequential equivalence checking，不跨 DFF cycle。
 7. SAT solver timeout / UNKNOWN 會回報 `ok=false` 與 `solverTimedOut` / `solverUnknown`，不再被混成普通 false。
 8. FunctionalDependence 目前要求 scalar target 與 scalar PI / DFF.Q pseudo-PI input，不把 internal driven net 當成可獨立切換的 input。
@@ -501,6 +528,7 @@ isNetConstantFunction()
 isNetAlwaysZero()
 isNetAlwaysOne()
 getBooleanExpression()
+writeBooleanEquationArtifact()
 getSimplifiedBooleanExpression()
 getPrimaryInputsOfNet()
 FunctionalDependence dual-cone SAT miter
@@ -516,6 +544,8 @@ SimplifiedBooleanExpression、PrimaryInputsOfNet、support 三分類、undriven 
 DFF.Q/tombstone boundary、SAT-based
 AlwaysZero / AlwaysOne / TruthStatus / CanBeValue / Equivalence、invalid query。
 目前 test4 結果：Summary: 17 passed, 0 failed.
+mini test/test46：named-DAG artifact、5000-level chain、reconvergence、deadline、
+DFF.Q boundary 共 8 passed, 0 failed。
 CLI integration regression test9-test17：150 passed, 0 failed。
 ```
 
@@ -525,6 +555,6 @@ CLI integration regression test9-test17：150 passed, 0 failed。
 bus constant status
 SAT counterexample model extraction
 一般 expression algebraic minimization / AIG expression index
-iterative expression traversal / 更明確的 truncation report
+小型 Boolean function 的 algebraic/canonical expression（依未來 prompt 需求）
 bounded sequential analysis
 ```

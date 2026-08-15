@@ -19,6 +19,7 @@
 #include <vector>
 #include <queue>
 #include <algorithm>
+#include <fstream>
 
 namespace {
 
@@ -611,4 +612,212 @@ Netlist::PrimaryInputSupport Netlist::getPrimaryInputSupportBreakdown(const std:
 // ─────────────────────────────────────────────────────────────────────────────
 std::vector<std::string> Netlist::getPrimaryInputsOfNet(const std::string& netName) const {
     return getPrimaryInputSupportBreakdown(netName).all;
+}
+
+Netlist::BooleanEquationArtifactResult Netlist::writeBooleanEquationArtifact(
+    const std::string& netName,
+    const std::string& outputFilePath,
+    double timeLimitSeconds) const {
+    BooleanEquationArtifactResult result;
+    result.format = "NAMED_DAG_EQUATIONS_V1";
+    result.outputFilePath = outputFilePath;
+
+    const int rootNetId = getNetId(netName);
+    if (rootNetId < 0 || !isValidNetId(rootNetId) || nets[rootNetId].isRemoved) {
+        result.message = "Boolean equation target net was not found.";
+        return result;
+    }
+    if (outputFilePath.empty()) {
+        result.message = "Boolean equation artifact requires an output path.";
+        return result;
+    }
+
+    request_time_budget::RequestDeadline deadline(timeLimitSeconds);
+    if (!deadline.valid()) {
+        result.message = "Boolean equation artifact requires a finite, positive time limit.";
+        return result;
+    }
+
+    std::ofstream output(outputFilePath, std::ios::out | std::ios::trunc);
+    if (!output.is_open()) {
+        result.message = "Failed to open Boolean equation artifact: " + outputFilePath;
+        return result;
+    }
+    result.fileCreated = true;
+
+    output << "# Complete named-net Boolean DAG equation artifact\n"
+           << "Format: " << result.format << "\n"
+           << "Target: " << netName << "\n"
+           << "Boundary semantics: PI, CONSTANT, DFF_Q, and UNDRIVEN are leaves\n\n";
+
+    struct VisitFrame {
+        int netId = -1;
+        bool exiting = false;
+    };
+
+    std::vector<unsigned char> state(nets.size(), 0);
+    std::vector<VisitFrame> stack;
+    std::vector<int> equationNetIds;
+    std::vector<int> boundaryNetIds;
+    bool invalidStructure = false;
+    bool unsupportedGate = false;
+    bool cycleDetected = false;
+    size_t workCounter = 0;
+
+    stack.push_back({rootNetId, false});
+    while (!stack.empty()) {
+        if ((++workCounter & 1023u) == 0u && deadline.expired()) {
+            result.timedOut = true;
+            break;
+        }
+
+        const VisitFrame frame = stack.back();
+        stack.pop_back();
+        const int currentNetId = frame.netId;
+        if (currentNetId < 0 || currentNetId >= static_cast<int>(nets.size()) ||
+            nets[currentNetId].isRemoved) {
+            invalidStructure = true;
+            continue;
+        }
+
+        if (frame.exiting) {
+            if (state[currentNetId] == 1) {
+                state[currentNetId] = 2;
+                equationNetIds.push_back(currentNetId);
+            }
+            continue;
+        }
+        if (state[currentNetId] == 2) continue;
+        if (state[currentNetId] == 1) {
+            cycleDetected = true;
+            continue;
+        }
+
+        const Net& net = nets[currentNetId];
+        const int driverId = net.driverGateId;
+        const bool invalidDriver = driverId >= static_cast<int>(gates.size());
+        const bool boundary = net.isPI || net.isConst || driverId < 0 ||
+            invalidDriver || isGateRemoved(driverId) ||
+            (driverId >= 0 && gates[driverId].type == GateType::DFF);
+        if (boundary) {
+            state[currentNetId] = 2;
+            boundaryNetIds.push_back(currentNetId);
+            if (invalidDriver) invalidStructure = true;
+            continue;
+        }
+
+        const Gate& gate = gates[driverId];
+        if (gate.type == GateType::UNKNOWN) unsupportedGate = true;
+        state[currentNetId] = 1;
+        stack.push_back({currentNetId, true});
+        for (auto input = gate.inputNetIds.rbegin();
+             input != gate.inputNetIds.rend(); ++input) {
+            if (*input < 0 || *input >= static_cast<int>(nets.size()) ||
+                nets[*input].isRemoved) {
+                invalidStructure = true;
+                continue;
+            }
+            if (state[*input] == 1) {
+                cycleDetected = true;
+                continue;
+            }
+            if (state[*input] == 0) stack.push_back({*input, false});
+        }
+    }
+    if (deadline.expired()) result.timedOut = true;
+
+    std::sort(boundaryNetIds.begin(), boundaryNetIds.end(),
+              [&](int lhs, int rhs) { return nets[lhs].name < nets[rhs].name; });
+    boundaryNetIds.erase(
+        std::unique(boundaryNetIds.begin(), boundaryNetIds.end()),
+        boundaryNetIds.end());
+
+    output << "Boundaries:\n";
+    for (int boundaryNetId : boundaryNetIds) {
+        if (result.timedOut) break;
+        if ((++workCounter & 1023u) == 0u && deadline.expired()) {
+            result.timedOut = true;
+            break;
+        }
+        const Net& net = nets[boundaryNetId];
+        std::string kind = "UNDRIVEN";
+        if (net.isConst) {
+            kind = "CONSTANT";
+        } else if (net.isPI) {
+            kind = "PI";
+        } else if (net.driverGateId >= 0 &&
+                   net.driverGateId < static_cast<int>(gates.size()) &&
+                   !isGateRemoved(net.driverGateId) &&
+                   gates[net.driverGateId].type == GateType::DFF) {
+            kind = "DFF_Q";
+        }
+        output << "  " << net.name << " : " << kind << "\n";
+        ++result.boundaryCount;
+    }
+
+    output << "\nEquations:\n";
+    if (!result.timedOut) {
+        for (int equationNetId : equationNetIds) {
+            if ((++workCounter & 1023u) == 0u && deadline.expired()) {
+                result.timedOut = true;
+                break;
+            }
+            const Net& net = nets[equationNetId];
+            const int driverId = net.driverGateId;
+            if (driverId < 0 || driverId >= static_cast<int>(gates.size()) ||
+                isGateRemoved(driverId)) {
+                invalidStructure = true;
+                continue;
+            }
+            const Gate& gate = gates[driverId];
+            output << "  " << net.name << " = " << gateTypeToString(gate.type)
+                   << "(";
+            for (size_t inputIndex = 0;
+                 inputIndex < gate.inputNetIds.size(); ++inputIndex) {
+                if (inputIndex != 0) output << ", ";
+                const int inputNetId = gate.inputNetIds[inputIndex];
+                if (inputNetId < 0 || inputNetId >= static_cast<int>(nets.size()) ||
+                    nets[inputNetId].isRemoved) {
+                    output << "?";
+                    invalidStructure = true;
+                } else {
+                    output << nets[inputNetId].name;
+                }
+            }
+            output << ")\n";
+            ++result.equationCount;
+            if (!output.good()) break;
+        }
+    }
+    if (deadline.expired()) result.timedOut = true;
+
+    const bool bodyIoFailed = !output.good();
+    const bool logicallyComplete = !result.timedOut && !invalidStructure &&
+        !unsupportedGate && !cycleDetected && !bodyIoFailed &&
+        result.equationCount == equationNetIds.size();
+    output << "\nRoot: " << netName << "\n"
+           << "Equation count: " << result.equationCount << "\n"
+           << "Boundary count: " << result.boundaryCount << "\n"
+           << "Complete: " << (logicallyComplete ? "yes" : "no") << "\n";
+    if (result.timedOut) output << "Reason: request deadline exceeded\n";
+    else if (cycleDetected) output << "Reason: combinational cycle detected\n";
+    else if (unsupportedGate) output << "Reason: unsupported gate type\n";
+    else if (invalidStructure) output << "Reason: invalid or removed graph reference\n";
+    else if (bodyIoFailed) output << "Reason: output I/O failure\n";
+    output.flush();
+    const bool finalIoFailed = !output.good();
+    output.close();
+
+    result.complete = logicallyComplete && !finalIoFailed;
+    result.ok = result.complete;
+    if (result.complete) {
+        result.message = "Complete named-net Boolean DAG equations were written.";
+    } else if (result.timedOut) {
+        result.message = "Boolean equation artifact was incomplete because the request deadline expired.";
+    } else if (bodyIoFailed || finalIoFailed) {
+        result.message = "Boolean equation artifact could not be written completely.";
+    } else {
+        result.message = "Boolean equation artifact was incomplete because the target cone was invalid or unsupported.";
+    }
+    return result;
 }
