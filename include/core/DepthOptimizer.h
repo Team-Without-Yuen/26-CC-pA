@@ -133,8 +133,6 @@ struct DepthOptimizerConfig {
     DepthOptimizerConfig() {
         maxAreaIncreasePerPath = -1;
         targetDepthPerPath = -1;
-        stage2Policy.maxIterations = 10;
-        stage2Policy.patience = 3;
         finalizeReserveSeconds = 3.0;
         equivalenceReserveSeconds = 15.0;
         verifyEquivalence = false;
@@ -197,6 +195,51 @@ private:
     friend struct DepthOptimizerTestAccess;
 
     DepthOptimizerConfig config; // 用來儲存引擎的設定值
+
+    // Stage 2 單一路徑所需的全部輸入。兩條路徑共用，確保分數可比。
+    struct Stage2Context {
+        const Netlist* templateNetlist = nullptr;   // PI/PO/DFF 介面來源
+        const depth_opt::OptimizationRequest* request = nullptr;
+        const lowering::LoweringSpec* loweringSpec = nullptr;
+        bool* loweringActive = nullptr;             // 兩條路徑共享，失敗即全域關閉
+        depth_opt::IterationPolicy policy;
+        const request_time_budget::RequestDeadline* deadline = nullptr;
+        double reserveSeconds = 0.0;                // 離開 Stage 2 後仍需要的時間
+        double firstIterEstimate = 0.0;
+        bool verbose = false;
+    };
+
+    enum class Stage2StopReason {
+        Converged,      // 停滯 + 沒時間再探索，或打到 hardPatience
+        BudgetOut,      // 時間用盡（仍可能在改善）
+        IterationCap    // maxIterations 用盡
+    };
+
+    struct Stage2PathResult {
+        bool ok = false;
+        std::string name;
+        Netlist netlist;                            // 已 lowering、已合規
+        depth_opt::CostMeasurement cost;
+        int    iterationsRun = 0;
+        double elapsedSeconds = 0.0;
+
+        // 最後一次改善發生在第幾輪（-1 = 從未改善）。等於
+        // iterationsRun - 1 代表「跑到最後一刻都還在進步」。
+        int  lastImprovedIteration = -1;
+        // 因為時間不夠而停，而不是因為停滯而停。
+        Stage2StopReason stopReason = Stage2StopReason::Converged;
+        // 續跑用的網路快照。stoppedOnBudget 時才有值。
+        std::optional<mockturtle::aig_network> aigState;
+        std::optional<mockturtle::xag_network> xagState;
+
+        bool resumable() const { return aigState.has_value() || xagState.has_value(); }
+    };
+
+    template <typename Ntk>
+    Stage2PathResult runStage2Path(const Stage2Context& ctx,
+                                    const char* pathName,
+                                    double pathBudgetSeconds,
+                                    const Ntk* warmStart = nullptr);
 
     // 輔助函式：給定 Root 與 Cut 邊界，從 Netlist 走訪並建立 PatternNode (AST)，同時收集 TargetCone
     std::shared_ptr<PatternNode> extractLhsFromCut(Netlist& netlist, 

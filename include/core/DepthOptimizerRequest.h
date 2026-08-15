@@ -130,8 +130,16 @@ OptimizationRequest makeLegacyRequest(const ConeReport& coneReport,
 // 中間一兩輪打平、之後才掉深度——所以預設給 3。
 // -------------------------------------------------------------------------
 struct IterationPolicy {
-    int maxIterations = 10;
-    int patience      = 3;
+    int maxIterations = 15;
+
+    // 軟停止：連續幾輪沒改善後，開始把「剩餘時間」納入考量。
+    int patience = 2;
+
+    // 硬停止：不管剩多少時間都停。防止在不動點上空轉。
+    int hardPatience = 6;
+
+    // 軟停止後還要繼續探索，至少需要幾輪的時間餘裕。
+    double explorationSlack = 2.0;
 };
 
 // 候選追蹤器：記住迭代過程中「依 cost metric 最好的那一個」。

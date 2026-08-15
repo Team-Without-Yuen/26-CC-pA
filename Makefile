@@ -11,7 +11,7 @@ AR  = ar
 CADICAL_DIR = include/lib/cadical
 ABC_DIR     = include/lib/abc
 
-TARGET = tools
+TARGET = NetlistTool
 
 # =============================================================
 # 1. 環境偵測
