@@ -501,4 +501,4 @@ low-level primitive、legacy structural alias 與代表性 invalid request 另�
 `rollbackOnFailure=false` 僅保留 request 相容性，public wrapper 在 validation failure
 時仍固定 rollback，不提供保留無效設計的對外模式。
 
-另外 `mini test/test26` 的 functional search/merge C++ API regression 為 27 passed、0 failed，並覆蓋 whole-design verification failure rollback；官方 test29/test30 實測分別成功合併 7/1 顆 gate，並通過 whole-design SAT。
+另外 `mini test/test26` 的 functional search/merge C++ API regression 為 28 passed、0 failed，並覆蓋直接 timeout 與 whole-design verification failure rollback。官方原始 test29/test30 單獨執行 functional merge 時分別合併 7/1 顆；`mini test/test45` 依官方 prompt 重播 AND/NOT conversion、cleanup、double-inverter collapse 後再 merge，分別完整合併 361/494 顆。兩題的 oracle、report、active-gate delta、mandatory/independent whole-design CEC 與 write/readback CEC 全部一致。

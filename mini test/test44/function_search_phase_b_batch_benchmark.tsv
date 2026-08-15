@@ -1,0 +1,24 @@
+design	mode	expectation_met	set_match	complete_match	legacy_complete	phase_b_complete	legacy_pairs	phase_b_pairs	legacy_sat_checks	phase_b_sat_checks	legacy_unknown	phase_b_unknown	legacy_seconds	phase_b_seconds	speedup
+test29	equivalent_all	yes	yes	yes	yes	yes	7	7	2990	2990	0	0	2.766244	0.441445	6.266346
+test30	equivalent_all	yes	yes	yes	yes	yes	1	1	286	286	0	0	0.218025	0.035937	6.066946
+test35	nand_any	yes	yes	yes	yes	yes	1	1	1485	1485	0	0	10.034480	2.283287	4.394752
+test35	nand_all	yes	yes	yes	yes	yes	512	512	11831	11831	0	0	62.907149	53.814360	1.168966
+synthetic	equivalent_all	yes	yes	yes	yes	yes	4	4	4	4	0	0	0.001462	0.000382	3.826747
+synthetic	nand_all	yes	yes	yes	yes	yes	10	10	10	10	0	0	0.003387	0.001706	1.985578
+random_1	equivalent_all	yes	yes	yes	yes	yes	9	9	7	7	0	0	0.002493	0.000416	6.000000
+random_1	nand_any	yes	yes	yes	yes	yes	1	1	1	1	0	0	0.000347	0.000489	0.709176
+random_2	equivalent_all	yes	yes	yes	yes	yes	28	28	20	20	0	0	0.007272	0.002502	2.906090
+random_2	nand_any	yes	yes	yes	yes	yes	1	1	1	1	0	0	0.000388	0.001253	0.309571
+random_3	equivalent_all	yes	yes	yes	yes	yes	32	32	27	27	0	0	0.011075	0.002404	4.607330
+random_3	nand_any	yes	yes	yes	yes	yes	1	1	1	1	0	0	0.000414	0.001910	0.216772
+random_4	equivalent_all	yes	yes	yes	yes	yes	65	65	46	46	0	0	0.018228	0.001905	9.567050
+random_4	nand_any	yes	yes	yes	yes	yes	1	1	1	1	0	0	0.001245	0.000622	2.000964
+random_5	equivalent_all	yes	yes	yes	yes	yes	440	440	111	111	0	0	0.044547	0.004058	10.976198
+random_5	nand_any	yes	yes	yes	yes	yes	1	1	1	1	0	0	0.000657	0.000672	0.977381
+random_6	equivalent_all	yes	yes	yes	yes	yes	712	712	177	177	0	0	0.074866	0.015991	4.681834
+random_6	nand_any	yes	yes	yes	yes	yes	1	1	1	1	0	0	0.000470	0.000678	0.692659
+random_7	equivalent_all	yes	yes	yes	yes	yes	3203	3203	355	355	0	0	0.177945	0.030325	5.867908
+random_7	nand_any	yes	yes	yes	yes	yes	1	1	1	1	0	0	0.000642	0.000935	0.686818
+random_8	equivalent_all	yes	yes	yes	yes	yes	3357	3357	538	538	0	0	0.316734	0.040442	7.831835
+random_8	nand_any	yes	yes	yes	yes	yes	1	1	1	1	0	0	0.000916	0.001333	0.687270
+SUMMARY	passed=22	total=22

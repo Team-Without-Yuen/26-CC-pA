@@ -772,4 +772,4 @@ public `CollapseDoubleInverter`：約 0.741 秒 collapse 500,000 pairs、無 rol
 command suite 為 test2 39/39，通用 wrapper/report/validation suite 為 test1 142/142。
 Boolean functional merge、DFF initial-state 與 sequential proof 維持 Deferred。
 
-`mini test/test26` 另有 27 個 C++ API assertions 與 18 個 CLI assertions，涵蓋 functional search/merge、timeout-before-mutation 與 verification-failure rollback；NewTestCase test29/test30 分別實測合併 7/1 顆 gate 並通過 whole-design SAT。
+`mini test/test26` 另有 28 個 C++ API assertions 與 18 個 CLI assertions，涵蓋 functional search/merge、直接 timeout、timeout-before-mutation 與 verification-failure rollback。NewTestCase test29/test30 的原始設計單獨 merge 為 7/1 顆；`mini test/test45` 重播官方前序 edit 後為 361/494 顆，並通過 oracle/report/delta 核對、mandatory/independent CEC 及 write/readback CEC。

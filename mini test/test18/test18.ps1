@@ -8,6 +8,7 @@ $commands = @(
     "path_query pi_po_cut unique_cut"
     "path_query pi_po_cut branch_p"
     "path_query mandatory_nodes net:a net:y"
+    "path_query articulation_between net:a net:y"
     "path_query mandatory_nodes net:branch_p net:branch_q"
     "path_query mandatory_nodes net:missing net:y"
     "path_query pi_po_cut a"
@@ -43,6 +44,9 @@ Check-Result `
     ($output -match "(?s)Status: ARTICULATION_POINTS_FOUND.*?Path exists: yes.*?Mandatory internal nets \(1\):\s+join_r") `
     "articulation query returns only the common directed dominator"
 Check-Result `
+    ($output -match "(?s)mode: articulation_between.*?Status: ARTICULATION_POINTS_FOUND.*?Path exists: yes.*?Mandatory internal nets \(1\):\s+join_r") `
+    "public articulation_between alias returns the directed mandatory internal net"
+Check-Result `
     ($output -match "(?s)Status: NO_PATH.*?Path exists: no.*?Mandatory internal nets \(0\)") `
     "no-path result is distinct from an empty connected articulation list"
 Check-Result `
@@ -63,12 +67,13 @@ Check-Result `
     "legacy graph_query remains executable"
 Check-Result `
     ($output.Contains("mandatory_nodes") -and
+     $output.Contains("articulation_between") -and
      -not $output.Contains("graph_query pi_po_cut") -and
      -not $output.Contains("reg_path_query <mode>")) `
     "public help exposes only the consolidated path entry"
 Check-Result `
-    (([regex]::Matches($output, "TOOL_RESULT_BEGIN")).Count -eq 12 -and `
-     ([regex]::Matches($output, "TOOL_RESULT_END")).Count -eq 12) `
+    (([regex]::Matches($output, "TOOL_RESULT_BEGIN")).Count -eq 13 -and `
+     ([regex]::Matches($output, "TOOL_RESULT_END")).Count -eq 13) `
     "every path consolidation command has one response envelope"
 
 Write-Output "Summary: $passed passed, $failed failed."

@@ -60,6 +60,7 @@ driver 策略，不應在 tool envelope 內把 partial 改標為 complete。
 | `func_search nand_pair --all` | 大量 signal pairs | 預設不限量；streaming artifact | 回 match_count / complete / output_file | 否，已完成 |
 | `func_search equivalent_pairs --all` | equivalence classes 與展開 pair records | 緊湊 classes + streaming pair artifact | 回 class/pair count / complete / output_file | 否，已完成 |
 | `structure_query list_* / gates_by_type` | 全部 gate/net/port names | terminal 全量輸出 | count 題只簡答；list 題目前全量讀 terminal | 視 hidden size 決定是否補 `-out` |
+| `structure_query` batch rich listing | 大量物件的 pin/net/role 明細 | 尚無 public batch-detail report | 單一物件可查；大量物件需逐筆呼叫，無法可靠完成 | Deferred；等待 API structured records 定案後同步 parser/envelope/printer |
 | `structure_query structural_issues / fanout_violations` | 大量問題 nets/gates | terminal 全量輸出 | count 題只簡答；list 題全量輸出 | 可考慮共用 list file output |
 | `cone_query net/gate fanin/fanout` | 大型 cone gate/net lists | terminal 全量輸出 | count/type 題只簡答；list 題全量輸出 | 建議討論 `summary_only` / `-out` |
 | `depth_query all_po/all_dff_d/exceeding` | 大量 endpoint/depth records | terminal 全量輸出 | count 題只簡答；list 題全量輸出 | 可考慮 `-out` |
@@ -83,6 +84,11 @@ P0: cone_query / structure_query 的共用 summary-only 與 file-output。
 P1: depth/edit/equivalence 的大型 detail file-output。
 P2: Boolean expression，留待 AIG/Boolean 重構。
 ```
+
+Batch rich listing 的候選 hidden prompt 包含 gate pins、DFF pins、cone 內 connection、
+driver/load pin roles 與 constant-input pin detail。這裡只登記 tools 同步責任；在
+`API_SPEC/API_CORE_BACKEND_TODO.md` 的 structured batch report 完成前，不得先在
+`TOOLS_SPEC` 宣告不存在的命令或參數。
 
 ## 已完成的 tools.cpp 同步項目
 

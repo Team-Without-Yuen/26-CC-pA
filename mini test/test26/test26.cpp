@@ -90,6 +90,13 @@ int main() {
                    any.status == "MATCH_FOUND",
                "FindAny returns one complete existential witness");
 
+    auto timeoutQuery = baseQuery();
+    timeoutQuery.timeLimitSeconds = 1e-12;
+    const auto timeout = netlist.runFunctionSearchQuery(timeoutQuery);
+    test.check(!timeout.ok && timeout.timedOut && !timeout.complete &&
+                   timeout.status == "TIMEOUT",
+               "EquivalentGatePairs reports an explicit partial timeout");
+
     auto andOnlyQuery = baseQuery();
     andOnlyQuery.gateTypeFilter = GateType::AND;
     const auto andOnly = netlist.runFunctionSearchQuery(andOnlyQuery);

@@ -1,0 +1,3 @@
+case	passed	expected_merged	reported_merged	active_gate_delta	oracle_seconds	merge_search_seconds	merge_total_seconds	flow_seconds	write_read_seconds	failures
+test29	1	361	361	-361	1.073579	1.082373	1.133420	2.306037	0.019780	
+test30	1	494	494	-494	0.138257	0.138771	0.159432	0.361685	0.016055	

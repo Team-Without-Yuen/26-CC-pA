@@ -1406,6 +1406,7 @@ EquivClassReport Primitives::equivalence_report(int min_size) {
               });
 
     if (report.excluded_untrusted > 0) {
+        report.is_complete = false;
         std::cerr << "[Primitives] equivalence_report: excluded "
                   << report.excluded_untrusted
                   << " untrustworthy net(s); the report is incomplete. "

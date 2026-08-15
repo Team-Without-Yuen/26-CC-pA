@@ -5,7 +5,9 @@
 `structure_query` 負責 current active netlist 的基本數量、物件列表、物件資訊、structural issue 與一層直接 connectivity。它不處理 transitive cone、endpoint path、logic depth 或 Boolean property。
 
 完整性規則：list mode 預設取得全部 active objects，不自行限制筆數；只問 count 時只回摘要。
-時間限制依題目指定。詳見 [`LLM_NOTES.md`](LLM_NOTES.md)。
+當所有 list sections 合計超過工具內部顯示門檻時，CLI 會自動將完整資料寫入唯一 artifact，
+terminal 只回 count、artifact completeness 與 `output_file`。這個門檻只決定輸出位置，不會
+截斷結果，也不由 LLM 設定。時間限制依題目指定。詳見 [`LLM_NOTES.md`](LLM_NOTES.md)。
 
 ## 2. 選擇條件
 
@@ -81,6 +83,19 @@ parser error 或不完整結果不能當成 count 0 或 empty list。
 修改後的 gate count 必須使用 active fields；tombstone storage 中的 removed gate/net 不得計入。
 `const_input_gates` 只證明 input pin 直接連到 constant，不代表 output Boolean function 為常數。
 
+大型 list query 另讀：
+
+```text
+list artifact format: QUERY_LIST_ARTIFACT_V1
+list artifact complete: yes/no
+list entry count
+wrote list to file
+output_file
+```
+
+只有 envelope `complete:true`、`list artifact complete:yes`，且 artifact footer 為
+`Complete: yes` 時，檔案才是完整答案。artifact 建立失敗時工具會回退成 terminal 全量輸出。
+
 ## 7. Prompt Examples
 
 ```text
@@ -114,6 +129,8 @@ Read: max fanout, Max-fanout nets
 - `summary` 的 PI/PO 數量是 port count；bus width 請讀 `list_pi`/`list_po` 的 `Port summaries`。
 - prompt 說 input/output bits 或 signals 時，必須加總 `Port summaries` 的 width，不能直接使用
   port count。
+- 大型 gate/net/load/structural-issue 名單會自動寫 artifact；正式回答提供總數與
+  `output_file`，不要把 artifact 全文重新貼回自然語言答案。
 - `Floating primary-input nets` 是沒有 active load 的 PI bit nets；
   `Unconnected primary-output nets` 是沒有 active driver 的 PO bit nets。兩者都是 bit-net
   name，不是 bus base port name。

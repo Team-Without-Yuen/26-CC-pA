@@ -23,11 +23,23 @@ API_SPEC/TOOLS待更新表.md
 - [x] Netlist 私有持有唯一 lazy Primitives owner；copy/move/restore 一律捨棄 cache。
 - [x] Primitives 改以 `const Netlist&` 讀取 named design；revision 是 freshness 權威。
 - [ ] snapshot CEC、cofactor/`equiv_under()` 與首次 lazy AIG rebuild 尚未接收同一套 cooperative deadline。
-- [ ] `SatEngine` 與 `Fraig` 仍為 Phase B stub，不可啟用。
+- [x] `SatEngine` 與 `Fraig` Phase B backend 已實作；incremental query、FRAIG 與 mutation lifecycle focused regression 通過。
 - [x] FunctionalDependence / Symmetry 統一遵守 `query.timeLimitSeconds`；非正值回 `INVALID_ARGUMENT`。
-- [x] Function Query 第一批 legacy/AIG differential：正常 budget 25/25 語意一致。
-- [x] benchmark 決議 production 維持 legacy：Phase-A AIG 總時間約為 legacy 2.67 倍，且 tiny-budget timeout contract 不同。
-- [ ] Phase B/shared incremental SAT、bus equivalence miter 與統一 timeout contract 完成後，再評估 Function Query AIG 接入。
+- [x] Public BooleanExpression 改為無 gate/depth/字元上限的 named-DAG streaming artifact；
+  每個 cone net 只輸出一次，deadline/I/O/incomplete footer 語意與 test46 regression 完成。
+- [x] Function Query 第一階段試接：scalar Equivalence、CanBeValue、ConstantFunction、AlwaysZero/One、TruthStatus 曾使用 private owner + Phase B incremental SAT，correctness differential 通過。
+- [x] 依 NewTestCase workload 決定 production 回切 legacy：大型電路的少量、非重複查詢無法穩定攤平 owner build/rebuild 成本；Phase B engine 與 private owner 保留但目前無高階 caller。
+- [x] Phase B 試接期間的 high-level / Phase A differential 已保留為 test40 歷史基準；production test40 恢復 legacy/AIG differential。
+- [x] NewTestCase Phase B / legacy benchmark：單筆 19/19、session 7/7 語意一致；cold 單筆 0/19 勝、warm 19/19 勝，cold session 1/7 勝、warm session 7/7 勝；cold/rebuild 中位成本約為 legacy 的 2.5x。
+- [x] 第一個 production batch 接入完成：Function Search EquivalentGatePairs 使用 private Phase B owner，其餘 mode 不變。
+- [x] Function Search Phase B batch prototype（test44）：官方與 synthetic 結果完整一致；EquivalentGatePairs 約加速 5.7x–7.9x，test35 NAND FindAny 約 4.47x。
+- [x] 固定 seed random DAG differential：48 至 2048 gates、16/16 通過、Unknown=0；EquivalentGatePairs 約 3.18x–8.98x，單 proof NAND FindAny 多數僅 0.17x–0.94x。
+- [x] EquivalentGatePairs production 局部接入：保留既有 query/report/candidate/simulation 語意，Phase B 僅替換 class proof backend。
+- [ ] NAND FindAny 暫維持 legacy；只有能可靠預估 simulation surviving proof 數且足以攤平 owner build 時，才評估 adaptive backend。
+- [ ] NAND FindAll 不可直接使用目前 `make_and + incremental equiv_checked`：test35 290 秒預算雖 512/512 完整，但約 55.85s，慢於 legacy 28.13s；需 ephemeral/chunked proof 設計。
+- [ ] conditional equivalence、FunctionalDependence、Symmetry、NAND Function Search 與 equivalence report 尚未遷移；所有 production Function Query 目前維持 legacy backend。
+- [x] Phase B focused regression：test42 共 22 checks，另與 Phase A 比對 320 筆固定亂數 DAG query 無差異。
+- [x] 修正 FRAIG simulation memory 用盡時重試相同候選至 timeout，以及 untrusted equivalence report 誤標完整的問題。
 
 ## 已完成：DFF.Q fanin scope 停在 boundary
 
@@ -139,6 +151,38 @@ netlist。因此此項不列為競賽實作待辦，也不修改 Function Search
 
 目前決議：`Out of Scope / No Action`。若官方日後變更 netlist gate-type contract，再重新開啟。
 
+## Deferred：批次物件明細查詢（Batch Rich Listing）
+
+目前高階 Structure/Basic report 可以列出 gate names，也能對單一 gate 查詢 pin/net detail，
+但缺少一次回傳大量物件完整明細的 structured batch report。例如：
+
+```text
+List all NAND gates in this design with their input and output signals.
+```
+
+若先列出全部 NAND gate，再逐顆呼叫單一物件查詢，大型 testcase 可能需要數萬次 tool calls，
+不適合作為競賽解法。這不是 NAND 專屬問題；hidden prompts 可能出現下列同類變形：
+
+```text
+- 列出某 gate type 的所有 gate，並附 input/output pin 與 net。
+- 列出所有 DFF，並附 D/Q/clock/reset 等 pin connection。
+- 列出某 cone、scope 或條件篩選結果中的 gate connection detail。
+- 列出 driver/load，並附 gate、pin role 與 net。
+- 列出 constant-input gates，並指出實際 constant pin。
+- 同時要求 filtered object count 與完整 detail list。
+```
+
+未來介面應優先採用通用 projection/detail 設計，而不是為每種 prompt 新增獨立 mode：
+
+```text
+- 保留現有 names-only query 的參數與回傳語意。
+- 新增 opt-in structured detail records，欄位由物件類型明確定義。
+- 大型 records 必須完整寫入 artifact；report 回傳 count、complete 與 output path。
+- API facade 負責篩選、欄位投影與 report；tools.cpp 只負責 parser/envelope/printer。
+```
+
+目前狀態：`Deferred / Marked`。先蒐集 hidden-prompt 變形與共通欄位需求，暫不修改 API。
+
 ## 後期 AIG / Boolean 重構項目
 
 目前決策：
@@ -156,7 +200,7 @@ netlist。因此此項不列為競賽實作待辦，也不修改 Function Search
 - sequential_query enable_hold 的 Q-free EN/DATA Boolean decomposition。
 - func_query boolean_expression 的 canonical / depth-limited / large-output policy。
 - func_query symmetry 的完整 Boolean-level proof 與 cache。
-- func_query equivalence / constant function 的共用 SAT/AIG cache。
+- func_query scalar equivalence / constant function 的共用 SAT/AIG cache已完成；bus、conditional 與 batch search 尚待遷移。
 - merge_functionally_equivalent_gates 這類依賴全域 Boolean equivalence 的 cleanup/edit。
 ```
 
