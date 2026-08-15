@@ -36,8 +36,9 @@ query.type + target/comparison/condition/symmetry inputs/constant/depth fields
 ```text
 FunctionQuery 是功能分析，不是連線分析。
 FunctionQuery 驗證已指定的 target；未知 pair/candidate 搜尋使用 FunctionSearchQuery。
-SAT 類 query 會用 SAT model 判斷功能性質。
-Boolean expression 類 query 會做 fanin symbolic traversal。
+SAT 類 query 目前使用 production legacy proof backend；AIG 只保留為內部 differential
+與已證明適合的 batch backend，不由 caller 選擇。Boolean expression tools mode 以
+named-net DAG streaming 寫入完整 artifact，不建立指數膨脹的平面字串。
 DFF.Q 視為 pseudo primary input，不穿越 DFF 回到 D pin。
 ```
 
@@ -69,7 +70,7 @@ if (report.ok && report.exists) {
 | `TruthStatus` | 分類 scalar net 的 truth status | `netNameA` | `canBeZero`, `canBeOne`, `isConstant`, `constValue`, `status` |
 | `FunctionalDependence` | target function 是否 exact 依賴 selected input | `netNameA`, `netNameB` | `dependsOnInput`, `inputInStructuralSupport`, `status` |
 | `Symmetry` | 交換兩個 inputs 後 target function 是否不變 | `netNameA`, `symmetryInputNameA`, `symmetryInputNameB` | `symmetric`, support flags、counterexample、`status` |
-| `BooleanExpression` | 展開 Boolean expression | `netNameA` | `expression`, `expressionDepthLimited`, support 分類、`expressionLength` |
+| `BooleanExpression` | 完整 Boolean DAG equations | `netNameA`；tools 內部自動設定 artifact path | artifact 完整性、equation/boundary counts、output path、support 分類 |
 | `SimplifiedBooleanExpression` | 展開 depth-limited Boolean expression | `netNameA`, `maxExpressionDepth` | `expression`, `expressionDepthLimited`, `maxExpressionDepth` |
 | `PrimaryInputsOfNet` | 回報並分類 fanin cone leaves | `netNameA` | `supportPrimaryInputs` 與三個分類欄位 |
 
@@ -88,7 +89,9 @@ if (report.ok && report.exists) {
 | `conditionValue` | `int` | `-1` | `ConditionalEquivalence` 使用；只能是 0 或 1 |
 | `constValue` | `int` | `-1` | `CanBeValue` / `ConstantFunction` 使用；只能是 0 或 1 |
 | `maxExpressionDepth` | `int` | `10` | `SimplifiedBooleanExpression` 使用；必須 >= 0 |
-| `timeLimitSeconds` | `double` | `290.0` | SAT 類 query 的 backend wall-clock 預算；equivalence、conditional equivalence、truth/constant、functional dependence 與 symmetry 都會傳到底層 solver |
+| `writeExpressionToFile` | `bool` | `false` | 內部/C++ artifact mode；public tool 固定設為 true |
+| `expressionOutputFilePath` | `std::string` | `""` | 內部輸出路徑；public tool 自動產生，不由 LLM 指定 |
+| `timeLimitSeconds` | `double` | `290.0` | Boolean backend wall-clock 預算；constant/truth family 的兩個 value proof 各使用最多一半預算 |
 
 ---
 
@@ -102,7 +105,7 @@ if (report.ok && report.exists) {
 | `exists` | yes/no 問題的主要答案；expression 類成功時也會是 true |
 | `message` | debug / LLM response 用的簡短訊息 |
 | `status` | 更明確的分類字串 |
-| `solverRan` | SAT 類 query 是否實際呼叫 solver |
+| `solverRan` | 是否實際呼叫 solver；若 AIG structural sharing/constant shortcut 已直接證明，可為 false |
 | `solverTimedOut` | SAT solver 是否因 time limit 回 UNKNOWN |
 | `solverUnknown` | SAT solver 是否回 UNKNOWN；不能解讀成 false |
 | `unsupported` | 目標 cone / gate type / 參數是否不支援 |
@@ -139,6 +142,13 @@ if (report.ok && report.exists) {
 | `expressionLength` | `expression.size()` |
 | `maxExpressionDepth` | depth-limited query 使用的展開深度；完整展開時為 -1 |
 | `expressionDepthLimited` | 完整 mode 表示實際觸發 safety limit；simplified mode 表示採用 depth-limited expansion |
+| `wroteExpressionToFile` | 是否建立 artifact |
+| `expressionArtifactComplete` | artifact 是否包含完整 target DAG equations |
+| `expressionArtifactTimedOut` | 是否因 request deadline 中止 |
+| `expressionEquationCount` | 寫出的 combinational equations 數 |
+| `expressionBoundaryCount` | PI/constant/DFF.Q/undriven boundary 數 |
+| `expressionArtifactFormat` | 目前為 `NAMED_DAG_EQUATIONS_V1` |
+| `expressionOutputFilePath` | 完整 artifact 路徑 |
 | `supportPrimaryInputs` | real PI、DFF.Q pseudo-PI、undriven leaf 的排序聯集 |
 | `supportRealPrimaryInputs` | 真正宣告的 top-level PI |
 | `supportDffPseudoInputs` | 作為 sequential boundary 的 DFF.Q leaves |
@@ -395,10 +405,9 @@ prompt 對應：
 注意：
 
 ```text
-BooleanExpression 以 structural expansion 為主，會做固定的 local identity 化簡，
-但不做一般 algebraic minimization。
-大型 cone 可改用 SimplifiedBooleanExpression；完整 mode 若觸發內部 safety limit，
-`expressionDepthLimited` 會是 true，深層子式會以 net name 表示。
+Public tool 的 BooleanExpression 使用 exact structural named-DAG equations，不做一般
+algebraic minimization；每個 net 只輸出一次，因此不需 depth/size cap。C++ caller 若不
+啟用 artifact mode，仍可使用 legacy inline expression 與 `expressionDepthLimited`。
 ```
 
 ---
@@ -578,13 +587,13 @@ func_query symmetry n11 n3 n9[0]
 
 | FunctionQueryType | 底層 helper |
 |---|---|
-| `Equivalence` | `areNetsEquivalent()` / `checkEquivalence()` |
+| `Equivalence` | legacy combined-cone SAT miter，支援 scalar/bus |
 | `ConditionalEquivalence` | shared equivalence CNF + scalar condition unit clause |
-| `CanBeValue` | `canNetBeValue()` |
-| `ConstantFunction` | `isNetConstantFunction()` |
-| `AlwaysZero` | `isNetAlwaysZero()` |
-| `AlwaysOne` | `isNetAlwaysOne()` |
-| `TruthStatus` | `canNetBeValue(net, 0)` + `canNetBeValue(net, 1)` |
+| `CanBeValue` | legacy fanin-cone SAT，分別檢查 target=0/1 |
+| `ConstantFunction` | legacy fanin-cone SAT 對 const0/const1 的兩次 proof |
+| `AlwaysZero` | legacy fanin-cone constant proof |
+| `AlwaysOne` | legacy fanin-cone constant proof |
+| `TruthStatus` | legacy fanin-cone SAT 對 const0/const1 的兩次 proof |
 | `FunctionalDependence` | `runFunctionQuery()` 內部 dual-cone SAT miter |
 | `Symmetry` | `runFunctionQuery()` 內部 swapped-cofactor dual-cone SAT miter |
 | `BooleanExpression` | `getBooleanExpression()` |
@@ -667,7 +676,8 @@ Netlist::FunctionReport report = netlist.runFunctionQuery(query);
 2. Equivalence 支援 bus，但兩邊 bit width 必須一致。
 3. Symmetry 會回傳非對稱 counterexample；其他 SAT query 目前不一定回傳 witness assignment。
 4. Boolean expression 只做固定 local identity，不做一般 algebraic minimization。
-5. Boolean expression 有內部 size/depth safety limit；大型 testcase 仍建議使用 SimplifiedBooleanExpression。
+5. Public Boolean expression artifact 無 gate/depth/字元上限；legacy inline helper 仍有
+   safety limit。SimplifiedBooleanExpression 只用於 prompt 明確要求 depth-limited 輸出。
 6. DFF.Q 是 pseudo PI；這不是 sequential equivalence。
 7. 若 SAT solver timeout 或 UNKNOWN，`report.ok=false`，並透過 `solverTimedOut` / `solverUnknown` / `solverStatus` 明確回報，不應解讀成普通 false。
 8. FunctionalDependence 只接受 scalar target 與 scalar PI / DFF.Q pseudo-PI selected input，目前不回傳 SAT witness assignment。
@@ -683,7 +693,9 @@ Netlist::FunctionReport report = netlist.runFunctionQuery(query);
 expression 檔案：src/analysis/Booleanexpression.cpp
 型別檔案：include/core/NetlistQueries.h
 tester：mini test/test4/test4.cpp
+artifact/scalability tester：mini test/test46/test46.cpp
 目前 test4：Summary: 17 passed, 0 failed.
+目前 test46：Summary: 8 passed, 0 failed.
 CLI integration regression test9-test17：150 passed, 0 failed。
 symmetry integration test22：14 passed, 0 failed。
 NewTestCase test36/test37：兩題皆回 SYMMETRIC；指定 inputs 均不在 target support，solverStatus=NOT_NEEDED。

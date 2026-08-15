@@ -75,7 +75,7 @@ CFLAGS   = -O3 -Wall $(PLATFORM_DEF) $(ABC_DEFS) \
 # 3. 原始碼與目的檔
 # =============================================================
 # 在這裡新增了 $(wildcard src/SATEngine/*.cpp)
-SRCS_CPP = tools.cpp \
+SRCS_CPP = main.cpp \
 		   $(wildcard src/core/*.cpp) \
 		   $(wildcard src/io/*.cpp) \
 		   $(wildcard src/analysis/*.cpp) \
@@ -140,7 +140,8 @@ $(TARGET_BIN): $(CADICAL_LIB) $(ABC_LIB) $(OBJS)
 # ---- 清理 ----
 clean:
 	@echo "[CLEAN] Removing objects & executable..."
-	@rm -f $(OBJS) $(DEPS) $(TARGET_BIN) $(TARGET).exe
+	@rm -f $(OBJS) $(DEPS) $(TARGET_BIN) $(TARGET).exe \
+		src/SATEngine/EngineStubs.o src/SATEngine/EngineStubs.d
 	@echo "[CLEAN] Done."
 
 clean_all: clean

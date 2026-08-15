@@ -223,6 +223,12 @@ struct FunctionQuery {
     int constValue = -1;    // CanBeValue / ConstantFunction 使用；只能是 0 或 1
     int maxExpressionDepth = 10; // SimplifiedBooleanExpression 使用；必須 >= 0
     double timeLimitSeconds = request_time_budget::kGeneralToolBudgetSeconds;
+
+    // Internal/tool-layer output policy for a complete Boolean equation.
+    // The public CLI assigns a unique path automatically; the LLM does not
+    // choose this path or an output-size limit.
+    bool writeExpressionToFile = false;
+    std::string expressionOutputFilePath;
 };
 
 struct FunctionReport {
@@ -268,6 +274,13 @@ struct FunctionReport {
     size_t expressionLength = 0;   // expression.size()，方便 LLM 決定是否摘要
     int maxExpressionDepth = -1;   // SimplifiedBooleanExpression 實際使用的 depth limit
     bool expressionDepthLimited = false; // true 表示這次輸出使用 depth-limited expansion
+    bool wroteExpressionToFile = false;
+    bool expressionArtifactComplete = false;
+    bool expressionArtifactTimedOut = false;
+    size_t expressionEquationCount = 0;
+    size_t expressionBoundaryCount = 0;
+    std::string expressionArtifactFormat;
+    std::string expressionOutputFilePath;
     std::vector<std::string> supportPrimaryInputs; // fanin cone PI / DFF.Q pseudo-PI leaves（三桶聯集，不分類）
     // supportPrimaryInputs 的分類版本：同一次 BFS 分出的三個互斥子集，聯集等於
     // supportPrimaryInputs。BooleanExpression / SimplifiedBooleanExpression /

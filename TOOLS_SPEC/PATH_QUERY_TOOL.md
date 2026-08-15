@@ -2,7 +2,7 @@
 
 ## 1. 責任
 
-`path_query` 負責明確 startpoint 與 endpoint 之間的 combinational path、路徑限制、register-to-register path、mandatory nodes 與 separator/cut。對外不使用 legacy `reg_path_query` 或 `graph_query`。
+`path_query` 負責明確 startpoint 與 endpoint 之間的 combinational path、路徑限制、register-to-register path、mandatory nodes 與 separator/cut。官方 prompt 使用 `articulation points between A and B` 時，也由本工具的 `articulation_between` mode 處理。對外不使用 legacy `reg_path_query` 或 `graph_query`。
 
 完整性規則：`all paths` 預設不設數量上限。只問數量時使用 `-count_only`；要求完整列表時
 直接呼叫 `enumerate`，CLI 會自動以 streaming 寫入不覆寫既有結果的唯一檔名，正式答案只回
@@ -11,7 +11,7 @@
 
 ## 2. 選擇條件
 
-prompt 出現 `path from A to B`、`through`、`avoid`、`every path`、`shortest`、`longest between endpoints`、`register-to-register`、`mandatory`、`separator` 或 `cut` 時使用本 tool。
+prompt 出現 `path from A to B`、`through`、`avoid`、`every path`、`shortest`、`longest between endpoints`、`register-to-register`、`mandatory`、`articulation points between A and B`、`separator` 或 `cut` 時使用本 tool。
 
 只問某物件可到達的完整範圍使用 `cone_query`；全設計 maximum depth/critical endpoint 使用 `depth_query`。
 
@@ -27,6 +27,7 @@ path_query enumerate <start_endpoint> <end_endpoint>
            [-time_limit seconds]
 
 path_query is_separator <start_endpoint> <end_endpoint> <candidate_net>
+path_query articulation_between <start_endpoint> <end_endpoint>
 path_query pi_po_cut <candidate_net>
 path_query direct_pi_po
 ```
@@ -64,6 +65,7 @@ required/avoided nodes 使用 `gate:<g>`、`net:<n>` 或 bare net；bare token �
 | `every_through` | `<start> <end> -req <node...>` | 每條 path 是否都通過 required nodes | `Yes` / `No` |
 | `every_avoids` | `<start> <end> -avoid <node...>` | 每條 path 是否都避開指定 nodes | `Yes` / `No` |
 | `mandatory_nodes` | `<start> <end>` | 所有 path 都經過的 internal nets | `Path exists`, `Mandatory internal nets` |
+| `articulation_between` | `<start> <end>` | `mandatory_nodes` 的官方 prompt 對應別名 | `Path exists`, `Mandatory internal nets` |
 | `is_separator` | `<start> <end> <candidate_net>` | candidate 是否切斷指定 endpoints | `Is separator`, witness fields |
 | `pi_po_cut` | `<candidate_net>` | candidate 是否為 PI-to-PO directed cut | `Is separator`, witness fields |
 | `direct_pi_po` | 無必要 option | 所有 depth-0 PI-to-PO direct connections | 完整 connection list 與總數 |
@@ -86,7 +88,7 @@ required/avoided nodes 使用 `gate:<g>`、`net:<n>` 或 bare net；bare token �
 |---|---|
 | `exists`, `every_through`, `every_avoids` | `Yes` / `No`；必須先確認 `complete:true` |
 | `find_any`, `min_depth`, `max_depth` | path existence、`Depth`, `Nets`, `Gates` |
-| `mandatory_nodes` | `Path exists`, `Mandatory internal nets` |
+| `mandatory_nodes`, `articulation_between` | `Path exists`, `Mandatory internal nets` |
 | `is_separator`, `pi_po_cut` | `Is separator` 與 witness fields |
 | `enumerate` | `Total paths`, `Complete enumeration`, `Timed out`, `Stop reason`, `Output file` |
 | `direct_pi_po` | total count 與完整 connection list |
@@ -127,6 +129,12 @@ Command: path_query pi_po_cut n10
 Read: Is separator
 ```
 
+```text
+Prompt: Find all articulation points in the combinational graph between n2 and n14.
+Command: path_query articulation_between net:n2 net:n14
+Read: Path exists, Mandatory internal nets；若 Status=NO_PATH，表示兩端原本沒有 directed combinational path
+```
+
 ## 7. 限制
 
 - 大型設計的 all-path enumeration 可能產生大型檔案。只問數量時使用 `-count_only`；完整
@@ -137,3 +145,6 @@ Read: Is separator
 - bus bit endpoint 必須寫成 `net:n0[0]`、`net:n63[1]`；不要把 bus bit 當成 `pi:` / `po:` endpoint。
 - `max_depth` 是指定 endpoints 間的最長 path；全域 critical path 應使用 `depth_query global_critical`。
 - 空的 mandatory list 可能表示 path 存在但沒有 mandatory internal net；必須同時讀 `Path exists`。
+- `articulation_between` 在本工具中的精確語意，是列出每一條 directed `start -> end`
+  combinational path 都必經的 internal nets；不包含 start/end，也不是搜尋整張無向圖的全域
+  articulation vertices。它與 `mandatory_nodes` 使用同一個 report 與 backend。

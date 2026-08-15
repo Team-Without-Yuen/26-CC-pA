@@ -1,0 +1,18 @@
+design	mode	expectation_met	set_match	complete_match	legacy_complete	phase_b_complete	legacy_pairs	phase_b_pairs	legacy_sat_checks	phase_b_sat_checks	legacy_unknown	phase_b_unknown	legacy_seconds	phase_b_seconds	speedup
+random_1	equivalent_all	yes	yes	yes	yes	yes	9	9	7	7	0	0	0.002705	0.000703	3.847106
+random_1	nand_any	yes	yes	yes	yes	yes	1	1	1	1	0	0	0.000397	0.000420	0.945065
+random_2	equivalent_all	yes	yes	yes	yes	yes	28	28	20	20	0	0	0.007393	0.003175	2.328137
+random_2	nand_any	yes	yes	yes	yes	yes	1	1	1	1	0	0	0.000385	0.001710	0.225069
+random_3	equivalent_all	yes	yes	yes	yes	yes	32	32	27	27	0	0	0.012122	0.003537	3.426920
+random_3	nand_any	yes	yes	yes	yes	yes	1	1	1	1	0	0	0.000424	0.002841	0.149081
+random_4	equivalent_all	yes	yes	yes	yes	yes	65	65	46	46	0	0	0.017744	0.002113	8.396792
+random_4	nand_any	yes	yes	yes	yes	yes	1	1	1	1	0	0	0.000431	0.000643	0.669984
+random_5	equivalent_all	yes	yes	yes	yes	yes	440	440	111	111	0	0	0.049615	0.004075	12.176058
+random_5	nand_any	yes	yes	yes	yes	yes	1	1	1	1	0	0	0.000553	0.000632	0.874980
+random_6	equivalent_all	yes	yes	yes	yes	yes	712	712	177	177	0	0	0.077275	0.015072	5.127071
+random_6	nand_any	yes	yes	yes	yes	yes	1	1	1	1	0	0	0.000470	0.000672	0.699672
+random_7	equivalent_all	yes	yes	yes	yes	yes	3203	3203	355	355	0	0	0.197342	0.029067	6.789177
+random_7	nand_any	yes	yes	yes	yes	yes	1	1	1	1	0	0	0.000636	0.000854	0.745082
+random_8	equivalent_all	yes	yes	yes	yes	yes	3357	3357	538	538	0	0	0.348598	0.040910	8.521188
+random_8	nand_any	yes	yes	yes	yes	yes	1	1	1	1	0	0	0.000809	0.001219	0.663769
+SUMMARY	passed=16	total=16

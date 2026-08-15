@@ -197,6 +197,43 @@ types 以空白或逗號分隔；不得把「NOR and NOT only」解讀為只允�
 - 未指定 baseline 時，query 回答 current design；`original` 與 `previous_edit` 只能透過
   `equiv_query` 的對應 mode 明確選擇。
 
+### Routing Checklist
+
+每個 prompt 在送出 command 前必須逐項核對。不能只根據 `path`、`cone`、`list` 等單一關鍵字
+選工具，也不能因 command 回傳 `status:ok` 就假設已回答原題。
+
+| 必查項目 | Routing 規則 |
+|---|---|
+| 量詞 | `any`、`exists`、`find one` 使用 find-any；只有 `all`、`every`、`list each` 才完整列舉或加 `--all` |
+| 路徑限制 | `avoid`、`without passing`、`does not traverse` 必須保留為 `-avoid`；`through`、`must pass` 不得降成普通 existence query |
+| 名稱 | 完整保留 gate/net/port 名稱；bus bit `n4[0]` 不得改成 `n4` |
+| Scope | whole、fanin、fanout、指定 endpoints 與指定 candidate set 不得互換 |
+| 比較題 | `A or B which...` 分別查 A、B，再比較相同 metric；不能改查全設計 winner |
+| 修改後追問 | edit/opt 後重新查 current design；詢問修改 delta 才使用 `report_query last_edit` |
+| Sequential boundary | DFF.Q fanin 是空 combinational cone；空結果不是 error，也不能回追同一顆 DFF.D |
+| 完整性 | 只有 `complete:true` 及對應 artifact complete 才能宣稱 `all` 已完整 |
+| 最終答案 | 依 prompt 直接回答數值、名稱、yes/no 或比較結果；不要只貼多份 tool reports 讓評分器自行推導 |
+
+常見 routing 對照：
+
+```text
+Does there exist any pair ... NAND(a,b)==n25?
+-> func_search nand_pair n25
+
+List all pairs ... NAND(a,b)==n25.
+-> func_search nand_pair n25 --all
+
+Does a path from A to B exist that does not traverse X?
+-> path_query exists net:A net:B -avoid net:X
+
+Which output (A or B) has the larger fanin cone?
+-> cone_query net_fanin A
+-> cone_query net_fanin B
+-> compare the two `gates` values and answer A, B, or tie
+```
+
+詳細的 error、large-output 與答案組裝規則見 [`LLM_NOTES.md`](LLM_NOTES.md)。
+
 ---
 
 ## 1. 判斷順序
@@ -247,6 +284,9 @@ Which primary input has the highest direct fanout?
 
 責任邊界：只處理物件本身與一層 connectivity。題目若要求 transitive cone，改用 `ConeQuery`；若要求 A 到 B 的完整路徑，改用 `PathQuery`；若問 signal 是否功能常數，不是 structural constant connection，改用 `FunctionQuery`。
 
+大型 object/load/issue 名單會自動完整寫入 list artifact；LLM 讀取 count、
+`list artifact complete` 與 `output_file`，不需也不能指定輸出門檻或檔名。
+
 詳細用法：[`STRUCTURE_QUERY_TOOL.md`](STRUCTURE_QUERY_TOOL.md)
 
 ---
@@ -274,6 +314,9 @@ Which output has the largest fanin cone?
 
 責任邊界：`ConeQuery` 回答「範圍中有哪些物件」，不負責證明某一條 A-to-B path，也不計算全域 critical depth。指定 endpoints 的路徑使用 `PathQuery`；logic depth 使用 `DepthQuery`。
 
+大型 cone names 會自動完整寫入 list artifact，terminal 保留 cone counts、gate-type
+breakdown、完整性與 `output_file`；小型 cone 維持直接列出全部名稱。
+
 詳細用法：[`CONE_QUERY_TOOL.md`](CONE_QUERY_TOOL.md)
 
 ---
@@ -297,10 +340,11 @@ Is there a path from n1 to n20?
 List all paths from input a to output y that avoid n8.
 Find the longest path from ff1.Q to ff2.D.
 Which nodes occur on every path from a to y?
+Find all articulation points in the combinational graph between n2 and n14.
 Is n10 a separator between the primary inputs and outputs?
 ```
 
-責任邊界：題目必須關心兩個 endpoints 之間如何連通。只問某個 signal 的完整 fanin/fanout 範圍使用 `ConeQuery`；只問全設計 endpoint depth 或 critical path 使用 `DepthQuery`。separator/mandatory-node 題目對外仍由 `PathQuery` 處理，不直接選內部 `GraphQuery`。
+責任邊界：題目必須關心兩個 endpoints 之間如何連通。只問某個 signal 的完整 fanin/fanout 範圍使用 `ConeQuery`；只問全設計 endpoint depth 或 critical path 使用 `DepthQuery`。separator/mandatory-node 題目對外仍由 `PathQuery` 處理，不直接選內部 `GraphQuery`。`articulation points between A and B` 應呼叫 `path_query articulation_between A B`；此處語意為所有 directed A-to-B paths 的共同 internal nets，不是無向圖的全域 articulation vertices。
 
 詳細用法：[`PATH_QUERY_TOOL.md`](PATH_QUERY_TOOL.md)
 
@@ -343,7 +387,7 @@ Report the critical path and maximum logic depth.
 - signal 是否 constant 0、constant 1，或能否取某個值。
 - output 是否 functionally dependent on 指定 input。
 - 兩個 inputs 對指定 function 是否 symmetric。
-- Boolean expression、simplified expression 與 functional support。
+- 完整 named-DAG Boolean equation artifact、simplified expression 與 functional support。
 
 典型 prompt：
 
@@ -357,6 +401,10 @@ Derive the Boolean expression for n15.
 ```
 
 責任邊界：候選 signal 名稱必須已知。若題目要求從全設計「找出任意一組」符合條件的 signals，使用 `FunctionSearchQuery`。若比較的是修改前後兩份 design，不是兩條 internal nets，使用 `WholeDesignEquivalence`。
+
+`func_query boolean_expression <net>` 會自動把完整 named-net DAG equations 寫入唯一
+artifact；LLM 不指定 path 或大小上限。response 只回完整性、equation/boundary counts
+與 `output_file`，不得把大型 artifact 全貼進自然語言答案。
 
 詳細用法：[`FUNCTION_QUERY_TOOL.md`](FUNCTION_QUERY_TOOL.md)
 

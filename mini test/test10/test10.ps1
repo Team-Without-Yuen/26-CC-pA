@@ -18,6 +18,13 @@ $commands = @(
 ) -join "`n"
 
 $output = $commands | & $Executable 2>&1 | Out-String
+$artifactMatch = [regex]::Match($output, '(?m)^  output_file: (.+)$')
+$artifactPath = if ($artifactMatch.Success) { $artifactMatch.Groups[1].Value.Trim() } else { "" }
+$artifact = if ($artifactPath -and (Test-Path -LiteralPath $artifactPath)) {
+    Get-Content -LiteralPath $artifactPath -Raw
+} else {
+    ""
+}
 $passed = 0
 $failed = 0
 
@@ -43,10 +50,15 @@ Check-Result ($output.Contains("mode: gate_on_critical")) "gate-on-critical mode
 Check-Result ($output.Contains("Gate on critical path: yes")) "g0 lies on a maximum-depth path"
 Check-Result ($output.Contains("mode: deepest_output")) "deepest output mode is exposed"
 Check-Result ($output.Contains("Worst endpoint: y depth=3")) "deepest output is y at depth 3"
-Check-Result ($output.Contains("expression: NOT(OR(AND(a, b), c))")) "full Boolean expression is returned"
+Check-Result ($output.Contains("expression artifact format: NAMED_DAG_EQUATIONS_V1") -and
+              $output.Contains("expression artifact complete: yes")) "complete Boolean equation artifact is returned"
+Check-Result ($artifact.Contains("n1 = AND(a, b)") -and
+              $artifact.Contains("n2 = OR(n1, c)") -and
+              $artifact.Contains("y = NOT(n2)") -and
+              $artifact.Contains("Complete: yes")) "Boolean equation artifact is self-contained"
 Check-Result ($output.Contains("expression: NOT(n2)")) "depth-limited expression is returned"
 Check-Result ($output.Contains("expression depth limited: yes")) "depth-limited flag is returned"
-Check-Result ($output.Contains("Support primary inputs (3):")) "support PI list is returned"
+Check-Result ($output.Contains("Support leaves (3):")) "support leaf list is returned"
 Check-Result ($output.Contains("Total paths: 4")) "all_pi/all_po count-only enumeration is complete"
 Check-Result (([regex]::Matches($output, "Total paths: 4")).Count -ge 2) "legacy max_paths does not truncate complete enumeration"
 Check-Result (([regex]::Matches($output, "Path limit reached: no")).Count -eq 3) "path-limit status remains false for complete enumeration"
@@ -57,6 +69,9 @@ Check-Result (([regex]::Matches($output, "TOOL_RESULT_BEGIN")).Count -eq 11) "ev
 Check-Result (([regex]::Matches($output, "TOOL_RESULT_END")).Count -eq 11) "every Batch 2 envelope is closed"
 
 Write-Output "Summary: $passed passed, $failed failed."
+if ($artifactPath -and (Test-Path -LiteralPath $artifactPath)) {
+    Remove-Item -LiteralPath $artifactPath -Force
+}
 if ($failed -ne 0) {
     Write-Output "--- tools output ---"
     Write-Output $output

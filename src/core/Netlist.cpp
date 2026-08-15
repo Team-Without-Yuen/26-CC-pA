@@ -74,8 +74,13 @@ eqeng::Primitives& Netlist::booleanPrimitives() const {
     if (!primitives_) {
         eqeng::Primitives::Config config;
         config.verbose_rebuild = false;
+        // Keep the dormant internal owner ready for future batch proofs.
+        // Production Function Query currently uses the legacy backend; FRAIG
+        // stays explicit until a request deadline covers the whole sweep.
+        config.fraig_auto_sweep_threshold = 0;
         primitives_ = std::make_unique<eqeng::Primitives>(
             *this, eqeng::AigModel::Options{}, config);
+        primitives_->enable_phase_b(true);
     }
     return *primitives_;
 }

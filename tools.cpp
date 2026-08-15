@@ -38,8 +38,10 @@ struct ToolSession {
     std::string loadedFilePath;
     size_t designRevision = 0;
     size_t pathArtifactSequence = 0;
+    size_t functionExpressionArtifactSequence = 0;
     size_t functionSearchArtifactSequence = 0;
     size_t sequentialArtifactSequence = 0;
+    size_t listArtifactSequence = 0;
     bool designLoaded = false;
 };
 
@@ -50,6 +52,36 @@ struct ToolResponse {
     std::string mode;
     std::string message;
     bool complete = false;
+};
+
+constexpr size_t kAutomaticListArtifactThreshold = 200;
+
+struct ListArtifactSection {
+    std::string title;
+    std::vector<std::string> entries;
+};
+
+struct ListArtifactContent {
+    std::vector<std::pair<std::string, std::string>> fields;
+    std::vector<ListArtifactSection> sections;
+
+    size_t entryCount() const {
+        size_t count = 0;
+        for (const ListArtifactSection& section : sections) {
+            count += section.entries.size();
+        }
+        return count;
+    }
+};
+
+struct ListArtifactResult {
+    bool attempted = false;
+    bool complete = false;
+    bool wroteFile = false;
+    size_t entryCount = 0;
+    std::string format = "QUERY_LIST_ARTIFACT_V1";
+    std::string outputFilePath;
+    std::string message;
 };
 
 std::string toolStatusName(ToolStatus status) {
@@ -374,8 +406,155 @@ Netlist::PathEndpoint parseEndpoint(const std::string& token) {
     return Netlist::PathEndpoint(Netlist::PathEndpointType::SpecificNet, token);
 }
 
+void addListSection(ListArtifactContent& content,
+                    const std::string& title,
+                    const std::vector<std::string>& entries) {
+    if (!entries.empty()) content.sections.push_back({title, entries});
+}
+
+std::vector<std::string> gateNamesFromIds(
+    const Netlist& netlist,
+    const std::vector<int>& gateIds);
+std::vector<std::string> fanoutReportEntries(
+    const std::vector<Netlist::FanoutLoadReport>& reports);
+
+ListArtifactContent makeBasicListArtifactContent(
+    const Netlist& netlist,
+    const Netlist::BasicReport& report) {
+    ListArtifactContent content;
+    content.fields = {
+        {"message", report.message},
+        {"gate count", std::to_string(report.gateCount)},
+        {"net count", std::to_string(report.netCount)},
+        {"logical wire count", std::to_string(report.logicalWireCount)},
+        {"primary input count", std::to_string(report.primaryInputCount)},
+        {"primary output count", std::to_string(report.primaryOutputCount)}
+    };
+
+    std::vector<std::string> gateTypeCounts;
+    for (const auto& item : report.gateTypeCounts) {
+        gateTypeCounts.push_back(netlist.gateTypeToString(item.first) + " : " +
+                                 std::to_string(item.second));
+    }
+    addListSection(content, "Gate type counts", gateTypeCounts);
+    addListSection(content, "Gate names", report.gateNames);
+    addListSection(content, "Net names", report.netNames);
+    addListSection(content, "Port names", report.portNames);
+
+    std::vector<std::string> ports;
+    ports.reserve(report.ports.size());
+    for (const PortSummary& port : report.ports) {
+        const std::string direction = port.isInput
+            ? "input"
+            : (port.isOutput ? "output" : "unknown");
+        ports.push_back("name=" + port.name + " direction=" + direction +
+                        " width=" + std::to_string(port.width) +
+                        " is_bus=" + (port.isBus ? "true" : "false") +
+                        " msb=" + std::to_string(port.msb) +
+                        " lsb=" + std::to_string(port.lsb));
+    }
+    addListSection(content, "Port summaries", ports);
+    addListSection(content, "Undriven nets", report.undrivenNets);
+    addListSection(content, "No-load nets", report.noLoadNets);
+    addListSection(content, "Floating nets", report.floatingNets);
+    addListSection(content, "Unconnected gates", report.unconnectedGates);
+    addListSection(content, "Floating primary-input nets",
+                   report.floatingPrimaryInputNets);
+    addListSection(content, "Unconnected primary-output nets",
+                   report.unconnectedPrimaryOutputNets);
+    return content;
+}
+
+ListArtifactContent makeConnectivityListArtifactContent(
+    const Netlist& netlist,
+    const Netlist::DirectConnectivityReport& report) {
+    ListArtifactContent content;
+    content.fields = {
+        {"message", report.message},
+        {"gate", report.gateName},
+        {"net", report.netName},
+        {"count", std::to_string(report.count)}
+    };
+
+    if (report.fanoutLoadReport.ok) {
+        const Netlist::FanoutLoadReport& fanout = report.fanoutLoadReport;
+        content.fields.push_back(
+            {"fanout load count", std::to_string(fanout.totalLoadCount)});
+        content.fields.push_back(
+            {"drives primary output", fanout.drivesPrimaryOutput ? "yes" : "no"});
+        content.fields.push_back(
+            {"primary output load count",
+             std::to_string(fanout.primaryOutputLoadCount)});
+        addListSection(content, "Combinational gate input loads",
+                       gateNamesFromIds(netlist, fanout.combinationalGateLoads));
+        addListSection(content, "DFF D-pin loads",
+                       gateNamesFromIds(netlist, fanout.dffDataLoads));
+        addListSection(content, "DFF clock-pin loads",
+                       gateNamesFromIds(netlist, fanout.dffClockLoads));
+        addListSection(content, "DFF reset/set-pin loads",
+                       gateNamesFromIds(netlist, fanout.dffResetSetLoads));
+        addListSection(content, "DFF other-pin loads",
+                       gateNamesFromIds(netlist, fanout.dffOtherLoads));
+    }
+    if (report.globalFanoutReport.ok) {
+        const Netlist::GlobalFanoutReport& global = report.globalFanoutReport;
+        content.fields.push_back(
+            {"checked nets", std::to_string(global.checkedNetCount)});
+        content.fields.push_back(
+            {"max fanout", std::to_string(global.maxFanout)});
+        if (global.fanoutLimit >= 0) {
+            content.fields.push_back(
+                {"fanout limit", std::to_string(global.fanoutLimit)});
+            content.fields.push_back(
+                {"satisfies limit", global.satisfiesLimit ? "yes" : "no"});
+        }
+        addListSection(content, "Max-fanout nets",
+                       fanoutReportEntries(global.maxFanoutReports));
+        addListSection(content, "Violating nets",
+                       fanoutReportEntries(global.violatingReports));
+    }
+    if (!report.fanoutLoadReport.ok) {
+        addListSection(content, "Gate names", report.gateNames);
+    }
+    addListSection(content, "Net names", report.netNames);
+    return content;
+}
+
+ListArtifactContent makeConeListArtifactContent(
+    const Netlist& netlist,
+    const Netlist::ConeReport& report) {
+    ListArtifactContent content;
+    content.fields = {
+        {"message", report.message},
+        {"source", report.sourceName},
+        {"second source", report.secondSourceName},
+        {"gate count", std::to_string(report.gateCount)},
+        {"net count", std::to_string(report.netCount)},
+        {"checked primary outputs", std::to_string(report.checkedOutputCount)},
+        {"longest local path depth", std::to_string(report.longestDepth)},
+        {"shortest local path depth", std::to_string(report.shortestDepth)}
+    };
+
+    std::vector<std::string> gateTypeCounts;
+    for (const auto& item : report.gateTypeCounts) {
+        gateTypeCounts.push_back(netlist.gateTypeToString(item.first) + " : " +
+                                 std::to_string(item.second));
+    }
+    addListSection(content, "Gate type counts", gateTypeCounts);
+    addListSection(content, "Root nets", report.rootNetNames);
+    addListSection(content, "Cone gates", report.gateNames);
+    addListSection(content, "Cone nets", report.netNames);
+    addListSection(content, "Longest local path nets",
+                   report.longestPathNetNames);
+    addListSection(content, "Shortest local path nets",
+                   report.shortestPathNetNames);
+    return content;
+}
+
 // 印出 BasicQuery 的統一 report。
-void printBasicReport(const Netlist& netlist, const Netlist::BasicReport& report) {
+void printBasicReport(const Netlist& netlist,
+                      const Netlist::BasicReport& report,
+                      bool suppressLists = false) {
     if (!report.ok) {
         std::cout << "Error: " << report.message << "\n";
         return;
@@ -417,16 +596,16 @@ void printBasicReport(const Netlist& netlist, const Netlist::BasicReport& report
                       << " : " << item.second << "\n";
         }
     }
-    if (!report.gateNames.empty()) {
+    if (!suppressLists && !report.gateNames.empty()) {
         printStringList("Gate names", report.gateNames);
     }
-    if (!report.netNames.empty()) {
+    if (!suppressLists && !report.netNames.empty()) {
         printStringList("Net names", report.netNames);
     }
-    if (!report.portNames.empty()) {
+    if (!suppressLists && !report.portNames.empty()) {
         printStringList("Port names", report.portNames);
     }
-    if (!report.ports.empty()) {
+    if (!suppressLists && !report.ports.empty()) {
         std::cout << "Port summaries (" << report.ports.size() << "):\n";
         for (const PortSummary& port : report.ports) {
             std::cout << "  - name: " << port.name << "\n";
@@ -439,34 +618,192 @@ void printBasicReport(const Netlist& netlist, const Netlist::BasicReport& report
             std::cout << "    lsb: " << port.lsb << "\n";
         }
     }
-    if (!report.undrivenNets.empty()) {
+    if (!suppressLists && !report.undrivenNets.empty()) {
         printStringList("Undriven nets", report.undrivenNets);
     }
-    if (!report.noLoadNets.empty()) {
+    if (!suppressLists && !report.noLoadNets.empty()) {
         printStringList("No-load nets", report.noLoadNets);
     }
-    if (!report.floatingNets.empty()) {
+    if (!suppressLists && !report.floatingNets.empty()) {
         printStringList("Floating nets", report.floatingNets);
     }
-    if (!report.unconnectedGates.empty()) {
+    if (!suppressLists && !report.unconnectedGates.empty()) {
         printStringList("Unconnected gates", report.unconnectedGates);
     }
-    if (!report.floatingPrimaryInputNets.empty()) {
+    if (!suppressLists && !report.floatingPrimaryInputNets.empty()) {
         printStringList(
             "Floating primary-input nets",
             report.floatingPrimaryInputNets);
     }
-    if (!report.unconnectedPrimaryOutputNets.empty()) {
+    if (!suppressLists && !report.unconnectedPrimaryOutputNets.empty()) {
         printStringList(
             "Unconnected primary-output nets",
             report.unconnectedPrimaryOutputNets);
     }
 }
 
+// 建立 Structure/Cone 大型清單的自動 artifact 名稱。
+std::string makeAutomaticListOutputPath(ToolSession& session,
+                                        const std::string& command) {
+    namespace fs = std::filesystem;
+
+    std::string designStem = session.loadedFilePath.empty()
+        ? "design"
+        : fs::path(session.loadedFilePath).stem().string();
+    for (char& ch : designStem) {
+        const unsigned char value = static_cast<unsigned char>(ch);
+        if (!std::isalnum(value) && ch != '_' && ch != '-') ch = '_';
+    }
+    if (designStem.empty()) designStem = "design";
+
+    std::string commandStem = command;
+    for (char& ch : commandStem) {
+        const unsigned char value = static_cast<unsigned char>(ch);
+        if (!std::isalnum(value) && ch != '_' && ch != '-') ch = '_';
+    }
+    if (commandStem.empty()) commandStem = "query";
+
+    while (true) {
+        ++session.listArtifactSequence;
+        const std::string candidate = designStem + "_" + commandStem +
+            "_list_" + std::to_string(session.listArtifactSequence) + ".txt";
+        std::error_code error;
+        const bool exists = fs::exists(candidate, error);
+        if (error || !exists) return candidate;
+    }
+}
+
+ListArtifactResult writeAutomaticListArtifact(
+    ToolSession& session,
+    const std::string& command,
+    const std::string& mode,
+    const ListArtifactContent& content) {
+    namespace fs = std::filesystem;
+
+    ListArtifactResult result;
+    result.entryCount = content.entryCount();
+    if (result.entryCount <= kAutomaticListArtifactThreshold) return result;
+
+    result.attempted = true;
+    result.outputFilePath = makeAutomaticListOutputPath(session, command);
+    const std::string temporaryPath = result.outputFilePath + ".tmp";
+    std::ofstream output(temporaryPath, std::ios::out | std::ios::trunc);
+    if (!output.is_open()) {
+        result.message = "Failed to create list artifact; full list was printed to terminal.";
+        return result;
+    }
+
+    output << "# Complete query list artifact\n"
+           << "Format: " << result.format << "\n"
+           << "Command: " << command << "\n"
+           << "Mode: " << mode << "\n"
+           << "Loaded design: " << session.loadedFilePath << "\n"
+           << "Design revision: " << session.designRevision << "\n\n"
+           << "Fields:\n";
+    for (const auto& field : content.fields) {
+        output << "  " << field.first << ": " << field.second << "\n";
+    }
+
+    output << "\nLists:\n";
+    for (const ListArtifactSection& section : content.sections) {
+        output << section.title << " (" << section.entries.size() << "):\n";
+        for (const std::string& entry : section.entries) {
+            output << "  " << entry << "\n";
+        }
+    }
+    output << "\nTotal list entries: " << result.entryCount << "\n"
+           << "Complete: yes\n";
+    output.flush();
+    const bool writeSucceeded = output.good();
+    output.close();
+
+    if (!writeSucceeded) {
+        std::error_code removeError;
+        fs::remove(temporaryPath, removeError);
+        result.message = "List artifact I/O failed; full list was printed to terminal.";
+        return result;
+    }
+
+    std::error_code renameError;
+    fs::rename(temporaryPath, result.outputFilePath, renameError);
+    if (renameError) {
+        std::error_code removeError;
+        fs::remove(temporaryPath, removeError);
+        result.message = "List artifact finalization failed; full list was printed to terminal.";
+        return result;
+    }
+
+    result.complete = true;
+    result.wroteFile = true;
+    result.message = "Complete list data was written to an automatic artifact.";
+    return result;
+}
+
+void printListArtifactMetadata(const ListArtifactResult& artifact) {
+    if (!artifact.attempted) return;
+    std::cout << "  list artifact format: " << artifact.format << "\n";
+    std::cout << "  list artifact complete: "
+              << (artifact.complete ? "yes" : "no") << "\n";
+    std::cout << "  list entry count: " << artifact.entryCount << "\n";
+    std::cout << "  wrote list to file: "
+              << (artifact.wroteFile ? "yes" : "no") << "\n";
+    if (artifact.wroteFile) {
+        std::cout << "  output_file: " << artifact.outputFilePath << "\n";
+    }
+    std::cout << "  list artifact message: " << artifact.message << "\n";
+}
+
+std::vector<std::string> gateNamesFromIds(const Netlist& netlist,
+                                          const std::vector<int>& gateIds) {
+    std::vector<std::string> names;
+    names.reserve(gateIds.size());
+    for (int gateId : gateIds) {
+        if (netlist.isValidGateId(gateId)) {
+            names.push_back(netlist.getGate(gateId).instName);
+        }
+    }
+    return names;
+}
+
+std::vector<std::string> fanoutReportEntries(
+    const std::vector<Netlist::FanoutLoadReport>& reports) {
+    std::vector<std::string> entries;
+    entries.reserve(reports.size());
+    for (const Netlist::FanoutLoadReport& report : reports) {
+        entries.push_back(report.netName + " fanout=" +
+                          std::to_string(report.totalLoadCount));
+    }
+    return entries;
+}
+
+// 建立不覆寫既有檔案的 Boolean equation artifact 名稱。
+std::string makeAutomaticFunctionExpressionOutputPath(ToolSession& session) {
+    namespace fs = std::filesystem;
+
+    std::string designStem = session.loadedFilePath.empty()
+        ? "design"
+        : fs::path(session.loadedFilePath).stem().string();
+    for (char& ch : designStem) {
+        const unsigned char value = static_cast<unsigned char>(ch);
+        if (!std::isalnum(value) && ch != '_' && ch != '-') ch = '_';
+    }
+    if (designStem.empty()) designStem = "design";
+
+    while (true) {
+        ++session.functionExpressionArtifactSequence;
+        const std::string candidate = designStem + "_boolean_equation_" +
+            std::to_string(session.functionExpressionArtifactSequence) + ".txt";
+        std::error_code error;
+        const bool exists = fs::exists(candidate, error);
+        if (error || !exists) return candidate;
+    }
+}
+
 // 印出 DirectConnectivityQuery 的統一 report。
 void printConnectivityReport(const Netlist& netlist,
                              const Netlist::DirectConnectivityQuery& query,
-                             const Netlist::DirectConnectivityReport& report) {
+                             const Netlist::DirectConnectivityReport& report,
+                             bool suppressLists = false) {
     if (!report.ok) {
         std::cout << "Error: " << report.message << "\n";
         return;
@@ -491,12 +828,14 @@ void printConnectivityReport(const Netlist& netlist,
                   << (fanout.drivesPrimaryOutput ? "yes" : "no") << "\n";
         std::cout << "  primary output load count: "
                   << fanout.primaryOutputLoadCount << "\n";
-        printGateIdList(netlist, "Combinational gate input loads",
-                        fanout.combinationalGateLoads);
-        printGateIdList(netlist, "DFF D-pin loads", fanout.dffDataLoads);
-        printGateIdList(netlist, "DFF clock-pin loads", fanout.dffClockLoads);
-        printGateIdList(netlist, "DFF reset/set-pin loads", fanout.dffResetSetLoads);
-        printGateIdList(netlist, "DFF other-pin loads", fanout.dffOtherLoads);
+        if (!suppressLists) {
+            printGateIdList(netlist, "Combinational gate input loads",
+                            fanout.combinationalGateLoads);
+            printGateIdList(netlist, "DFF D-pin loads", fanout.dffDataLoads);
+            printGateIdList(netlist, "DFF clock-pin loads", fanout.dffClockLoads);
+            printGateIdList(netlist, "DFF reset/set-pin loads", fanout.dffResetSetLoads);
+            printGateIdList(netlist, "DFF other-pin loads", fanout.dffOtherLoads);
+        }
     }
     if (report.globalFanoutReport.ok) {
         const Netlist::GlobalFanoutReport& global = report.globalFanoutReport;
@@ -507,21 +846,26 @@ void printConnectivityReport(const Netlist& netlist,
             std::cout << "  satisfies limit: "
                       << (global.satisfiesLimit ? "yes" : "no") << "\n";
         }
-        printFanoutNetList("Max-fanout nets", global.maxFanoutReports);
-        if (!global.violatingReports.empty()) {
-            printFanoutNetList("Violating nets", global.violatingReports);
+        if (!suppressLists) {
+            printFanoutNetList("Max-fanout nets", global.maxFanoutReports);
+            if (!global.violatingReports.empty()) {
+                printFanoutNetList("Violating nets", global.violatingReports);
+            }
         }
     }
-    if (!report.gateNames.empty()) {
+    if (!suppressLists && !report.fanoutLoadReport.ok &&
+        !report.gateNames.empty()) {
         printStringList("Gate names", report.gateNames);
     }
-    if (!report.netNames.empty()) {
+    if (!suppressLists && !report.netNames.empty()) {
         printStringList("Net names", report.netNames);
     }
 }
 
 // 印出 ConeQuery 的統一 report。
-void printConeReport(const Netlist& netlist, const Netlist::ConeReport& report) {
+void printConeReport(const Netlist& netlist,
+                     const Netlist::ConeReport& report,
+                     bool suppressLists = false) {
     if (!report.ok) {
         std::cout << "Error: " << report.message << "\n";
         return;
@@ -544,19 +888,21 @@ void printConeReport(const Netlist& netlist, const Netlist::ConeReport& report) 
     if (report.checkedOutputCount > 0) {
         std::cout << "  checked primary outputs: " << report.checkedOutputCount << "\n";
     }
-    if (!report.rootNetNames.empty()) {
+    if (!suppressLists && !report.rootNetNames.empty()) {
         printStringList("Root nets", report.rootNetNames);
     }
-    if (!report.gateNames.empty()) {
+    if (!suppressLists && !report.gateNames.empty()) {
         printStringList("Cone gates", report.gateNames);
     }
-    if (!report.netNames.empty()) {
+    if (!suppressLists && !report.netNames.empty()) {
         printStringList("Cone nets", report.netNames);
     }
     if (report.longestDepth >= 0) {
         std::cout << "  longest local path depth: " << report.longestDepth << "\n";
-        for (int netId : report.longestPathNetIds) {
-            std::cout << "    " << netlist.getNet(netId).name << "\n";
+        if (!suppressLists) {
+            for (int netId : report.longestPathNetIds) {
+                std::cout << "    " << netlist.getNet(netId).name << "\n";
+            }
         }
     }
     if (report.shortestDepth >= 0) {
@@ -788,8 +1134,51 @@ void printFunctionReport(const Netlist::FunctionReport& report) {
             std::cout << "  max expression depth: " << report.maxExpressionDepth << "\n";
         }
     }
-    if (!report.supportPrimaryInputs.empty()) {
-        printStringList("Support primary inputs", report.supportPrimaryInputs);
+    if (!report.expressionArtifactFormat.empty() ||
+        !report.expressionOutputFilePath.empty()) {
+        std::cout << "  expression artifact format: "
+                  << report.expressionArtifactFormat << "\n";
+        std::cout << "  expression artifact complete: "
+                  << (report.expressionArtifactComplete ? "yes" : "no") << "\n";
+        std::cout << "  expression artifact timed out: "
+                  << (report.expressionArtifactTimedOut ? "yes" : "no") << "\n";
+        std::cout << "  equation count: "
+                  << report.expressionEquationCount << "\n";
+        std::cout << "  boundary count: "
+                  << report.expressionBoundaryCount << "\n";
+        std::cout << "  wrote expression to file: "
+                  << (report.wroteExpressionToFile ? "yes" : "no") << "\n";
+        if (!report.expressionOutputFilePath.empty()) {
+            std::cout << "  output_file: "
+                      << report.expressionOutputFilePath << "\n";
+        }
+    }
+    const bool expressionResult =
+        report.status == "BOOLEAN_EXPRESSION" ||
+        report.status == "BOOLEAN_EQUATION_ARTIFACT" ||
+        report.status == "BOOLEAN_EQUATION_ARTIFACT_TIMEOUT" ||
+        report.status == "BOOLEAN_EQUATION_ARTIFACT_INCOMPLETE" ||
+        report.status == "SIMPLIFIED_BOOLEAN_EXPRESSION" ||
+        report.status == "PRIMARY_INPUT_SUPPORT";
+    const bool hasSupportBreakdown = expressionResult ||
+        !report.supportPrimaryInputs.empty() ||
+        !report.supportRealPrimaryInputs.empty() ||
+        !report.supportDffPseudoInputs.empty() ||
+        !report.supportUndrivenLeaves.empty();
+    if (hasSupportBreakdown) {
+        printStringList("Support leaves", report.supportPrimaryInputs);
+        std::cout << "  real primary input count: "
+                  << report.supportRealPrimaryInputs.size() << "\n";
+        std::cout << "  DFF.Q boundary count: "
+                  << report.supportDffPseudoInputs.size() << "\n";
+        std::cout << "  undriven boundary count: "
+                  << report.supportUndrivenLeaves.size() << "\n";
+        std::cout << "  primary-input-only combinational expression available: "
+                  << (report.supportDffPseudoInputs.empty() &&
+                              report.supportUndrivenLeaves.empty()
+                          ? "yes"
+                          : "no")
+                  << "\n";
     }
     if (!report.supportRealPrimaryInputs.empty()) {
         printStringList("  - real primary inputs", report.supportRealPrimaryInputs);
@@ -841,10 +1230,6 @@ void printFunctionReport(const Netlist::FunctionReport& report) {
         }
     }
 
-    const bool expressionResult =
-        report.status == "BOOLEAN_EXPRESSION" ||
-        report.status == "SIMPLIFIED_BOOLEAN_EXPRESSION" ||
-        report.status == "PRIMARY_INPUT_SUPPORT";
     const bool symmetryResult =
         report.status == "SYMMETRIC" ||
         report.status == "NOT_SYMMETRIC" ||
@@ -2827,8 +3212,8 @@ void printHelp() {
         << "  use -out, -max_print, -max_paths, or -time_limit only when the prompt explicitly requests that control\n"
         << "  -max_paths is legacy-only and does not truncate enumeration\n"
         << "  mode: exists | find_any | enumerate | min_depth | max_depth\n"
-        << "        every_through | every_avoids | mandatory_nodes | is_separator\n"
-        << "        pi_po_cut <internal_net> | direct_pi_po\n"
+        << "        every_through | every_avoids | mandatory_nodes | articulation_between\n"
+        << "        is_separator | pi_po_cut <internal_net> | direct_pi_po\n"
         << "  endpoint: net:<n> | pi:<p> | po:<p> | all_pi | all_po | dff_q:<ff> | dff_d:<ff>\n"
         << "            all_dff_q | all_dff_d\n"
         << "            dff_clk:<ff>[:pin] | dff_reset:<ff>[:pin]\n"
@@ -3046,6 +3431,11 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         std::istringstream basicArgs(remainingArgs);
         if (buildBasicQuery(session.current, basicArgs, mode, basicQuery)) {
             const Netlist::BasicReport report = session.current.runBasicQuery(basicQuery);
+            const ListArtifactResult artifact = report.ok
+                ? writeAutomaticListArtifact(
+                    session, command, toLower(mode),
+                    makeBasicListArtifactContent(session.current, report))
+                : ListArtifactResult{};
             ToolResponse response;
             response.ok = report.ok;
             response.status = report.ok ? ToolStatus::Ok : ToolStatus::Error;
@@ -3054,7 +3444,8 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             response.message = report.message;
             response.complete = report.ok;
             emitToolResponse(session, response, [&]() {
-                printBasicReport(session.current, report);
+                printBasicReport(session.current, report, artifact.complete);
+                printListArtifactMetadata(artifact);
             });
             return true;
         }
@@ -3064,6 +3455,11 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         if (buildConnectivityQuery(connectivityArgs, mode, connectivityQuery)) {
             const Netlist::DirectConnectivityReport report =
                 session.current.runDirectConnectivityQuery(connectivityQuery);
+            const ListArtifactResult artifact = report.ok
+                ? writeAutomaticListArtifact(
+                    session, command, toLower(mode),
+                    makeConnectivityListArtifactContent(session.current, report))
+                : ListArtifactResult{};
             ToolResponse response;
             response.ok = report.ok;
             response.status = report.ok ? ToolStatus::Ok : ToolStatus::Error;
@@ -3072,7 +3468,9 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             response.message = report.message;
             response.complete = report.ok;
             emitToolResponse(session, response, [&]() {
-                printConnectivityReport(session.current, connectivityQuery, report);
+                printConnectivityReport(
+                    session.current, connectivityQuery, report, artifact.complete);
+                printListArtifactMetadata(artifact);
             });
             return true;
         }
@@ -3095,6 +3493,11 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             return true;
         }
         const Netlist::BasicReport report = session.current.runBasicQuery(query);
+        const ListArtifactResult artifact = report.ok
+            ? writeAutomaticListArtifact(
+                session, command, toLower(mode),
+                makeBasicListArtifactContent(session.current, report))
+            : ListArtifactResult{};
         ToolResponse response;
         response.ok = report.ok;
         response.status = report.ok ? ToolStatus::Ok : ToolStatus::Error;
@@ -3102,7 +3505,10 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         response.mode = toLower(mode);
         response.message = report.message;
         response.complete = report.ok;
-        emitToolResponse(session, response, [&]() { printBasicReport(session.current, report); });
+        emitToolResponse(session, response, [&]() {
+            printBasicReport(session.current, report, artifact.complete);
+            printListArtifactMetadata(artifact);
+        });
         return true;
     }
 
@@ -3120,6 +3526,11 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         }
         const Netlist::DirectConnectivityReport report =
             session.current.runDirectConnectivityQuery(query);
+        const ListArtifactResult artifact = report.ok
+            ? writeAutomaticListArtifact(
+                session, command, toLower(mode),
+                makeConnectivityListArtifactContent(session.current, report))
+            : ListArtifactResult{};
         ToolResponse response;
         response.ok = report.ok;
         response.status = report.ok ? ToolStatus::Ok : ToolStatus::Error;
@@ -3128,7 +3539,8 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         response.message = report.message;
         response.complete = report.ok;
         emitToolResponse(session, response, [&]() {
-            printConnectivityReport(session.current, query, report);
+            printConnectivityReport(session.current, query, report, artifact.complete);
+            printListArtifactMetadata(artifact);
         });
         return true;
     }
@@ -3146,6 +3558,11 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             return true;
         }
         const Netlist::ConeReport report = session.current.runConeQuery(query);
+        const ListArtifactResult artifact = report.ok
+            ? writeAutomaticListArtifact(
+                session, command, toLower(mode),
+                makeConeListArtifactContent(session.current, report))
+            : ListArtifactResult{};
         ToolResponse response;
         response.ok = report.ok;
         response.status = report.ok ? ToolStatus::Ok : ToolStatus::Error;
@@ -3153,7 +3570,10 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         response.mode = toLower(mode);
         response.message = report.message;
         response.complete = report.ok;
-        emitToolResponse(session, response, [&]() { printConeReport(session.current, report); });
+        emitToolResponse(session, response, [&]() {
+            printConeReport(session.current, report, artifact.complete);
+            printListArtifactMetadata(artifact);
+        });
         return true;
     }
 
@@ -3425,15 +3845,30 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             emitToolError(session, command, mode, "Unknown func_query mode: " + mode);
             return true;
         }
+        if (query.type == Netlist::FunctionQueryType::BooleanExpression) {
+            query.writeExpressionToFile = true;
+            query.expressionOutputFilePath =
+                makeAutomaticFunctionExpressionOutputPath(session);
+        }
         const Netlist::FunctionReport report = session.current.runFunctionQuery(query);
         ToolResponse response;
         response.ok = report.ok;
         response.command = command;
         response.mode = toLower(mode);
-        response.complete = report.ok && !report.solverUnknown && !report.unsupported;
-        if (report.solverTimedOut) response.status = ToolStatus::Timeout;
+        const bool expressionArtifact =
+            query.type == Netlist::FunctionQueryType::BooleanExpression &&
+            query.writeExpressionToFile;
+        response.complete = expressionArtifact
+            ? report.expressionArtifactComplete
+            : (report.ok && !report.solverUnknown && !report.unsupported);
+        if (report.solverTimedOut || report.expressionArtifactTimedOut) {
+            response.status = ToolStatus::Timeout;
+        }
         else if (report.unsupported) response.status = ToolStatus::Unsupported;
         else if (report.solverUnknown) response.status = ToolStatus::Partial;
+        else if (expressionArtifact && !report.expressionArtifactComplete) {
+            response.status = ToolStatus::Partial;
+        }
         else response.status = report.ok ? ToolStatus::Ok : ToolStatus::Error;
         response.message = report.message;
         emitToolResponse(session, response, [&]() { printFunctionReport(report); });

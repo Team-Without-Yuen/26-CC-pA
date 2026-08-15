@@ -38,6 +38,35 @@ best-effort 不能改寫工具事實：不得把 partial 標成 complete，也�
 已證明等價。對 transformation/optimization，未通過 structure、constraint 與
 functional-equivalence validation 的候選不得輸出；應保留 original 或最後一個已驗證版本。
 
+## 2.1 Routing And Answer Checklist
+
+送出每個 command 前，重新讀取 prompt 中的量詞、否定詞、限制條件、scope、object kind 與
+輸出要求。以下詞不能在 routing 時遺失：
+
+| Prompt 語意 | 必須保留的 command 語意 |
+|---|---|
+| `any`、`exists`、`find one` | find-any；找到一個 proven witness 即完整回答，不使用 `--all` |
+| `all`、`every`、`list each` | 完整列舉；不得用第一個 witness 代替 |
+| `avoid`、`without passing`、`does not traverse` | 使用 `-avoid` 並保留被避開物件的種類與名稱 |
+| `through`、`must pass`、`every path passes` | 使用對應 through/every-through mode，不得改成普通 `exists` |
+| `only TYPE...`、`at most N` | 原樣保留 allowed gate basis 或數值 constraint |
+| `original`、`previous edit`、`current` | 選正確 baseline，不得互換 |
+
+`status:ok` 只證明送出的 command 合法。送出後仍需反查 result 的 mode、source/target、scope、
+constraints 與 complete status；若 prompt 有 avoid X，但回傳 command/result 沒有 X，即使結果
+為 `ok` 仍屬 routing 錯誤。
+
+複合答案必須完成最後一步推導：
+
+- `Which of A or B...`：分別查 A、B 的相同 metric，再明確回答 winner 或 tie；不能只貼兩份 report。
+- `gate type and pin connections`：組合 gate type、input nets 與 output net 成一個答案。
+- `List DFFs driven by clock n0`：使用 fanout-load report 的 `DFF clock-pin loads`，不能把所有 load
+  類型或只有總 fanout count 當成 DFF 名單。
+- cone gate-type count 為空時，若 query complete 且 root 是 DFF.Q boundary，明答各 gate type
+  為 0；不要回 `unknown`，也不要穿透到 DFF.D。
+- 大型完整結果位於 artifact 時，答案提供題目要求的 count/yes-no/關鍵結論、完整性與
+  `output_file`；不要把 artifact 全文貼回自然語言 response。
+
 ## 3. Compound Prompt 執行順序
 
 一個 prompt 同時包含多個要求時，依相依關係執行，不要只呼叫一個 summary command。
@@ -88,7 +117,7 @@ depth_query 取得 before depth
 | bus/port 解析失敗 | 保留完整 bit token；確認題目要 port count 還是 bit count |
 | paginated/records truncated | 使用 next offset 續查，直到沒有下一頁 |
 | path count timeout | 若只問數量，改用 `-count_only`；不要先要求完整 path file |
-| path list timeout | 使用 `-out` streaming、`-max_print 0` 與可用的最大安全 time limit |
+| path list timeout | 保留原 `all paths` 語意；確認使用 `enumerate` 自動 artifact，不自行加入 `-out`、`-max_print`、`-max_paths` 或 `-time_limit` |
 | function search timeout | existence 題改 find-any；all-pairs 題保留 confirmed pairs 並依完整性規則處理 |
 | SAT timeout/unknown | 縮小合法 scope、增加可用 budget 或改用其他已完成 query 交叉推定 |
 | edit/optimization rollback | 不輸出失敗候選；保留 original 或最後一個已驗證版本 |
@@ -127,17 +156,31 @@ scope、輸出模式或時間配置；仍無法完成才使用 best-effort infer
 
 | 題型 | 作法 |
 |---|---|
-| Structure/Cone/Depth name list | printer 會全量輸出；只問數量時不要把清單搬入答案 |
-| direct PI-to-PO connections | 先讀 `Total direct PI-to-PO connections`，要求完整列表時再以該總數重送 `-max_print` |
+| Structure/Cone name list | 小型清單直接輸出；大型清單自動完整寫入 `QUERY_LIST_ARTIFACT_V1`，答案回 count、完整性與 `output_file` |
+| Depth name list | printer 會全量輸出；只問數量時不要把清單搬入答案 |
+| direct PI-to-PO connections | 直接使用 `path_query direct_pi_po`；讀取完整 connection records 與總數，不自行加入 display limit |
 | all paths count | `path_query enumerate ... -count_only` |
 | all paths list | `path_query enumerate ...`；工具自動完整寫入唯一 artifact |
 | sequential DFF detail | all-DFF 預設自動完整寫入 artifact；答案回 `artifact_record_count`、完整性與 `output_file` |
 | FunctionSearch FindAll | 使用 `--all`；工具自動完整寫入唯一 artifact，答案回 `match_count`、完整性與 `output_file` |
-| Boolean expression | 目前直接輸出完整 expression；大型 cone 需預留足夠輸出時間 |
+| Boolean expression | 呼叫 `func_query boolean_expression <net>`；工具自動完整寫入 named-DAG artifact，答案回 equation/boundary counts、完整性與 `output_file` |
+
+Boolean expression 若回 `primary-input-only combinational expression available: no`，必須查看
+`DFF.Q boundary count` 與 `undriven boundary count`。DFF.Q 是 current-state pseudo input，不是
+top-level PI；不得為滿足 `using only primary input names` 而跨越 DFF 回追 D pin。此時應明確
+回答在 current combinational frame 下無法只用 top-level PI 表示，並指出實際 boundary。
 
 FunctionSearch 不再要求 LLM 推算 unordered pair 上界。Prompt 未明確限制數量時不得加入
 `--max-results`；`--all` 的完整 records 從 `output_file` 取得，只有 `complete:true`、
 `truncated:false` 且未 timeout/unsupported 時才能宣稱完整。
+
+Boolean equation artifact 不設 gate/depth/字元上限。只有 envelope `complete:true`、
+`expression artifact complete: yes` 且檔案 footer 為 `Complete: yes` 時才可宣稱完整；
+自然語言 response 不重貼大型 equations，只提供簡答與 `output_file` 路徑。
+
+Structure/Cone 的自動 list artifact 同樣不限制結果數量；內部門檻只決定 terminal 或檔案
+呈現。看到 `list artifact complete:yes` 時，完整名單位於 `output_file`，自然語言答案提供
+總數與路徑。若沒有 artifact metadata，代表結果規模小，完整清單已直接出現在 data。
 
 ## 6. Sequential Boundaries
 

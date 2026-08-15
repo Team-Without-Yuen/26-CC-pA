@@ -31,7 +31,7 @@ public:
     bool     tainted()    const { return tainted_; }
 
     // 取反：只翻 complement bit，generation 不變。
-    SigRef operator!() const { return SigRef(!sig_, gen_); }
+    SigRef operator!() const { return SigRef(!sig_, gen_, tainted_); }
 
     // 同一版之內才有比較意義；跨版比較一律回 false（而不是假裝相等）。
     bool operator==(const SigRef& o) const {

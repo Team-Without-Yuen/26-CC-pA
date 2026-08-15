@@ -390,10 +390,12 @@ struct Fraig::Impl {
                 piWord[p] = (piWord[p] & mask) | (v ? bit : 0ull);
             }
         }
+        // append 失敗時必須保留 pendingNodes，讓呼叫端的
+        // abandon_pending() 能將這批候選標成 GivenUp。若先清空，這些
+        // 候選會保持 Open，下一輪便會重做同一批 SAT 直到總時限耗盡。
+        if (!append_word(piWord)) return false;   // 記憶體上限
         pendingCex.clear();
         pendingNodes.clear();
-
-        if (!append_word(piWord)) return false;   // 記憶體上限
         repartition_last_word();
         return true;
     }

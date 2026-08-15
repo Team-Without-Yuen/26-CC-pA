@@ -1297,6 +1297,27 @@ public:
     std::string getSimplifiedBooleanExpression(
         const std::string& netName, int maxDepth = 10) const;
 
+    struct BooleanEquationArtifactResult {
+        bool ok = false;
+        bool fileCreated = false;
+        bool complete = false;
+        bool timedOut = false;
+        size_t equationCount = 0;
+        size_t boundaryCount = 0;
+        std::string format;
+        std::string outputFilePath;
+        std::string message;
+    };
+
+    // Writes a complete, named-net DAG equation system in O(cone) space/time.
+    // Every driven combinational net is emitted once; PI, constant, DFF.Q and
+    // undriven signals are explicit boundaries. No gate/depth/output-size cap
+    // is applied. The request deadline and I/O errors are the only cutoffs.
+    BooleanEquationArtifactResult writeBooleanEquationArtifact(
+        const std::string& netName,
+        const std::string& outputFilePath,
+        double timeLimitSeconds = request_time_budget::kGeneralToolBudgetSeconds) const;
+
     // 回傳 netName fanin cone 中所有 PI net 的名稱（排序去重）
     // 用於回答「n12 depends on which primary inputs」
     // 注意：這是 getPrimaryInputSupportBreakdown() 三個桶（real PI / DFF.Q

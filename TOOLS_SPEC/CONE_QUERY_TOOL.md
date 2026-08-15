@@ -5,7 +5,9 @@
 `cone_query` 負責指定 net/gate 的多層 transitive fanin/fanout 集合、cone gate-type breakdown、shared fanin 及最大 output cone。它回答「範圍內有哪些物件」，不證明特定 endpoints 間的 path condition。
 
 完整性規則：要求 cone list 時取得全部 gates/nets，不自行限制筆數；只問數量或 type breakdown
-時只回摘要。時間限制依題目指定。詳見 [`LLM_NOTES.md`](LLM_NOTES.md)。
+時只回摘要。大型 cone list 由 CLI 自動完整寫入唯一 artifact，terminal 保留 gates/nets、type
+breakdown、artifact completeness 與 `output_file`。內部門檻只決定輸出位置，不限制 cone
+大小，也不由 LLM 設定。時間限制依題目指定。詳見 [`LLM_NOTES.md`](LLM_NOTES.md)。
 
 ## 2. 選擇條件
 
@@ -42,6 +44,9 @@ cone_query <mode> [name] [with_paths]
 | 哪個 output cone 最大 | `source` 與 `gates` |
 | 兩 cone 共用哪些 gates | `Cone gates` |
 
+大型 cone 改讀 `list artifact complete`、`list entry count` 與 `output_file`；只有 envelope
+`complete:true`、artifact complete 為 `yes`，且檔案 footer 為 `Complete: yes` 時才是完整名單。
+
 ## 6. Prompt Examples
 
 ```text
@@ -69,5 +74,6 @@ Read: Cone gates
 - cone traversal 不會跨越 sequential state；DFF 的 D/clock/reset 等 pin 不可由 Q 的 fanin query 反推。
 - 若題目只問數量或 gate-type breakdown，只讀 `gates`、`nets` 或 `Gate type counts`；不要把
   完整 `Cone gates` / `Cone nets` 複製進答案。題目明確要求列出物件時，必須輸出全部
-  confirmed entries，不得用固定筆數、省略號或摘要取代完整清單。
+  confirmed entries；大型結果使用工具自動產生的 artifact，不得用固定筆數、省略號或摘要
+  取代完整清單。
 - 若題目要求「所有 A-to-B paths 是否都經過某點」，必須改用 `path_query`。
