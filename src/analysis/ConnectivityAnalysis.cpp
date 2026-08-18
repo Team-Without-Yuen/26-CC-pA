@@ -4,6 +4,7 @@
 #include <cctype>
 #include <string>
 #include <unordered_set>
+#include <utility>
 #include <vector>
 
 namespace {
@@ -126,6 +127,86 @@ std::string uppercasePinName(std::string pinName) {
     std::transform(pinName.begin(), pinName.end(), pinName.begin(),
                    [](unsigned char c) { return static_cast<char>(std::toupper(c)); });
     return pinName;
+}
+
+std::string inputPinName(const Gate& gate, size_t pinIndex) {
+    if (pinIndex < gate.inputPinNames.size() &&
+        !gate.inputPinNames[pinIndex].empty()) {
+        return gate.inputPinNames[pinIndex];
+    }
+    return "IN" + std::to_string(pinIndex + 1);
+}
+
+ConnectivityPinRole inputPinRole(const Gate& gate, size_t pinIndex) {
+    if (gate.type != GateType::DFF) {
+        return ConnectivityPinRole::CombinationalInput;
+    }
+    const std::string pinName = uppercasePinName(inputPinName(gate, pinIndex));
+    if (pinName == "D") return ConnectivityPinRole::DffData;
+    if (pinName == "CK") return ConnectivityPinRole::DffClock;
+    if (pinName == "RN" || pinName == "SN") {
+        return ConnectivityPinRole::DffResetSet;
+    }
+    return ConnectivityPinRole::DffOther;
+}
+
+std::vector<ConnectivityPinRecord> driverPinRecordsForNetIds(
+    const Netlist& netlist,
+    const std::vector<int>& netIds) {
+    std::vector<ConnectivityPinRecord> records;
+    records.reserve(netIds.size());
+    for (int netId : netIds) {
+        const int gateId = netlist.getNet(netId).driverGateId;
+        if (!hasConsistentActiveDriver(netlist, netId, gateId)) {
+            continue;
+        }
+        const Net& net = netlist.getNet(netId);
+        const Gate& gate = netlist.getGate(gateId);
+        ConnectivityPinRecord record;
+        record.netId = netId;
+        record.netName = net.name;
+        record.gateId = gateId;
+        record.gateName = gate.instName;
+        record.gateTypeName = netlist.gateTypeToString(gate.type);
+        record.pinName = gate.type == GateType::DFF ? "Q" : "OUT";
+        record.direction = ConnectivityPinDirection::Driver;
+        record.role = ConnectivityPinRole::Output;
+        records.push_back(std::move(record));
+    }
+    return records;
+}
+
+std::vector<ConnectivityPinRecord> loadPinRecordsForNetIds(
+    const Netlist& netlist,
+    const std::vector<int>& netIds) {
+    std::vector<ConnectivityPinRecord> records;
+    for (int netId : netIds) {
+        const Net& net = netlist.getNet(netId);
+        const std::vector<int> gateIds = uniqueValidGateIds(netlist, net.loadGateIds);
+        for (int gateId : gateIds) {
+            if (!isConsistentActiveLoad(netlist, netId, gateId)) {
+                continue;
+            }
+            const Gate& gate = netlist.getGate(gateId);
+            for (size_t pinIndex = 0; pinIndex < gate.inputNetIds.size(); ++pinIndex) {
+                if (gate.inputNetIds[pinIndex] != netId) {
+                    continue;
+                }
+                ConnectivityPinRecord record;
+                record.netId = netId;
+                record.netName = net.name;
+                record.gateId = gateId;
+                record.gateName = gate.instName;
+                record.gateTypeName = netlist.gateTypeToString(gate.type);
+                record.pinIndex = static_cast<int>(pinIndex);
+                record.pinName = inputPinName(gate, pinIndex);
+                record.direction = ConnectivityPinDirection::Load;
+                record.role = inputPinRole(gate, pinIndex);
+                records.push_back(std::move(record));
+            }
+        }
+    }
+    return records;
 }
 
 // 將 rhs 的 fanout load 分類合併到 lhs；bus aggregate 會使用這個 helper。
@@ -494,6 +575,12 @@ Netlist::DirectConnectivityReport Netlist::runDirectConnectivityQuery(
                 }
             }
             report.count = driverGateIds.size();
+            report.pinDetailsIncluded = query.includePinDetails;
+            if (query.includePinDetails) {
+                report.pinConnections =
+                    driverPinRecordsForNetIds(*this, activeNetIds);
+                report.pinConnectionCount = report.pinConnections.size();
+            }
         }
         return report;
     }
@@ -525,6 +612,11 @@ Netlist::DirectConnectivityReport Netlist::runDirectConnectivityQuery(
                 report.gateNames = gateIdsToNames(*this, loadGateIds);
             }
             report.count = loadGateIds.size();
+            report.pinDetailsIncluded = query.includePinDetails;
+            if (query.includePinDetails) {
+                report.pinConnections = loadPinRecordsForNetIds(*this, activeNetIds);
+                report.pinConnectionCount = report.pinConnections.size();
+            }
         }
         return report;
     }

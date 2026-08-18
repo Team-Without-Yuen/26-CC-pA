@@ -73,7 +73,7 @@
 | 7 remove dangling/dead gates | `edit_apply trim_dead_logic` | removed gate delta | `Ready` |
 | 8 dangling gates removed | `report_query last_edit` | removed active gates | `Ready` |
 | 9 cone `n8` to NAND/NOT basis | `edit_apply convert_basis net_fanin n8 -allow NAND NOT` | no disallowed cone gates + certificate | `Ready` |
-| 10 NAND count in cone `n8` | `cone_query net_fanin n8` | `gateTypeCounts.NAND` | `Ready` |
+| 10 NAND count in cone `n8` | `cone_query net_fanin n8 --gate-types NAND` | `filtered gates` | `Ready` |
 | 11 equivalence `n55146/n55104` | `func_query equivalence n55146 n55104` | complete + equivalent | `Ready` |
 | 12 every `n3` to `n9` path | `path_query enumerate pi:n3 po:n9 -out ...` | paths + complete flag | `Conditional` |
 | 13 whether `n8` functionally depends on `n1` | `func_query depends_on n8 n1` | complete exact SAT/cofactor yes/no | `Ready` |
@@ -106,7 +106,7 @@
 | 6 path PI `n2` to PO `n25` | `path_query exists pi:n2 po:n25` | explicit yes/no | `Ready` |
 | 7 gates connected to output of `g0` | `structure_query gate_fanout g0` | load gate names | `Ready` |
 | 8 deepest output bit | `depth_query deepest_output` | output name + depth | `Ready` |
-| 9 all NAND gates with pins | `structure_query gates_by_type NAND`, then `gate_info` per gate | names and all input/output signals | `Composite` |
+| 9 all NAND gates with pins | `structure_query gates_by_type NAND --with-pins` | 19,682 structured gate/input/output records；完整 artifact | `Ready`；test70 實測 19,682/19,682 complete |
 | 10 rename `n7431` | `edit_apply rename_net n7431 renamed_wire` | changed names + certificate | `Ready` |
 | 11 pre/post transformation equivalence | `equiv_query previous_edit` | complete + equivalent | `Ready` |
 | 12 equivalence `n29498/n29471` | `func_query equivalence n29498 n29471` | complete + equivalent | `Ready` |
@@ -142,7 +142,7 @@
 |---|---|---|---|
 | 4 gate type count in cone `n8` | `cone_query net_fanin n8` | all cone gate type counts | `Ready` |
 | 5 cone `n8` to NAND/NOT | `edit_apply convert_basis net_fanin n8 -allow NAND NOT` | final cone basis + certificate | `Ready` |
-| 6 current NAND count in cone | `cone_query net_fanin n8` | `gateTypeCounts.NAND` | `Ready` |
+| 6 current NAND count in cone | `cone_query net_fanin n8 --gate-types NAND` | `filtered gates` | `Ready` |
 | 7 prune unused gates | `edit_apply trim_dead_logic` | removed active gates + certificate | `Ready` |
 | 8 current vs loaded equivalence | `equiv_query original` | complete + equivalent | `Ready` |
 | 9 all register paths | `path_query enumerate all_dff_q all_dff_d -out ...` | paths + complete flag | `Conditional` |

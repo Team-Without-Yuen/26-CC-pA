@@ -18,31 +18,49 @@ prompt 出現 `transitive fanin`、`transitive fanout`、`cone`、`reachable`、
 ## 3. Command Grammar
 
 ```text
-cone_query <mode> [name] [with_paths]
+cone_query <mode> [name] [options]
 ```
+
+options 可任意排列：
+
+```text
+with_paths | --with-paths
+--gate-types <type> [type ...]
+--with-pins
+```
+
+`--gate-types` 支援 `AND OR NOT NAND NOR XOR XNOR BUF DFF`，不分大小寫；多個 type
+採 OR semantics，重複 type 會自動去重。沒有此 option 表示所有 gate type。`MUX`、
+`UNKNOWN` 或其他名稱會回 `status:error`，不可自行替換成近似 type。
 
 ## 4. Modes
 
 | Mode | 參數 | 用途 | 主要 data |
 |---|---|---|---|
-| `net_fanin` | `<net> [with_paths]` | net 的 transitive fanin | `gates`, `nets`, `Gate type counts`, cone names |
-| `net_fanout` | `<net> [with_paths]` | net 的 transitive fanout | 同上 |
-| `gate_fanin` | `<gate> [with_paths]` | gate 的 transitive fanin | 同上 |
-| `gate_fanout` | `<gate> [with_paths]` | gate 的 transitive fanout | 同上 |
-| `largest_output` | `[with_paths]` | 比較所有 PO fanin cones | `source`, `checked primary outputs`, cone 統計 |
-| `shared_fanin` | `<net_a> <net_b> [with_paths]` | 兩個 nets 的 shared fanin gates | `source`, `second source`, `Cone gates` |
+| `net_fanin` | `<net> [options]` | net 的 transitive fanin | scope/filter counts、nets、type counts、names/details |
+| `net_fanout` | `<net> [options]` | net 的 transitive fanout | 同上 |
+| `gate_fanin` | `<gate> [options]` | gate 的 transitive fanin | 同上 |
+| `gate_fanout` | `<gate> [options]` | gate 的 transitive fanout | 同上 |
+| `largest_output` | `[options]` | 比較所有 PO fanin cones | `source`、checked outputs、scope/filter counts |
+| `shared_fanin` | `<net_a> <net_b> [options]` | 兩個 nets 的 shared fanin gates | sources、scope/filter counts、names/details |
 
 `with_paths` 額外要求 local longest/shortest path 摘要，主要欄位為 `longest local path depth`、`shortest local path depth` 與 longest path nets。
+
+`--with-pins` 回傳 filter 後每顆 gate 的名稱、type、input pin/net、output pin/net 與
+PI/PO/constant 標記。只有 prompt 明確要求 connection、pin 或每顆 gate 的詳細資訊時使用。
 
 ## 5. 輸出判讀
 
 | 題目 | 應讀欄位 |
 |---|---|
-| cone 內有多少 gates/nets | `gates`, `nets` |
-| cone 內某 gate type 數量 | `Gate type counts` 對應 type |
-| 列出 cone gates/nets | `Cone gates`, `Cone nets` |
-| 哪個 output cone 最大 | `source` 與 `gates` |
-| 兩 cone 共用哪些 gates | `Cone gates` |
+| 完整 cone 有多少 gates | `scope gates` |
+| 指定 type 後有多少 gates | `filtered gates`（相容欄位 `gates` 相同） |
+| cone 內某 gate type 數量 | 傳 `--gate-types <type>`，讀 `filtered gates` |
+| cone 內各 gate type breakdown | 不傳 filter，讀 `Gate type counts` |
+| 列出符合 type 的 gates | 傳 filter，讀 `Cone gates` |
+| 列出 gate pin/net details | 加 `--with-pins`，讀 `Gate connection details` |
+| 哪個 output cone 最大 | `source` 與 `scope gates`；output 選擇不受 filter 影響 |
+| 兩 cone 共用哪些 gates | `Cone gates` 或 filter 後 details |
 
 大型 cone 改讀 `list artifact complete`、`list entry count` 與 `output_file`；只有 envelope
 `complete:true`、artifact complete 為 `yes`，且檔案 footer 為 `Complete: yes` 時才是完整名單。
@@ -51,8 +69,14 @@ cone_query <mode> [name] [with_paths]
 
 ```text
 Prompt: How many NOR gates are in the fanin cone of n15?
-Command: cone_query net_fanin n15
-Read: Gate type counts 中的 NOR
+Command: cone_query net_fanin n15 --gate-types NOR
+Read: filtered gates
+```
+
+```text
+Prompt: List every NAND or NOT gate in n8's fanin cone with its pin connections.
+Command: cone_query net_fanin n8 --gate-types NAND NOT --with-pins
+Read: Gate connection details；大型結果讀 output_file
 ```
 
 ```text
@@ -71,6 +95,8 @@ Read: Cone gates
 
 - `with_paths` 是 cone 內 local path 摘要，不等於列出所有 paths。
 - DFF.Q 是 combinational sequential boundary；`cone_query net_fanin <dff_q_net>` 不會回傳任何 combinational gate（`gates: 0`），也不會穿透到同一顆 DFF 的 D input。report 仍可能保留 query root 本身，因此 `nets` 可為 1。
+- `DFF` 是合法 filter，但 cone traversal 不包含 sequential gate；因此只篩 DFF 時通常是
+  `status:ok`、`filtered gates: 0`，不能把 valid zero 誤判為工具失敗。
 - cone traversal 不會跨越 sequential state；DFF 的 D/clock/reset 等 pin 不可由 Q 的 fanin query 反推。
 - 若題目只問數量或 gate-type breakdown，只讀 `gates`、`nets` 或 `Gate type counts`；不要把
   完整 `Cone gates` / `Cone nets` 複製進答案。題目明確要求列出物件時，必須輸出全部

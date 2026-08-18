@@ -310,7 +310,6 @@ const auto result = netlist.runPathQuery(query);
 Public types: include/core/PathTypes.h
 Implementation: src/analysis/PathAnalysis.cpp
 CLI: tools.cpp
-Issue/regression record: Blup/PATH_QUERY_ISSUES_AND_CHANGES.md
 ```
 
 所有 `PathQueryMode` 已完成 dispatch。官方 testcase 已驗證 existence、avoid、enumeration、
@@ -322,4 +321,4 @@ endpoints。
 - `combinationalOnly=false` 不支援。
 - combinational graph contract 為 DAG。
 - 64-bit count overflow 等待官方規格回覆。
-- partial path file 的完成狀態目前必須由 report envelope 判讀。
+- compact path artifact footer 與 report envelope 都必須標示 complete，才能視為完整答案。

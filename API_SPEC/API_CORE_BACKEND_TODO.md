@@ -1,383 +1,76 @@
 # API / Core Backend 待辦
 
-這份文件記錄不屬於 `tools.cpp` parser/help/envelope printer 的事項。
-包含 public C++ API、Netlist/engine、optimizer core、sequential pattern engine、
-transaction validation、session state 與底層 regression。
+本文件只記錄尚未完成的 public C++ API、Netlist/engine、optimizer core、sequential
+pattern engine 與底層 regression。已完成事項必須寫入對應 API/Usage 文件後從本表移除。
 
-對應的 tools 層同步項目請放在：
+`tools.cpp` parser/help/printer 與 `TOOLS_SPEC` 同步事項請放在 `TOOLS待更新表.md`。
 
-```text
-API_SPEC/TOOLS待更新表.md
-```
+## P1：Critical Path Optimization runtime blocker
 
-## AIG 內部工具狀態
-
-- [x] AIG engine 保持為高階 API 內部 Boolean proof utility，不提供第二套 query/report facade。
-- [x] 移除平行 Function Query facade 與 AIG Function Search differential public entry。
-- [x] Phase A timed equivalence/constant proof 使用 deadline-aware AIG-to-CNF 與 CaDiCaL `TimeLimitTerminator`。
-- [x] 每個 `Primitives` 以自身 `builtRevision` 判斷 freshness，不再只依賴共用 dirty flag。
-- [x] cofactor cache 改用完整 `(function, variable, value)` key 與 equality。
-- [x] Phase B 切換依 `Fraig -> SatEngine -> AigModel` 順序釋放。
-- [x] AigBuilder 對 AND/OR/NAND/NOR/XOR/XNOR 折疊全部 inputs，並正確處理 non-adjacent tied input。
-- [x] NOT/BUF 驗證 exactly-one input；非法 arity 將 model 標為 Invalid。
-- [x] Netlist 私有持有唯一 lazy Primitives owner；copy/move/restore 一律捨棄 cache。
-- [x] Primitives 改以 `const Netlist&` 讀取 named design；revision 是 freshness 權威。
-- [ ] snapshot CEC、cofactor/`equiv_under()` 與首次 lazy AIG rebuild 尚未接收同一套 cooperative deadline。
-- [x] `SatEngine` 與 `Fraig` Phase B backend 已實作；incremental query、FRAIG 與 mutation lifecycle focused regression 通過。
-- [x] FunctionalDependence / Symmetry 統一遵守 `query.timeLimitSeconds`；非正值回 `INVALID_ARGUMENT`。
-- [x] Public BooleanExpression 改為無 gate/depth/字元上限的 named-DAG streaming artifact；
-  每個 cone net 只輸出一次，deadline/I/O/incomplete footer 語意與 test46 regression 完成。
-- [x] Function Query 第一階段試接：scalar Equivalence、CanBeValue、ConstantFunction、AlwaysZero/One、TruthStatus 曾使用 private owner + Phase B incremental SAT，correctness differential 通過。
-- [x] 依 NewTestCase workload 決定 production 回切 legacy：大型電路的少量、非重複查詢無法穩定攤平 owner build/rebuild 成本；Phase B engine 與 private owner 保留但目前無高階 caller。
-- [x] Phase B 試接期間的 high-level / Phase A differential 已保留為 test40 歷史基準；production test40 恢復 legacy/AIG differential。
-- [x] NewTestCase Phase B / legacy benchmark：單筆 19/19、session 7/7 語意一致；cold 單筆 0/19 勝、warm 19/19 勝，cold session 1/7 勝、warm session 7/7 勝；cold/rebuild 中位成本約為 legacy 的 2.5x。
-- [x] 第一個 production batch 接入完成：Function Search EquivalentGatePairs 使用 private Phase B owner，其餘 mode 不變。
-- [x] Function Search Phase B batch prototype（test44）：官方與 synthetic 結果完整一致；EquivalentGatePairs 約加速 5.7x–7.9x，test35 NAND FindAny 約 4.47x。
-- [x] 固定 seed random DAG differential：48 至 2048 gates、16/16 通過、Unknown=0；EquivalentGatePairs 約 3.18x–8.98x，單 proof NAND FindAny 多數僅 0.17x–0.94x。
-- [x] EquivalentGatePairs production 局部接入：保留既有 query/report/candidate/simulation 語意，Phase B 僅替換 class proof backend。
-- [ ] NAND FindAny 暫維持 legacy；只有能可靠預估 simulation surviving proof 數且足以攤平 owner build 時，才評估 adaptive backend。
-- [ ] NAND FindAll 不可直接使用目前 `make_and + incremental equiv_checked`：test35 290 秒預算雖 512/512 完整，但約 55.85s，慢於 legacy 28.13s；需 ephemeral/chunked proof 設計。
-- [ ] conditional equivalence、FunctionalDependence、Symmetry、NAND Function Search 與 equivalence report 尚未遷移；所有 production Function Query 目前維持 legacy backend。
-- [x] Phase B focused regression：test42 共 22 checks，另與 Phase A 比對 320 筆固定亂數 DAG query 無差異。
-- [x] 修正 FRAIG simulation memory 用盡時重試相同候選至 timeout，以及 untrusted equivalence report 誤標完整的問題。
-
-## 已完成：DFF.Q fanin scope 停在 boundary
-
-官方 QA 要求 DFF.Q/register output 的 fanin cone 視為空的 combinational
-boundary，不得自動改取同一 DFF 的 D-input cone。
-
-已完成修改：
+大型 scoped optimization 仍可能在 core 內超時：
 
 ```text
-- resolveRewriteScope() 的 NET_FANIN 已移除 DFF.Q -> D-pin 特例。
-- cone_query net_fanin <DFF.Q> 回傳 empty cone、gate count 0、depth 0。
-- scoped edit/optimization 對 empty cone 回 no-change / already optimal。
-- gate-basis constraint 在 empty cone 上 vacuously satisfied。
-- GATE_FANIN <DFF instance> 仍可解析到 D-pin cone，因為 target 是 DFF cell 本身。
-```
-
-驗證：
-
-```text
-NewTestCase/test26 n10:
-- cone_query net_fanin n10 -> gates 0, nets 1
-- edit_apply convert_basis net_fanin n10 -allow NOR NOT -> no_change
-- opt_apply critical_path_depth --scope net_fanin n10 --objective cone --allowed NOR NOT -> already optimal, depth 0
-```
-
-## 已標記為 LLM 層策略：跨 prompt persistent constraints
-
-同一 testcase 中，先前 prompt 建立的 structural constraints 在後續
-transformation 後是否仍需成立，屬於 prompt / testcase 語意判斷。這件事先不在
-底層自動保存 accumulated constraint state，避免 API 依自然語言做過度推論。
-
-目前定位：
-
-```text
-- constraint memory 交給 LLM / testcase driver 維護。
-- 若後續 prompt 需要保留前題 hard constraint，LLM 必須在 edit/opt/query 時重送對應條件或額外呼叫驗證工具。
-- 底層 API 只保證單次 request 中明確帶入的 allowed/banned/fanout/equivalence requirement 會被檢查。
-- 後續若要新增 LLM-facing policy 或 tool usage 說明，放在 tools 文件同步階段處理。
-```
-
-## 已完成：AND-only enable/hold candidate 改為 non-match diagnostic
-
-官方 QA 已確認 `D = EN & DATA` 不算 enable/hold；只有含同一 DFF.Q feedback
-的 MUX-hold function 才算 enable/hold。
-
-已完成修改：
-
-```text
-- AND-only report kind 改為 DataGatingWithoutHoldFeedback。
-- per-DFF status 改為 DATA_GATING_WITHOUT_HOLD_FEEDBACK。
-- matched_dff_count / candidate_dff_count 都不計入 AND-only data gating。
-- semanticsPending=false，因官方語意已明確，不再標成 pending candidate。
-- functional fallback 仍可辨識 Q69 允許的 Q-free EN/DATA Boolean decomposition。
-```
-
-## P1-2：Critical Path Optimization core runtime blocker
-
-目前不是 tools parser 待更新，而是 optimizer core 待補：
-
-```text
-- 單次 mockturtle primitive cooperative cancellation。
+- 單次 mockturtle primitive 尚缺 cooperative cancellation。
 - ScopedFaninCone 不應先做全設計 XAG；需要 cone-isolated resynthesis。
 ```
 
-背景驗證紀錄：
+已知結果：test22、test26 與 NewTestCase/test40 bounded smoke 可完成；NewTestCase/test33
+曾在 120 秒外層 timeout。此問題屬 optimizer core，不由 tools parser 修正。
+
+## P1：Function Analysis expression regression
+
+現有 expression 已有 size/depth/incomplete 契約，但仍需補：
 
 ```text
-mini test/test31: 11 passed
-test22: global depth 41 -> 20
-test26: n10 -> D-pin n1113，global depth 58 -> 30，NOR/NOT compliance PASS
-mini test/test32: tools、timeout、depth-0 / NAND-NOT depth-2 lower bound PASS
-NewTestCase/test40: official bounded smoke PASS，約 3.6 秒
-NewTestCase/test33: 120 秒 process timeout；large D-pin cone core runtime blocker
+- 極深 BUF/NOT chain 的 stack safety。
+- size budget 與 depth limit 各自觸發時的 report flag。
+- deadline、artifact footer 與 partial/complete 一致性。
 ```
 
-## Out of Scope：VerilogReader 靜默略過未知 primitive
+不得為測試新增 hidden output cap，也不改既有 public 參數。
 
-`VerilogReader::read()` 目前只在第一個 token 可轉成既有 `GateType` 時呼叫
-`parseGateInstance()`；MUX 或其他未知 primitive 會被直接略過，read 仍回成功，且沒有
-unsupported diagnostic。
+## P1：AIG deadline 與資源安全
 
-實證：
+尚未完成：
 
 ```text
-Blup/TESTING/function_search_runs/unsupported_probe/unknown_primitive_probe.v
-
-mux g_mux (y, select, data0, data1);
-read -> ok:true, gate_count:0
-func_search equivalent_pairs whole --all
-  -> complete:true, NO_MATCH, unsupported:false
-func_search nand_pair y --all --include-boundary-signals
-  -> complete:true, NO_MATCH, unsupported:false
+- snapshot CEC、cofactor/equiv_under() 與首次 lazy AIG rebuild 接收同一個 cooperative deadline。
+- Phase B budget、simulate-only、auto-sweep threshold 與大電路 memory regression。
 ```
 
-若任意 Verilog primitive 可出現在輸入，這會讓下游 API 在失真的 named netlist 上產生看似
-完整的答案。不過官方 testcase netlist 只會使用題目規定的 gate types；prompt 中的 MUX 等
-語意會由合法 gates 組成的 Boolean function 表示，不會以 direct `mux` primitive 出現在
-netlist。因此此項不列為競賽實作待辦，也不修改 Function Search。
+AIG 只能作為既有高階 API 的 private Boolean backend；named netlist 仍是唯一 design state，
+不得建立平行 public query/report facade。
 
-一般 robustness 的可能修正方向：
+## P2：Function Search backend
+
+目前 `EquivalentGatePairs` 已適合使用 Phase B，NAND modes 維持 legacy。後續候選：
 
 ```text
-1. reader 遇到未知 primitive 時不得靜默忽略。
-2. 若該 primitive 可保留，建立可辨識的 unsupported cell/net connectivity，讓 analysis 回 partial/unsupported。
-3. 若無法安全保留，read 應回失敗並列出 instance/type/line diagnostic。
-4. 若官方確認 direct MUX/cell 會出現，應正式擴充 GateType、reader、writer、graph、simulation 與 SAT encoding。
-5. 新增 read -> structure -> write round-trip regression，禁止 gate instance 靜默遺失。
+- NAND FindAny：只有可預估 surviving proof 數並能攤平 owner build 時才評估 adaptive backend。
+- NAND FindAll：需要 ephemeral/chunked proof 或可控制 solver growth 的設計。
 ```
 
-目前決議：`Out of Scope / No Action`。若官方日後變更 netlist gate-type contract，再重新開啟。
+test35 目前 legacy FindAll 約 28.13 秒；直接使用 Phase B incremental candidate 約 55.85 秒，
+因此不得只因 AIG 已存在就切換 backend。
 
-## Deferred：批次物件明細查詢（Batch Rich Listing）
+## 後期 Boolean/AIG 重構
 
-目前高階 Structure/Basic report 可以列出 gate names，也能對單一 gate 查詢 pin/net detail，
-但缺少一次回傳大量物件完整明細的 structured batch report。例如：
+下列能力集中處理，不在各 API 零散加入 heuristic：
 
 ```text
-List all NAND gates in this design with their input and output signals.
+- arbitrary Q-free enable/hold decomposition。
+- conditional/bus/batch equivalence、constant、dependence 與 symmetry proof。
+- consistent witness 與 complement-equivalence report。
+- Boolean expression stack-safe DAG/artifact contract。
+- functionally-equivalent cleanup/edit 的 scalable proof。
 ```
 
-若先列出全部 NAND gate，再逐顆呼叫單一物件查詢，大型 testcase 可能需要數萬次 tool calls，
-不適合作為競賽解法。這不是 NAND 專屬問題；hidden prompts 可能出現下列同類變形：
+正式接入時保留既有 query/report schema；Unknown 不得當成 NotEqual，edit/opt 也不得把
+Unknown 當成已證明等價。
 
-```text
-- 列出某 gate type 的所有 gate，並附 input/output pin 與 net。
-- 列出所有 DFF，並附 D/Q/clock/reset 等 pin connection。
-- 列出某 cone、scope 或條件篩選結果中的 gate connection detail。
-- 列出 driver/load，並附 gate、pin role 與 net。
-- 列出 constant-input gates，並指出實際 constant pin。
-- 同時要求 filtered object count 與完整 detail list。
-```
+## 不列入本表
 
-未來介面應優先採用通用 projection/detail 設計，而不是為每種 prompt 新增獨立 mode：
-
-```text
-- 保留現有 names-only query 的參數與回傳語意。
-- 新增 opt-in structured detail records，欄位由物件類型明確定義。
-- 大型 records 必須完整寫入 artifact；report 回傳 count、complete 與 output path。
-- API facade 負責篩選、欄位投影與 report；tools.cpp 只負責 parser/envelope/printer。
-```
-
-目前狀態：`Deferred / Marked`。先蒐集 hidden-prompt 變形與共通欄位需求，暫不修改 API。
-
-## 後期 AIG / Boolean 重構項目
-
-目前決策：
-
-```text
-- Boolean-function 類能力先不做短期擴充。
-- 後期先建立 current named netlist 對應的 AIG functional index，再統一處理 SAT / cofactor / equivalence / symmetry / enable-hold decomposition。
-- current named netlist 仍是唯一正式 design state；AIG 只作為 functional analysis index，不取代 gate/net 名稱、depth、fanout 或 writer 結果。
-- 現階段保留既有可回答能力，但不再新增臨時 heuristic 來補 hidden Boolean pattern。
-```
-
-後期重構範圍：
-
-```text
-- sequential_query enable_hold 的 Q-free EN/DATA Boolean decomposition。
-- func_query boolean_expression 的 canonical / depth-limited / large-output policy。
-- func_query symmetry 的完整 Boolean-level proof 與 cache。
-- func_query scalar equivalence / constant function 的共用 SAT/AIG cache已完成；bus、conditional 與 batch search 尚待遷移。
-- merge_functionally_equivalent_gates 這類依賴全域 Boolean equivalence 的 cleanup/edit。
-```
-
-### AIG 內部導入規則
-
-```text
-- AIG 只替換既有高階 API 內部的 Boolean proof，不建立另一套 public query。
-- 參數驗證、名稱/bus、timeout、report 與 artifact 必須維持單一實作。
-- 內部 owner 可保存與 current Netlist 綁定的 Primitives，但不得再擁有另一份 Netlist 或組裝高階 report。
-- named Netlist mutation 呼叫 markDirty；Primitives 以 revision lazy rebuild。
-- 整份 Netlist replacement/move 後必須重建 Primitives。
-- restoreFrom() 必須保持 revision 單調增加。
-- 正式接入只在既有 backend 證明答案與效能均適合後進行。
-```
-
-### 已完成：AIG model-health 安全門檻
-
-```text
-- 新增 Sound / Conservative / Invalid model health。
-- gate-input floating 與 PO-only floating 均以 free PI 建模，不再默認 constant 0。
-- missing required gate input、DFF D、無法解析的已連接 control、invalid output 與
-  topo-dropped gate 會使模型成為 Invalid。
-- Invalid model 的 checked proof 回 Unknown；其他 Boolean operation 丟 UnsoundModel。
-- UnknownPolicy::AsEqual 不能把 Invalid model 轉成 true。
-- mini test/test36：21 passed, 0 failed。
-- mini test/test37：22 passed, 0 failed；涵蓋任意 fan-in、tied input 與 Netlist copy/move/rollback lifecycle。
-```
-
-使用與安全語意：`API_SPEC/AIG_PRIMITIVES_BACKEND_GUIDE.md`。
-
-## 已完成但歸屬 API / backend 的事項
-
-### Sequential Pattern functional fallback
-
-目前狀態與定位：
-
-```text
-C++ API 已完成
-既有 sequential_query 行為維持 canonical/default mode
-functional fallback 維持 opt-in
-candidate ranking 為 engine 固定策略，不新增 CLI 參數
-simulation-aware stable rerank 為 engine 固定策略，不新增 CLI 參數
-simulation safe Reject 不占 max-functional-candidates quota
-one-shot/reusable hybrid SAT session 為 engine 固定策略，不新增 CLI 參數
-此功能目前不列為短期 default-policy 調整項；後期 AIG 重構後再統一決定 public/default behavior。
-```
-
-公開 API / engine counter 已包含：
-
-```text
-complete
-timed_out
-functional_candidate_count
-functional_searchable_candidate_count
-functional_candidates_examined
-functional_unexamined_candidate_count
-functional_inconclusive_candidate_count
-functional_simulation_pattern_count
-functional_simulation_candidate_count
-functional_simulation_rejected_candidate_count
-functional_simulation_seconds
-functional_sat_check_count
-functional_match_count
-elapsed_seconds
-```
-
-每顆 DFF detail 已包含：
-
-```text
-functional_fallback_attempted
-functional_fallback_complete
-functional_fallback_timed_out
-functional_candidate_limit_reached
-functional_candidate_count
-functional_searchable_candidate_count
-functional_candidates_examined
-functional_unexamined_candidate_count
-functional_inconclusive_candidate_count
-functional_simulation_candidate_count
-functional_simulation_rejected_candidate_count
-functional_sat_check_count
-```
-
-每筆 pattern 已包含：
-
-```text
-detection_method: structural_canonical | structural_canonical_with_sat | functional_cofactor_sat
-active_level
-hold_level
-data_function_resolved
-data_search_attempted
-data_search_complete
-data_search_timed_out
-data_candidate_count
-data_candidates_examined
-hold_functionally_proven
-load_functionally_proven
-```
-
-### Critical Path Optimization V1 facade
-
-目前 C++ public facade 已完成：
-
-```text
-OptPassKind::CriticalPathDepth
-Netlist::runOptQuery()
-Netlist::runOptApply()
-NetlistEditReport.depthChange
-NetlistEditReport.depthOptimization
-```
-
-已完成安全條件：
-
-```text
-1. working copy 產生候選，通過後才 commit。
-2. structure / Problem A / gate-basis / depth target validation。
-3. mandatory whole-design SAT：同名 PO + DFF.D。
-4. no improvement、target 未達、basis violation、timeout、不等價時保留 original。
-5. DFF.Q fanin rewrite scope 停在 sequential boundary，不解析到 D-pin data cone。
-6. XAG candidate 使用 Problem A 實際 depth；NOT/BUF 都算一層。
-7. OptimizationResult.changed / equivalenceChecked / equivalent 使用真實狀態。
-```
-
-正式 C++ 用法見：
-
-```text
-API_SPEC/OPT_APPLY_API.md
-API_SPEC/OPT_APPLY_USAGE.md
-```
-
-### PathQuery all-DFF max-depth DP fast path
-
-目前狀態：
-
-```text
-`path_query max_depth all_dff_q all_dff_d` 已改為 multi-source / multi-endpoint
-DP-style longest-path engine。
-```
-
-語意：
-
-```text
-- 適用於無 required/avoid constraints 的 MaxDepth query。
-- 所有 DFF.Q startpoints 視為 depth-0 sources。
-- 所有 DFF.D endpoints 中取最大 reachable depth。
-- 回傳 depth 與一條 witness combinational path。
-- 若偵測到 combinational cycle，保留 fallback 到原本 pair-wise DFS。
-```
-
-背景驗證紀錄：
-
-```text
-修正前：NewTestCase/test40 path_query max_depth all_dff_q all_dff_d 70 秒外層 timeout
-修正後：同一 command 約 0.5 秒完成，Depth=104
-對照：NewTestCase/test40 depth_query all_dff_d 約 0.17 秒完成，worst Depth=104
-mini test/test33: 10 passed
-Tools regression profile: 9 passed
-```
-
-### Technology mapping internal helpers
-
-以下屬於 optimizer internal helper，不新增 tools.cpp command，也不擴張 public
-gate type：
-
-```text
-convertToBasisOnGateSet
-absorbInvertersOnGateSet
-```
-
-strict containment、no-op success 與 OptApply regression 已完成。
-
-## 已符合但需同步文件的 QA 結論
-
-```text
-- Q61: 名稱只查 current transformed netlist，不維護 original aliases。
-- Q62/Q66: verified no-op / zero replacement 可接受。
-- Q64: cost 必須讀 final constrained candidate 的 metrics。
-- Q67: intermediate helper gate 不受 final basis 限制。
-- Q68: transformation log 可簡短；generated Verilog 與 final validation 才是評分依據。
-```
+- `tools.cpp` parser/help/envelope 或 `TOOLS_SPEC` 文件同步。
+- 已完成的 regression、QA 結論與歷史 benchmark。
+- 官方保證不會出現在 netlist 的未知 primitive robustness。
+- 由 LLM/testcase driver 管理的跨 prompt persistent constraints。

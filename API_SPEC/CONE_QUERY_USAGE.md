@@ -62,8 +62,10 @@ DFF 是 sequential boundary，ConeQuery 不穿越 DFF。
 | `netName` | `std::string` | `""` | net 類 query 使用 |
 | `secondNetName` | `std::string` | `""` | `SharedFaninGates` 的第二個 net |
 | `gateName` | `std::string` | `""` | gate 類 query 使用 |
+| `gateTypeFilters` | `std::vector<GateType>` | `{}` | 空集合為全部；多個 type 採 OR semantics |
 | `includeIds` | `bool` | `true` | 是否填 `rootNetIds`, `netIds`, `gateIds` |
 | `includeNames` | `bool` | `true` | 是否填 `rootNetNames`, `netNames`, `gateNames` |
+| `includeGateDetails` | `bool` | `false` | 是否填 filter 後 gates 的 structured pin/net records |
 | `includeLocalPaths` | `bool` | `false` | 是否附帶 cone 內 longest/shortest net path |
 
 ---
@@ -81,15 +83,20 @@ DFF 是 sequential boundary，ConeQuery 不穿越 DFF。
 | `secondSourceName` / `secondSourceId` | shared fanin query 的第二個來源 |
 | `cone` | 原始 `ConeResult` |
 | `netCount` | cone 內有效 net 數量 |
-| `gateCount` | cone 內有效 combinational gate 數量 |
-| `gateTypeCounts` | cone 或 shared gate 集合內各 gate type 數量 |
+| `scopeGateCount` | gate-type filter 前的有效 combinational gate 數量 |
+| `gateCount` | filter 後 gate 數量；未篩選時等於 `scopeGateCount` |
+| `gateTypeFilterApplied` | 是否真的套用 gate-type filter |
+| `appliedGateTypeFilters` | 去重後的 filters |
+| `gateDetailsIncluded` | query 是否要求 structured gate details |
+| `gateTypeCounts` | filter 後各 gate type 數量 |
 | `checkedOutputCount` | `LargestOutputCone` 掃描的 primary output bit 數量 |
 | `rootNetIds` | cone root net IDs |
 | `rootNetNames` | cone root net names |
 | `netIds` | cone 內 net IDs |
-| `gateIds` | cone 內 gate IDs |
+| `gateIds` | filter 後 gate IDs |
 | `netNames` | cone 內 net names |
-| `gateNames` | cone 內 gate names |
+| `gateNames` | filter 後 gate names |
+| `gateConnections` | filter 後 gates 的 `GateConnectionSummary` records |
 | `longestDepth` | cone 內 local longest path depth |
 | `shortestDepth` | cone 內 local shortest path depth |
 | `longestPathNetNames` | cone 內 local longest path 的 net names |
@@ -102,6 +109,9 @@ removed gate/net 視為不存在，不會出現在 root、count 或 payload。
 bus 只有至少一個 active bit 時才存在；partial-removed bus 只走訪 active bits。
 cone 只沿著 net cache 與 gate pin 兩端一致的 driver/load edge traversal。
 includeIds/includeNames 只控制 payload，不改變 count、ok 或 exists。
+gateTypeFilters 空集合表示全部；重複值去重，UNKNOWN 回 invalid argument。
+filter 沒有 match 時仍回 ok=true、exists=true、gateCount=0。
+gate filter 不裁切 cone/net payload，只裁切 gate result fields。
 ```
 
 ---
@@ -132,6 +142,30 @@ Netlist::ConeReport report = netlist.runConeQuery(query);
 | fanin cone net names | `report.netNames` |
 | gate 數量 | `report.gateCount` |
 | net 數量 | `report.netCount` |
+
+---
+
+### 5.1 篩選多個 gate type 並取得接線明細
+
+```cpp
+Netlist::ConeQuery query;
+query.type = Netlist::ConeQueryType::NetTransitiveFanin;
+query.netName = "n10";
+query.gateTypeFilters = {GateType::AND, GateType::OR, GateType::NOT};
+query.includeGateDetails = true;
+
+const Netlist::ConeReport report = netlist.runConeQuery(query);
+if (report.ok) {
+    const size_t fullConeGateCount = report.scopeGateCount;
+    const size_t matchedGateCount = report.gateCount;
+    for (const GateConnectionSummary& gate : report.gateConnections) {
+        // gate.gateName, gate.typeName, gate.inputs, gate.output
+    }
+}
+```
+
+此例的 filter 是 AND/OR/NOT 聯集。`scopeGateCount` 仍是 n10 完整 fanin cone 的 gate 數，
+`gateCount` 與 `gateConnections` 則只包含三種指定類型。
 
 ---
 
@@ -302,6 +336,8 @@ Netlist::ConeReport report = netlist.runConeQuery(query);
 | Which output has the largest fanin cone? | `LargestOutputCone` | 無 | `sourceName`, `gateCount` |
 | Report all gates shared between the fanin cones of n16 and n17. | `SharedFaninGates` | `netName = "n16"`, `secondNetName = "n17"` | `gateNames`, `gateCount` |
 | Report the number of each gate type in the cone of n8. | `NetTransitiveFanin` | `netName = "n8"` | `gateTypeCounts` |
+| List all NAND and NOR gates in n10's fanin cone. | `NetTransitiveFanin` | `gateTypeFilters = {NAND, NOR}` | `gateNames`, `gateCount` |
+| Show pin/net connections of gates in n15's fanout cone. | `NetTransitiveFanout` | `includeGateDetails = true` | `gateConnections` |
 
 ---
 
@@ -340,7 +376,8 @@ Netlist::ConeReport report = netlist.runConeQuery(query);
 實作檔案：src/analysis/ConeAnalysis.cpp
 型別檔案：include/core/NetlistQueries.h
 tester：mini test/tester.cpp, mini test/test6/test6.cpp
-目前 test6：Summary: 16 passed, 0 failed.
-覆蓋 active/tombstone、partial/all-removed bus、stale driver、SharedFanin flags、
-reconvergent/multi-root/cycle 與 100000-level iterative longest path。
+目前 test6：Summary: 24 passed, 0 failed.
+覆蓋 active/tombstone、partial/all-removed bus、stale driver、none/one/many/duplicate/UNKNOWN
+gate-type filters、valid zero、structured details、SharedFanin filter、reconvergent/multi-root/cycle
+與 100000-level iterative longest path；另以 NewTestCase/test70 驗證大型 cone consistency。
 ```

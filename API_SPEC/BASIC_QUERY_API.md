@@ -389,8 +389,8 @@ BasicReport runBasicQuery(const BasicQuery& query) const;
 | `NetInfo` | 查單一 net | `objectId`、`typeName`、PI/PO/constant flags |
 | `PortInfo` | 查單一 port | `portWidth`、`isBus`、direction flags、bit net names/IDs |
 | `CountByGateType` | 統計 gate type | `gateTypeCounts`、`gateCount` |
-| `GatesByType` | 列出指定 gate type | `gateIds`、`gateNames` |
-| `GatesWithConstantInput` | 找 constant input gates | `gateIds`、`gateNames`、`gateCount` |
+| `GatesByType` | 列出指定 gate type；可選 batch pin/net detail | `gateIds`、`gateNames`、`gateConnections` |
+| `GatesWithConstantInput` | 找 constant input gates；可選 batch pin/net detail | `gateIds`、`gateNames`、`gateConnections`、`gateCount` |
 | `StructuralIssues` | 回報結構問題 | `undrivenNets`、`noLoadNets`、`floatingNets`、`unconnectedGates` |
 
 `ports` 是依 declaration 順序排列的 `PortSummary`，每筆包含 `name`、`width`、`msb`、`lsb`、`isBus`、`isInput`、`isOutput`。因此「列出所有 PI/PO 並附 bit width」只需要一次 `ListPrimaryInputs` 或 `ListPrimaryOutputs`。
@@ -398,6 +398,12 @@ BasicReport runBasicQuery(const BasicQuery& query) const;
 `ListPrimaryInputs` / `ListPrimaryOutputs` 會固定填入 structured `ports`；`includeNames=false` 只省略重複的 flat `portNames`，不會移除 width、range 與 direction metadata。
 
 `PortInfo` 的 `netNames` 與 `netIds` 都依該 port 的 Verilog declaration order 回傳，且兩者使用相同的 active-net filter，因此同一個 index 必定描述同一個 bit。`includeIds` / `includeNames` 只控制欄位是否填入，不會改變另一個欄位的排序。方向由 `isPrimaryInput` / `isPrimaryOutput` 表示。
+
+`GatesByType` 或 `GatesWithConstantInput` 設定 `includeConnectionDetails=true` 時，會依篩選後的
+gate ID 順序填入
+`gateConnections`。每筆 `GateConnectionSummary` 包含 gate ID/name/type、依 pin 順序排列的
+inputs，以及 output。每個 `PinConnectionSummary` 明確區分 pin name、net ID/name、是否 connected、
+constant value 與 PI/PO flags。這是 `GateInfo` object snapshot 的批次 projection，不做 traversal。
 
 `Summary`、`ListGates`、`ListNets`、`CountByGateType` 與 structural issue helpers 都以 current active design 為準。`GateInfo` / `NetInfo` 查詢已移除的 tombstone 會回報 not found，不會將 `UNKNOWN` 暴露成題目中的 gate type。
 
@@ -412,12 +418,18 @@ struct BasicQuery {
     int inputCount = -1;
     bool includeIds = true;
     bool includeNames = true;
+    bool includeConnectionDetails = false;
 };
 
 struct BasicReport {
     bool ok = false;
     std::string message;
 
+    bool hasGateCount = false;
+    bool hasNetCount = false;
+    bool hasLogicalWireCount = false;
+    bool hasPrimaryInputCount = false;
+    bool hasPrimaryOutputCount = false;
     size_t gateCount = 0;
     size_t netCount = 0;
     size_t logicalWireCount = 0;
@@ -427,6 +439,7 @@ struct BasicReport {
     std::vector<std::string> gateNames;
     std::vector<std::string> netNames;
     std::vector<std::string> portNames;
+    std::vector<GateConnectionSummary> gateConnections;
 
     std::map<GateType, int> gateTypeCounts;
 
@@ -438,6 +451,11 @@ struct BasicReport {
     std::vector<std::string> unconnectedPrimaryOutputNets;
 };
 ```
+
+`hasGateCount`、`hasNetCount`、`hasLogicalWireCount`、`hasPrimaryInputCount` 與
+`hasPrimaryOutputCount` 用來區分「有效結果剛好為 0」和「此 query 不提供該 count」。呼叫端只能在
+對應 `has...Count=true` 時解讀 count；例如沒有 matching gate 時，`GatesWithConstantInput` 會回傳
+`hasGateCount=true, gateCount=0`。
 
 ---
 

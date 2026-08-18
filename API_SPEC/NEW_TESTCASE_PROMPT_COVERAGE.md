@@ -180,16 +180,14 @@ test35
 BasicQuery query;
 query.type = BasicQueryType::GatesByType;
 query.gateType = GateType::XOR; // or NAND
+query.includeConnectionDetails = true;
 BasicReport report = netlist.runBasicQuery(query);
 ```
 
-若需要 input/output pin connections：
+CLI：
 
-```cpp
-BasicQuery info;
-info.type = BasicQueryType::GateInfo;
-info.name = gateName;
-BasicReport gateInfo = netlist.runBasicQuery(info);
+```text
+structure_query gates_by_type NAND --with-pins
 ```
 
 Coverage：
@@ -201,8 +199,8 @@ OK
 注意：
 
 ```text
-「with their input and output signals」需要對 GatesByType 回傳的每個 gate 再呼叫 GateInfo。
-這屬於可接受的批次查詢，不一定要新增 API。
+`gateConnections` 一次回傳完整 structured records；大型結果由 tools 自動寫入 artifact，不能
+再對每個 gate 逐筆呼叫 GateInfo。current test70 實測 19,682 筆全部完成。
 ```
 
 ---

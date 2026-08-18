@@ -47,8 +47,8 @@ DirectConnectivityQuery 只查 immediate connection。
 
 | Query type | 問題類型 | 需要設定 | 主要讀取欄位 |
 |---|---|---|---|
-| `NetDriverGates` | 誰 drive 這條 net / bus | `netName` | `gateIds`, `gateNames`, `count` |
-| `NetLoadGates` | 這條 net / bus load 到哪些 gates | `netName` | `gateIds`, `gateNames`, `count` |
+| `NetDriverGates` | 誰 drive 這條 net / bus；可選 output-pin detail | `netName`, optional `includePinDetails` | `gateIds`, `gateNames`, `count`, `pinConnections` |
+| `NetLoadGates` | 這條 net / bus load 到哪些 gates；可選逐 input-pin detail | `netName`, optional `includePinDetails` | `gateIds`, `gateNames`, `count`, `pinConnections` |
 | `FanoutLoadReport` | 依 Problem A QA 定義統計 pin-level fanout loads | `netName` | `fanoutLoadReport`, `count` |
 | `GlobalFanoutReport` | 全設計或 PI-only fanout max / violations | `fanoutLimit`, `primaryInputsOnly` | `globalFanoutReport` |
 | `GateInputs` | 這顆 gate 的 input nets | `gateName` | `netIds`, `netNames`, `count` |
@@ -68,6 +68,7 @@ DirectConnectivityQuery 只查 immediate connection。
 | `netName` | `std::string` | `""` | net 相關 query 使用 |
 | `includeIds` | `bool` | `true` | 是否填 `gateIds` / `netIds` |
 | `includeNames` | `bool` | `true` | 是否填 `gateNames` / `netNames` |
+| `includePinDetails` | `bool` | `false` | `NetDriverGates` / `NetLoadGates` 是否填逐 pin records |
 
 注意：
 
@@ -95,6 +96,9 @@ includeIds / includeNames 只控制 payload 是否填入，不改變 count。
 | `netIds` | 查詢結果中的 net IDs |
 | `gateNames` | 查詢結果中的 gate names |
 | `netNames` | 查詢結果中的 net names |
+| `pinDetailsIncluded` | 本次是否要求 pin detail；即使結果為空仍為 true |
+| `pinConnectionCount` | 實際 driver/load pin edge 數，不等同去重 gate count |
+| `pinConnections` | 完整 `ConnectivityPinRecord` records |
 | `fanoutLoadReport` | `FanoutLoadReport` 查詢的分類結果 |
 | `globalFanoutReport` | `GlobalFanoutReport` 查詢的全域彙整結果 |
 
@@ -133,6 +137,7 @@ GateOutput 找不到有效且一致的 output edge 時，gate 本身仍存在，
 Netlist::DirectConnectivityQuery query;
 query.type = Netlist::DirectConnectivityQueryType::NetDriverGates;
 query.netName = "n1";
+query.includePinDetails = true;
 
 Netlist::DirectConnectivityReport report =
     netlist.runDirectConnectivityQuery(query);
@@ -145,6 +150,7 @@ Netlist::DirectConnectivityReport report =
 | driver gate names | `report.gateNames` |
 | driver gate IDs | `report.gateIds` |
 | driver 數量 | `report.count` |
+| driver output pin records | `report.pinConnections` |
 
 語意：
 
@@ -169,6 +175,7 @@ bus 會展開 active bit nets，忽略 removed bits。
 Netlist::DirectConnectivityQuery query;
 query.type = Netlist::DirectConnectivityQueryType::NetLoadGates;
 query.netName = "n1";
+query.includePinDetails = true;
 
 Netlist::DirectConnectivityReport report =
     netlist.runDirectConnectivityQuery(query);
@@ -181,14 +188,18 @@ Netlist::DirectConnectivityReport report =
 | load gate names | `report.gateNames` |
 | load gate IDs | `report.gateIds` |
 | load 數量 | `report.count` |
+| load pin 數量 | `report.pinConnectionCount` |
+| gate type、pin name 與 DFF role | `report.pinConnections` |
 
 注意：
 
 ```text
-NetLoadGates 只回答「這條 net 接到哪些 gate/DFF instance」。
-它不會把 primary output connection 算成 load，也不會區分 DFF.D / DFF.CK / DFF.RN / DFF.SN。
+NetLoadGates 預設只回答「這條 net 接到哪些 gate/DFF instance」。設定 `includePinDetails=true` 後，
+會區分 combinational input 與 DFF.D / DFF.CK / DFF.RN / DFF.SN。
+它不會把 primary output connection 算成 gate pin load。
 若題目問 fanout load count，應使用 FanoutLoadReport。
-同一顆 gate 的多個 input pin 接同一條 net 時，NetLoadGates 仍只列一次 gate。
+同一顆 gate 的多個 input pin 接同一條 net 時，`count` 仍只計一次 gate，但 `pinConnections` 會逐 pin
+保留，因此 `pinConnectionCount` 可能大於 `count`。
 ```
 
 ---

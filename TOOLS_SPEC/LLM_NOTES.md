@@ -59,7 +59,15 @@ constraints 與 complete status；若 prompt 有 avoid X，但回傳 command/res
 複合答案必須完成最後一步推導：
 
 - `Which of A or B...`：分別查 A、B 的相同 metric，再明確回答 winner 或 tie；不能只貼兩份 report。
-- `gate type and pin connections`：組合 gate type、input nets 與 output net 成一個答案。
+- 單一 gate 的 `gate type and pin connections`：使用 `gate_info` 組合 type、input nets 與 output net。
+- 某 type 的全部 gates 並附 pin connections：使用
+  `structure_query gates_by_type <type> --with-pins`，不得逐顆呼叫 `gate_info`。
+- constant-input gates 若還要求 constant 所在 pin、其他 inputs 或 output signal：使用
+  `structure_query const_input_gates [type|all] [0|1|any] --with-pins`；只問數量或名稱時不要加旗標。
+- 成功的 list/filter query 明確回傳 `gates: 0` 時，回答沒有 matching gates；若欄位根本未輸出，
+  不能自行當作 0，應依 mode 文件判斷或改用正確 query。
+- net driver/load 題目若要求 exact pin、gate type 或 DFF pin role，加 `--with-pins`；回答 gate 數讀
+  `count`，回答 pin/edge 數讀 `pin connection count`，兩者不得交換。
 - `List DFFs driven by clock n0`：使用 fanout-load report 的 `DFF clock-pin loads`，不能把所有 load
   類型或只有總 fanout count 當成 DFF 名單。
 - cone gate-type count 為空時，若 query complete 且 root 是 DFF.Q boundary，明答各 gate type
@@ -150,7 +158,11 @@ scope、輸出模式或時間配置；仍無法完成才使用 best-effort infer
 - 有 pagination 的 list query 必須持續讀取直到 `records_truncated:false` 或沒有 next offset。
   若因總時限無法完成，正式答案仍依 Competition Answer Policy，根據 partial count、
   stop reason 與已取得 records 提交最可能答案。
-- `cone_query` 若只問數量或 type breakdown，只讀計數欄位，不搬運 `Cone gates` / `Cone nets` 的完整清單。
+- `cone_query` 若 prompt 指定一種或多種 gate type，必須原樣傳給 `--gate-types <type...>`，
+  再讀 `filtered gates`；不可只查完整 cone 後由自然語言自行估算。合法 type 為 `AND OR
+  NOT NAND NOR XOR XNOR BUF DFF`。若只問數量或 type breakdown，不搬運完整 gate/net 清單。
+- `cone_query --with-pins` 只在 prompt 要求 connection/pin/detail 時使用。大型 details 會自動
+  寫入 artifact，答案回 `filtered gates`、完整性與 `output_file`。
 
 完整輸出配方：
 

@@ -70,8 +70,8 @@ if (report.ok) {
 | `NetInfo` | 查單一 net 基本資訊 | `name` = net name | `exists`, `objectId`, `objectName`, `typeName`, `isPrimaryInput`, `isPrimaryOutput`, `isConstant` |
 | `PortInfo` | 查單一 PI/PO port | `name` = port name | `exists`, `objectName`, `portWidth`, `isBus`, `isPrimaryInput`, `isPrimaryOutput`, `netNames`, `netIds` |
 | `CountByGateType` | 統計 gate type 數量 | `gateType` 可選 | `gateTypeCounts`, `gateCount`, `typeName` |
-| `GatesByType` | 列出指定 gate type | `gateType` | `gateIds`, `gateNames`, `gateCount`, `typeName` |
-| `GatesWithConstantInput` | 找 constant input gates | `gateType`、`constValue`、`inputCount` 可選 | `gateIds`, `gateNames`, `gateCount`, `typeName` |
+| `GatesByType` | 列出指定 gate type，可選 pin/net detail | `gateType`, optional `includeConnectionDetails` | `gateIds`, `gateNames`, `gateConnections`, `gateCount`, `typeName` |
+| `GatesWithConstantInput` | 找 constant input gates，可選 pin/net detail | `gateType`、`constValue`、`inputCount`、`includeConnectionDetails` 可選 | `gateIds`, `gateNames`, `gateConnections`, `gateCount`, `typeName` |
 | `StructuralIssues` | 找結構問題 | 無 | `undrivenNets`, `noLoadNets`, `floatingNets`, `unconnectedGates` |
 
 ---
@@ -89,6 +89,7 @@ if (report.ok) {
 | `inputCount` | `int` | `-1` | `GatesWithConstantInput` 使用；`-1` 不限制，非負數限制 gate input 數量 |
 | `includeIds` | `bool` | `true` | 是否填入 `gateIds` / `netIds` |
 | `includeNames` | `bool` | `true` | 是否填入 `gateNames` / `netNames` / `portNames`；不控制 structured `ports` |
+| `includeConnectionDetails` | `bool` | `false` | `GatesByType` / `GatesWithConstantInput` 是否填入每顆 gate 的 structured input/output pin-net records |
 
 `gateType` 的常見值：
 
@@ -130,6 +131,10 @@ if (report.ok) {
 | `primaryOutputCount` | PO port 數量 |
 | `gateTypeCounts` | 各 gate type 統計 |
 
+每個 count 都有對應 validity flag：`hasGateCount`、`hasNetCount`、`hasLogicalWireCount`、
+`hasPrimaryInputCount`、`hasPrimaryOutputCount`。flag 為 `true` 時 count 即使是 `0` 也是完整、有效
+答案；flag 為 `false` 則代表該 mode 不提供此 metric，不能把預設零值當成答案。
+
 ### 4.3 單一物件資訊
 
 | 欄位 | 意思 |
@@ -156,6 +161,11 @@ if (report.ok) {
 | `gateNames` | 查詢結果中的 gate names |
 | `netNames` | 查詢結果中的 net names |
 | `portNames` | 查詢結果中的 port names |
+| `gateConnections` | `GatesByType` 的 optional structured details；每筆含 gate ID/name/type、ordered input pins 與 output pin |
+
+`GateConnectionSummary.inputs` 依 netlist pin order 排列。每個 `PinConnectionSummary` 都包含
+`pinName`、`netId`、`netName`、`connected`、constant value 與 PI/PO flags；DFF output pin 使用 `Q`，
+一般 combinational output 使用 `OUT`。
 
 ### 4.5 Structural issue 欄位
 
@@ -391,10 +401,15 @@ int nandCount = report.gateCount;
 Netlist::BasicQuery query;
 query.type = Netlist::BasicQueryType::GatesByType;
 query.gateType = GateType::NAND;
+query.includeConnectionDetails = true;
 
 Netlist::BasicReport report = netlist.runBasicQuery(query);
 std::vector<std::string> nandGates = report.gateNames;
+std::vector<GateConnectionSummary> nandConnections = report.gateConnections;
 ```
+
+不需要 connections 時維持預設 `false`，避免建立重複的 detail records。大量 results 的檔案輸出
+由 `tools.cpp` 負責；C++ API 本身回傳完整 structured records，不做隱含截斷。
 
 ---
 
@@ -414,6 +429,7 @@ query.type = Netlist::BasicQueryType::GatesWithConstantInput;
 query.gateType = GateType::UNKNOWN;
 query.constValue = -1;
 query.inputCount = -1;
+query.includeConnectionDetails = true;
 
 Netlist::BasicReport report = netlist.runBasicQuery(query);
 ```
@@ -439,6 +455,11 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 | 數量 | `report.gateCount` |
 | gate IDs | `report.gateIds` |
 | gate names | `report.gateNames` |
+| constant 所在 pin、其他 inputs 與 output net | `report.gateConnections` |
+
+不需要連接明細時保留 `includeConnectionDetails=false`，即可維持 names-only 回傳。詳細模式仍只列出
+符合 constant filter 的 gates；每筆 input 的 `isConstant` / `constantValue` 可精確指出 constant
+接在哪個 pin。
 
 ---
 
@@ -531,6 +552,7 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 | Is net n1 a PI? | `NetInfo` | `name = "n1"` | `isPrimaryInput` |
 | Is output y a bus? | `PortInfo` | `name = "y"` | `isBus`, `portWidth` |
 | Find gates with constant input. | `GatesWithConstantInput` | 可選 `gateType`, `constValue` | `gateNames`, `gateCount` |
+| List constant-input gates with their input/output signals. | `GatesWithConstantInput` | `includeConnectionDetails = true` | `gateConnections`, `gateCount` |
 | Find floating nets. | `StructuralIssues` | 無 | `floatingNets` |
 
 ---

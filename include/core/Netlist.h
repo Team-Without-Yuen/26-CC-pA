@@ -54,6 +54,11 @@ private:
     // SigRef/AIG objects must never escape into public reports.
     eqeng::Primitives& booleanPrimitives() const;
 
+    // Shared structured gate snapshot used by BasicQuery and ConeQuery.
+    // Keeping it on Netlist prevents the two facades from drifting on pin order,
+    // tombstone handling, constants, and bus-bit names.
+    GateConnectionSummary buildGateConnectionSummary(int gateId) const;
+
 public:
     Netlist();
     ~Netlist();
@@ -1479,6 +1484,9 @@ public:
     using DirectConnectivityQueryType = ::DirectConnectivityQueryType;
     using DirectConnectivityQuery = ::DirectConnectivityQuery;
     using DirectConnectivityReport = ::DirectConnectivityReport;
+    using ConnectivityPinDirection = ::ConnectivityPinDirection;
+    using ConnectivityPinRole = ::ConnectivityPinRole;
+    using ConnectivityPinRecord = ::ConnectivityPinRecord;
     using FanoutLoadReport = ::FanoutLoadReport;
     using GlobalFanoutReport = ::GlobalFanoutReport;
 

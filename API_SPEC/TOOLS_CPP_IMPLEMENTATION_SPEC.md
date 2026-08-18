@@ -422,8 +422,8 @@ written = true
 | `net_info` | `net_name` | PI/PO/constant/internal | signal information |
 | `port_info` | `port_name` | width、bus、bit nets | `list PI/PO with bit widths` |
 | `count_by_type` | optional `gate_type` | count / all type counts | `How many NOT gates...` |
-| `gates_by_type` | `gate_type` | names/count | `List all XOR gates` |
-| `const_input_gates` | optional `gate_type`, optional `const_value` | matching gates | constant propagation 前置查詢 |
+| `gates_by_type` | `gate_type [--with-pins]` | names/count；optional structured pin/net artifact | `List all XOR gates`；`List all NAND gates with input/output signals` |
+| `const_input_gates` | optional `gate_type`, optional `const_value`, optional `--with-pins` | matching gates；detail mode 回傳 input/output pin-net records | constant propagation 前置查詢或 constant pin 詳細盤查 |
 | `structural_issues` | 無 | undriven/no-load/floating/unconnected | floating signals |
 
 規格要求：
@@ -441,8 +441,8 @@ written = true
 
 | mode | 必要參數 | 主要輸出 | Prompt 用途 |
 |---|---|---|---|
-| `net_driver` | `net_name` | direct driver gates | net driver |
-| `net_loads` | `net_name` | direct load gates | direct loads |
+| `net_driver` | `net_name`, optional `--with-pins` | direct driver gates；detail mode 回 output-pin records | net driver |
+| `net_loads` | `net_name`, optional `--with-pins` | direct load gates；detail mode 回逐 input-pin/type/role records | direct loads |
 | `fanout_load` | `net_name` | QA fanout count + pin categories | `fanout of n0` |
 | `global_fanout` | optional `fanout_limit` | max fanout / violations | global constraint |
 | `pi_fanout` | optional `fanout_limit` | highest fanout PI | test36/test38 |
@@ -477,7 +477,17 @@ What is the fanout of primary input n0?
 
 ## 10. cone_query
 
-### 10.1 已有核心 API，可直接 expose
+### 10.1 CLI grammar 與核心 API
+
+```text
+cone_query <mode> [name] [with_paths|--with-paths]
+           [--gate-types <type...>] [--with-pins]
+```
+
+`--gate-types` 經 `stringToGateType()` 解析，支援 `AND OR NOT NAND NOR XOR XNOR BUF DFF`；
+多值寫入 `ConeQuery.gateTypeFilters`，重複值由 backend 去重。`--with-pins` 對應
+`ConeQuery.includeGateDetails=true`。parser 必須拒絕未知 option、未知 type 及空的
+`--gate-types`，不能靜默忽略。
 
 | mode | API type | 參數 |
 |---|---|---|
@@ -498,7 +508,14 @@ net_names
 root_net_names
 checked_output_count
 longest_depth / shortest_depth（有要求時）
+scope_gate_count
+gate_type_filter_applied / applied_gate_type_filters
+gate_details_included / gate_connections（有要求時）
 ```
+
+CLI 保留 `gates` 作為 filter 後相容欄位，另明確輸出 `scope gates` 與 `filtered gates`。
+大型 names/details 使用 `QUERY_LIST_ARTIFACT_V1`；artifact 必須包含 filter metadata、
+完整 gate details 與 `Complete: yes` footer。
 
 ### 10.2 Batch 5 已補 ConeReport 並 expose
 
@@ -506,6 +523,8 @@ longest_depth / shortest_depth（有要求時）
 |---|---|---|
 | cone 內各 gate type 數量 | `ConeReport.gateTypeCounts` | 不應由 LLM 對 gate list 自行統計 |
 | 兩個 fanin cone shared gates | `ConeQueryType::SharedFaninGates` + second net field | 不應由 tools.cpp 自行做集合交集 |
+| 一種或多種 gate type 篩選 | `ConeQuery.gateTypeFilters` | 不應由 LLM 取得全清單後自行統計 |
+| gate pin/net detail | `ConeQuery.includeGateDetails` | 重用 shared `GateConnectionSummary` |
 
 對應 prompt：
 

@@ -59,8 +59,8 @@ TOOL_RESULT_END
 
 ```text
 How many NAND gates are in the cone of n8?
--> cone_query net_fanin n8
-   讀 cone gate-type breakdown 的 NAND count
+-> cone_query net_fanin n8 --gate-types NAND
+   讀 filtered gates
 
 How many NAND gates are in the whole design?
 -> structure_query count_by_type NAND
@@ -137,6 +137,8 @@ structure_query net_loads n10
 ```
 
 送出 command 後必須核對回傳的 mode、resolved object/scope、objective 與 constraints。
+成功的 count/filter query 若沒有 matching object，工具會明確輸出 `gates: 0` 等有效零值；缺少
+某個 count 欄位代表該 mode 不提供它，不得自行猜成 0。
 若 `output` 被回報為不存在的 net，或回傳 scope 與 prompt 不同，代表參數擷取錯誤，
 應修正 command 後重試，不能把工具 error 當成題目答案。
 
@@ -266,6 +268,7 @@ minimize / optimize / find best cost             -> Optimization flow
 
 - gate、net、PI、PO、DFF 的 active 數量與名稱列表。
 - gate type 的數量與 gate 列表。
+- 依 gate type 批次列出每顆 gate 的 input/output pin-net 明細。
 - 單一 gate、net、port 的基本資訊。
 - floating net、undriven net、unused gate 等 structural issue。
 - net 的直接 driver/load、gate 的 input/output、immediate fanin/fanout。
@@ -276,6 +279,7 @@ minimize / optimize / find best cost             -> Optimization flow
 ```text
 How many primary inputs and primary outputs does this design have?
 List all NOR gates.
+List all NAND gates with their input and output signals.
 How many floating signals were found?
 What gate drives n10?
 List all flip-flops driven by clock n0.
@@ -286,6 +290,18 @@ Which primary input has the highest direct fanout?
 
 大型 object/load/issue 名單會自動完整寫入 list artifact；LLM 讀取 count、
 `list artifact complete` 與 `output_file`，不需也不能指定輸出門檻或檔名。
+
+同一 gate type 的 names-only list 使用 `gates_by_type <type>`；prompt 明確要求 pins、connections
+或 input/output signals 時，使用 `gates_by_type <type> --with-pins`。不要先列 names 再逐顆呼叫
+`gate_info`。
+
+constant-input gate 的 names-only list 使用 `const_input_gates [type|all] [0|1|any]`；prompt 還要求
+constant 位於哪個 pin、其他 input 或 output signal 時，加上 `--with-pins`。不要先取得 gate names
+再逐顆查詢。
+
+net driver/load 預設回 gate-level names；prompt 明確要求 exact pin、gate type 或 pin role 時使用
+`net_driver <net> --with-pins` / `net_loads <net> --with-pins`。其中 `count` 是去重 gate 數，
+`pin connection count` 才是逐 pin edge 數。
 
 詳細用法：[`STRUCTURE_QUERY_TOOL.md`](STRUCTURE_QUERY_TOOL.md)
 
@@ -299,6 +315,7 @@ Which primary input has the highest direct fanout?
 
 - 找出 cone 內所有 gates、nets、PIs、POs 與 DFF boundary。
 - 統計 cone 內 gate 數量或各 gate type 數量。
+- 以一種或多種 gate type 篩選 cone，並取得 filter 後 gates 或完整 pin/net details。
 - 比較或尋找 shared fanin gates。
 - 查詢 largest output cone 等 cone 層級摘要。
 
@@ -308,6 +325,7 @@ Which primary input has the highest direct fanout?
 Find the transitive fanin cone of n10.
 Which gates can affect output y?
 How many NOR gates are in the cone of n15?
+List all NAND, NOR, and NOT gates in n8's fanin cone with their connections.
 Which gates are shared by the fanin cones of n10 and n12?
 Which output has the largest fanin cone?
 ```
@@ -316,6 +334,9 @@ Which output has the largest fanin cone?
 
 大型 cone names 會自動完整寫入 list artifact，terminal 保留 cone counts、gate-type
 breakdown、完整性與 `output_file`；小型 cone 維持直接列出全部名稱。
+
+prompt 指定 gate type 時使用 `--gate-types <type...>`；支援 `AND OR NOT NAND NOR XOR
+XNOR BUF DFF`，多個 type 是聯集。prompt 要求 pin/net connection 時再加 `--with-pins`。
 
 詳細用法：[`CONE_QUERY_TOOL.md`](CONE_QUERY_TOOL.md)
 

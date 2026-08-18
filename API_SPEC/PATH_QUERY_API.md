@@ -252,10 +252,9 @@ Reachable cone 不是 start-to-end path；全域 critical depth 也不應用所�
 | Implementation | `src/analysis/PathAnalysis.cpp` |
 | CLI integration | `tools.cpp` |
 | API regression | `mini test/tester.cpp`、`mini test/test7`、`mini test/test8` |
-| 專項盤查 | `Blup/PATH_QUERY_ISSUES_AND_CHANGES.md` |
 
 目前所有 `PathQueryMode` 均已 dispatch。已知未完成事項：
 
 - `combinationalOnly=false` 不支援。
 - 超過 64-bit 的 path count 等待官方回覆。
-- partial path file 本身尚未包含 completion metadata；completion 目前由 report envelope 提供。
+- compact path artifact 以 footer 記錄 expected/written/complete/stop reason；呼叫端仍須同時核對 report envelope。

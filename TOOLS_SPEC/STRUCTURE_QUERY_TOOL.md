@@ -41,8 +41,8 @@ structure_query <mode> [args]
 | `net_info` | `<net>` | net 類型、ID 與基本資訊 | `object`, `id`, `type` |
 | `port_info` | `<port>` | port direction、width/bus flag 與 bit nets | `object`, `width`, `is_bus`, `is_primary_input`, `is_primary_output`, `Net names`；不輸出無意義的負 ID |
 | `count_by_type` | `[type]` | 指定 type 數量；省略時列全部 type 統計 | `gates`, `Gate type counts` |
-| `gates_by_type` | `<type>` | 指定 type 的 gate names | `Gate names` |
-| `const_input_gates` | `[type\|all] [0\|1\|any] [--inputs N]` | 找 input pin 直接接 constant 的 gates | `Gate names` |
+| `gates_by_type` | `<type> [--with-pins]` | 指定 type 的 gates；旗標要求每顆 gate 的 pin/net 明細 | names-only：`Gate names`；detail：`Gate connection details` artifact |
+| `const_input_gates` | `[type\|all] [0\|1\|any] [--with-pins]` | 找 input pin 直接接 constant 的 gates；旗標要求 pin/net 明細 | names-only：`Gate names`；detail：`Gate connection details` artifact |
 | `structural_issues` | 無 | 結構問題摘要 | 一般 issue lists，以及 `Floating primary-input nets`、`Unconnected primary-output nets` 精確分類 |
 
 gate 數量皆指 current active objects，不應使用底層 raw storage count 回答修改後的 gate 數量。
@@ -51,8 +51,8 @@ gate 數量皆指 current active objects，不應使用底層 raw storage count 
 
 | Mode | 參數 | 用途 | 主要 data |
 |---|---|---|---|
-| `net_driver` | `<net>` | 直接 driver gates | `count`, `Gate names` |
-| `net_loads` | `<net>` | 直接 load gates | `count`, `Gate names` |
+| `net_driver` | `<net> [--with-pins]` | 直接 driver gates；可選 output-pin detail | names-only：`count`, `Gate names`；detail：`pin connection count`, `Pin connection details` |
+| `net_loads` | `<net> [--with-pins]` | 直接 load gates；可選逐 input-pin detail | names-only：`count`, `Gate names`；detail：`pin connection count`, `Pin connection details` |
 | `fanout_load` / `fanout_report` | `<net>` | QA 定義的 pin-level fanout 分類 | `fanout load count`, 各 load 分類 |
 | `global_fanout` | `[limit]` | 全設計最大 fanout；有 limit 時也檢查 violations | `max fanout`, `Max-fanout nets`, `Violating nets` |
 | `pi_fanout` | `[limit]` | 只掃 PI nets 的最大 fanout | 同上 |
@@ -70,6 +70,9 @@ gate 數量皆指 current active objects，不應使用底層 raw storage count 
 先確認 envelope `status:ok` 與 `complete:true`，再依 mode 讀取 data。不存在的 object、
 parser error 或不完整結果不能當成 count 0 或 empty list。
 
+count query 或 list/filter query 即使沒有 matching object，也會明確輸出有效的零值，例如
+`gates: 0`。成功但不適用於該 mode 的 count 欄位不會輸出；LLM 不得自行把缺少欄位解讀為零。
+
 | 題目 | 應讀欄位 |
 |---|---|
 | current active gate 總數與 type breakdown | `summary` 的 `gates` 與 `Gate type counts` |
@@ -77,7 +80,10 @@ parser error 或不完整結果不能當成 count 0 或 empty list。
 | PI/PO port 數量 | `summary` 的 `primary inputs` / `primary outputs` |
 | PI/PO bit 或 signal 數量 | `list_pi` / `list_po` 的 `Port summaries` width 加總 |
 | driver/load gate 數量 | `net_driver` / `net_loads` 的 count 與 `Gate names` |
+| 某 net 的 exact driver/load pins | `net_driver <net> --with-pins` / `net_loads <net> --with-pins` 的 `Pin connection details` |
 | pin-level fanout load | `fanout_load` / `fanout_report` 的 total load 與分類 |
+| 某 type 所有 gates 及其 input/output signals | `gates_by_type <type> --with-pins` 的 `Gate connection details` |
+| constant-input gates 及 constant 所在 pin、其他 inputs、output | `const_input_gates [type\|all] [0\|1\|any] --with-pins` 的 `Gate connection details` |
 | floating/unconnected 結構問題 | `structural_issues` 的精確分類 lists |
 
 修改後的 gate count 必須使用 active fields；tombstone storage 中的 removed gate/net 不得計入。
@@ -96,6 +102,37 @@ output_file
 只有 envelope `complete:true`、`list artifact complete:yes`，且 artifact footer 為
 `Complete: yes` 時，檔案才是完整答案。artifact 建立失敗時工具會回退成 terminal 全量輸出。
 
+`gates_by_type <type>` 維持 names-only；只有 prompt 明確要求 pins、input/output signals 或
+connections 時才加 `--with-pins`。detail artifact 每筆格式為：
+
+```text
+gate=g103 type=NAND inputs=[IN1=n29328, IN2=n29163] output=OUT=n30174
+```
+
+DFF 會保留具名 input pins（例如 D、CK、RN、SN），output pin 為 Q。`<unconnected>` 表示該 pin
+沒有 active net；`(PI)`、`(PO)` 與 `1'b0`/`1'b1` 標記是 net 屬性，不是額外 net 名稱。
+
+`const_input_gates` 預設仍只回傳 names。prompt 明確要求 constant 所在 pin、其他 input 或 output
+signal 時才加 `--with-pins`。例如：
+
+```text
+gate=g12 type=NAND inputs=[IN1=1'b1, IN2=n8] output=OUT=n15
+```
+
+既有 `--inputs N` 只保留作相容選項；本題 gate arity 已固定，不需用它回答一般 prompt。
+
+`net_driver` / `net_loads` 的 `count` 是去重 gate instance 數；`pin connection count` 是實際 edge
+數。同一 net 接到同一 gate 的兩個 inputs 時，detail 會保留兩筆。record 格式為：
+
+```text
+net=n10 direction=load gate=g12 type=NAND pin=IN1 role=combinational_input
+net=n0 direction=load gate=g20 type=DFF pin=CK role=clock
+net=n8 direction=driver gate=g7 type=NOR pin=OUT role=output
+```
+
+這兩個 mode 只列 gate pins，不含 primary-output connection；QA fanout load count 仍使用
+`fanout_load` / `fanout_report`。
+
 ## 7. Prompt Examples
 
 ```text
@@ -111,9 +148,21 @@ Read: DFF clock-pin loads
 ```
 
 ```text
-Prompt: How many 2-input OR gates have a constant-1 input?
-Command: structure_query const_input_gates OR 1 --inputs 2
+Prompt: List every gate pin connected to n10, including gate type and pin role.
+Command: structure_query net_loads n10 --with-pins
+Read: count, pin connection count；完整 records 在 `Pin connection details` 或 artifact
+```
+
+```text
+Prompt: How many OR gates have a constant-1 input?
+Command: structure_query const_input_gates OR 1
 Read: Gate names 的列表長度
+```
+
+```text
+Prompt: List all NAND gates with a constant-1 input and show where the constant is connected, the other input, and the output signal.
+Command: structure_query const_input_gates NAND 1 --with-pins
+Read: gate count, list artifact complete, output_file；完整 records 在 artifact
 ```
 
 ```text
@@ -122,10 +171,18 @@ Command: structure_query pi_fanout
 Read: max fanout, Max-fanout nets
 ```
 
+```text
+Prompt: List all NAND gates with their input and output signals.
+Command: structure_query gates_by_type NAND --with-pins
+Read: gate count, list artifact complete, output_file；完整 records 在 artifact
+```
+
 ## 8. 限制
 
 - `const_input_gates` 是結構連線查詢，不證明 output function 為 constant。
 - `gate_fanout` 只回一層 immediate loads，不代表所有 reachable gates。
+- `gates_by_type --with-pins` 是全設計依 type 篩選，不會自動限制在某個 cone；有 cone scope 的
+  prompt 仍需使用 `cone_query`，不能假裝這個旗標支援 scope。
 - `summary` 的 PI/PO 數量是 port count；bus width 請讀 `list_pi`/`list_po` 的 `Port summaries`。
 - prompt 說 input/output bits 或 signals 時，必須加總 `Port summaries` 的 width，不能直接使用
   port count。

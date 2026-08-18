@@ -418,18 +418,75 @@ std::vector<std::string> gateNamesFromIds(
 std::vector<std::string> fanoutReportEntries(
     const std::vector<Netlist::FanoutLoadReport>& reports);
 
+std::string formatPinConnection(const PinConnectionSummary& pin) {
+    std::string result = pin.pinName + "=";
+    if (!pin.connected) return result + "<unconnected>";
+    if (pin.isConstant && (pin.constantValue == 0 || pin.constantValue == 1)) {
+        result += "1'b" + std::to_string(pin.constantValue);
+    } else {
+        result += pin.netName;
+    }
+    if (pin.isPrimaryInput) result += "(PI)";
+    if (pin.isPrimaryOutput) result += "(PO)";
+    return result;
+}
+
+std::string formatGateConnection(const GateConnectionSummary& gate) {
+    std::string result = "gate=" + gate.gateName + " type=" + gate.typeName +
+                         " inputs=[";
+    for (size_t i = 0; i < gate.inputs.size(); ++i) {
+        if (i != 0) result += ", ";
+        result += formatPinConnection(gate.inputs[i]);
+    }
+    result += "] output=" + formatPinConnection(gate.output);
+    return result;
+}
+
+std::string connectivityPinRoleName(ConnectivityPinRole role) {
+    switch (role) {
+    case ConnectivityPinRole::Output: return "output";
+    case ConnectivityPinRole::CombinationalInput: return "combinational_input";
+    case ConnectivityPinRole::DffData: return "data";
+    case ConnectivityPinRole::DffClock: return "clock";
+    case ConnectivityPinRole::DffResetSet: return "reset_set";
+    case ConnectivityPinRole::DffOther: return "dff_other";
+    }
+    return "unknown";
+}
+
+std::string formatConnectivityPinRecord(const ConnectivityPinRecord& record) {
+    return "net=" + record.netName +
+           " direction=" +
+           (record.direction == ConnectivityPinDirection::Driver ? "driver" : "load") +
+           " gate=" + record.gateName +
+           " type=" + record.gateTypeName +
+           " pin=" + record.pinName +
+           " role=" + connectivityPinRoleName(record.role);
+}
+
 ListArtifactContent makeBasicListArtifactContent(
     const Netlist& netlist,
     const Netlist::BasicReport& report) {
     ListArtifactContent content;
-    content.fields = {
-        {"message", report.message},
-        {"gate count", std::to_string(report.gateCount)},
-        {"net count", std::to_string(report.netCount)},
-        {"logical wire count", std::to_string(report.logicalWireCount)},
-        {"primary input count", std::to_string(report.primaryInputCount)},
-        {"primary output count", std::to_string(report.primaryOutputCount)}
-    };
+    content.fields.push_back({"message", report.message});
+    if (report.hasGateCount) {
+        content.fields.push_back({"gate count", std::to_string(report.gateCount)});
+    }
+    if (report.hasNetCount) {
+        content.fields.push_back({"net count", std::to_string(report.netCount)});
+    }
+    if (report.hasLogicalWireCount) {
+        content.fields.push_back(
+            {"logical wire count", std::to_string(report.logicalWireCount)});
+    }
+    if (report.hasPrimaryInputCount) {
+        content.fields.push_back(
+            {"primary input count", std::to_string(report.primaryInputCount)});
+    }
+    if (report.hasPrimaryOutputCount) {
+        content.fields.push_back(
+            {"primary output count", std::to_string(report.primaryOutputCount)});
+    }
 
     std::vector<std::string> gateTypeCounts;
     for (const auto& item : report.gateTypeCounts) {
@@ -437,7 +494,16 @@ ListArtifactContent makeBasicListArtifactContent(
                                  std::to_string(item.second));
     }
     addListSection(content, "Gate type counts", gateTypeCounts);
-    addListSection(content, "Gate names", report.gateNames);
+    std::vector<std::string> gateConnections;
+    gateConnections.reserve(report.gateConnections.size());
+    for (const GateConnectionSummary& gate : report.gateConnections) {
+        gateConnections.push_back(formatGateConnection(gate));
+    }
+    if (gateConnections.empty()) {
+        addListSection(content, "Gate names", report.gateNames);
+    } else {
+        addListSection(content, "Gate connection details", gateConnections);
+    }
     addListSection(content, "Net names", report.netNames);
     addListSection(content, "Port names", report.portNames);
 
@@ -513,7 +579,17 @@ ListArtifactContent makeConnectivityListArtifactContent(
         addListSection(content, "Violating nets",
                        fanoutReportEntries(global.violatingReports));
     }
-    if (!report.fanoutLoadReport.ok) {
+    if (report.pinDetailsIncluded) {
+        content.fields.push_back(
+            {"pin connection count", std::to_string(report.pinConnectionCount)});
+        std::vector<std::string> pinConnections;
+        pinConnections.reserve(report.pinConnections.size());
+        for (const ConnectivityPinRecord& record : report.pinConnections) {
+            pinConnections.push_back(formatConnectivityPinRecord(record));
+        }
+        addListSection(content, "Pin connection details", pinConnections);
+    }
+    if (!report.fanoutLoadReport.ok && !report.pinDetailsIncluded) {
         addListSection(content, "Gate names", report.gateNames);
     }
     addListSection(content, "Net names", report.netNames);
@@ -524,11 +600,24 @@ ListArtifactContent makeConeListArtifactContent(
     const Netlist& netlist,
     const Netlist::ConeReport& report) {
     ListArtifactContent content;
+    std::string appliedGateTypes = "all";
+    if (!report.appliedGateTypeFilters.empty()) {
+        appliedGateTypes.clear();
+        for (GateType type : report.appliedGateTypeFilters) {
+            if (!appliedGateTypes.empty()) appliedGateTypes += ", ";
+            appliedGateTypes += netlist.gateTypeToString(type);
+        }
+    }
     content.fields = {
         {"message", report.message},
         {"source", report.sourceName},
         {"second source", report.secondSourceName},
-        {"gate count", std::to_string(report.gateCount)},
+        {"scope gate count", std::to_string(report.scopeGateCount)},
+        {"filtered gate count", std::to_string(report.gateCount)},
+        {"gate type filter applied", report.gateTypeFilterApplied ? "yes" : "no"},
+        {"gate type filters", appliedGateTypes},
+        {"gate details included", report.gateDetailsIncluded ? "yes" : "no"},
+        {"gate detail count", std::to_string(report.gateConnections.size())},
         {"net count", std::to_string(report.netCount)},
         {"checked primary outputs", std::to_string(report.checkedOutputCount)},
         {"longest local path depth", std::to_string(report.longestDepth)},
@@ -542,7 +631,16 @@ ListArtifactContent makeConeListArtifactContent(
     }
     addListSection(content, "Gate type counts", gateTypeCounts);
     addListSection(content, "Root nets", report.rootNetNames);
-    addListSection(content, "Cone gates", report.gateNames);
+    if (report.gateDetailsIncluded) {
+        std::vector<std::string> gateConnections;
+        gateConnections.reserve(report.gateConnections.size());
+        for (const GateConnectionSummary& gate : report.gateConnections) {
+            gateConnections.push_back(formatGateConnection(gate));
+        }
+        addListSection(content, "Gate connection details", gateConnections);
+    } else {
+        addListSection(content, "Cone gates", report.gateNames);
+    }
     addListSection(content, "Cone nets", report.netNames);
     addListSection(content, "Longest local path nets",
                    report.longestPathNetNames);
@@ -561,12 +659,19 @@ void printBasicReport(const Netlist& netlist,
     }
 
     std::cout << "OK: " << report.message << "\n";
-    if (report.gateCount || report.netCount || report.logicalWireCount ||
-        report.primaryInputCount || report.primaryOutputCount) {
+    if (report.hasGateCount) {
         std::cout << "  gates: " << report.gateCount << "\n";
+    }
+    if (report.hasNetCount) {
         std::cout << "  nets: " << report.netCount << "\n";
+    }
+    if (report.hasLogicalWireCount) {
         std::cout << "  logical wires: " << report.logicalWireCount << "\n";
+    }
+    if (report.hasPrimaryInputCount) {
         std::cout << "  primary inputs: " << report.primaryInputCount << "\n";
+    }
+    if (report.hasPrimaryOutputCount) {
         std::cout << "  primary outputs: " << report.primaryOutputCount << "\n";
     }
     if (!report.objectName.empty()) {
@@ -596,8 +701,16 @@ void printBasicReport(const Netlist& netlist,
                       << " : " << item.second << "\n";
         }
     }
-    if (!suppressLists && !report.gateNames.empty()) {
+    if (!suppressLists && !report.gateNames.empty() &&
+        report.gateConnections.empty()) {
         printStringList("Gate names", report.gateNames);
+    }
+    if (!suppressLists && !report.gateConnections.empty()) {
+        std::cout << "Gate connection details ("
+                  << report.gateConnections.size() << "):\n";
+        for (const GateConnectionSummary& gate : report.gateConnections) {
+            std::cout << "  " << formatGateConnection(gate) << "\n";
+        }
     }
     if (!suppressLists && !report.netNames.empty()) {
         printStringList("Net names", report.netNames);
@@ -817,6 +930,10 @@ void printConnectivityReport(const Netlist& netlist,
         std::cout << "  net: " << report.netName << "\n";
     }
     std::cout << "  count: " << report.count << "\n";
+    if (report.pinDetailsIncluded) {
+        std::cout << "  pin connection count: "
+                  << report.pinConnectionCount << "\n";
+    }
     if (query.type == Netlist::DirectConnectivityQueryType::DirectlyConnected) {
         std::cout << "  connected: " << (report.connected ? "yes" : "no") << "\n";
     }
@@ -853,7 +970,16 @@ void printConnectivityReport(const Netlist& netlist,
             }
         }
     }
+    if (!suppressLists && report.pinDetailsIncluded &&
+        !report.pinConnections.empty()) {
+        std::cout << "Pin connection details ("
+                  << report.pinConnections.size() << "):\n";
+        for (const ConnectivityPinRecord& record : report.pinConnections) {
+            std::cout << "  " << formatConnectivityPinRecord(record) << "\n";
+        }
+    }
     if (!suppressLists && !report.fanoutLoadReport.ok &&
+        !report.pinDetailsIncluded &&
         !report.gateNames.empty()) {
         printStringList("Gate names", report.gateNames);
     }
@@ -877,6 +1003,23 @@ void printConeReport(const Netlist& netlist,
         std::cout << "  second source: " << report.secondSourceName << "\n";
     }
     std::cout << "  gates: " << report.gateCount << "\n";
+    std::cout << "  scope gates: " << report.scopeGateCount << "\n";
+    std::cout << "  filtered gates: " << report.gateCount << "\n";
+    std::cout << "  gate type filter applied: "
+              << (report.gateTypeFilterApplied ? "yes" : "no") << "\n";
+    std::cout << "  gate type filters: ";
+    if (report.appliedGateTypeFilters.empty()) {
+        std::cout << "all\n";
+    } else {
+        for (size_t i = 0; i < report.appliedGateTypeFilters.size(); ++i) {
+            if (i != 0) std::cout << ", ";
+            std::cout << netlist.gateTypeToString(report.appliedGateTypeFilters[i]);
+        }
+        std::cout << "\n";
+    }
+    std::cout << "  gate details included: "
+              << (report.gateDetailsIncluded ? "yes" : "no") << "\n";
+    std::cout << "  gate detail count: " << report.gateConnections.size() << "\n";
     std::cout << "  nets: " << report.netCount << "\n";
     if (!report.gateTypeCounts.empty()) {
         std::cout << "Gate type counts (" << report.gateTypeCounts.size() << "):\n";
@@ -891,7 +1034,14 @@ void printConeReport(const Netlist& netlist,
     if (!suppressLists && !report.rootNetNames.empty()) {
         printStringList("Root nets", report.rootNetNames);
     }
-    if (!suppressLists && !report.gateNames.empty()) {
+    if (!suppressLists && report.gateDetailsIncluded &&
+        !report.gateConnections.empty()) {
+        std::cout << "Gate connection details ("
+                  << report.gateConnections.size() << "):\n";
+        for (const GateConnectionSummary& gate : report.gateConnections) {
+            std::cout << "  " << formatGateConnection(gate) << "\n";
+        }
+    } else if (!suppressLists && !report.gateNames.empty()) {
         printStringList("Cone gates", report.gateNames);
     }
     if (!suppressLists && !report.netNames.empty()) {
@@ -2231,32 +2381,59 @@ bool buildBasicQuery(const Netlist& netlist,
     } else if (m == "gates_by_type") {
         query.type = Netlist::BasicQueryType::GatesByType;
         std::string gateType;
-        iss >> gateType;
+        if (!(iss >> gateType)) return false;
         query.gateType = netlist.stringToGateType(gateType);
+        if (query.gateType == GateType::UNKNOWN) return false;
+        std::string option;
+        if (iss >> option) {
+            if (option != "--with-pins") return false;
+            query.includeConnectionDetails = true;
+            if (iss >> option) return false;
+        }
     } else if (m == "const_input_gates") {
         query.type = Netlist::BasicQueryType::GatesWithConstantInput;
+        std::vector<std::string> tokens;
         std::string token;
-        if (!(iss >> token)) return true;
+        while (iss >> token) tokens.push_back(token);
 
-        const std::string loweredType = toLower(token);
-        if (loweredType == "all" || loweredType == "any") {
-            query.gateType = GateType::UNKNOWN;
-        } else {
-            query.gateType = netlist.stringToGateType(token);
-            if (query.gateType == GateType::UNKNOWN) return false;
+        size_t index = 0;
+        if (index < tokens.size() && tokens[index].rfind("-", 0) != 0) {
+            const std::string loweredType = toLower(tokens[index]);
+            if (loweredType == "all" || loweredType == "any") {
+                query.gateType = GateType::UNKNOWN;
+            } else {
+                query.gateType = netlist.stringToGateType(tokens[index]);
+                if (query.gateType == GateType::UNKNOWN) return false;
+            }
+            ++index;
         }
 
-        if (!(iss >> token)) return true;
-        if (token != "--inputs" && token != "-inputs") {
-            if (!parseConstantFilter(token, query.constValue)) return false;
-            if (!(iss >> token)) return true;
+        if (index < tokens.size() && tokens[index].rfind("-", 0) != 0) {
+            if (!parseConstantFilter(tokens[index], query.constValue)) return false;
+            ++index;
         }
 
-        if (token != "--inputs" && token != "-inputs") return false;
-        if (!(iss >> token) || !parseStrictInteger(token, query.inputCount) || query.inputCount < 1) {
+        bool sawInputs = false;
+        bool sawWithPins = false;
+        while (index < tokens.size()) {
+            const std::string& option = tokens[index++];
+            if (option == "--with-pins") {
+                if (sawWithPins) return false;
+                sawWithPins = true;
+                query.includeConnectionDetails = true;
+                continue;
+            }
+            if (option == "--inputs" || option == "-inputs") {
+                if (sawInputs || index >= tokens.size()) return false;
+                sawInputs = true;
+                if (!parseStrictInteger(tokens[index++], query.inputCount) ||
+                    query.inputCount < 1) {
+                    return false;
+                }
+                continue;
+            }
             return false;
         }
-        if (iss >> token) return false;
     } else if (m == "structural_issues") {
         query.type = Netlist::BasicQueryType::StructuralIssues;
     } else {
@@ -2272,10 +2449,22 @@ bool buildConnectivityQuery(std::istringstream& iss,
     const std::string m = toLower(mode);
     if (m == "net_driver") {
         query.type = Netlist::DirectConnectivityQueryType::NetDriverGates;
-        iss >> query.netName;
+        if (!(iss >> query.netName)) return false;
+        std::string option;
+        if (iss >> option) {
+            if (option != "--with-pins") return false;
+            query.includePinDetails = true;
+            if (iss >> option) return false;
+        }
     } else if (m == "net_loads") {
         query.type = Netlist::DirectConnectivityQueryType::NetLoadGates;
-        iss >> query.netName;
+        if (!(iss >> query.netName)) return false;
+        std::string option;
+        if (iss >> option) {
+            if (option != "--with-pins") return false;
+            query.includePinDetails = true;
+            if (iss >> option) return false;
+        }
     } else if (m == "fanout_load" || m == "fanout_report") {
         query.type = Netlist::DirectConnectivityQueryType::FanoutLoadReport;
         iss >> query.netName;
@@ -2313,36 +2502,106 @@ bool buildConnectivityQuery(std::istringstream& iss,
 }
 
 // 將 cone_query 的 mode 轉成 ConeQuery。
-bool buildConeQuery(std::istringstream& iss,
+bool buildConeQuery(const Netlist& netlist,
+                    std::istringstream& iss,
                     const std::string& mode,
-                    Netlist::ConeQuery& query) {
+                    Netlist::ConeQuery& query,
+                    std::string& errorMessage) {
     const std::string m = toLower(mode);
     if (m == "net_fanin") {
         query.type = Netlist::ConeQueryType::NetTransitiveFanin;
-        iss >> query.netName;
+        if (!(iss >> query.netName)) {
+            errorMessage = "net_fanin requires <net>";
+            return false;
+        }
     } else if (m == "net_fanout") {
         query.type = Netlist::ConeQueryType::NetTransitiveFanout;
-        iss >> query.netName;
+        if (!(iss >> query.netName)) {
+            errorMessage = "net_fanout requires <net>";
+            return false;
+        }
     } else if (m == "gate_fanin") {
         query.type = Netlist::ConeQueryType::GateTransitiveFanin;
-        iss >> query.gateName;
+        if (!(iss >> query.gateName)) {
+            errorMessage = "gate_fanin requires <gate>";
+            return false;
+        }
     } else if (m == "gate_fanout") {
         query.type = Netlist::ConeQueryType::GateTransitiveFanout;
-        iss >> query.gateName;
+        if (!(iss >> query.gateName)) {
+            errorMessage = "gate_fanout requires <gate>";
+            return false;
+        }
     } else if (m == "largest_output") {
         query.type = Netlist::ConeQueryType::LargestOutputCone;
     } else if (m == "shared_fanin") {
         query.type = Netlist::ConeQueryType::SharedFaninGates;
-        iss >> query.netName >> query.secondNetName;
+        if (!(iss >> query.netName >> query.secondNetName)) {
+            errorMessage = "shared_fanin requires <net_a> <net_b>";
+            return false;
+        }
     } else {
+        errorMessage = "Unknown cone_query mode: " + mode;
         return false;
     }
 
-    std::string option;
-    while (iss >> option) {
-        if (toLower(option) == "with_paths") {
+    std::vector<std::string> tokens;
+    std::string token;
+    while (iss >> token) tokens.push_back(token);
+
+    bool sawPaths = false;
+    bool sawPins = false;
+    bool sawGateTypes = false;
+    for (size_t i = 0; i < tokens.size();) {
+        const std::string option = toLower(tokens[i]);
+        if (option == "with_paths" || option == "--with-paths") {
+            if (sawPaths) {
+                errorMessage = "Duplicate cone_query path option";
+                return false;
+            }
+            sawPaths = true;
             query.includeLocalPaths = true;
+            ++i;
+            continue;
         }
+        if (option == "--with-pins") {
+            if (sawPins) {
+                errorMessage = "Duplicate cone_query option: --with-pins";
+                return false;
+            }
+            sawPins = true;
+            query.includeGateDetails = true;
+            ++i;
+            continue;
+        }
+        if (option == "--gate-types") {
+            if (sawGateTypes) {
+                errorMessage = "Duplicate cone_query option: --gate-types";
+                return false;
+            }
+            sawGateTypes = true;
+            ++i;
+            const size_t firstType = i;
+            while (i < tokens.size()) {
+                const std::string candidate = toLower(tokens[i]);
+                if (candidate.rfind("--", 0) == 0 || candidate == "with_paths") break;
+                const GateType type = netlist.stringToGateType(tokens[i]);
+                if (type == GateType::UNKNOWN) {
+                    errorMessage = "Unsupported gate type '" + tokens[i] +
+                        "'. Supported types: AND OR NOT NAND NOR XOR XNOR BUF DFF";
+                    return false;
+                }
+                query.gateTypeFilters.push_back(type);
+                ++i;
+            }
+            if (i == firstType) {
+                errorMessage = "--gate-types requires at least one gate type";
+                return false;
+            }
+            continue;
+        }
+        errorMessage = "Unknown cone_query option: " + tokens[i];
+        return false;
     }
     return true;
 }
@@ -3159,17 +3418,22 @@ void printHelp() {
         << "  structure_query <mode> [args]\n"
         << "  mode: summary | list_gates | list_nets | list_pi | list_po\n"
         << "        list_dffs | list_comb | gate_info <gate> | net_info <net>\n"
-        << "        port_info <port> | count_by_type [type] | gates_by_type <type>\n"
-        << "        const_input_gates [type|all] [0|1|any] [--inputs N] | structural_issues\n"
-        << "        net_driver <net> | net_loads <net> | gate_inputs <gate>\n"
+        << "        port_info <port> | count_by_type [type]\n"
+        << "        gates_by_type <type> [--with-pins]\n"
+        << "        const_input_gates [type|all] [0|1|any] [--with-pins]\n"
+        << "        structural_issues\n"
+        << "        net_driver <net> [--with-pins]\n"
+        << "        net_loads <net> [--with-pins] | gate_inputs <gate>\n"
         << "        fanout_load <net> | fanout_report <net>\n"
         << "        global_fanout [limit] | pi_fanout [limit] | fanout_violations <limit>\n"
         << "        gate_output <gate> | gate_fanin <gate> | gate_fanout <gate>\n"
         << "        is_connected <gate> <net>\n"
         << "\nCone query\n"
-        << "  cone_query <mode> [name] [with_paths]\n"
+        << "  cone_query <mode> [name] [options]\n"
         << "  mode: net_fanin | net_fanout | gate_fanin | gate_fanout | largest_output\n"
         << "        shared_fanin <net_a> <net_b>\n"
+        << "  options: [with_paths|--with-paths] [--gate-types <type...>] [--with-pins]\n"
+        << "  gate types: AND OR NOT NAND NOR XOR XNOR BUF DFF\n"
         << "\nPath query\n"
         << "  path_query <mode> <start_endpoint> <end_endpoint> [-req node...] [-avoid node...]\n"
         << "  path_query enumerate <start_endpoint> <end_endpoint> [-count_only]\n"
@@ -3513,12 +3777,13 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         if (!requireDesign()) return true;
         std::string mode;
         if (!(iss >> mode)) {
-            emitToolError(session, command, "", "Usage: cone_query <mode> <name> [with_paths]");
+            emitToolError(session, command, "", "Usage: cone_query <mode> [name] [options]");
             return true;
         }
         Netlist::ConeQuery query;
-        if (!buildConeQuery(iss, mode, query)) {
-            emitToolError(session, command, mode, "Unknown cone_query mode: " + mode);
+        std::string parseError;
+        if (!buildConeQuery(session.current, iss, mode, query, parseError)) {
+            emitToolError(session, command, mode, parseError);
             return true;
         }
         const Netlist::ConeReport report = session.current.runConeQuery(query);

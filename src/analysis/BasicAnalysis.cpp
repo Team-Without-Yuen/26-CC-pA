@@ -89,7 +89,52 @@ size_t getActiveNetCount(const Netlist& netlist) {
     return count;
 }
 
+PinConnectionSummary makePinConnectionSummary(
+    const Netlist& netlist,
+    const std::string& pinName,
+    int netId) {
+    PinConnectionSummary summary;
+    summary.pinName = pinName;
+    summary.netId = netId;
+    if (!isActiveNet(netlist, netId)) {
+        return summary;
+    }
+
+    const Net& net = netlist.getNet(netId);
+    summary.connected = true;
+    summary.netName = net.name;
+    summary.isConstant = net.isConst;
+    summary.constantValue = net.constVal;
+    summary.isPrimaryInput = net.isPI;
+    summary.isPrimaryOutput = net.isPO;
+    return summary;
+}
+
 } // namespace
+
+GateConnectionSummary Netlist::buildGateConnectionSummary(int gateId) const {
+    GateConnectionSummary summary;
+    if (!isActiveGate(*this, gateId)) {
+        return summary;
+    }
+
+    const Gate& gate = getGate(gateId);
+    summary.gateId = gateId;
+    summary.gateName = gate.instName;
+    summary.typeName = gateTypeToString(gate.type);
+    summary.inputs.reserve(gate.inputNetIds.size());
+    for (size_t i = 0; i < gate.inputNetIds.size(); ++i) {
+        const std::string pinName =
+            (i < gate.inputPinNames.size() && !gate.inputPinNames[i].empty())
+                ? gate.inputPinNames[i]
+                : "IN" + std::to_string(i + 1);
+        summary.inputs.push_back(
+            makePinConnectionSummary(*this, pinName, gate.inputNetIds[i]));
+    }
+    summary.output = makePinConnectionSummary(
+        *this, gate.type == GateType::DFF ? "Q" : "OUT", gate.outputNetId);
+    return summary;
+}
 
 // 判斷 gate ID 是否落在 gates vector 的合法範圍內。
 bool Netlist::isValidGateId(int gateId) const {
@@ -406,6 +451,11 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
     case BasicQueryType::Summary: {
         report.ok = true;
         report.message = "Basic design summary";
+        report.hasGateCount = true;
+        report.hasNetCount = true;
+        report.hasLogicalWireCount = true;
+        report.hasPrimaryInputCount = true;
+        report.hasPrimaryOutputCount = true;
         // [Perf #4] Merged two separate gate scans into one pass.
         // Before: getActiveGateCount() + countGatesByType() each iterated gates once.
         size_t activeGates = 0;
@@ -440,6 +490,7 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
     case BasicQueryType::ListGates:
         report.ok = true;
         report.message = "List all gates";
+        report.hasGateCount = true;
         report.gateCount = getActiveGateCount(*this);
         if (query.includeNames) {
             report.gateNames = getAllGateNames();
@@ -456,6 +507,7 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
     case BasicQueryType::ListNets:
         report.ok = true;
         report.message = "List all nets";
+        report.hasNetCount = true;
         report.netCount = getActiveNetCount(*this);
         if (query.includeNames) {
             report.netNames = getAllNetNames();
@@ -472,6 +524,7 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
     case BasicQueryType::ListPrimaryInputs:
         report.ok = true;
         report.message = "List primary inputs";
+        report.hasPrimaryInputCount = true;
         report.primaryInputCount = getPrimaryInputs().size();
         if (query.includeNames) {
             report.portNames = getPrimaryInputNames();
@@ -491,6 +544,7 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
     case BasicQueryType::ListPrimaryOutputs:
         report.ok = true;
         report.message = "List primary outputs";
+        report.hasPrimaryOutputCount = true;
         report.primaryOutputCount = getPrimaryOutputs().size();
         if (query.includeNames) {
             report.portNames = getPrimaryOutputNames();
@@ -510,6 +564,7 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
     case BasicQueryType::ListDffs: {
         report.ok = true;
         report.message = "List DFF gates";
+        report.hasGateCount = true;
         // [Perf #2] Compute DFF id list once; derive names + count from it.
         // Before: getDffNames(), getGatesByType(DFF), getGateCountByType(DFF) each scanned gates.
         const std::vector<int> dffIds = getGatesByType(GateType::DFF);
@@ -522,6 +577,7 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
     case BasicQueryType::ListCombinationalGates:
         report.ok = true;
         report.message = "List combinational gates";
+        report.hasGateCount = true;
         if (query.includeIds) {
             for (size_t i = 0; i < getGateCount(); ++i) {
                 if (isCombinationalGate(static_cast<int>(i))) {
@@ -654,6 +710,7 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
     case BasicQueryType::CountByGateType:
         report.ok = true;
         report.message = "Count gates by type";
+        report.hasGateCount = true;
         if (query.gateType == GateType::UNKNOWN) {
             report.gateTypeCounts = countGatesByType();
             report.gateCount = getActiveGateCount(*this);
@@ -672,6 +729,7 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
         }
         report.ok = true;
         report.message = "List gates by type";
+        report.hasGateCount = true;
         report.typeName = gateTypeToString(query.gateType);
         // [Perf #1] Compute id list once; derive names + count from it.
         // Before: getGatesByType() called for ids, again inside names block,
@@ -679,6 +737,13 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
         const std::vector<int> ids = getGatesByType(query.gateType);
         if (query.includeIds)   report.gateIds   = ids;
         if (query.includeNames) report.gateNames = gateIdsToNames(*this, ids);
+        if (query.includeConnectionDetails) {
+            report.gateConnections.reserve(ids.size());
+            for (int gateId : ids) {
+                report.gateConnections.push_back(
+                    buildGateConnectionSummary(gateId));
+            }
+        }
         report.gateCount = ids.size();
         return report;
     }
@@ -694,6 +759,7 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
         }
         report.ok = true;
         report.message = "List gates with constant input";
+        report.hasGateCount = true;
         // [Perf #3] Compute id list once; derive names + count from it.
         // Before: findGatesWithConstInput() invoked 3× (directly for ids,
         //         inside getGateNamesWithConstInput, inside countGatesWithConstInput).
@@ -701,6 +767,13 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
             query.gateType, query.constValue, query.inputCount);
         if (query.includeIds)   report.gateIds   = constIds;
         if (query.includeNames) report.gateNames = gateIdsToNames(*this, constIds);
+        if (query.includeConnectionDetails) {
+            report.gateConnections.reserve(constIds.size());
+            for (int gateId : constIds) {
+                report.gateConnections.push_back(
+                    buildGateConnectionSummary(gateId));
+            }
+        }
         report.gateCount = constIds.size();
         if (query.gateType != GateType::UNKNOWN) {
             report.typeName = gateTypeToString(query.gateType);
