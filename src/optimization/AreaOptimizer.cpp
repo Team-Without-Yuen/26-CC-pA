@@ -123,6 +123,65 @@ int AreaOptimizer::eliminateDoubleInverters(Netlist& netlist) {
     return removed;
 }
 
+// [NEW] See AreaOptimizer.h for the full rationale. Structural, always-safe
+// rewrite: AND followed by a single trailing NOT becomes NAND (OR->NOR,
+// XOR->XNOR), recovering the compactness lost when Stage 2 round-trips the
+// design through mockturtle's XAG (AND/XOR-only) representation.
+int AreaOptimizer::fuseTrailingInverters(
+    Netlist& netlist,
+    const std::vector<GateType>& allowedTypes,
+    const std::vector<GateType>& bannedTypes) {
+    int fused = 0;
+    bool progress = true;
+
+    while (progress) {
+        progress = false;
+        const int gateCount = static_cast<int>(netlist.getGateCount());
+        for (int gid = 0; gid < gateCount; ++gid) {
+            if (!netlist.isValidGateId(gid) || netlist.isGateRemoved(gid)) continue;
+
+            const GateType baseType = netlist.getGate(gid).type;
+            GateType fusedType;
+            if (baseType == GateType::AND) fusedType = GateType::NAND;
+            else if (baseType == GateType::OR) fusedType = GateType::NOR;
+            else if (baseType == GateType::XOR) fusedType = GateType::XNOR;
+            else continue;
+
+            if (!isGateAllowedArea(fusedType, allowedTypes, bannedTypes)) continue;
+
+            const int outNet = netlist.getGate(gid).outputNetId;
+            if (outNet < 0) continue;
+            const Net& outNetRef = netlist.getNet(outNet);
+            if (outNetRef.isPO) continue;                    // don't touch named PO nets
+            if (outNetRef.loadGateIds.size() != 1) continue; // must be the ONLY load
+
+            const int notGateId = outNetRef.loadGateIds[0];
+            if (!netlist.isValidGateId(notGateId) || netlist.isGateRemoved(notGateId)) continue;
+            if (netlist.getGate(notGateId).type != GateType::NOT) continue;
+
+            const int finalOutNet = netlist.getGate(notGateId).outputNetId;
+            if (finalOutNet < 0) continue;
+
+            // Remove the NOT gate first (this clears finalOutNet's driver
+            // via disconnectAllPins()); only THEN retarget the base gate's
+            // output to finalOutNet, or the removal would immediately wipe
+            // out the retargeting we're about to do.
+            netlist.removeGate(notGateId);
+
+            Gate& gg = netlist.getGateMutable(gid);
+            gg.type = fusedType;
+            gg.outputNetId = finalOutNet;
+            netlist.getNetMutable(finalOutNet).driverGateId = gid;
+            netlist.getNetMutable(outNet).driverGateId = -1;  // outNet now dangling
+
+            ++fused;
+            progress = true;
+        }
+    }
+
+    return fused;
+}
+
 // [NEW] High-level entry point. Mirrors
 // DepthOptimizer::executeCriticalPathOptimization()'s three-stage shape,
 // re-scored for gate count instead of depth.
@@ -214,6 +273,7 @@ OptimizationResult AreaOptimizer::executeAreaOptimization(
         mockturtle::aig_network candA = aig0, best = aig0;
         Netlist bestProbe = AigToNetlist(candA, netlist);
         eliminateDoubleInverters(bestProbe);
+        fuseTrailingInverters(bestProbe, allowedTypes, bannedTypes);  // [NEW] recover NAND/NOR compactness
         int bestGateCount = totalCombinationalGateCount(bestProbe);
 
         for (int i = 0; i < 10; ++i) {
@@ -239,6 +299,7 @@ OptimizationResult AreaOptimizer::executeAreaOptimization(
 
             Netlist probe = AigToNetlist(candA, netlist);
             eliminateDoubleInverters(probe);
+            fuseTrailingInverters(probe, allowedTypes, bannedTypes);  // [NEW]
             const int gateCount = totalCombinationalGateCount(probe);
             if (gateCount < bestGateCount) {
                 bestGateCount = gateCount;
@@ -249,6 +310,7 @@ OptimizationResult AreaOptimizer::executeAreaOptimization(
         }
         netlist = AigToNetlist(best, netlist);
         eliminateDoubleInverters(netlist);
+        fuseTrailingInverters(netlist, allowedTypes, bannedTypes);  // [NEW]
         if (verbose) std::cout << "  -> AIG netlist gate count: " << totalCombinationalGateCount(netlist) << "\n";
 
     } else {
@@ -258,6 +320,7 @@ OptimizationResult AreaOptimizer::executeAreaOptimization(
         mockturtle::xag_network best = xag;
         Netlist initialProbe = XagToNetlist(xag, netlist);
         eliminateDoubleInverters(initialProbe);
+        fuseTrailingInverters(initialProbe, allowedTypes, bannedTypes);  // [NEW] recover NAND/NOR compactness
         int bestGateCount = totalCombinationalGateCount(initialProbe);
 
         for (int iter = 0; iter < 10; ++iter) {
@@ -283,6 +346,7 @@ OptimizationResult AreaOptimizer::executeAreaOptimization(
 
             Netlist probe = XagToNetlist(xag, netlist);
             eliminateDoubleInverters(probe);
+            fuseTrailingInverters(probe, allowedTypes, bannedTypes);  // [NEW]
             const int gateCount = totalCombinationalGateCount(probe);
             if (gateCount < bestGateCount) {
                 bestGateCount = gateCount;
@@ -293,6 +357,7 @@ OptimizationResult AreaOptimizer::executeAreaOptimization(
         }
         netlist = XagToNetlist(best, netlist);
         eliminateDoubleInverters(netlist);
+        fuseTrailingInverters(netlist, allowedTypes, bannedTypes);  // [NEW]
         if (verbose) std::cout << "  -> XAG best gate count: " << totalCombinationalGateCount(netlist) << "\n";
     }
 

@@ -107,6 +107,21 @@ private:
     // DepthOptimizer 的 private method，這裡複製同一份邏輯（不是新演算法，
     // 純粹是因為存取權限只能複製）。
     int eliminateDoubleInverters(Netlist& netlist);
+
+    // [NEW] 反相器融合：把「AND 閘輸出只接一顆 NOT」這種鏈結，融合成單一
+    // NAND 閘（OR+NOT -> NOR，XOR+NOT -> XNOR 同理）。
+    //
+    // 動機：Stage 2 會把電路轉成 XAG（只有 AND/XOR 兩種元件）去跑
+    // mockturtle 優化，但原始電路如果是 NAND/NOR 為主，轉換過程本身就會
+    // 把 NAND(a,b) 拆成 AND(a,b) 再接一顆 NOT，讓 gate 數量白白多一顆。
+    // 這個函式在轉換回來之後把這種鏈結融合掉，找回轉換過程中損失的精簡度。
+    //
+    // 這是結構上安全的改寫（NAND(a,b) 恆等於 NOT(AND(a,b))，不需要額外
+    // 證明），受 allowedTypes/bannedTypes 限制：如果題目不准用 NAND，就
+    // 不會做這個融合。
+    int fuseTrailingInverters(Netlist& netlist,
+                               const std::vector<GateType>& allowedTypes,
+                               const std::vector<GateType>& bannedTypes);
 };
 
 // =========================================================================
