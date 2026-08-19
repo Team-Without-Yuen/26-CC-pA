@@ -61,6 +61,26 @@ int getQaFanoutLoadCount(const std::vector<Gate>& gates,
     return total;
 }
 
+void rebuildNetLoadGateIds(Netlist& netlist) {
+    for (size_t netIndex = 0; netIndex < netlist.getNetCount(); ++netIndex) {
+        netlist.getNetMutable(static_cast<int>(netIndex)).loadGateIds.clear();
+    }
+    for (size_t gateIndex = 0; gateIndex < netlist.getGateCount(); ++gateIndex) {
+        const int gateId = static_cast<int>(gateIndex);
+        const Gate& gate = netlist.getGate(gateId);
+        if (gate.type == GateType::UNKNOWN) {
+            continue;
+        }
+        for (int inputNetId : gate.inputNetIds) {
+            if (!netlist.isValidNetId(inputNetId) ||
+                netlist.getNet(inputNetId).isRemoved) {
+                continue;
+            }
+            netlist.getNetMutable(inputNetId).loadGateIds.push_back(gateId);
+        }
+    }
+}
+
 // 依照 kept/moved pin lists 重建 source net 與 buffer output net 的 loadGateIds，
 // 並只改接 moved 裡指定的 pin。這可避免同一顆 DFF 多個 pin 被整顆一起搬走。
 void moveFanoutSinkPinsToBuffer(std::vector<Gate>& gates,
@@ -645,75 +665,78 @@ bool Netlist::mergeNets(int oldNetId, int newNetId) {
 // ─────────────────────────────────────────────────────────────────────────────
 BufferInsertionReport Netlist::insertBuffersForFanout(int maxFanout) {
     BufferInsertionReport report;
+    if (maxFanout < 2) return report;
 
-    // 防呆：Fanout 必須至少為 2，否則無法插入 Buffer
-    if (maxFanout < 2) return report; 
+    // 先收集所有超載的 net 與它們的 sink pin，再統一處理。
+    // 這樣中途不需要維護 loadGateIds（增量維護每條 net 是 O(F^2)），
+    // 最後一次 rebuildNetLoadGateIds 即可。
+    struct Overloaded {
+        int netId;
+        std::vector<FanoutSinkPin> sinkPins;
+    };
+    std::vector<Overloaded> targets;
 
-    // 使用動態邊界，讓新生成的 bufNet 也能被迴圈檢查到
-    for (int netIdx = 0; netIdx < (int)nets.size(); netIdx++) {
+    const int originalNetCount = (int)nets.size();
+    for (int netIdx = 0; netIdx < originalNetCount; netIdx++) {
         if (nets[netIdx].isConst) continue;
+        if (getQaFanoutLoadCount(gates, nets, netIdx) <= maxFanout) continue;
+        targets.push_back({netIdx, collectFanoutSinkPins(gates, nets, netIdx)});
+    }
+    if (targets.empty()) return report;
 
-        while (getQaFanoutLoadCount(gates, nets, netIdx) > maxFanout) {
-            
-            // 只保留能安全留在 source net 上的 sink pins。
-            // 若 source net 是 PO，要額外替 PO connection 保留一個 load 名額。
-            int keepCount = computeKeepSinkCount(maxFanout, nets[netIdx]);
-            std::vector<FanoutSinkPin> sinkPins = collectFanoutSinkPins(gates, nets, netIdx);
+    for (Overloaded& target : targets) {
+        const int keepCount = std::min(
+            computeKeepSinkCount(maxFanout, nets[target.netId]),
+            (int)target.sinkPins.size());
 
-            // 把超載的負載擷取出來
-            std::vector<FanoutSinkPin> keptSinks(
-                sinkPins.begin(),
-                sinkPins.begin() + std::min(keepCount, (int)sinkPins.size())
-            );
-            std::vector<FanoutSinkPin> overLoads(
-                sinkPins.begin() + std::min(keepCount, (int)sinkPins.size()),
-                sinkPins.end()
-            );
+        std::vector<FanoutSinkPin> remaining(
+            target.sinkPins.begin() + keepCount, target.sinkPins.end());
+        int currentSourceNetId = target.netId;
 
-            // 產生新元件與線路名稱
-            std::string bufName    = makeUniqueGateName("_ins_buf");
-            std::string bufNetName = makeUniqueNetName("_ins_buf_net");
+        while (!remaining.empty()) {
+            const int takeCount = ((int)remaining.size() <= maxFanout)
+                ? (int)remaining.size()
+                : maxFanout - 1;
 
-            int bufGateId = addGate(bufName, GateType::BUF);
-            int bufNetId  = addNet(bufNetName);
+            const std::string bufName    = makeUniqueGateName("_ins_buf");
+            const std::string bufNetName = makeUniqueNetName("_ins_buf_net");
+            const int bufGateId = addGate(bufName, GateType::BUF);
+            const int bufNetId  = addNet(bufNetName);
 
-            // 在接線被改動前，先紀錄下這顆 Buffer 的驅動源頭
             BufInsertRecord record;
-            record.bufGateId     = bufGateId;
-            record.bufGateName   = bufName;
-            record.inputNetId    = netIdx;
-            record.inputNetName  = nets[netIdx].name;
-            record.driverGateId  = nets[netIdx].driverGateId;
-            record.driverGateName = (nets[netIdx].driverGateId != -1) ? gates[nets[netIdx].driverGateId].instName : "PI";
-            record.outputNetId   = bufNetId;
-            record.outputNetName = bufNetName;
+            record.bufGateId      = bufGateId;
+            record.bufGateName    = bufName;
+            record.inputNetId     = currentSourceNetId;
+            record.inputNetName   = nets[currentSourceNetId].name;
+            record.driverGateId   = nets[currentSourceNetId].driverGateId;
+            record.driverGateName = (record.driverGateId != -1)
+                ? gates[record.driverGateId].instName : "PI";
+            record.outputNetId    = bufNetId;
+            record.outputNetName  = bufNetName;
 
-            // 雙向連接 Buffer Input
-            gates[bufGateId].inputNetIds.push_back(netIdx);
-            gates[bufGateId].inputPinNames.push_back("A"); 
-
-            // 雙向連接 Buffer Output
+            gates[bufGateId].inputNetIds.push_back(currentSourceNetId);
+            gates[bufGateId].inputPinNames.push_back("A");
             gates[bufGateId].outputNetId = bufNetId;
             nets[bufNetId].driverGateId  = bufGateId;
 
-            // 把超載的 sink pins 改接到新的 bufNetId 上，並收集資訊給 Report
-            for (int j = 0; j < (int)overLoads.size(); j++) {
-                int loadGateId = overLoads[j].gateId;
-                
-                // 收集被這顆 Buffer 驅動的下游資訊
-                record.drivenGateIds.push_back(loadGateId);
-                record.drivenGateNames.push_back(gates[loadGateId].instName);
+            // 只改 pin 的連線，loadGateIds 留到最後統一重建。
+            for (int i = 0; i < takeCount; ++i) {
+                const FanoutSinkPin& sink = remaining[i];
+                gates[sink.gateId].inputNetIds[sink.pinIndex] = bufNetId;
+                record.drivenGateIds.push_back(sink.gateId);
+                record.drivenGateNames.push_back(gates[sink.gateId].instName);
             }
-            moveFanoutSinkPinsToBuffer(gates, nets, netIdx, bufGateId, bufNetId,
-                                       keptSinks, overLoads);
-            markDirty();
+            remaining.erase(remaining.begin(), remaining.begin() + takeCount);
 
-            // 填入負載總數並將單筆紀錄推入報告中
             record.fanoutCount = record.drivenGateIds.size();
             report.records.push_back(record);
+
+            currentSourceNetId = bufNetId;
         }
     }
 
+    rebuildNetLoadGateIds(*this);
+    markDirty();
     return report;
 }
 
@@ -776,97 +799,88 @@ NetlistEditReport Netlist::insertBuffersForFanoutWithReport(int maxFanout) {
 
 //  針對特定的 Net 或 Bus，限制最大 Fanout，並採用 Cascaded Buffer (串聯緩衝樹) 結構
 //  回傳值: BufferInsertionReport (包含所有新增 Buffer 的詳細細節)
-BufferInsertionReport Netlist::insertBuffersForSpecificNet(const std::string& wireName, int maxFanout) {
+BufferInsertionReport Netlist::insertBuffersForSpecificNet(
+    const std::string& wireName, int maxFanout) {
     BufferInsertionReport report;
-
-    // 防呆：Fanout 必須至少為 2
     if (maxFanout < 2) return report;
 
-    // 展開 Bus，取得所有目標 Net ID
-    std::vector<int> targetNets = expandNetToBits(wireName);
+    const std::vector<int> targetNets = expandNetToBits(wireName);
     if (targetNets.empty()) return report;
 
-    // 使用 Queue 來動態追蹤：因為新產生的 Buffer Net 如果也超載，必須再被處理一次！
-    std::queue<int> netsToProcess;
+    // 先收集所有超載的 net 與它們的 sink pin，再統一處理。
+    // 舊寫法每插一顆 buffer 就重新 collectFanoutSinkPins + 重建 loadGateIds，
+    // 對 fanout=F 的 net 是 O(F^2/K)。這裡改成收集一次、本地切片、
+    // 最後統一 rebuildNetLoadGateIds，複雜度降到 O(F)。
+    struct Overloaded {
+        int netId;
+        std::vector<FanoutSinkPin> sinkPins;
+    };
+    std::vector<Overloaded> targets;
+    std::unordered_set<int> visited;
+
     for (int netId : targetNets) {
-        netsToProcess.push(netId);
+        if (netId < 0 || netId >= (int)nets.size()) continue;
+        if (nets[netId].isConst) continue;
+        if (!visited.insert(netId).second) continue;
+        if (getQaFanoutLoadCount(gates, nets, netId) <= maxFanout) continue;
+        targets.push_back({netId, collectFanoutSinkPins(gates, nets, netId)});
     }
+    if (targets.empty()) return report;
 
-    // 只要還有線路需要檢查，就繼續處理
-    while (!netsToProcess.empty()) {
-        int netIdx = netsToProcess.front();
-        netsToProcess.pop();
+    for (Overloaded& target : targets) {
+        const int keepCount = std::min(
+            computeKeepSinkCount(maxFanout, nets[target.netId]),
+            (int)target.sinkPins.size());
 
-        if (netIdx < 0 || netIdx >= (int)nets.size() || nets[netIdx].isConst) {
-            continue;
-        }
+        std::vector<FanoutSinkPin> remaining(
+            target.sinkPins.begin() + keepCount, target.sinkPins.end());
+        int currentSourceNetId = target.netId;
 
-        // 如果這條線的 QA fanout load 超過限制，進行切割
-        while (getQaFanoutLoadCount(gates, nets, netIdx) > maxFanout) {
-            
-            // 留下可安全保留在 source net 上的 sink pins。
-            // 剩下的 1 個名額留給即將接上來的 Buffer；若 source net 是 PO，也要預留 PO 名額。
-            int keepCount = computeKeepSinkCount(maxFanout, nets[netIdx]);
-            std::vector<FanoutSinkPin> sinkPins = collectFanoutSinkPins(gates, nets, netIdx);
+        while (!remaining.empty()) {
+            // 剩下的能一次收完就全收；否則留一個名額給下一顆 buffer。
+            const int takeCount = ((int)remaining.size() <= maxFanout)
+                ? (int)remaining.size()
+                : maxFanout - 1;
 
-            std::vector<FanoutSinkPin> keptSinks(
-                sinkPins.begin(),
-                sinkPins.begin() + std::min(keepCount, (int)sinkPins.size())
-            );
-            std::vector<FanoutSinkPin> overLoads(
-                sinkPins.begin() + std::min(keepCount, (int)sinkPins.size()),
-                sinkPins.end()
-            );
+            const std::string bufName    = makeUniqueGateName("_fanout_buf");
+            const std::string bufNetName = makeUniqueNetName("_fanout_net");
+            const int bufGateId = addGate(bufName, GateType::BUF);
+            const int bufNetId  = addNet(bufNetName);
 
-            // 建立專屬的新 Buffer 與新線路
-            std::string bufName    = makeUniqueGateName("_fanout_buf");
-            std::string bufNetName = makeUniqueNetName("_fanout_net");
-
-            int bufGateId = addGate(bufName, GateType::BUF);
-            int bufNetId  = addNet(bufNetName);
-
-            // 報告紀錄準備
             BufInsertRecord record;
-            record.bufGateId     = bufGateId;
-            record.bufGateName   = bufName;
-            record.inputNetId    = netIdx;
-            record.inputNetName  = nets[netIdx].name;
-            record.driverGateId  = nets[netIdx].driverGateId;
-            record.driverGateName = (nets[netIdx].driverGateId != -1) ? gates[nets[netIdx].driverGateId].instName : "PI";
-            record.outputNetId   = bufNetId;
-            record.outputNetName = bufNetName;
+            record.bufGateId      = bufGateId;
+            record.bufGateName    = bufName;
+            record.inputNetId     = currentSourceNetId;
+            record.inputNetName   = nets[currentSourceNetId].name;
+            record.driverGateId   = nets[currentSourceNetId].driverGateId;
+            record.driverGateName = (record.driverGateId != -1)
+                ? gates[record.driverGateId].instName : "PI";
+            record.outputNetId    = bufNetId;
+            record.outputNetName  = bufNetName;
 
-            // 雙向連接 Buffer Input (接在當前的 netIdx 上)
-            gates[bufGateId].inputNetIds.push_back(netIdx);
-            // 為 BUF 補上 input pin name，維持與 inputNetIds 的一對一對齊，保護資料結構
-            gates[bufGateId].inputPinNames.push_back("I"); 
-
-            // 雙向連接 Buffer Output
+            gates[bufGateId].inputNetIds.push_back(currentSourceNetId);
+            gates[bufGateId].inputPinNames.push_back("I");
             gates[bufGateId].outputNetId = bufNetId;
             nets[bufNetId].driverGateId  = bufGateId;
 
-            // 把被切出來的超載 sink pins，全部改接到新的 bufNetId 上
-            for (int j = 0; j < (int)overLoads.size(); j++) {
-                int loadGateId = overLoads[j].gateId;
-                
-                // 【報告紀錄】：收集下游 Gate 資訊
-                record.drivenGateIds.push_back(loadGateId);
-                record.drivenGateNames.push_back(gates[loadGateId].instName);
+            // 只改 pin 的連線；loadGateIds 留到最後統一重建。
+            for (int i = 0; i < takeCount; ++i) {
+                const FanoutSinkPin& sink = remaining[i];
+                gates[sink.gateId].inputNetIds[sink.pinIndex] = bufNetId;
+                record.drivenGateIds.push_back(sink.gateId);
+                record.drivenGateNames.push_back(gates[sink.gateId].instName);
             }
-            moveFanoutSinkPinsToBuffer(gates, nets, netIdx, bufGateId, bufNetId,
-                                       keptSinks, overLoads);
-            markDirty();
+            remaining.erase(remaining.begin(), remaining.begin() + takeCount);
 
-            // 結算這顆 Buffer 的資訊，並存入 Report
             record.fanoutCount = record.drivenGateIds.size();
             report.records.push_back(record);
 
-            // 將這條「新的 Buffer 輸出線」也推入 Queue！
-            // 這樣如果 overLoads 的數量依然 > maxFanout，下一輪它就會再被切出另一顆 Buffer！
-            netsToProcess.push(bufNetId);
+            currentSourceNetId = bufNetId;
         }
     }
 
+    rebuildNetLoadGateIds(*this);
+    markDirty();
     return report;
 }
 
@@ -877,11 +891,25 @@ NetlistEditReport Netlist::insertBuffersForSpecificNetWithReport(
     Netlist before = cloneForRollback();
     const std::vector<int> targetNetIds = expandNetToBits(wireName);
 
+    // net 不存在時直接回報錯誤。若讓流程跑完，summarizeScopedFanout 會產生
+    // meets_constraint:false 但 violating_net_names 為空的組合，LLM 無從判讀。
+    if (targetNetIds.empty()) {
+        NetlistEditReport report = buildEditReport(
+            before, *this,
+            "insertBuffersForSpecificNet",
+            NetlistEditOperationKind::BufferInsertion);
+        report.success = false;
+        report.changed = false;
+        report.message = "Target net not found: " + wireName;
+        report.validation.messages.push_back(report.message);
+        return report;
+    }
+
     auto summarizeScopedFanout = [this, maxFanout](const std::vector<int>& netIds) {
         FanoutChange summary;
         summary.targetFanout = maxFanout;
         summary.afterMaxFanout = -1;
-        summary.meetsConstraint = !netIds.empty() && maxFanout >= 2;
+        summary.meetsConstraint = maxFanout >= 2;   // netIds 已由 early return 保證非空
 
         std::unordered_set<int> visited;
         for (int netId : netIds) {
@@ -961,115 +989,106 @@ NetlistEditReport Netlist::insertBuffersForSpecificNetWithReport(
 // processClock: 是否處理時脈網路
 // processReset: 是否處理重置網路
 // 回傳值: BufferInsertionReport (包含所有新增 Buffer 的詳細紀錄)
-BufferInsertionReport Netlist::insertBuffersForDffControl(int maxFanout, bool processClock, bool processReset) {
+BufferInsertionReport Netlist::insertBuffersForDffControl(
+    int maxFanout, bool processClock, bool processReset) {
     BufferInsertionReport report;
-
-    // 防呆：Fanout 必須至少為 2，且至少要選擇處理一種訊號
     if (maxFanout < 2 || (!processClock && !processReset)) return report;
 
-    // 掃描全電路，自動收集所有扮演 Clock 或 Reset 角色的 Net ID
-    // 使用 unordered_set 來避免同一條 Clock 線被重複加入
-    std::unordered_set<int> targetNets;
-
+    // 掃描全電路，收集扮演 clock / reset(含 set) 角色的 net。
+    // 常數 net（例如 SN 綁 1'b1）不需要 buffer。
+    std::unordered_set<int> controlNets;
     for (size_t i = 0; i < gates.size(); i++) {
         const Gate& gate = gates[i];
-        
-        if (gate.type == GateType::DFF) {
-            for (size_t k = 0; k < gate.inputPinNames.size(); k++) {
-                const std::string& pinName = gate.inputPinNames[k];
-                int netId = gate.inputNetIds[k];
-                
-                if (netId == -1 || nets[netId].isConst) continue;
+        if (gate.type != GateType::DFF) continue;
+        for (size_t k = 0; k < gate.inputPinNames.size(); k++) {
+            const int netId = gate.inputNetIds[k];
+            if (netId < 0 || netId >= (int)nets.size()) continue;
+            if (nets[netId].isConst) continue;
 
-                bool isClk = (pinName == "CK");
-                bool isRst = (pinName == "RN" || pinName == "SN");
-
-                if ((processClock && isClk) || (processReset && isRst)) {
-                    targetNets.insert(netId);
-                }
+            const std::string& pinName = gate.inputPinNames[k];
+            const bool isClk = (pinName == "CK");
+            const bool isRst = (pinName == "RN" || pinName == "SN");
+            if ((processClock && isClk) || (processReset && isRst)) {
+                controlNets.insert(netId);
             }
         }
     }
+    if (controlNets.empty()) return report;
 
-    // 針對收集到的 High-Fanout Nets 進行 Cascaded Buffer 插入 (與特定 Net 邏輯相同)
-    int bufCounter = 0;
-    std::queue<int> netsToProcess;
-    
-    for (int netId : targetNets) {
-        netsToProcess.push(netId);
+    // 與 insertBuffersForFanout 相同的 pre-collect 模式：
+    // 收集一次 sink pin、本地切片、最後統一 rebuildNetLoadGateIds。
+    struct Overloaded {
+        int netId;
+        std::vector<FanoutSinkPin> sinkPins;
+    };
+    std::vector<Overloaded> targets;
+
+    // controlNets 是 unordered_set，迭代順序未定義。排序後處理，
+    // 讓 buffer 命名與插入順序在同一份 netlist 上可重現。
+    std::vector<int> orderedNets(controlNets.begin(), controlNets.end());
+    std::sort(orderedNets.begin(), orderedNets.end());
+
+    for (int netId : orderedNets) {
+        if (getQaFanoutLoadCount(gates, nets, netId) <= maxFanout) continue;
+        targets.push_back({netId, collectFanoutSinkPins(gates, nets, netId)});
     }
+    if (targets.empty()) return report;
 
-    while (!netsToProcess.empty()) {
-        int netIdx = netsToProcess.front();
-        netsToProcess.pop();
+    int bufCounter = 0;
+    for (Overloaded& target : targets) {
+        const int keepCount = std::min(
+            computeKeepSinkCount(maxFanout, nets[target.netId]),
+            (int)target.sinkPins.size());
 
-        if (netIdx < 0 || netIdx >= (int)nets.size() || nets[netIdx].isConst) {
-            continue;
-        }
+        std::vector<FanoutSinkPin> remaining(
+            target.sinkPins.begin() + keepCount, target.sinkPins.end());
+        int currentSourceNetId = target.netId;
 
-        // 如果這條線的 QA fanout load 超過限制，進行切割
-        while (getQaFanoutLoadCount(gates, nets, netIdx) > maxFanout) {
-            
-            int keepCount = computeKeepSinkCount(maxFanout, nets[netIdx]);
-            std::vector<FanoutSinkPin> sinkPins = collectFanoutSinkPins(gates, nets, netIdx);
+        while (!remaining.empty()) {
+            const int takeCount = ((int)remaining.size() <= maxFanout)
+                ? (int)remaining.size()
+                : maxFanout - 1;
 
-            std::vector<FanoutSinkPin> keptSinks(
-                sinkPins.begin(),
-                sinkPins.begin() + std::min(keepCount, (int)sinkPins.size())
-            );
-            std::vector<FanoutSinkPin> overLoads(
-                sinkPins.begin() + std::min(keepCount, (int)sinkPins.size()),
-                sinkPins.end()
-            );
+            const std::string bufName    = "dff_ctrl_buf_" + std::to_string(bufCounter);
+            const std::string bufNetName = "dff_ctrl_net_" + std::to_string(bufCounter);
+            ++bufCounter;
 
-            // 命名標記為 dff_ctrl_buf，方便在 Report 中一眼認出是 Clock/Reset 的 Buffer
-            std::string bufName    = "dff_ctrl_buf_" + std::to_string(bufCounter);
-            std::string bufNetName = "dff_ctrl_net_" + std::to_string(bufCounter);
-            bufCounter++;
+            const int bufGateId = addGate(bufName, GateType::BUF);
+            const int bufNetId  = addNet(bufNetName);
 
-            int bufGateId = addGate(bufName, GateType::BUF);
-            int bufNetId  = addNet(bufNetName);
-
-            // 報告紀錄準備
             BufInsertRecord record;
             record.bufGateId      = bufGateId;
             record.bufGateName    = bufName;
-            record.inputNetId     = netIdx;
-            record.inputNetName   = nets[netIdx].name;
-            record.driverGateId   = nets[netIdx].driverGateId;
-            record.driverGateName = (nets[netIdx].driverGateId != -1) ? gates[nets[netIdx].driverGateId].instName : "PI";
+            record.inputNetId     = currentSourceNetId;
+            record.inputNetName   = nets[currentSourceNetId].name;
+            record.driverGateId   = nets[currentSourceNetId].driverGateId;
+            record.driverGateName = (record.driverGateId != -1)
+                ? gates[record.driverGateId].instName : "PI";
             record.outputNetId    = bufNetId;
             record.outputNetName  = bufNetName;
 
-            // 雙向連接 Buffer Input
-            gates[bufGateId].inputNetIds.push_back(netIdx);
-            
-            // 為 BUF 補上 input pin name，維持 DFF Pin 對齊
-            gates[bufGateId].inputPinNames.push_back("I"); 
-
-            // 雙向連接 Buffer Output
+            gates[bufGateId].inputNetIds.push_back(currentSourceNetId);
+            gates[bufGateId].inputPinNames.push_back("I");
             gates[bufGateId].outputNetId = bufNetId;
             nets[bufNetId].driverGateId  = bufGateId;
 
-            // 將超載的負載轉移，並收集 Report 資訊
-            for (int j = 0; j < (int)overLoads.size(); j++) {
-                int loadGateId = overLoads[j].gateId;
-                
-                record.drivenGateIds.push_back(loadGateId);
-                record.drivenGateNames.push_back(gates[loadGateId].instName);
+            for (int i = 0; i < takeCount; ++i) {
+                const FanoutSinkPin& sink = remaining[i];
+                gates[sink.gateId].inputNetIds[sink.pinIndex] = bufNetId;
+                record.drivenGateIds.push_back(sink.gateId);
+                record.drivenGateNames.push_back(gates[sink.gateId].instName);
             }
-            moveFanoutSinkPinsToBuffer(gates, nets, netIdx, bufGateId, bufNetId,
-                                       keptSinks, overLoads);
-            markDirty();
+            remaining.erase(remaining.begin(), remaining.begin() + takeCount);
 
             record.fanoutCount = record.drivenGateIds.size();
             report.records.push_back(record);
 
-            // 將新生成的 Buffer Net 推入 Queue，遞迴檢查是否依然超載
-            netsToProcess.push(bufNetId);
+            currentSourceNetId = bufNetId;
         }
     }
 
+    rebuildNetLoadGateIds(*this);
+    markDirty();
     return report;
 }
 

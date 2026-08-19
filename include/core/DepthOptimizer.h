@@ -4,6 +4,7 @@
 #include "include/core/MockturtleConverter.h"
 #include "include/core/TechMapper.h"
 #include "include/core/RequestTimeBudget.h"
+#include "include/core/DepthOptimizerRequest.h"
 #include <vector>
 #include <algorithm>
 #include <mockturtle/networks/aig.hpp>
@@ -107,12 +108,36 @@ struct CutScore {
 struct DepthOptimizerConfig {
     // 面積限制設定 (Area Constraints)
     // -1 表示「不限制」單一 Critical Path 最佳化時增加的邏輯閘數量 (Default)
-    int maxAreaIncreasePerPath = -1;    
+    int maxAreaIncreasePerPath;    
 
     // 深度限制設定 (Depth Constraints)
     // -1 表示尊重個別 OptimizationCandidate 內帶的 targetDepth (Default)
     // 若大於 0，則作為單一 Critical Path 最佳化時的目標深度限制
-    int targetDepthPerPath = -1;
+    int targetDepthPerPath;
+
+    depth_opt::IterationPolicy stage2Policy;   // Stage 2 的迭代與 patience 設定
+
+    // Stage 2 離開迴圈後還要做「最終 lowering + 結算量測」,這段時間不能被砍。
+    // 實際保留值會依閘數放大,這是下限。
+    double finalizeReserveSeconds;
+
+    // 等價驗證的保留時間(下限,同樣依閘數放大)。verifyEquivalence 關掉時不保留。
+    double equivalenceReserveSeconds;
+    bool verifyEquivalence;
+
+    // 等價「下不了結論」(逾時 / 污染 / 介面不符)時要不要回滾。
+    // 預設 false:保留優化結果但把 equivalent 標成 false,由呼叫端決定怎麼回報。
+    // 想要最保守就打開。
+    bool rollbackOnInconclusiveEquivalence;
+
+    DepthOptimizerConfig() {
+        maxAreaIncreasePerPath = -1;
+        targetDepthPerPath = -1;
+        finalizeReserveSeconds = 3.0;
+        equivalenceReserveSeconds = 15.0;
+        verifyEquivalence = false;
+        rollbackOnInconclusiveEquivalence = false;
+    }
 };
 
 // =========================================================================
@@ -156,18 +181,65 @@ public:
     //
     // 每個階段之後都做 trimDeadLogic 清死邏輯，結算前必做一次確保面積正確。
     // =====================================================================
-    OptimizationResult executeCriticalPathOptimization(Netlist& netlist, 
-                                                       TechMapper& techMapper,
-                                                       const ConeReport& targetConeReport,
-                                                       const std::vector<GateType>& allowedTypes = {},
-                                                       const std::vector<GateType>& bannedTypes = {},
-                                                       bool verbose = false,
-                                                       const request_time_budget::RequestDeadline* requestDeadline = nullptr);
+
+    // cost target 與 basis scope 分離。動作路徑不因 cost metric 改變：
+    // 一律全域最佳化，cost metric 只影響候選挑選與回報。
+    OptimizationResult executeCriticalPathOptimization(
+        Netlist& netlist,
+        TechMapper& techMapper,
+        const depth_opt::OptimizationRequest& request,
+        bool verbose = false,
+        const request_time_budget::RequestDeadline* requestDeadline = nullptr);
 
 private:
     friend struct DepthOptimizerTestAccess;
 
     DepthOptimizerConfig config; // 用來儲存引擎的設定值
+
+    // Stage 2 單一路徑所需的全部輸入。兩條路徑共用，確保分數可比。
+    struct Stage2Context {
+        const Netlist* templateNetlist = nullptr;   // PI/PO/DFF 介面來源
+        const depth_opt::OptimizationRequest* request = nullptr;
+        const lowering::LoweringSpec* loweringSpec = nullptr;
+        bool* loweringActive = nullptr;             // 兩條路徑共享，失敗即全域關閉
+        depth_opt::IterationPolicy policy;
+        const request_time_budget::RequestDeadline* deadline = nullptr;
+        double reserveSeconds = 0.0;                // 離開 Stage 2 後仍需要的時間
+        double firstIterEstimate = 0.0;
+        bool verbose = false;
+    };
+
+    enum class Stage2StopReason {
+        Converged,      // 停滯 + 沒時間再探索，或打到 hardPatience
+        BudgetOut,      // 時間用盡（仍可能在改善）
+        IterationCap    // maxIterations 用盡
+    };
+
+    struct Stage2PathResult {
+        bool ok = false;
+        std::string name;
+        Netlist netlist;                            // 已 lowering、已合規
+        depth_opt::CostMeasurement cost;
+        int    iterationsRun = 0;
+        double elapsedSeconds = 0.0;
+
+        // 最後一次改善發生在第幾輪（-1 = 從未改善）。等於
+        // iterationsRun - 1 代表「跑到最後一刻都還在進步」。
+        int  lastImprovedIteration = -1;
+        // 因為時間不夠而停，而不是因為停滯而停。
+        Stage2StopReason stopReason = Stage2StopReason::Converged;
+        // 續跑用的網路快照。stoppedOnBudget 時才有值。
+        std::optional<mockturtle::aig_network> aigState;
+        std::optional<mockturtle::xag_network> xagState;
+
+        bool resumable() const { return aigState.has_value() || xagState.has_value(); }
+    };
+
+    template <typename Ntk>
+    Stage2PathResult runStage2Path(const Stage2Context& ctx,
+                                    const char* pathName,
+                                    double pathBudgetSeconds,
+                                    const Ntk* warmStart = nullptr);
 
     // 輔助函式：給定 Root 與 Cut 邊界，從 Netlist 走訪並建立 PatternNode (AST)，同時收集 TargetCone
     std::shared_ptr<PatternNode> extractLhsFromCut(Netlist& netlist, 
@@ -187,4 +259,13 @@ private:
 
     // 全 netlist 的 NOT(NOT x) → x 消除。
     int eliminateDoubleInverters(Netlist& netlist);
+
+    // 把 mockturtle 網路轉回 Netlist、做完必要的清理，然後量測 cost。
+    // 這是 Stage 2 唯一的評估入口——所有候選都必須經過同一條路徑，
+    // 否則不同候選的分數不可比。
+    template <typename NtkT, typename ToNetlistFn>
+    depth_opt::CostMeasurement evaluateCandidate(const NtkT& ntk,
+                                                 const Netlist& templateNetlist,
+                                                 ToNetlistFn&& toNetlist,
+                                                 const depth_opt::CostTarget& cost);
 };

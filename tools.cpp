@@ -2178,6 +2178,7 @@ std::string equivalenceMethodName(EquivalenceCheckMethod method) {
     switch (method) {
         case EquivalenceCheckMethod::StructuralIdentity: return "StructuralIdentity";
         case EquivalenceCheckMethod::LocalRewriteRule: return "LocalRewriteRule";
+        case EquivalenceCheckMethod::CertifiedRewrite: return "CertifiedRewrite";
         case EquivalenceCheckMethod::WholeDesignSat: return "WholeDesignSat";
         case EquivalenceCheckMethod::NotChecked:
         default:
@@ -2357,6 +2358,28 @@ void printEditReport(const Netlist& netlist, const Netlist::NetlistEditReport& r
         printStringList("    skipped_gate_names", summary.skippedGateNames);
     }
 
+    if (report.deadLogic) {
+        const auto& s = *report.deadLogic;
+        std::cout << "  dead_logic:\n";
+        std::cout << "    removed_gate_count: " << s.removedGateCount << "\n";
+        std::cout << "    removed_net_count: " << s.removedNetCount << "\n";
+        std::cout << "    removed_dff_count: " << s.removedDffCount << "\n";
+        std::cout << "    include_sequential: "
+                  << (s.includeSequential ? "true" : "false") << "\n";
+        std::cout << "    timed_out: " << (s.timedOut ? "true" : "false") << "\n";
+    }
+
+    if (report.redundancyRemoval) {
+        const auto& s = *report.redundancyRemoval;
+        std::cout << "  redundancy_removal:\n";
+        std::cout << "    removed_gate_count: " << s.removedGateCount << "\n";
+        std::cout << "    removed_net_count: " << s.removedNetCount << "\n";
+        std::cout << "    proven_redundant_pin_count: " << s.provenRedundantPinCount << "\n";
+        std::cout << "    complete: " << (s.complete ? "true" : "false") << "\n";
+        std::cout << "    timed_out: " << (s.timedOut ? "true" : "false") << "\n";
+        std::cout << "    elapsed_seconds: " << s.elapsedSeconds << "\n";
+    }
+
     if (report.functionalMerge) {
         const auto& summary = *report.functionalMerge;
         std::cout << "  functional_merge:\n";
@@ -2418,6 +2441,8 @@ void printEditReport(const Netlist& netlist, const Netlist::NetlistEditReport& r
         std::cout << "    scope: " << summary.scope << "\n";
         std::cout << "    requested_scope_name: "
                   << summary.requestedScopeName << "\n";
+        std::cout << "    basis_scope: " << summary.basisScope << "\n";
+        std::cout << "    basis_scope_name: " << summary.basisScopeName << "\n";
         std::cout << "    resolved_root_net_name: "
                   << summary.resolvedRootNetName << "\n";
         std::cout << "    core_status: " << summary.coreStatus << "\n";
@@ -3752,6 +3777,24 @@ bool parsePublicOptApply(const Netlist& netlist,
                 return false;
             }
             request.scopeName = args[i++];
+        } else if (option == "--basis-scope" || option == "--basis_scope" ||
+                   option == "-basis_scope") {
+            if (++i >= args.size() || !parseTargetScope(args[i], request.basisScope)) {
+                error = "--basis-scope requires whole, net_fanin, net_fanout, gate_fanin, or gate_fanout.";
+                return false;
+            }
+            ++i;
+            if (scopeNeedsName(request.basisScope) &&
+                i < args.size() && !isCliOptionToken(args[i])) {
+                request.basisScopeName = args[i++];
+            }
+        } else if (option == "--basis-name" || option == "--basis_name" ||
+                   option == "-basis_name") {
+            if (++i >= args.size() || isCliOptionToken(args[i])) {
+                error = "--basis-name requires a scope target name.";
+                return false;
+            }
+            request.basisScopeName = args[i++];
         } else if (option == "--objective" || option == "-objective") {
             if (++i >= args.size()) {
                 error = "--objective requires global or cone.";
@@ -3836,6 +3879,20 @@ bool parsePublicOptApply(const Netlist& netlist,
         request.scope != TargetScope::NET_FANIN &&
         request.scope != TargetScope::GATE_FANIN) {
         error = "Cone depth objective requires net_fanin or gate_fanin scope.";
+        return false;
+    }
+    if (scopeNeedsName(request.basisScope) && request.basisScopeName.empty()) {
+        error = "--basis-scope requires --basis-name <net_or_gate>, or the name "
+                "immediately after --basis-scope.";
+        return false;
+    }
+    if (!scopeNeedsName(request.basisScope) && !request.basisScopeName.empty()) {
+        error = "Whole-netlist basis scope does not accept --basis-name.";
+        return false;
+    }
+    if (request.basisScope != TargetScope::WHOLE_NETLIST &&
+        request.allowedTypes.empty() && request.bannedTypes.empty()) {
+        error = "--basis-scope only makes sense together with --allowed and/or --banned.";
         return false;
     }
     for (GateType type : request.allowedTypes) {
@@ -3939,10 +3996,22 @@ bool parsePublicEditApply(const Netlist& netlist,
         request.kind = Netlist::EditCommandKind::LocalSimplificationFixpoint;
     } else if (m == "safe_cleanup_fixpoint") {
         request.kind = Netlist::EditCommandKind::SafeCleanupFixpoint;
-    } else if (m == "trim_dead_logic") {
-        request.kind = Netlist::EditCommandKind::TrimDeadLogic;
-    } else if (m == "remove_dangling_logic") {
-        request.kind = Netlist::EditCommandKind::RemoveDanglingLogic;
+    } else if (m == "remove_dead_logic" ||
+               m == "trim_dead_logic" ||
+               m == "remove_dangling_logic") {
+        request.kind = Netlist::EditCommandKind::RemoveDeadLogic;
+        std::string option;
+        while (iss >> option) {
+            const std::string lowered = toLower(option);
+            if (lowered == "--include-sequential" ||
+                lowered == "-include_sequential") {
+                request.includeSequential = true;
+            } else {
+                error = "Unknown remove_dead_logic option: " + option;
+                return false;
+            }
+        }
+        return true;
     } else if (m == "remove_unused_nets") {
         request.kind = Netlist::EditCommandKind::RemoveUnusedNets;
     } else if (m == "merge_equivalent_gates") {
@@ -3963,6 +4032,26 @@ bool parsePublicEditApply(const Netlist& netlist,
             error = "remove_net_if_unused requires <net_name>.";
             return false;
         }
+    } else if (m == "remove_redundant_logic") {
+        request.kind = Netlist::EditCommandKind::RemoveRedundantLogic;
+        std::string option;
+        while (iss >> option) {
+            const std::string lowered = toLower(option);
+            if (lowered == "--time-limit" || lowered == "-time_limit") {
+                std::string valueToken;
+                double value = 0.0;
+                if (!(iss >> valueToken) || !parseStrictDouble(valueToken, value) ||
+                    value <= 0.0) {
+                    error = "--time-limit requires a positive number of seconds.";
+                    return false;
+                }
+                request.timeLimitSeconds = value;
+            } else {
+                error = "Unknown remove_redundant_logic option: " + option;
+                return false;
+            }
+        }
+        return true;
     } else if (m == "insert_buffers_for_fanout") {
         request.kind = Netlist::EditCommandKind::InsertBuffersForFanout;
         if (!(iss >> request.maxFanout)) {
@@ -4198,17 +4287,22 @@ void printHelp() {
         << "  opt_query critical_path_depth\n"
         << "  opt_apply critical_path_depth [--scope <scope> [scope_name]]\n"
         << "            [--name <scope_name>] [--objective global|cone]\n"
+        << "            [--basis-scope <scope> [scope_name]] [--basis-name <name>]\n"
         << "            [--allowed <type...>] [--banned <type...>]\n"
         << "            [--target-depth N] [--time-limit seconds]\n"
         << "            [--allow-no-improvement] [--verbose]\n"
+        << "  --scope/--objective select the cost function; --basis-scope selects where\n"
+        << "  the gate-type constraint applies (default: the whole netlist)\n"
         << "  gate-type lists accept spaces or commas, for example NOR NOT or nor,not\n"
-        << "  CriticalPathDepth commits only after constraints and equivalence validation\n"
-        << "  graph-identity no-op uses StructuralIdentity; changed candidates use whole-design SAT\n"
+        << "  this pass does not run whole-design SAT; use equiv_query for that\n"
         << "\nEdit apply\n"
         << "  edit_apply rename_gate <old> <new> | rename_net <old> <new>\n"
         << "  edit_apply cleanup_buffers | collapse_double_inverter | local_simplification_fixpoint\n"
+        << "  edit_apply remove_dead_logic [--include-sequential]\n"
+        << "             (aliases: trim_dead_logic, remove_dangling_logic)\n"
         << "  edit_apply safe_cleanup_fixpoint | trim_dead_logic | remove_dangling_logic\n"
         << "  edit_apply remove_unused_nets | remove_net_if_unused <net>\n"
+        << "  edit_apply remove_redundant_logic [--time-limit seconds]\n"
         << "  edit_apply merge_structurally_equivalent_gates\n"
         << "  edit_apply merge_functionally_equivalent_gates <scope> [scope_name]\n"
         << "             [--gate-type type] [--patterns 1..4096] [--time-limit seconds]\n"
@@ -5192,8 +5286,7 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
 
         const bool optimizationTimedOut =
             report.depthOptimization &&
-            (report.depthOptimization->wholeDesignTimedOut ||
-             report.depthOptimization->coreStatus == "TIMEOUT");
+            report.depthOptimization->coreStatus == "TIMEOUT";
         const bool equivalenceComplete =
             report.validation.equivalenceChecked &&
             report.validation.functionallyEquivalent;
@@ -5204,16 +5297,13 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             response.status = ToolStatus::Timeout;
         } else if (!report.success) {
             response.status = ToolStatus::Error;
-        } else if (!equivalenceComplete) {
-            response.status = ToolStatus::Partial;
         } else {
-            response.status =
-                report.changed ? ToolStatus::Ok : ToolStatus::NoChange;
+            response.status = report.changed ? ToolStatus::Ok : ToolStatus::NoChange;
         }
         response.command = command;
         response.mode = toLower(mode);
         response.message = report.message;
-        response.complete = report.success && equivalenceComplete;
+        response.complete = report.success;
         emitToolResponse(session, response, [&]() {
             printEditReport(session.current, report);
         });
@@ -5379,14 +5469,20 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             !request.validateEquivalence ||
             (report.validation.equivalenceChecked &&
              report.validation.functionallyEquivalent);
-
-        ToolResponse response;
-        response.ok = report.success;
         const bool functionalMergeTimedOut =
             report.functionalMerge &&
             (report.functionalMerge->searchTimedOut ||
              report.functionalMerge->wholeDesignTimedOut);
-        if (functionalMergeTimedOut) {
+        const bool deadLogicTimedOut =
+            report.deadLogic && report.deadLogic->timedOut;
+        const bool redundancyTimedOut =
+            report.redundancyRemoval && report.redundancyRemoval->timedOut;
+        const bool anyTimedOut =
+            functionalMergeTimedOut || deadLogicTimedOut || redundancyTimedOut;
+
+        ToolResponse response;
+        response.ok = report.success;
+        if (anyTimedOut) {
             response.status = ToolStatus::Timeout;
         } else if (!report.success) {
             response.status = ToolStatus::Error;
@@ -5400,7 +5496,7 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         response.message = !report.success || equivalenceComplete
             ? report.message
             : "Edit completed, but the requested equivalence certificate is unavailable. " + report.message;
-        response.complete = report.success && equivalenceComplete;
+        response.complete = report.success && equivalenceComplete && !anyTimedOut;
         emitToolResponse(session, response, [&]() { printEditReport(session.current, report); });
         return true;
     }

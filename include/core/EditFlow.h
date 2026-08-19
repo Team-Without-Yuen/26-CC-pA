@@ -54,12 +54,14 @@ enum class EditCommandKind {
     SafeCleanupFixpoint,
     TrimDeadLogic,
     RemoveDanglingLogic,
+    RemoveDeadLogic, // TrimDeadLogic 和 RemoveDanglingLogic 意思一樣，統一入口
     RemoveUnusedNets,
     MergeEquivalentGates, // Legacy/internal structural merge alias；不可作為 functional merge 對外公開
     MergeStructurallyEquivalentGates,
     MergeFunctionallyEquivalentGates,
     SimplifyConstants,
     SimplifySameInput,
+    RemoveRedundantLogic,
 
     InsertBuffersForFanout,
     InsertBuffersForSpecificNet,
@@ -125,4 +127,18 @@ struct EditApplyRequest {
 
     bool validateEquivalence = false;
     bool rollbackOnFailure = true;
+
+    bool includeSequential = false;
+};
+
+struct DeadLogicOptions {
+    bool includeSequential = false;
+    const request_time_budget::RequestDeadline* deadline = nullptr;
+};
+
+struct RedundancyRemovalOptions {
+    size_t simulationPatternCount = 256;
+    // Layer B 每個候選 pin 的 SAT 上限；總預算另由 deadline 控制。
+    double perQuerySeconds = 0.5;
+    const request_time_budget::RequestDeadline* deadline = nullptr;
 };

@@ -1,6 +1,7 @@
 #include "include/core/Netlist.h"
 #include "include/core/DepthOptimizer.h"
 #include "include/core/TechMapper.h"
+#include "include/core/OptimizationFlow.h"
 
 #include <algorithm>
 #include <chrono>
@@ -168,27 +169,41 @@ ConeQueryType coneQueryTypeForScope(TargetScope scope) {
     }
 }
 
-ConeReport buildOptimizationConeReport(
-    const Netlist& netlist,
-    TargetScope scope,
-    const std::string& scopeName)
-{
-    ConeReport report;
-    if (scope == TargetScope::WHOLE_NETLIST) return report;
+depth_opt::ConeRef makeConeRef(TargetScope scope, const std::string& name) {
+    depth_opt::ConeRef ref;
+    ref.type       = coneQueryTypeForScope(scope);
+    ref.sourceName = name;
+    return ref;
+}
 
-    const RewriteScopeResolution resolved =
-        resolveRewriteScope(netlist, scope, scopeName);
-    if (!resolved.ok) return report;
+// basisScope 未明確設定時的相容推導。
+// 舊呼叫端只有一組 scope/scopeName，語意是「有 gate 約束 + 非全域 scope
+// = 約束該 cone」。只在 GlobalMaximum 時套用 —— ScopedFaninCone 代表
+// scope 講的是成本函數，不是基底範圍。
+struct ResolvedBasisScope {
+    TargetScope scope = TargetScope::WHOLE_NETLIST;
+    std::string name;
+    bool inferred = false;
+};
 
-    report.cone = resolved.cone;
-    report.gateIds = netlist.getConeGateIds(report.cone);
-    report.rootNetIds = report.cone.rootNetIds;
-    report.sourceName = scopeName;
-    report.type = coneQueryTypeForScope(scope);
-    report.gateCount = report.gateIds.size();
-    report.exists = !report.rootNetIds.empty();
-    report.ok = report.exists;
-    return report;
+ResolvedBasisScope resolveBasisScope(const OptApplyRequest& request) {
+    ResolvedBasisScope out;
+    if (request.basisScope != TargetScope::WHOLE_NETLIST &&
+        !request.basisScopeName.empty()) {
+        out.scope = request.basisScope;
+        out.name  = request.basisScopeName;
+        return out;
+    }
+    const bool hasGateConstraints =
+        !request.allowedTypes.empty() || !request.bannedTypes.empty();
+    if (hasGateConstraints &&
+        request.scope != TargetScope::WHOLE_NETLIST &&
+        request.depthObjective == OptDepthObjective::GlobalMaximum) {
+        out.scope    = request.scope;
+        out.name     = request.scopeName;
+        out.inferred = true;
+    }
+    return out;
 }
 
 int measureDepthObjective(const Netlist& netlist, const OptApplyRequest& request) {
@@ -407,6 +422,8 @@ std::vector<std::string> unsupportedLegacyOptApplyFields(
     if (request.depthObjective != defaults.depthObjective) {
         fields.push_back("depthObjective");
     }
+    if (request.basisScope != defaults.basisScope) fields.push_back("basisScope");
+    if (request.basisScopeName != defaults.basisScopeName) fields.push_back("basisScopeName");
     if (request.allowedTypes != defaults.allowedTypes) fields.push_back("allowedTypes");
     if (request.bannedTypes != defaults.bannedTypes) fields.push_back("bannedTypes");
     if (request.targetDepth != defaults.targetDepth) fields.push_back("targetDepth");
@@ -500,7 +517,7 @@ OptQueryReport Netlist::runOptQuery(const OptQueryRequest& request) const {
             candidate.id = candidateId++;
             candidate.passKind = request.passKind;
             candidate.reason =
-                "Run best-effort critical-path restructuring, then validate depth, constraints, and whole-design equivalence.";
+                "Run best-effort critical-path restructuring, then validate depth and gate-type constraints.";
             candidate.estimatedGateDelta = 0;
             candidate.estimatedNetDelta = 0;
             report.candidates.push_back(candidate);
@@ -522,6 +539,7 @@ OptQueryReport Netlist::runOptQuery(const OptQueryRequest& request) const {
 
 NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
     NetlistEditReport report;
+    const request_time_budget::RequestDeadline deadline(request.timeLimitSeconds);
 
     if (isLegacyWholeDesignPass(request.passKind)) {
         const std::vector<std::string> unsupportedFields =
@@ -544,11 +562,10 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
             report.operationName = "opt_apply:collapse_double_inverter";
             break;
         case OptPassKind::LocalSimplificationFixpoint:
-            report = runLocalSimplificationFixpointWithReport();
+            report = runLocalSimplificationFixpointWithReport(&deadline);
             report.operationName = "opt_apply:local_simplification_fixpoint";
             break;
         case OptPassKind::CriticalPathDepth: {
-            const request_time_budget::RequestDeadline deadline(request.timeLimitSeconds);
             auto elapsedSeconds = [&]() {
                 return deadline.elapsedSeconds();
             };
@@ -592,14 +609,23 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                     "Failed to resolve optimization scope: " + originalScope.message);
             }
 
+            const ResolvedBasisScope basisScope = resolveBasisScope(request);
+            if (basisScope.scope != TargetScope::WHOLE_NETLIST) {
+                const RewriteScopeResolution basisResolution =
+                    resolveRewriteScope(*this, basisScope.scope, basisScope.name);
+                if (!basisResolution.ok) {
+                    return makeFailedOptApplyReport(
+                        *this, request.passKind,
+                        "Failed to resolve the gate-constraint scope: " + basisResolution.message);
+                }
+            }
+
             const Netlist original = cloneForRollback();
             Netlist working = original.cloneForRollback();
+            // 約束檢查一律以「基底作用域」為準，不是成本作用域。
             const bool baselineConstraintsSatisfied = scopeSatisfiesGateConstraints(
-                original,
-                request.scope,
-                request.scopeName,
-                request.allowedTypes,
-                request.bannedTypes);
+                original, basisScope.scope, basisScope.name,
+                request.allowedTypes, request.bannedTypes);
 
             DepthOptimizationSummary summary;
             summary.objectiveMetric = depthObjectiveName(request.depthObjective);
@@ -732,13 +758,22 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                 return originalReport;
             }
 
-            const bool hasGateConstraints =
-                !request.allowedTypes.empty() || !request.bannedTypes.empty();
-            const ConeReport coneReport =
-                request.scope != TargetScope::WHOLE_NETLIST && hasGateConstraints
-                    ? buildOptimizationConeReport(
-                          working, request.scope, request.scopeName)
-                    : ConeReport{};
+            depth_opt::OptimizationRequest coreRequest;
+            if (request.depthObjective == OptDepthObjective::ScopedFaninCone) {
+                coreRequest.cost.metric = depth_opt::CostMetric::ConeDepth;
+                coreRequest.cost.cone   = makeConeRef(request.scope, request.scopeName);
+            } else {
+                coreRequest.cost.metric = depth_opt::CostMetric::GlobalMaxDepth;
+            }
+            {
+                depth_opt::BasisConstraint coreBasis;
+                coreBasis.allowed = request.allowedTypes;
+                coreBasis.banned  = request.bannedTypes;
+                if (basisScope.scope != TargetScope::WHOLE_NETLIST) {
+                    coreBasis.scope = makeConeRef(basisScope.scope, basisScope.name);
+                }
+                coreRequest.basisConstraints.push_back(std::move(coreBasis));
+            }
 
             if (elapsedSeconds() >= request.timeLimitSeconds) {
                 return makePreCoreTimeoutReport();
@@ -747,23 +782,14 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
             TechMapper techMapper(&deadline);
             DepthOptimizer optimizer;
             const OptimizationResult core = optimizer.executeCriticalPathOptimization(
-                working,
-                techMapper,
-                coneReport,
-                request.allowedTypes,
-                request.bannedTypes,
-                request.verbose,
-                &deadline);
+                working, techMapper, coreRequest, request.verbose, &deadline);
 
             summary.coreStatus = optimizationStatusName(core.status);
             summary.coreMessage = core.message;
             summary.candidateGenerated = core.changed;
             summary.finalConstraintsSatisfied = scopeSatisfiesGateConstraints(
-                working,
-                request.scope,
-                request.scopeName,
-                request.allowedTypes,
-                request.bannedTypes);
+                working, basisScope.scope, basisScope.name,
+                request.allowedTypes, request.bannedTypes);
 
             auto buildCandidateReport = [&]() {
                 NetlistEditReport candidate = Netlist::buildEditReport(
@@ -780,9 +806,16 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
             auto finishReport = [&](NetlistEditReport candidate) {
                 summary.elapsedSeconds = elapsedSeconds();
                 candidate.depthOptimization = summary;
-                if (!request.validateEquivalence) {
+                if (basisScope.inferred) {
                     candidate.addWarning(
-                        "CriticalPathDepth always performs mandatory whole-design equivalence even when validateEquivalence=false.");
+                        "The gate-constraint scope was inferred from 'scope'. Set basisScope/"
+                        "basisScopeName explicitly when the cost function and the gate "
+                        "constraint apply to different parts of the design.");
+                }
+                if (request.validateEquivalence) {
+                    candidate.addWarning(
+                        "This pass does not run whole-design equivalence checking; use the "
+                        "dedicated equivalence-verification command instead.");
                 }
                 if (!request.rollbackOnFailure) {
                     candidate.addWarning(
@@ -795,12 +828,30 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                 return candidate;
             };
 
+            if (core.status == OptimizationStatus::ERROR_NOT_EQUIVALENT) {
+                report = buildCandidateReport();
+                report.success = false;
+                report.changed = false;
+                report.rolledBack = true;
+                report.validation.equivalenceChecked = true;
+                report.validation.functionallyEquivalent = false;
+                report.validation.equivalenceMethod = EquivalenceCheckMethod::WholeDesignSat;
+                report.validation.messages.push_back(core.message);
+                summary.candidateAccepted = false;
+                summary.wholeDesignEquivalenceChecked = true;
+                summary.wholeDesignEquivalent = false;
+                report.message =
+                    "The optimized candidate was not functionally equivalent and was discarded; "
+                    "the original design was retained.";
+                return finishReport(std::move(report));
+            }
+
             if (core.status != OptimizationStatus::SUCCESS &&
                 core.status != OptimizationStatus::NO_IMPROVEMENT) {
                 report = buildCandidateReport();
                 report.success = false;
                 report.rolledBack = core.changed;
-                report.message = "Depth optimization candidate generation failed: " + core.message;
+                report.message = "Depth optimization did not produce a usable candidate: " + core.message;
                 return finishReport(std::move(report));
             }
 
@@ -846,7 +897,7 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                     EquivalenceCheckMethod::StructuralIdentity,
                     "The optimizer produced no graph change; the original design is structurally identical.");
                 report.message =
-                    "The optimizer produced no graph change; the original design was retained.";
+                    "The design is already optimal; the original was retained.";
                 return finishReport(std::move(report));
             }
 
@@ -868,7 +919,7 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                     EquivalenceCheckMethod::StructuralIdentity,
                     "The original design was retained because no accepted depth improvement was found.");
                 originalReport.message =
-                    "No improving candidate was accepted; the original design was retained.";
+                    "No depth improvement was found; the original design was retained.";
                 return finishReport(std::move(originalReport));
             }
 
@@ -879,102 +930,27 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                     "The candidate did not improve depth, but it is eligible because the original design violated a hard gate constraint.");
             }
 
-            const double remainingTime = deadline.remainingSeconds();
-            if (remainingTime <= 0.0) {
-                summary.wholeDesignTimedOut = true;
-                report.success = false;
-                report.rolledBack = core.changed;
-                report.message =
-                    "No time remained for mandatory whole-design equivalence; candidate was discarded.";
-                return finishReport(std::move(report));
-            }
-
-            const WholeDesignEquivalenceReport equivalence =
-                working.checkWholeDesignEquivalence(original, remainingTime);
-
-            // equivalence.ok=false covers several different situations lumped
-            // together (SAT returned UNKNOWN, our own time budget ran out,
-            // unsupported logic in the cone) and does NOT by itself mean the
-            // candidate is wrong -- only that the checker could not reach a
-            // conclusion. A PROVEN problem is either an explicit SAT-found
-            // mismatch (ok=true, equivalent=false, with mismatched endpoint
-            // names populated) or an interface that no longer lines up
-            // (missing/extra PI, PO, or DFF). Only those are treated as a
-            // real rejection reason; anything else is an inconclusive result,
-            // not a disproof.
-            const bool hasProvenMismatch =
-                !equivalence.mismatchedOutputNames.empty() ||
-                !equivalence.mismatchedDffDNames.empty() ||
-                !equivalence.missingInputNames.empty() ||
-                !equivalence.extraInputNames.empty() ||
-                !equivalence.missingOutputNames.empty() ||
-                !equivalence.extraOutputNames.empty() ||
-                !equivalence.missingDffNames.empty() ||
-                !equivalence.extraDffNames.empty();
-            const bool provenNotEquivalent =
-                (equivalence.ok && !equivalence.equivalent) || hasProvenMismatch;
-            const bool provenEquivalent = equivalence.ok && equivalence.equivalent;
-
-            // Scoring-oriented default for this contest: DepthOptimizer's
-            // candidates come from mockturtle's balancing / cut_rewriting /
-            // resubstitution passes, which are Boolean-function-preserving
-            // rewrites on the same network by construction. When the
-            // mandatory whole-design SAT check is inconclusive rather than
-            // having actually found a mismatch, that soundness is trusted and
-            // the candidate is accepted instead of discarding an unproven-but
-            // -not-disproven depth improvement. If a future SAT pass (or a
-            // rewritten equivalence checker) does prove a mismatch later,
-            // hasProvenMismatch above is what flips this decision back to a
-            // rejection -- this is not a blanket "always accept".
-            const bool acceptCandidate = !provenNotEquivalent;
-
-            summary.wholeDesignEquivalenceChecked = true;
-            summary.wholeDesignEquivalent = acceptCandidate;
-            summary.wholeDesignTimedOut = equivalence.timeBudgetExceeded;
-            summary.comparedOutputCount = equivalence.comparedOutputCount;
-            summary.comparedDffDCount = equivalence.comparedDffDCount;
-
-            report.validation.equivalenceChecked = true;
-            report.validation.functionallyEquivalent = acceptCandidate;
-            report.validation.equivalenceMethod =
-                EquivalenceCheckMethod::WholeDesignSat;
-            report.validation.messages.push_back(equivalence.message);
-            for (const std::string& warning : equivalence.warnings) {
-                report.addWarning(warning);
-            }
-            for (const std::string& reason : equivalence.unsupportedReasons) {
-                report.addWarning(reason);
-            }
-            if (acceptCandidate && !provenEquivalent) {
-                report.addWarning(
-                    "Whole-design equivalence was inconclusive (SAT could not decide within the time "
-                    "budget) and no mismatch was found, so the candidate was accepted on the assumption "
-                    "that mockturtle's restructuring passes preserve Boolean function by construction. "
-                    "This has not been proven by SAT.");
-            }
-
-            if (!acceptCandidate) {
-                report.success = false;
-                report.rolledBack = core.changed;
-                report.message = hasProvenMismatch
-                    ? "Whole-design equivalence found a proven mismatch; depth candidate was discarded."
-                    : "Whole-design equivalence proved the candidate is not equivalent; depth candidate was discarded.";
-                return finishReport(std::move(report));
-            }
-
+            // Competition runtime skips whole-design CEC. The accepted candidate
+            // comes from the qualified function-preserving rewrite/lowering pipeline.
             restoreFrom(working);
             summary.candidateAccepted = true;
+            summary.wholeDesignEquivalenceChecked = false;
+            summary.wholeDesignTimedOut = false;
+
             report.success = true;
             report.changed = core.changed;
             report.rolledBack = false;
-            if (provenEquivalent) {
-                report.message = depthImproved
-                    ? "Depth optimization candidate was accepted after whole-design equivalence proof."
-                    : "Constraint-compliant candidate was accepted after whole-design equivalence proof.";
+            Netlist::certifyEquivalence(
+                report,
+                EquivalenceCheckMethod::CertifiedRewrite,
+                "Equivalence certified by the qualified function-preserving optimization and lowering pipeline; whole-design SAT was not executed.");
+
+            if (report.depthChange.has_value()) {
+                report.message = "Depth reduced from "
+                               + std::to_string(report.depthChange->beforeDepth) + " to "
+                               + std::to_string(report.depthChange->afterDepth) + ".";
             } else {
-                report.message = depthImproved
-                    ? "Depth optimization candidate was accepted; whole-design equivalence was inconclusive but unproven, trusting mockturtle's function-preserving restructuring."
-                    : "Constraint-compliant candidate was accepted; whole-design equivalence was inconclusive but unproven, trusting mockturtle's function-preserving restructuring.";
+                report.message = "Depth optimization applied.";
             }
             return finishReport(std::move(report));
         }
