@@ -42,6 +42,7 @@ struct BufferInsertionReport {
 // 定義 ECO 替換的狀態碼，方便程式邏輯判斷
 enum class TechMapStatus {
     SUCCESS,                  // 替換成功
+    NO_CHANGE,                // 規則有效，但電路裡沒有可匹配的子圖（不是錯誤）
     TIMEOUT,                  // 請求時間預算用盡
     ERROR_RULE_NOT_FOUND,     // 找不到符合數量/類型的替換規則
     ERROR_NOT_EQUIVALENT,     // (真值表驗證) 邏輯不等價

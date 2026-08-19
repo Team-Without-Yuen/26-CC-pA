@@ -899,7 +899,14 @@ DepthOptimizer::Stage2PathResult DepthOptimizer::runStage2Path(
     auto toNetlist = [&](const Ntk& n, const Netlist& t) -> Netlist {
         if (*ctx.loweringActive) {
             lowering::LoweringResult r = lowerNtk(n, t);
-            if (r.ok) return std::move(r.netlist);
+            if (r.ok) {
+                if (ctx.verbose && !r.unpreservedDffNetNames.empty()) {
+                    std::cout << "  [lowering] " << r.unpreservedDffNetNames.size()
+                            << " DFF D-pin net name(s) could not be preserved, first: "
+                            << r.unpreservedDffNetNames.front() << "\n";
+                }
+                return std::move(r.netlist);
+            }
             *ctx.loweringActive = false;
             if (ctx.verbose)
                 std::cout << "  [warn] lowering failed at runtime: " << r.message << "\n";

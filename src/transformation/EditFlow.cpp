@@ -24,12 +24,14 @@ std::string editCommandKindName(EditCommandKind kind) {
         case EditCommandKind::SafeCleanupFixpoint: return "safe_cleanup_fixpoint";
         case EditCommandKind::TrimDeadLogic: return "trim_dead_logic";
         case EditCommandKind::RemoveDanglingLogic: return "remove_dangling_logic";
+        case EditCommandKind::RemoveDeadLogic: return "remove_dead_logic";
         case EditCommandKind::RemoveUnusedNets: return "remove_unused_nets";
         case EditCommandKind::MergeEquivalentGates: return "merge_equivalent_gates";
         case EditCommandKind::MergeStructurallyEquivalentGates: return "merge_structurally_equivalent_gates";
         case EditCommandKind::MergeFunctionallyEquivalentGates: return "merge_functionally_equivalent_gates";
         case EditCommandKind::SimplifyConstants: return "simplify_constants";
         case EditCommandKind::SimplifySameInput: return "simplify_same_input";
+        case EditCommandKind::RemoveRedundantLogic: return "remove_redundant_logic";
         case EditCommandKind::InsertBuffersForFanout: return "insert_buffers_for_fanout";
         case EditCommandKind::InsertBuffersForSpecificNet: return "insert_buffers_for_specific_net";
         case EditCommandKind::InsertBuffersForDffControl: return "insert_buffers_for_dff_control";
@@ -290,9 +292,11 @@ EditRequestValidation validateEditApplyRequest(const Netlist& netlist, const Edi
         case EditCommandKind::SafeCleanupFixpoint:
         case EditCommandKind::TrimDeadLogic:
         case EditCommandKind::RemoveDanglingLogic:
+        case EditCommandKind::RemoveDeadLogic:
         case EditCommandKind::RemoveUnusedNets:
         case EditCommandKind::MergeStructurallyEquivalentGates:
         case EditCommandKind::SimplifySameInput:
+        case EditCommandKind::RemoveRedundantLogic:
             return okValidation();
 
         case EditCommandKind::MergeFunctionallyEquivalentGates: {
@@ -319,8 +323,8 @@ EditRequestValidation validateEditApplyRequest(const Netlist& netlist, const Edi
         case EditCommandKind::MergeEquivalentGates:
             return failedValidation(
                 "MergeEquivalentGates is a legacy internal structural-merge alias. "
-                "Use MergeStructurallyEquivalentGates; SAT-based functional merge "
-                "is not implemented yet.");
+                "Use MergeStructurallyEquivalentGates for structural duplicates, or "
+                "MergeFunctionallyEquivalentGates for SAT-proven functional merge.");
 
         case EditCommandKind::SimplifyConstants:
             if (request.gateType != GateType::UNKNOWN &&
@@ -618,20 +622,29 @@ NetlistEditReport Netlist::runEditApply(const EditApplyRequest& request) {
             report = collapseBackToBackInvertersWithReport();
             break;
         case EditCommandKind::LocalSimplificationFixpoint:
-            report = runLocalSimplificationFixpointWithReport();
+            report = runLocalSimplificationFixpointWithReport(&deadline);
             break;
         case EditCommandKind::SafeCleanupFixpoint:
-            report = runSafeCleanupFixpointWithReport();
+            report = runSafeCleanupFixpointWithReport(&deadline);
             break;
-        case EditCommandKind::TrimDeadLogic:
-            report = trimDeadLogicWithReport();
+        case EditCommandKind::TrimDeadLogic:        // legacy alias
+        case EditCommandKind::RemoveDanglingLogic:  // legacy alias
+        case EditCommandKind::RemoveDeadLogic: {
+            DeadLogicOptions options;
+            options.includeSequential = request.includeSequential;
+            options.deadline = &deadline;
+            report = removeDeadLogicWithReport(options);
             break;
-        case EditCommandKind::RemoveDanglingLogic:
-            report = removeDanglingLogicWithReport();
-            break;
+        }
         case EditCommandKind::RemoveUnusedNets:
             report = removeUnusedNetsWithReport();
             break;
+        case EditCommandKind::RemoveRedundantLogic: {
+            RedundancyRemovalOptions options;
+            options.deadline = &deadline;
+            report = removeRedundantLogicWithReport(options);
+            break;
+        }
         case EditCommandKind::MergeEquivalentGates:
             report = mergeEquivalentGatesWithReport();
             break;

@@ -1037,13 +1037,17 @@ public:
     // =========================================================================
  
     int trimDeadLogic();
-    NetlistEditReport trimDeadLogicWithReport();
+    /*NetlistEditReport trimDeadLogicWithReport();*/
     int collapseBackToBackInverters();
     NetlistEditReport collapseBackToBackInvertersWithReport();
     // Legacy/internal structural merge alias。名稱不代表 SAT functional equivalence，
     // 對外請使用 mergeStructurallyEquivalentGates()。
     int mergeEquivalentGates();
     NetlistEditReport mergeEquivalentGatesWithReport();
+
+    // 取代 trimDeadLogic() 和 removeDanglingLogic()。
+    DeadLogicSummary removeDeadLogic(const DeadLogicOptions& options);
+    NetlistEditReport removeDeadLogicWithReport(const DeadLogicOptions& options);
 
     // =========================================================================
     // 2.5 Buffer Cleanup Building Blocks
@@ -1117,8 +1121,8 @@ public:
     std::vector<int> findDanglingGateIds() const;
  
     // 移除所有 dangling gate，回傳移除數量
-    int removeDanglingLogic();
-    NetlistEditReport removeDanglingLogicWithReport();
+    /*int removeDanglingLogic();
+    NetlistEditReport removeDanglingLogicWithReport();*/
  
     // =========================================================================
     // 2.10 Structural Hashing Building Blocks
@@ -1253,10 +1257,10 @@ public:
         int inputCount = -1);
     int simplifyAllSameInputGates();
     NetlistEditReport simplifyAllSameInputGatesWithReport();
-    int runLocalSimplificationFixpoint();
-    NetlistEditReport runLocalSimplificationFixpointWithReport();
-    int runSafeCleanupFixpoint();
-    NetlistEditReport runSafeCleanupFixpointWithReport();
+    int runLocalSimplificationFixpoint(const request_time_budget::RequestDeadline* deadline);
+    NetlistEditReport runLocalSimplificationFixpointWithReport(const request_time_budget::RequestDeadline* deadline);
+    int runSafeCleanupFixpoint(const request_time_budget::RequestDeadline* deadline);
+    NetlistEditReport runSafeCleanupFixpointWithReport(const request_time_budget::RequestDeadline* deadline);
 
     // =========================================================================
     // B-8: compactRemovedGatesWithIdMap
@@ -1268,6 +1272,20 @@ public:
         std::unordered_map<int, int> newToOldGateId;
     };
     CompactResult compactRemovedGatesWithIdMap();
+
+    // =========================================================================
+    // ATPG redundant removal API
+    // =========================================================================
+    void removeConstantRedundancy(const RedundancyRemovalOptions& options,
+                                  RedundancyRemovalSummary& summary,
+                                  RedundancyDiagnostics& diagnostics);
+
+    void removeSinglePathRedundancy(const RedundancyRemovalOptions& options,
+                                    RedundancyRemovalSummary& summary,
+                                    RedundancyDiagnostics& diagnostics);
+
+    NetlistEditReport removeRedundantLogicWithReport(const RedundancyRemovalOptions& options);
+    // =========================================================================
 
     // =========================================================================
     // Boolean Expression Extraction API
