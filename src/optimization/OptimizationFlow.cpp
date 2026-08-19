@@ -539,6 +539,7 @@ OptQueryReport Netlist::runOptQuery(const OptQueryRequest& request) const {
 
 NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
     NetlistEditReport report;
+    const request_time_budget::RequestDeadline deadline(request.timeLimitSeconds);
 
     if (isLegacyWholeDesignPass(request.passKind)) {
         const std::vector<std::string> unsupportedFields =
@@ -561,11 +562,10 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
             report.operationName = "opt_apply:collapse_double_inverter";
             break;
         case OptPassKind::LocalSimplificationFixpoint:
-            report = runLocalSimplificationFixpointWithReport();
+            report = runLocalSimplificationFixpointWithReport(&deadline);
             report.operationName = "opt_apply:local_simplification_fixpoint";
             break;
         case OptPassKind::CriticalPathDepth: {
-            const request_time_budget::RequestDeadline deadline(request.timeLimitSeconds);
             auto elapsedSeconds = [&]() {
                 return deadline.elapsedSeconds();
             };

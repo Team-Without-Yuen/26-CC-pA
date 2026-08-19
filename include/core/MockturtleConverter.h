@@ -110,6 +110,10 @@ struct LoweringResult {
     int  depth = -1;          // 產出電路的最大組合深度
     int  gateCount = 0;
     size_t coneNodeCount = 0; // 被判定在 cone 內的 mockturtle 節點數
+
+    // 沒能保留原名的 DFF D-pin net。原因通常是：兩顆 DFF 的 D 被合成同一條線、
+    // D 被化簡成 PI/常數、或名字已被其他 boundary 佔用。
+    std::vector<std::string> unpreservedDffNetNames;
 };
 
 // ---------------------------------------------------------------------------

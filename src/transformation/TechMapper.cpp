@@ -68,7 +68,9 @@ NetlistEditReport finalizeTechMapEditReport(
     report.mappingDelta = makeMappingDelta(techReport);
     report.changed = report.changed || !techReport.modifiedGateNames.empty();
 
-    if (techReport.status != TechMapStatus::SUCCESS) {
+    const bool techOk = techReport.status == TechMapStatus::SUCCESS ||
+                        techReport.status == TechMapStatus::NO_CHANGE;
+    if (!techOk) {
         report.success = false;
         report.message = techReport.message;
         report.addWarning("Technology mapping reported a non-success status.");
@@ -649,6 +651,18 @@ bool TechMapper::executeMappingPass(Netlist& netlist,
     if (requestExpired()) return false;
     bool actualChangesMade = false;
 
+    // 依 LHS root 的 gate type 建索引。
+    // matchRootGate 的第一件事就是比對 root type，type 不合的規則必定立刻 return false。
+    // 不建索引的話，每個候選 gate 都要對全部規則各做一次函式呼叫並建一個 MatchContext
+    // （三個 hash 容器），1M gates x 數十條規則就是數千萬次純浪費。
+    std::unordered_map<GateType, std::vector<const TechMapRule*>> rulesByRootType;
+    for (const TechMapRule& rule : validRules) {
+        if (!rule.targetPattern) continue;
+        if (rule.targetPattern->nodeType != NodeType::GATE) continue;
+        rulesByRootType[rule.targetPattern->gateType].push_back(&rule);
+    }
+    if (rulesByRootType.empty()) return false;
+
     // 候選 root 的合法範圍：scopeGates 給定就固定死在這個集合裡（cone 題不可擴張，
     // 新生成的 Gate id 本來就不在 scopeGates 內，天然被排除）；nullptr 代表全電路皆可。
     auto inCandidateScope = [&](int gateId) {
@@ -685,11 +699,16 @@ bool TechMapper::executeMappingPass(Netlist& netlist,
         queued.erase(rootId);
 
         // 安全防護：這個 Gate 可能已經在稍早的規則套用中被拔掉了
-        if (netlist.getGate(rootId).type == GateType::UNKNOWN) continue;
+        const GateType rootType = netlist.getGate(rootId).type;
+        if (rootType == GateType::UNKNOWN) continue;
 
-        // 依序嘗試每一條合法的 Rule (已經按 Cost 優化程度排過序了)
-        for (const auto& rule : validRules) {
+        // 只取 LHS root type 相符的規則；bucket 內仍維持 cost 由小到大的順序。
+        const auto bucketIt = rulesByRootType.find(rootType);
+        if (bucketIt == rulesByRootType.end()) continue;
+
+        for (const TechMapRule* rulePtr : bucketIt->second) {
             if (requestExpired()) break;
+            const TechMapRule& rule = *rulePtr;
 
             MatchContext ctx;
 
@@ -814,8 +833,11 @@ TechMapReport TechMapper::mapTechnologyCore(Netlist& netlist,
         report.status = TechMapStatus::SUCCESS;
         report.message = "Success: Tree-to-Tree technology mapping applied successfully.";
     } else {
-        report.status = TechMapStatus::ERROR_SIMULATION_FAILED;
-        report.message = "Notice: Rules matched constraints, but no matching subgraphs in the netlist required modification.";
+        // 「電路裡沒有符合的子圖」不是錯誤，是 no-change。
+        // 原本歸類成 ERROR_SIMULATION_FAILED 會讓 finalizeTechMapEditReport
+        // 判定失敗並整個 rollback —— 即使該 gate type 早已被前一輪間接清掉。
+        report.status = TechMapStatus::NO_CHANGE;
+        report.message = "Rules matched the constraints, but no matching subgraph in the netlist required modification.";
     }
 
     // 寫入最終電路快照
@@ -862,7 +884,8 @@ TechMapReport TechMapper::mapTechnologyForCone(Netlist& netlist,
     std::unordered_set<int> scopeGates(coneGateVec.begin(), coneGateVec.end());
     
     // 呼叫核心引擎，並將 scopeGates 的記憶體位址傳入
-    return mapTechnologyCore(netlist, targetConstraints, allowedConstraints, &scopeGates, allowedSources, verbose);
+    return mapTechnologyCore(netlist, targetConstraints, allowedConstraints,
+                             &scopeGates, allowedSources, verbose, &scopeGates);
 }
 
 NetlistEditReport TechMapper::mapTechnologyForConeWithReport(
@@ -2769,8 +2792,23 @@ TechMapReport TechMapper::convertToBasis(Netlist& netlist,
         }
     }
 
-    // 將 Set 轉回 Vector 以利後續迴圈處理
-    std::vector<GateType> targetsToRemove(targetsToRemoveSet.begin(), targetsToRemoveSet.end());
+    // 將 Set 轉回 Vector 以利後續迴圈處理。
+    // 消滅順序會影響最終 gate 數與結果可重現性，而 unordered_set 的迭代順序
+    // 未定義（同一份 netlist 跑兩次可能得到不同數量）。因此固定成明確序列：
+    // 複合閘先拆（XOR/XNOR 展開後會產生基本閘），基本閘後拆，可避免多做一輪。
+    static const std::vector<GateType> kEliminationOrder = {
+        GateType::XOR, GateType::XNOR,
+        GateType::AND, GateType::OR,
+        GateType::NAND, GateType::NOR,
+        GateType::BUF, GateType::NOT
+    };
+    std::vector<GateType> targetsToRemove;
+    targetsToRemove.reserve(targetsToRemoveSet.size());
+    for (GateType type : kEliminationOrder) {
+        if (targetsToRemoveSet.count(type) > 0) {
+            targetsToRemove.push_back(type);
+        }
+    }
 
     // 2. 計算目前環境「允許使用」的剩餘積木庫 (給底層 SAT 引擎的約束)
     std::map<GateType, int> allowedConstraints;
@@ -2842,9 +2880,11 @@ TechMapReport TechMapper::convertToBasis(Netlist& netlist,
 
         // 檢查該步驟是否失敗
         // 只有當電路中還殘留該種類的 Gate 時，才回報錯誤 (代表我們用現有的白名單積木，無法數學等價地展開它)
+        const bool stepOk = stepReport.status == TechMapStatus::SUCCESS ||
+                            stepReport.status == TechMapStatus::NO_CHANGE;
         const int remainingInScope = countGateTypeInScope(netlist, scope, name, targetType);
-        if (stepReport.status != TechMapStatus::SUCCESS || remainingInScope > 0) {
-            finalReport.status = (stepReport.status != TechMapStatus::SUCCESS) ? stepReport.status : TechMapStatus::ERROR_NOT_EQUIVALENT;
+        if (!stepOk || remainingInScope > 0) {
+            finalReport.status = !stepOk ? stepReport.status : TechMapStatus::ERROR_NOT_EQUIVALENT;
             finalReport.message = stepReport.status == TechMapStatus::TIMEOUT
                 ? stepReport.message
                 : "Basis conversion failed! Remaining gates of type: " + std::to_string((int)targetType);
@@ -2935,6 +2975,20 @@ NetlistEditReport TechMapper::replaceGateTypeWithReport(
             scope,
             name,
             verbose);
+
+        // 「Replace all X gates」必須真的清乾淨。
+        // convertToBasis 有這道檢查，replaceGateType 原本沒有，
+        // 導致只換掉一部分（例如某些 gate 的 fanout 檢查沒過）時
+        // 仍回報 status:ok + functionally_equivalent:true，LLM 會誤判已完成。
+        if (techReport.status == TechMapStatus::SUCCESS) {
+            const int remaining = countGateTypeInScope(netlist, scope, name, targetType);
+            if (remaining > 0) {
+                techReport.status = TechMapStatus::ERROR_NOT_EQUIVALENT;
+                techReport.message =
+                    "Gate-type replacement left " + std::to_string(remaining) +
+                    " gate(s) of the requested type in scope; the netlist was rolled back.";
+            }
+        }
     }
 
     return finalizeTechMapEditReport(netlist, before, techReport, "replaceGateType");
@@ -3020,7 +3074,8 @@ TechMapReport TechMapper::customMapTechnology(Netlist& netlist,
         needsSatFallback = true;
     } 
     // 狀況 B：LUT 字典裡有規則，但掃描後發現電路上根本沒有長那個形狀的子圖
-    else if (report.status == TechMapStatus::SUCCESS) {
+    else if (report.status == TechMapStatus::SUCCESS ||
+             report.status == TechMapStatus::NO_CHANGE) {
         bool actuallyModified = false;
         for (const auto& pair : targetConstraints) {
             auto it = report.removedCountByType.find(pair.first);

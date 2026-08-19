@@ -1059,15 +1059,21 @@ LoweringResult DoLowerToNetlist(const Ntk& ntk,
         }
 
         const uint32_t qL = piL[piIndex++];
-        const uint64_t key = slotKey(qL, 0);
-        int qNet = -1;
-        auto claim = slotClaimsPo.find(key);
-        if (claim != slotClaimsPo.end()) {
-            qNet = claim->second;              // Q 直接當 PO
-            slotClaimsPo.erase(claim);
-        } else {
-            qNet = nl.addNet(oldGate.instName + "_Q");
-        }
+
+        // Q 是 sequential boundary —— DFF 本身沒被重寫，這條線在最佳化前後
+        // 是同一個訊號，沒有理由改名。
+        std::string qName;
+        if (old_nl.isValidNetId(oldGate.outputNetId))
+            qName = old_nl.getNet(oldGate.outputNetId).name;
+        if (qName.empty()) qName = oldGate.instName + "_Q";
+
+        int qNet = nl.getNetId(qName);      // Q 同時是 PO 時，port 已經建過這條 net
+        if (qNet < 0) qNet = nl.addNet(qName);
+
+        // 這個 slot 若被 PO 認領過，認領作廢：net 已經有正確的名字，
+        // 而且 PO port 建的就是同一條線。
+        slotClaimsPo.erase(slotKey(qL, 0));
+
         nl.connectGateOutput(dffId, qNet);
         slotNet[qL][0] = qNet;
     }
@@ -1175,6 +1181,52 @@ LoweringResult DoLowerToNetlist(const Ntk& ntk,
             const auto [ln, pol] = poNeed[poIdx++];
             const int d = slotNet[ln][pol];
             nl.connectGateInput(dffId, (d >= 0 ? d : const0Net), "D");
+        }
+    }
+
+    // ---- DFF D-pin 名稱回填 ----
+    //
+    // 原始 D net 的驅動邏輯被整個重寫，餵給 D 的現在是一條新產生的 n_lo_xxx。
+    // 但「這顆 DFF 的 next-state」這個語意還在，所以把它改名回原本的名字。
+    //
+    // 三種保不住的情況，一律記進 unpreservedDffNetNames 讓呼叫端回報：
+    //   (a) 兩顆 DFF 的 D 被合成同一條線 —— 只有第一顆拿得到名字
+    //   (b) D 被化簡成 PI 或常數 —— 那條線已經有語意，不能覆蓋
+    //   (c) 名字已被其他 boundary 佔用（例如 shift register 的 Q→D，
+    //       那個名字在 Q 那段就保留好了，這裡跳過是正確的）
+    {
+        // 依 DFF 出現順序收集原始 D net 名稱，與 newDffIds 對齊
+        std::vector<std::string> wantedDNames;
+        wantedDNames.reserve(newDffIds.size());
+        for (size_t i = 0; i < old_nl.getGateCount(); ++i) {
+            const auto& g = old_nl.getGate(i);
+            if (g.type != GateType::DFF) continue;
+            std::string name;
+            for (size_t p = 0; p < g.inputPinNames.size(); ++p) {
+                if (g.inputPinNames[p] != "D") continue;
+                const int netId = g.inputNetIds[p];
+                if (old_nl.isValidNetId(netId)) name = old_nl.getNet(netId).name;
+                break;
+            }
+            wantedDNames.push_back(name);
+        }
+
+        for (size_t i = 0; i < newDffIds.size() && i < wantedDNames.size(); ++i) {
+            const std::string& wanted = wantedDNames[i];
+            if (wanted.empty()) continue;
+            if (nl.getNetId(wanted) >= 0) continue;      // (c) 名字已被佔用
+
+            const int dNet = nl.getGateInputNetId(newDffIds[i], "D");
+            if (!nl.isValidNetId(dNet)) continue;
+
+            const Net& n = nl.getNet(dNet);
+            if (n.isPI || n.isPO || n.isConst) {         // (b)
+                out.unpreservedDffNetNames.push_back(wanted);
+                continue;
+            }
+            if (!nl.renameNet(n.name, wanted)) {         // (a) 或其他失敗
+                out.unpreservedDffNetNames.push_back(wanted);
+            }
         }
     }
 

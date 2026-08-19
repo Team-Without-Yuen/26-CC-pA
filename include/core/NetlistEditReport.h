@@ -6,6 +6,7 @@
 #include <vector>
 
 #include "include/core/NetlistTypes.h"
+#include "include/core/EditFlow.h"
 
 // =========================================================================
 // Unified Netlist Edit Report Types
@@ -187,6 +188,57 @@ struct DepthOptimizationSummary {
     double elapsedSeconds = 0.0;
 };
 
+// Dead logic 移除結果。removedGateCount 是「移除了幾個 gate」類 prompt 的
+// 唯一正式答案來源；不要用 diff.activeGateCountDelta 反推。
+struct DeadLogicSummary {
+    size_t removedGateCount = 0;
+    size_t removedNetCount  = 0;
+    size_t removedDffCount  = 0;   // 只有 includeSequential 才可能非 0
+
+    bool includeSequential = false;
+    bool timedOut          = false;
+};
+
+// 內部診斷用，不進 report。
+struct RedundancyDiagnostics {
+    size_t constantNetCandidateCount = 0;
+    size_t constantNetTiedCount      = 0;
+    size_t constantNetSkippedPoCount = 0;
+    size_t constantNetSkippedCount   = 0;
+    size_t pinCandidateCount         = 0;
+    size_t pinRejectedBySimulation   = 0;
+    size_t pinSkippedReconvergent    = 0;
+    size_t pinSkippedDffControl      = 0;
+    size_t pinExaminedBySat          = 0;
+    size_t satChecks                 = 0;
+    size_t abortedCandidateCount     = 0;
+    size_t deadLogicRemovedGateCount = 0;
+    bool   constantPhaseComplete = false;
+    bool   satPhaseComplete      = false;
+    bool   fraigComplete         = false;
+};
+
+// Redundancy removal 結果。
+// 用語對齊業界 ATPG fault class：
+//   provenRedundantCount  ≈ RE (Redundant，已證明不可測)
+//   abortedCandidateCount ≈ AU (ATPG Untestable，未證出，不可計入答案)
+struct RedundancyRemovalSummary {
+    // 正式答案：最終移除的 gate 總數。
+    size_t removedGateCount = 0;
+    size_t removedNetCount  = 0;
+
+    // 完整性。false 代表這是時間預算內找到的數量，不是全部。
+    bool complete  = false;
+    bool timedOut  = false;
+
+    // 已證明 untestable 的 stuck-at fault 數（ATPG 的 RE 分類）。
+    // 未證明的候選（AU）刻意不回報 —— 它不是答案的一部分，
+    // 讓 LLM 看到只會誤把它加進總數。
+    size_t provenRedundantPinCount = 0;
+
+    double elapsedSeconds = 0.0;
+};
+
 // Single shared report for mutation / optimization / transformation flows.
 struct NetlistEditReport {
     bool success = false;
@@ -209,6 +261,8 @@ struct NetlistEditReport {
     std::optional<ConstantSimplificationSummary> constantSimplification;
     std::optional<FunctionalMergeSummary> functionalMerge;
     std::optional<DepthOptimizationSummary> depthOptimization;
+    std::optional<DeadLogicSummary> deadLogic;
+    std::optional<RedundancyRemovalSummary> redundancyRemoval;
 
     std::vector<int> changedGateIds;
     std::vector<int> changedNetIds;

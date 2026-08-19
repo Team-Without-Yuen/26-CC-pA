@@ -1871,6 +1871,28 @@ void printEditReport(const Netlist& netlist, const Netlist::NetlistEditReport& r
         printStringList("    skipped_gate_names", summary.skippedGateNames);
     }
 
+    if (report.deadLogic) {
+        const auto& s = *report.deadLogic;
+        std::cout << "  dead_logic:\n";
+        std::cout << "    removed_gate_count: " << s.removedGateCount << "\n";
+        std::cout << "    removed_net_count: " << s.removedNetCount << "\n";
+        std::cout << "    removed_dff_count: " << s.removedDffCount << "\n";
+        std::cout << "    include_sequential: "
+                  << (s.includeSequential ? "true" : "false") << "\n";
+        std::cout << "    timed_out: " << (s.timedOut ? "true" : "false") << "\n";
+    }
+
+    if (report.redundancyRemoval) {
+        const auto& s = *report.redundancyRemoval;
+        std::cout << "  redundancy_removal:\n";
+        std::cout << "    removed_gate_count: " << s.removedGateCount << "\n";
+        std::cout << "    removed_net_count: " << s.removedNetCount << "\n";
+        std::cout << "    proven_redundant_pin_count: " << s.provenRedundantPinCount << "\n";
+        std::cout << "    complete: " << (s.complete ? "true" : "false") << "\n";
+        std::cout << "    timed_out: " << (s.timedOut ? "true" : "false") << "\n";
+        std::cout << "    elapsed_seconds: " << s.elapsedSeconds << "\n";
+    }
+
     if (report.functionalMerge) {
         const auto& summary = *report.functionalMerge;
         std::cout << "  functional_merge:\n";
@@ -3012,10 +3034,22 @@ bool parsePublicEditApply(const Netlist& netlist,
         request.kind = Netlist::EditCommandKind::LocalSimplificationFixpoint;
     } else if (m == "safe_cleanup_fixpoint") {
         request.kind = Netlist::EditCommandKind::SafeCleanupFixpoint;
-    } else if (m == "trim_dead_logic") {
-        request.kind = Netlist::EditCommandKind::TrimDeadLogic;
-    } else if (m == "remove_dangling_logic") {
-        request.kind = Netlist::EditCommandKind::RemoveDanglingLogic;
+    } else if (m == "remove_dead_logic" ||
+               m == "trim_dead_logic" ||
+               m == "remove_dangling_logic") {
+        request.kind = Netlist::EditCommandKind::RemoveDeadLogic;
+        std::string option;
+        while (iss >> option) {
+            const std::string lowered = toLower(option);
+            if (lowered == "--include-sequential" ||
+                lowered == "-include_sequential") {
+                request.includeSequential = true;
+            } else {
+                error = "Unknown remove_dead_logic option: " + option;
+                return false;
+            }
+        }
+        return true;
     } else if (m == "remove_unused_nets") {
         request.kind = Netlist::EditCommandKind::RemoveUnusedNets;
     } else if (m == "merge_equivalent_gates") {
@@ -3036,6 +3070,26 @@ bool parsePublicEditApply(const Netlist& netlist,
             error = "remove_net_if_unused requires <net_name>.";
             return false;
         }
+    } else if (m == "remove_redundant_logic") {
+        request.kind = Netlist::EditCommandKind::RemoveRedundantLogic;
+        std::string option;
+        while (iss >> option) {
+            const std::string lowered = toLower(option);
+            if (lowered == "--time-limit" || lowered == "-time_limit") {
+                std::string valueToken;
+                double value = 0.0;
+                if (!(iss >> valueToken) || !parseStrictDouble(valueToken, value) ||
+                    value <= 0.0) {
+                    error = "--time-limit requires a positive number of seconds.";
+                    return false;
+                }
+                request.timeLimitSeconds = value;
+            } else {
+                error = "Unknown remove_redundant_logic option: " + option;
+                return false;
+            }
+        }
+        return true;
     } else if (m == "insert_buffers_for_fanout") {
         request.kind = Netlist::EditCommandKind::InsertBuffersForFanout;
         if (!(iss >> request.maxFanout)) {
@@ -3277,8 +3331,11 @@ void printHelp() {
         << "\nEdit apply\n"
         << "  edit_apply rename_gate <old> <new> | rename_net <old> <new>\n"
         << "  edit_apply cleanup_buffers | collapse_double_inverter | local_simplification_fixpoint\n"
+        << "  edit_apply remove_dead_logic [--include-sequential]\n"
+        << "             (aliases: trim_dead_logic, remove_dangling_logic)\n"
         << "  edit_apply safe_cleanup_fixpoint | trim_dead_logic | remove_dangling_logic\n"
         << "  edit_apply remove_unused_nets | remove_net_if_unused <net>\n"
+        << "  edit_apply remove_redundant_logic [--time-limit seconds]\n"
         << "  edit_apply merge_structurally_equivalent_gates\n"
         << "  edit_apply merge_functionally_equivalent_gates <scope> [scope_name]\n"
         << "             [--gate-type type] [--patterns 1..4096] [--time-limit seconds]\n"
@@ -4316,14 +4373,20 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             !request.validateEquivalence ||
             (report.validation.equivalenceChecked &&
              report.validation.functionallyEquivalent);
-
-        ToolResponse response;
-        response.ok = report.success;
         const bool functionalMergeTimedOut =
             report.functionalMerge &&
             (report.functionalMerge->searchTimedOut ||
              report.functionalMerge->wholeDesignTimedOut);
-        if (functionalMergeTimedOut) {
+        const bool deadLogicTimedOut =
+            report.deadLogic && report.deadLogic->timedOut;
+        const bool redundancyTimedOut =
+            report.redundancyRemoval && report.redundancyRemoval->timedOut;
+        const bool anyTimedOut =
+            functionalMergeTimedOut || deadLogicTimedOut || redundancyTimedOut;
+
+        ToolResponse response;
+        response.ok = report.success;
+        if (anyTimedOut) {
             response.status = ToolStatus::Timeout;
         } else if (!report.success) {
             response.status = ToolStatus::Error;
@@ -4337,7 +4400,7 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         response.message = !report.success || equivalenceComplete
             ? report.message
             : "Edit completed, but the requested equivalence certificate is unavailable. " + report.message;
-        response.complete = report.success && equivalenceComplete;
+        response.complete = report.success && equivalenceComplete && !anyTimedOut;
         emitToolResponse(session, response, [&]() { printEditReport(session.current, report); });
         return true;
     }
