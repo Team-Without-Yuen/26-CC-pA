@@ -4294,7 +4294,7 @@ void printHelp() {
         << "  --scope/--objective select the cost function; --basis-scope selects where\n"
         << "  the gate-type constraint applies (default: the whole netlist)\n"
         << "  gate-type lists accept spaces or commas, for example NOR NOT or nor,not\n"
-        << "  this pass does not run whole-design SAT; use equiv_query for that\n"
+        << "  accepted rewrites use CertifiedRewrite; use equiv_query only for explicit SAT proof\n"
         << "\nEdit apply\n"
         << "  edit_apply rename_gate <old> <new> | rename_net <old> <new>\n"
         << "  edit_apply cleanup_buffers | collapse_double_inverter | local_simplification_fixpoint\n"

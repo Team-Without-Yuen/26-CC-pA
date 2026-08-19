@@ -159,7 +159,7 @@ if (report.success) {
 | `validation.newProblemAConstraintViolations` | 此次 edit 新增的違規清單 |
 | `validation.equivalenceChecked` | 是否有等價性證明 |
 | `validation.functionallyEquivalent` | 若有檢查，是否等價 |
-| `validation.equivalenceMethod` | `NotChecked` / `StructuralIdentity` / `LocalRewriteRule` / `WholeDesignSat` |
+| `validation.equivalenceMethod` | `NotChecked` / `StructuralIdentity` / `LocalRewriteRule` / `CertifiedRewrite` / `WholeDesignSat` |
 
 ### 4.3 特定類型欄位
 
@@ -720,6 +720,7 @@ edit_apply merge_functionally_equivalent_gates net_fanin n10 --gate-type AND
 | `NotChecked` | 目前沒有等價性證明 | 不應出現在成功的 public `runEditApply()` edit |
 | `StructuralIdentity` | 名稱改變、unused/dangling/dead logic removal、structural merge | `RenameNet`, `RemoveDanglingLogic`, `TrimDeadLogic` |
 | `LocalRewriteRule` | 可由局部 Boolean identity 或安全 cleanup 組合證明 | `CleanupBuffers`, `CollapseDoubleInverter`, `SafeCleanupFixpoint`, `SimplifyConstants`, buffer insertion, `ConvertToBasis`, `ReplaceGateType` |
+| `CertifiedRewrite` | 由已 qualification 的 function-preserving transformation pipeline 認證；不是 SAT proof | `opt_apply critical_path_depth` 的 accepted changed candidate |
 | `WholeDesignSat` | current 與 original/previous-edit 的 whole-design SAT equivalence | `MergeFunctionallyEquivalentGates`、tools `equiv_query` |
 
 ---

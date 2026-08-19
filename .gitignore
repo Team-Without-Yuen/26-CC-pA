@@ -35,6 +35,8 @@
 # Executables
 *.out
 *.app
+/tools.exe
+/NetlistTool.exe
 
 # Build directories
 build/
