@@ -48,7 +48,7 @@
 |---|---|---|---|
 | 4 `g0` on any maximum-depth path | `depth_query gate_on_critical g0` | explicit yes/no | `Ready` |
 | 5 number of PIs and POs | `structure_query summary` | PI/PO counts | `Ready` |
-| 6 all register-to-register paths | `path_query enumerate all_dff_q all_dff_d -out ...` | path count/list + complete flag | `Conditional` |
+| 6 all register-to-register paths | `path_query enumerate all_dff_q all_dff_d` | automatic artifact + path count/complete flag | `Conditional` |
 | 7 NAND with constant-1 to NOT | query candidates, then typed simplification | only selected NAND gates rewritten | `Partial` |
 | 8 current NOT count | `structure_query count_by_type NOT` | active NOT count | `Ready` |
 | 9 every `n2` to `n12` path through `g0` | `path_query every_through pi:n2 po:n12 -req gate:g0` | explicit yes/no | `Ready` |
@@ -61,7 +61,7 @@
 | 16 NAND gates with constant inputs | `structure_query const_input_gates NAND` | matching gate names/count | `Ready` |
 | 17 simplify only reported NAND gates | `edit_apply simplify_constants NAND any` | selected NAND candidates/rewrites | `Ready` |
 | 18 NAND gates eliminated | `report_query last_edit` | `eliminated_target_gate_count` | `Ready` |
-| 19 all `n2` to `n12` paths | `path_query enumerate pi:n2 po:n12 -out ...` | paths + complete flag | `Conditional` |
+| 19 all `n2` to `n12` paths | `path_query enumerate pi:n2 po:n12` | automatic artifact + path count/complete flag | `Conditional` |
 
 ## test33
 
@@ -75,7 +75,7 @@
 | 9 cone `n8` to NAND/NOT basis | `edit_apply convert_basis net_fanin n8 -allow NAND NOT` | no disallowed cone gates + certificate | `Ready` |
 | 10 NAND count in cone `n8` | `cone_query net_fanin n8 --gate-types NAND` | `filtered gates` | `Ready` |
 | 11 equivalence `n55146/n55104` | `func_query equivalence n55146 n55104` | complete + equivalent | `Ready` |
-| 12 every `n3` to `n9` path | `path_query enumerate pi:n3 po:n9 -out ...` | paths + complete flag | `Conditional` |
+| 12 every `n3` to `n9` path | `path_query enumerate pi:n3 po:n9` | automatic artifact + path count/complete flag | `Conditional` |
 | 13 whether `n8` functionally depends on `n1` | `func_query depends_on n8 n1` | complete exact SAT/cofactor yes/no | `Ready` |
 | 14 current vs loaded equivalence | `equiv_query original` | complete + equivalent | `Ready` |
 | 15 whether `n55104` is a PI-to-PO cut | `path_query pi_po_cut n55104` | complete cut yes/no + witness pair | `Ready` |
@@ -145,7 +145,7 @@
 | 6 current NAND count in cone | `cone_query net_fanin n8 --gate-types NAND` | `filtered gates` | `Ready` |
 | 7 prune unused gates | `edit_apply trim_dead_logic` | removed active gates + certificate | `Ready` |
 | 8 current vs loaded equivalence | `equiv_query original` | complete + equivalent | `Ready` |
-| 9 all register paths | `path_query enumerate all_dff_q all_dff_d -out ...` | paths + complete flag | `Conditional` |
+| 9 all register paths | `path_query enumerate all_dff_q all_dff_d` | automatic artifact + path count/complete flag | `Conditional` |
 | 10 PI/PO counts | `structure_query summary` | PI/PO counts | `Ready` |
 | 11 list POs with widths | `structure_query list_po` | ordered name/width/range summaries | `Ready` |
 | 12 gates with input tied to `1'b1` | `structure_query const_input_gates all 1` | gate names/count | `Ready` |

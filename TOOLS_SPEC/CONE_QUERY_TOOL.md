@@ -6,7 +6,7 @@
 
 完整性規則：要求 cone list 時取得全部 gates/nets，不自行限制筆數；只問數量或 type breakdown
 時只回摘要。大型 cone list 由 CLI 自動完整寫入唯一 artifact，terminal 保留 gates/nets、type
-breakdown、artifact completeness 與 `output_file`。內部門檻只決定輸出位置，不限制 cone
+breakdown、artifact completeness 與 `output_file`。record/預估字元雙門檻只決定輸出位置，不限制 cone
 大小，也不由 LLM 設定。時間限制依題目指定。詳見 [`LLM_NOTES.md`](LLM_NOTES.md)。
 
 ## 2. 選擇條件

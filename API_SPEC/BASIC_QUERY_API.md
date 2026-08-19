@@ -388,8 +388,8 @@ BasicReport runBasicQuery(const BasicQuery& query) const;
 | `GateInfo` | 查單一 gate | `objectId`、`typeName`、predicate flags、`formattedInfo` |
 | `NetInfo` | 查單一 net | `objectId`、`typeName`、PI/PO/constant flags |
 | `PortInfo` | 查單一 port | `portWidth`、`isBus`、direction flags、bit net names/IDs |
-| `CountByGateType` | 統計 gate type | `gateTypeCounts`、`gateCount` |
-| `GatesByType` | 列出指定 gate type；可選 batch pin/net detail | `gateIds`、`gateNames`、`gateConnections` |
+| `CountByGateType` | 統計 include-minus-exclude gate types | `gateTypeCounts`、`gateCount`、filter metadata |
+| `GatesByType` | 列出 include-minus-exclude gates；可選 batch pin/net detail | `gateIds`、`gateNames`、`gateConnections`、filter metadata |
 | `GatesWithConstantInput` | 找 constant input gates；可選 batch pin/net detail | `gateIds`、`gateNames`、`gateConnections`、`gateCount` |
 | `StructuralIssues` | 回報結構問題 | `undrivenNets`、`noLoadNets`、`floatingNets`、`unconnectedGates` |
 
@@ -414,6 +414,8 @@ struct BasicQuery {
     BasicQueryType type = BasicQueryType::Summary;
     std::string name;
     GateType gateType = GateType::UNKNOWN;
+    std::vector<GateType> gateTypeFilters;
+    std::vector<GateType> excludedGateTypeFilters;
     int constValue = -1;
     int inputCount = -1;
     bool includeIds = true;
@@ -434,6 +436,13 @@ struct BasicReport {
     size_t netCount = 0;
     size_t logicalWireCount = 0;
 
+    size_t scopeGateCount = 0;
+    bool gateTypeFilterApplied = false;
+    bool gateTypeExclusionApplied = false;
+    bool gateDetailsIncluded = false;
+    std::vector<GateType> appliedGateTypeFilters;
+    std::vector<GateType> appliedExcludedGateTypeFilters;
+
     std::vector<int> gateIds;
     std::vector<int> netIds;
     std::vector<std::string> gateNames;
@@ -451,6 +460,12 @@ struct BasicReport {
     std::vector<std::string> unconnectedPrimaryOutputNets;
 };
 ```
+
+`CountByGateType`、`GatesByType` 與 `GatesWithConstantInput` 共用 gate-type 集合語意。
+`gateTypeFilters` 是 include OR-set，空集合代表全部；`excludedGateTypeFilters` 在 include
+之後扣除，因此同一 type 同時出現在兩者時由 exclude 優先。重複 type 會去重，結果依 gate ID
+穩定排序。`gateType` 僅保留給既有單型別呼叫；不得同時設定 concrete `gateType` 與
+`gateTypeFilters`。所有集合都拒絕 `UNKNOWN`，且 tombstone gate 永遠不進入 scope 或結果。
 
 `hasGateCount`、`hasNetCount`、`hasLogicalWireCount`、`hasPrimaryInputCount` 與
 `hasPrimaryOutputCount` 用來區分「有效結果剛好為 0」和「此 query 不提供該 count」。呼叫端只能在

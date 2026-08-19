@@ -1,6 +1,7 @@
 #include "include/core/Netlist.h"
 
 #include <map>
+#include <set>
 #include <string>
 #include <unordered_set>
 #include <vector>
@@ -45,6 +46,57 @@ bool isActiveGate(const Netlist& netlist, int gateId) {
 
 bool isActiveNet(const Netlist& netlist, int netId) {
     return netlist.isValidNetId(netId) && !netlist.getNet(netId).isRemoved;
+}
+
+const std::vector<GateType>& supportedGateTypes() {
+    static const std::vector<GateType> types = {
+        GateType::AND, GateType::OR, GateType::NAND, GateType::NOR,
+        GateType::NOT, GateType::BUF, GateType::XOR, GateType::XNOR,
+        GateType::DFF
+    };
+    return types;
+}
+
+bool prepareBasicGateTypeFilters(const BasicQuery& query,
+                                 BasicReport& report,
+                                 std::set<GateType>& included,
+                                 std::set<GateType>& excluded) {
+    if (query.gateType != GateType::UNKNOWN && !query.gateTypeFilters.empty()) {
+        report.message = "gateType and gateTypeFilters cannot both be specified";
+        return false;
+    }
+
+    if (query.gateType != GateType::UNKNOWN) {
+        included.insert(query.gateType);
+    }
+    for (GateType type : query.gateTypeFilters) {
+        if (type == GateType::UNKNOWN) {
+            report.message = "gateTypeFilters cannot contain UNKNOWN";
+            return false;
+        }
+        included.insert(type);
+    }
+    for (GateType type : query.excludedGateTypeFilters) {
+        if (type == GateType::UNKNOWN) {
+            report.message = "excludedGateTypeFilters cannot contain UNKNOWN";
+            return false;
+        }
+        excluded.insert(type);
+    }
+
+    report.gateTypeFilterApplied = !included.empty();
+    report.gateTypeExclusionApplied = !excluded.empty();
+    report.appliedGateTypeFilters.assign(included.begin(), included.end());
+    report.appliedExcludedGateTypeFilters.assign(excluded.begin(), excluded.end());
+    return true;
+}
+
+bool matchesBasicGateType(GateType type,
+                          const std::set<GateType>& included,
+                          const std::set<GateType>& excluded) {
+    return type != GateType::UNKNOWN &&
+           (included.empty() || included.count(type) != 0) &&
+           excluded.count(type) == 0;
 }
 
 bool hasConsistentActiveDriver(const Netlist& netlist, const Net& net) {
@@ -707,34 +759,62 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
         return report;
     }
 
-    case BasicQueryType::CountByGateType:
+    case BasicQueryType::CountByGateType: {
+        std::set<GateType> included;
+        std::set<GateType> excluded;
+        if (!prepareBasicGateTypeFilters(query, report, included, excluded)) {
+            return report;
+        }
         report.ok = true;
         report.message = "Count gates by type";
         report.hasGateCount = true;
-        if (query.gateType == GateType::UNKNOWN) {
+        report.scopeGateCount = getActiveGateCount(*this);
+        if (included.empty() && excluded.empty()) {
             report.gateTypeCounts = countGatesByType();
-            report.gateCount = getActiveGateCount(*this);
+            report.gateCount = report.scopeGateCount;
         } else {
-            const int count = static_cast<int>(getGateCountByType(query.gateType));
-            report.gateTypeCounts[query.gateType] = count;
-            report.gateCount = static_cast<size_t>(count);
-            report.typeName = gateTypeToString(query.gateType);
+            for (GateType type : supportedGateTypes()) {
+                if (matchesBasicGateType(type, included, excluded)) {
+                    report.gateTypeCounts[type] = 0;
+                }
+            }
+            for (size_t gateId = 0; gateId < getGateCount(); ++gateId) {
+                const Gate& gate = getGate(static_cast<int>(gateId));
+                if (matchesBasicGateType(gate.type, included, excluded)) {
+                    ++report.gateTypeCounts[gate.type];
+                    ++report.gateCount;
+                }
+            }
+            if (included.size() == 1 && excluded.empty()) {
+                report.typeName = gateTypeToString(*included.begin());
+            }
         }
         return report;
+    }
 
     case BasicQueryType::GatesByType: {
-        if (query.gateType == GateType::UNKNOWN) {
-            report.message = "GatesByType requires a concrete gate type";
+        std::set<GateType> included;
+        std::set<GateType> excluded;
+        if (!prepareBasicGateTypeFilters(query, report, included, excluded)) {
             return report;
         }
         report.ok = true;
         report.message = "List gates by type";
         report.hasGateCount = true;
-        report.typeName = gateTypeToString(query.gateType);
-        // [Perf #1] Compute id list once; derive names + count from it.
-        // Before: getGatesByType() called for ids, again inside names block,
-        //         and getGateCountByType() called it a 3rd time.
-        const std::vector<int> ids = getGatesByType(query.gateType);
+        report.gateDetailsIncluded = query.includeConnectionDetails;
+        report.scopeGateCount = getActiveGateCount(*this);
+        if (included.size() == 1 && excluded.empty()) {
+            report.typeName = gateTypeToString(*included.begin());
+        }
+        std::vector<int> ids;
+        ids.reserve(report.scopeGateCount);
+        for (size_t gateId = 0; gateId < getGateCount(); ++gateId) {
+            const Gate& gate = getGate(static_cast<int>(gateId));
+            if (matchesBasicGateType(gate.type, included, excluded)) {
+                ids.push_back(static_cast<int>(gateId));
+                ++report.gateTypeCounts[gate.type];
+            }
+        }
         if (query.includeIds)   report.gateIds   = ids;
         if (query.includeNames) report.gateNames = gateIdsToNames(*this, ids);
         if (query.includeConnectionDetails) {
@@ -757,14 +837,30 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
             report.message = "GatesWithConstantInput inputCount must be -1 or non-negative";
             return report;
         }
+        std::set<GateType> included;
+        std::set<GateType> excluded;
+        if (!prepareBasicGateTypeFilters(query, report, included, excluded)) {
+            return report;
+        }
         report.ok = true;
         report.message = "List gates with constant input";
         report.hasGateCount = true;
+        report.gateDetailsIncluded = query.includeConnectionDetails;
         // [Perf #3] Compute id list once; derive names + count from it.
         // Before: findGatesWithConstInput() invoked 3× (directly for ids,
         //         inside getGateNamesWithConstInput, inside countGatesWithConstInput).
-        const std::vector<int> constIds = findGatesWithConstInput(
-            query.gateType, query.constValue, query.inputCount);
+        const std::vector<int> unfilteredConstIds = findGatesWithConstInput(
+            GateType::UNKNOWN, query.constValue, query.inputCount);
+        report.scopeGateCount = unfilteredConstIds.size();
+        std::vector<int> constIds;
+        constIds.reserve(unfilteredConstIds.size());
+        for (int gateId : unfilteredConstIds) {
+            const Gate& gate = getGate(gateId);
+            if (matchesBasicGateType(gate.type, included, excluded)) {
+                constIds.push_back(gateId);
+                ++report.gateTypeCounts[gate.type];
+            }
+        }
         if (query.includeIds)   report.gateIds   = constIds;
         if (query.includeNames) report.gateNames = gateIdsToNames(*this, constIds);
         if (query.includeConnectionDetails) {
@@ -775,8 +871,8 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
             }
         }
         report.gateCount = constIds.size();
-        if (query.gateType != GateType::UNKNOWN) {
-            report.typeName = gateTypeToString(query.gateType);
+        if (included.size() == 1 && excluded.empty()) {
+            report.typeName = gateTypeToString(*included.begin());
         }
         return report;
     }

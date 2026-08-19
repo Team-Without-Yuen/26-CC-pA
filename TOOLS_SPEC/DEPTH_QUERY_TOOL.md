@@ -4,8 +4,9 @@
 
 `depth_query` 負責量測 current design 的 combinational arrival depth、PO/DFF.D endpoint depth、critical path 與 threshold count。它是 read-only analysis，不會降低或最佳化 depth。
 
-完整性規則：all/threshold mode 不自行限制 endpoint 筆數；只問 count 時只回摘要。時間限制
-依題目指定。詳見 [`LLM_NOTES.md`](LLM_NOTES.md)。
+完整性規則：all/threshold mode 不限制 endpoint 筆數。record 數或預估字元量超過 terminal 門檻時，工具自動
+完整寫入 artifact；response 只回 count、worst summary、完整性、格式與 `output_file`。
+詳見 [`LLM_NOTES.md`](LLM_NOTES.md)。
 
 ## 2. 選擇條件
 
@@ -43,6 +44,11 @@ depth_query <mode> [args]
 | Specific net depth | `net` report 中對應 endpoint depth |
 
 `exceeding` 包含 PO 與 DFF.D；題目明確說 outputs 時必須使用 `po_exceeding`。
+
+小型結果直接完整列出。大型 endpoint list 或 critical path 使用
+`QUERY_LIST_ARTIFACT_V1`；artifact 的 `Endpoint depth reports` 保存每個 endpoint 與 depth，
+`Worst path nets/gates in start-to-end order` 保存代表性 critical path。`Complete: yes` 才能
+把檔案視為完整結果。
 
 ## 6. Prompt Examples
 

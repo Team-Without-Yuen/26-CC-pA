@@ -290,9 +290,13 @@ Which primary input has the highest direct fanout?
 
 大型 object/load/issue 名單會自動完整寫入 list artifact；LLM 讀取 count、
 `list artifact complete` 與 `output_file`，不需也不能指定輸出門檻或檔名。
+自動切換同時考慮 record 數與預估 serialized characters，避免少量但超長的 detail records
+超過 response token；這兩個門檻不改變查詢結果數量。
 
-同一 gate type 的 names-only list 使用 `gates_by_type <type>`；prompt 明確要求 pins、connections
-或 input/output signals 時，使用 `gates_by_type <type> --with-pins`。不要先列 names 再逐顆呼叫
+一或多種 gate type 的 names-only list 使用 `gates_by_type --gate-types <type...>`；排除型別使用
+`--exclude-gate-types <type...>`。未指定 include 代表全部，include 後再套 exclude，且 exclude
+優先。單型別仍可使用 `gates_by_type <type>`。prompt 明確要求 pins、connections 或 input/output
+signals 時加 `--with-pins`。不要先列 names 再逐顆呼叫
 `gate_info`。
 
 constant-input gate 的 names-only list 使用 `const_input_gates [type|all] [0|1|any]`；prompt 還要求
@@ -423,9 +427,16 @@ Derive the Boolean expression for n15.
 
 責任邊界：候選 signal 名稱必須已知。若題目要求從全設計「找出任意一組」符合條件的 signals，使用 `FunctionSearchQuery`。若比較的是修改前後兩份 design，不是兩條 internal nets，使用 `WholeDesignEquivalence`。
 
+所有 `func_query` mode 必須照表提供完整參數；工具會拒絕缺值、trailing token、非 `0/1`
+condition/constant value，以及負數或非整數 expression depth，不會猜測缺少的參數。
+
 `func_query boolean_expression <net>` 會自動把完整 named-net DAG equations 寫入唯一
 artifact；LLM 不指定 path 或大小上限。response 只回完整性、equation/boundary counts
 與 `output_file`，不得把大型 artifact 全貼進自然語言答案。
+
+`func_query support_pi` 與 `func_query symmetry` 的完整 support/counterexample lists 若過大，
+會自動改寫入 `QUERY_LIST_ARTIFACT_V1`；response 保留 counts 與主要 Boolean 結論並回
+`output_file`。`boolean_expression` 不會再建立第二個 generic list artifact。
 
 詳細用法：[`FUNCTION_QUERY_TOOL.md`](FUNCTION_QUERY_TOOL.md)
 
@@ -577,7 +588,7 @@ Make sure nothing changes functionally.
 | 修改後回報移除數量 | `EditApply` → `EditReport` |
 | 修改後確認功能不變 | `EditApply` → `WholeDesignEquivalence` |
 | 修改、回報成果並確認功能不變 | `EditApply` → `EditReport` → `WholeDesignEquivalence` |
-| 最佳化 depth 並回報成果 | `Optimization` → `EditReport`；mandatory whole-design SAT 已內建 |
+| 最佳化 depth 並回報成果 | `Optimization` → `EditReport`；changed candidate 內建 whole-design SAT attempt，proof/inconclusive 依 `OPTIMIZATION_TOOL.md` 判讀 |
 | 找出未知候選，再對候選做詳細功能分析 | `FunctionSearchQuery` → `FunctionQuery` |
 | 列出某 clock 的 DFF，再分析這些 DFF 的 enable/hold | `StructureQuery` → `SequentialPatternQuery` |
 

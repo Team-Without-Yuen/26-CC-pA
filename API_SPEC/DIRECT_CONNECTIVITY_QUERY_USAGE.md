@@ -41,6 +41,28 @@ DirectConnectivityQuery 只查 immediate connection。
 如果要找 startpoint 到 endpoint 的路徑，應使用 PathQuery。
 ```
 
+公開 CLI grammar 必須嚴格遵守：
+
+```text
+structure_query net_driver <net> [--with-pins]
+structure_query net_loads <net> [--with-pins]
+structure_query fanout_load <net>
+structure_query fanout_report <net>
+structure_query global_fanout [non_negative_limit]
+structure_query pi_fanout [non_negative_limit]
+structure_query fanout_violations <non_negative_limit>
+structure_query gate_inputs <gate>
+structure_query gate_output <gate>
+structure_query gate_fanin <gate>
+structure_query gate_fanout <gate>
+structure_query is_connected <gate> <net>
+```
+
+名稱數量必須完全相符；fanout limit 只接受 `0..INT_MAX` 整數。缺值、未知 option、
+非法數字或 trailing token 都回 `status:error, complete:false`，不會用預設欄位繼續查詢。
+這是 CLI adapter 契約；直接建立 C++ `DirectConnectivityQuery` 時，必要欄位仍由 backend 的
+`report.ok/message` 驗證。
+
 ---
 
 ## 2. Query Type 總表
@@ -66,6 +88,9 @@ DirectConnectivityQuery 只查 immediate connection。
 | `type` | `DirectConnectivityQueryType` | `NetDriverGates` | 決定查詢類型 |
 | `gateName` | `std::string` | `""` | gate 相關 query 使用 |
 | `netName` | `std::string` | `""` | net 相關 query 使用 |
+| `fanoutLimit` | `int` | `-1` | `GlobalFanoutReport` 的 violation threshold；-1 表示未指定 |
+| `primaryInputsOnly` | `bool` | `false` | `GlobalFanoutReport` 是否只掃 PI bit nets |
+| `includeZeroFanout` | `bool` | `false` | `GlobalFanoutReport` 是否保留 0-fanout nets |
 | `includeIds` | `bool` | `true` | 是否填 `gateIds` / `netIds` |
 | `includeNames` | `bool` | `true` | 是否填 `gateNames` / `netNames` |
 | `includePinDetails` | `bool` | `false` | `NetDriverGates` / `NetLoadGates` 是否填逐 pin records |

@@ -9,6 +9,12 @@
 gate、depth 或輸出字元上限；只受 request deadline 與 I/O 錯誤限制。LLM 不提供
 output path，也不得省略 artifact 內的中間 equations。
 
+`support_pi` 的 support lists，以及 `symmetry` 的 support/counterexample/detail lists，若超過
+通用 entry-count 或 serialized-character 門檻，會自動寫入完整 `QUERY_LIST_ARTIFACT_V1`。
+response 保留 target、proof status、主要 bool 與各類 count，再提供 `output_file`；門檻只改變
+呈現位置，不會限制分析筆數。`boolean_expression` 已有專用 equation artifact，因此明確跳過
+generic list artifact，單次 response 只會有一個 `output_file`。
+
 ## 2. 選擇條件
 
 已知要分析的 net/bus 名稱，且 prompt 出現 `functionally equivalent`、`when condition`、`always 0/1`、`can be`、`depends on`、`symmetric`、`Boolean expression` 或 `support inputs` 時使用本 tool。
@@ -39,6 +45,12 @@ func_query <mode> [args]
 | `support_pi` | `<net>` | fanin real PI、DFF.Q 與 undriven support leaves | `Support leaves` 與三類 boundary counts |
 
 `equivalence_when` 是 `conditional_equivalence` 的 parser alias，但 LLM 應使用正式名稱 `conditional_equivalence`。
+
+所有 mode 採 exact arity。名稱缺失、option-like 名稱或 trailing token 都回
+`status:error, complete:false`，不得忽略後繼 token。`condition_value` 與 `const_value` 僅接受
+strict integer `0/1`；`simplified_expression` 的 `max_depth` 僅接受 `0..INT_MAX`。文字、小數、
+負數與 overflow 必須在 CLI parser 層拒絕。recognized-mode argument error 不得誤報為
+`Unknown func_query mode`。
 
 ## 5. SAT 輸出判讀
 
@@ -77,6 +89,19 @@ Boolean expression 的 leaf 必須依輸出分類判讀：
 若 prompt 要求 `using only primary input names`，但此欄位為 `no`，LLM 必須說明完整的
 current-cycle combinational expression 以 DFF.Q 或 undriven signal 為 boundary；不得把
 pseudo-PI 說成 primary input，也不得沿 DFF.Q 回追 D pin。
+
+`support_pi` / `symmetry` 若出現：
+
+```text
+list artifact format: QUERY_LIST_ARTIFACT_V1
+list artifact complete: yes
+wrote list to file: yes
+output_file: <path>
+```
+
+表示完整 support 或 counterexample records 位於該檔案；response 中的 count 與主要判定仍可
+直接使用。只有 artifact footer 為 `Complete: yes` 才能視為完整。小結果不觸發 artifact，仍
+直接完整列於 response。
 
 ## 6. Prompt Examples
 

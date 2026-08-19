@@ -9,7 +9,7 @@
 | Prompt 類型 | 對應 API |
 | --- | --- |
 | gate total / gate type breakdown | `BasicQuery` / gate type count |
-| gate-type list with input/output pin signals | `BasicQuery::GatesByType` with `includeConnectionDetails`; CLI `gates_by_type <type> --with-pins` |
+| one/many/excluded gate-type list with input/output pin signals | `BasicQuery::GatesByType` include/exclude sets with `includeConnectionDetails`; CLI `gates_by_type --gate-types <type...> --exclude-gate-types <type...> --with-pins` |
 | constant-input gate list with constant pin and input/output signals | `BasicQuery::GatesWithConstantInput` with `includeConnectionDetails`; CLI `const_input_gates [type|all] [0|1|any] --with-pins` |
 | exact net driver/load gate pins and roles | `DirectConnectivityQuery` with `includePinDetails`; CLI `net_driver <net> --with-pins` / `net_loads <net> --with-pins` |
 | primary input / primary output count and bit width | `BasicQuery` |

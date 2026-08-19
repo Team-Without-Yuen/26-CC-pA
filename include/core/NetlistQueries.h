@@ -43,7 +43,9 @@ enum class BasicQueryType {
 struct BasicQuery {
     BasicQueryType type = BasicQueryType::Summary;
     std::string name;                       // GateInfo/NetInfo/PortInfo 使用的物件名稱
-    GateType gateType = GateType::UNKNOWN;  // gate type filter；UNKNOWN 表示不限制或列全部
+    GateType gateType = GateType::UNKNOWN;  // legacy single-type filter；new code should use gateTypeFilters
+    std::vector<GateType> gateTypeFilters;  // include set；空集合且 gateType=UNKNOWN 表示全部
+    std::vector<GateType> excludedGateTypeFilters; // exclude set；套用在 include set 之後
     int constValue = -1;                    // constant input filter：-1 不限制，0 表示 1'b0，1 表示 1'b1
     int inputCount = -1;                    // gate input-count filter：-1 表示不限制
     bool includeIds = true;                 // 回傳 report 時是否填 gateIds/netIds
@@ -94,6 +96,13 @@ struct BasicReport {
     size_t logicalWireCount = 0;            // Verilog declaration 層級的 wire 數量
     size_t primaryInputCount = 0;           // primary input port 數量
     size_t primaryOutputCount = 0;          // primary output port 數量
+
+    size_t scopeGateCount = 0;              // 套用 gate-type include/exclude 前的候選 gate 數
+    bool gateTypeFilterApplied = false;     // 是否套用 include filter
+    bool gateTypeExclusionApplied = false;  // 是否套用 exclude filter
+    bool gateDetailsIncluded = false;       // 是否要求 batch pin/net detail
+    std::vector<GateType> appliedGateTypeFilters;
+    std::vector<GateType> appliedExcludedGateTypeFilters;
 
     int objectId = -1;                      // GateInfo/NetInfo 的 ID
     std::string objectName;                 // GateInfo/NetInfo/PortInfo 的名稱

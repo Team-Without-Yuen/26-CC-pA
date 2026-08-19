@@ -17,11 +17,8 @@
 
 | 優先級 | Tool / mode | 需確認事項 |
 |---:|---|---|
-| P0 | `depth_query all_po/all_dff_d/exceeding` | 大量 endpoint/depth records 是否改用自動 artifact |
-| P1 | `path_query direct_pi_po` | 是否需要自動 artifact，避免 LLM 先查 total 再重送 `-max_print` |
-| P1 | `edit_apply` / `report_query last_edit` | changed names、merge records 與 validation messages 的大型輸出 |
-| P1 | `equiv_query` | matched/skipped boundary 與 mismatch detail 的大型輸出 |
-| P2 | `func_query support_pi` | 大型 support list 是否重用 query-list artifact |
+| Deferred / team-owned | `edit_apply` / `report_query last_edit` | changed names、merge records 與 validation messages 的大型輸出；等待其他成員合併 |
+| Deferred / team-owned | `equiv_query` | matched/skipped boundary 與 mismatch detail 的大型輸出；等待其他成員合併 |
 
 工具內部的輸出門檻只能決定 terminal 或 artifact，不得限制實際計算筆數。artifact 模式的
 response 必須包含 count、complete 與 `output_file`。

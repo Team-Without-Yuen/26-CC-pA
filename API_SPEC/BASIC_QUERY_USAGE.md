@@ -26,7 +26,7 @@ query.type + optional filter fields -> runBasicQuery() -> BasicReport
 ```text
 1. 建立 Netlist::BasicQuery query
 2. 設定 query.type
-3. 視 query.type 設定 query.name / query.gateType / query.constValue / query.inputCount
+3. 視 query.type 設定 query.name / gate-type include/exclude filters / query.constValue / query.inputCount
 4. 視需求設定 query.includeIds / query.includeNames
 5. 呼叫 netlist.runBasicQuery(query)
 6. 從 report.ok / report.message / report.* 欄位讀結果
@@ -69,9 +69,9 @@ if (report.ok) {
 | `GateInfo` | 查單一 gate 基本資訊 | `name` = gate instance name | `exists`, `objectId`, `objectName`, `typeName`, `isDff`, `isCombinational`, `formattedInfo` |
 | `NetInfo` | 查單一 net 基本資訊 | `name` = net name | `exists`, `objectId`, `objectName`, `typeName`, `isPrimaryInput`, `isPrimaryOutput`, `isConstant` |
 | `PortInfo` | 查單一 PI/PO port | `name` = port name | `exists`, `objectName`, `portWidth`, `isBus`, `isPrimaryInput`, `isPrimaryOutput`, `netNames`, `netIds` |
-| `CountByGateType` | 統計 gate type 數量 | `gateType` 可選 | `gateTypeCounts`, `gateCount`, `typeName` |
-| `GatesByType` | 列出指定 gate type，可選 pin/net detail | `gateType`, optional `includeConnectionDetails` | `gateIds`, `gateNames`, `gateConnections`, `gateCount`, `typeName` |
-| `GatesWithConstantInput` | 找 constant input gates，可選 pin/net detail | `gateType`、`constValue`、`inputCount`、`includeConnectionDetails` 可選 | `gateIds`, `gateNames`, `gateConnections`, `gateCount`, `typeName` |
+| `CountByGateType` | 統計一或多種 gate type，可選排除型別 | gate-type filters 可選 | `gateTypeCounts`, `gateCount`, filter metadata |
+| `GatesByType` | 列出 include-minus-exclude gate 集合，可選 pin/net detail | gate-type filters、optional `includeConnectionDetails` | `gateIds`, `gateNames`, `gateConnections`, `gateCount`, filter metadata |
+| `GatesWithConstantInput` | 找 constant input gates，再套用 include/exclude type | gate-type filters、`constValue`、`inputCount`、`includeConnectionDetails` 可選 | `gateIds`, `gateNames`, `gateConnections`, `gateCount`, filter metadata |
 | `StructuralIssues` | 找結構問題 | 無 | `undrivenNets`, `noLoadNets`, `floatingNets`, `unconnectedGates` |
 
 ---
@@ -84,7 +84,9 @@ if (report.ok) {
 |---|---|---|---|
 | `type` | `BasicQueryType` | `Summary` | 決定要執行哪一種 basic query |
 | `name` | `std::string` | `""` | `GateInfo`, `NetInfo`, `PortInfo` 使用 |
-| `gateType` | `GateType` | `UNKNOWN` | `CountByGateType`, `GatesByType`, `GatesWithConstantInput` 使用 |
+| `gateType` | `GateType` | `UNKNOWN` | legacy 單型別 filter；新呼叫優先使用 `gateTypeFilters` |
+| `gateTypeFilters` | `std::vector<GateType>` | `{}` | include OR-set；空集合代表全部 |
+| `excludedGateTypeFilters` | `std::vector<GateType>` | `{}` | exclude set；在 include 後扣除且優先 |
 | `constValue` | `int` | `-1` | `GatesWithConstantInput` 使用；`-1` 不限制、`0` 找 `1'b0`、`1` 找 `1'b1` |
 | `inputCount` | `int` | `-1` | `GatesWithConstantInput` 使用；`-1` 不限制，非負數限制 gate input 數量 |
 | `includeIds` | `bool` | `true` | 是否填入 `gateIds` / `netIds` |
@@ -366,46 +368,54 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 用途：
 
 ```text
-統計或列出指定 gate type。
+統計或列出一或多種 gate type，也可排除指定 type。
 ```
+
+共用集合規則：`gateTypeFilters` 採 OR 聯集；未指定 include 表示全部 active gates；
+`excludedGateTypeFilters` 最後扣除且優先。重複 type 會去重，合法的零結果仍回
+`ok=true, hasGateCount=true, gateCount=0`。
 
 ### 10.1 CountByGateType
 
 | 設定 | 意思 |
 |---|---|
 | `query.type = CountByGateType` | 執行 gate type count |
-| `query.gateType = GateType::UNKNOWN` | 回傳全部 type 統計 |
-| `query.gateType = GateType::NAND` | 只統計 NAND |
+| include 未指定 | 回傳全部未排除 type 統計 |
+| `query.gateTypeFilters = {NAND, NOR}` | 統計 NAND 與 NOR 的 OR 聯集 |
+| `query.excludedGateTypeFilters = {DFF}` | 排除 DFF |
 
 例子：
 
 ```cpp
 Netlist::BasicQuery query;
 query.type = Netlist::BasicQueryType::CountByGateType;
-query.gateType = GateType::NAND;
+query.gateTypeFilters = {GateType::NAND, GateType::NOR};
+query.excludedGateTypeFilters = {GateType::NOR};
 
 Netlist::BasicReport report = netlist.runBasicQuery(query);
-int nandCount = report.gateCount;
+size_t nandCount = report.gateCount;
 ```
 
 ### 10.2 GatesByType
 
 | 設定 | 意思 |
 |---|---|
-| `query.type = GatesByType` | 列出指定 gate type |
-| `query.gateType = GateType::DFF` | 列出所有 DFF |
+| `query.type = GatesByType` | 列出 include-minus-exclude gate 集合 |
+| include 未指定 | 列出全部 active gates |
+| `query.gateTypeFilters = {AND, OR, NOT}` | 列出三種 type |
+| `query.excludedGateTypeFilters = {OR}` | 從候選移除 OR |
 
 例子：
 
 ```cpp
 Netlist::BasicQuery query;
 query.type = Netlist::BasicQueryType::GatesByType;
-query.gateType = GateType::NAND;
+query.gateTypeFilters = {GateType::NAND, GateType::NOR};
 query.includeConnectionDetails = true;
 
 Netlist::BasicReport report = netlist.runBasicQuery(query);
-std::vector<std::string> nandGates = report.gateNames;
-std::vector<GateConnectionSummary> nandConnections = report.gateConnections;
+std::vector<std::string> selectedGates = report.gateNames;
+std::vector<GateConnectionSummary> selectedConnections = report.gateConnections;
 ```
 
 不需要 connections 時維持預設 `false`，避免建立重複的 detail records。大量 results 的檔案輸出
@@ -426,7 +436,8 @@ std::vector<GateConnectionSummary> nandConnections = report.gateConnections;
 ```cpp
 Netlist::BasicQuery query;
 query.type = Netlist::BasicQueryType::GatesWithConstantInput;
-query.gateType = GateType::UNKNOWN;
+query.gateTypeFilters = {GateType::NAND, GateType::NOR};
+query.excludedGateTypeFilters = {GateType::NOR};
 query.constValue = -1;
 query.inputCount = -1;
 query.includeConnectionDetails = true;
@@ -438,8 +449,9 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 
 | 設定 | 意思 |
 |---|---|
-| `gateType = GateType::UNKNOWN` | 不限制 gate type |
-| `gateType = GateType::NAND` | 只找 NAND gates |
+| include 未指定 | 不限制 gate type |
+| `gateTypeFilters = {NAND, NOR}` | 找 NAND 或 NOR |
+| `excludedGateTypeFilters = {NOR}` | 從候選排除 NOR |
 | `constValue = -1` | 不限制 constant value |
 | `constValue = 0` | 只找接到 `1'b0` 的 input |
 | `constValue = 1` | 只找接到 `1'b1` 的 input |
