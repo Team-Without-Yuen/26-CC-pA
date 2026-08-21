@@ -10,10 +10,11 @@ fanout limit 是題目 constraint，不是輸出截斷。時間限制依題目�
 
 公開 tools layer 只開放 `CriticalPathDepth` 高階 transaction，不直接暴露 `DepthOptimizer`、mockturtle 或 unchecked rewrite。候選必須通過 scope、gate-type constraint 與 target depth 檢查才會 commit。
 
-**等價驗證不在本 tool 內執行。** 候選來自 mockturtle 的 balancing / cut_rewriting /
-resubstitution，這些是同一顆網路上的 Boolean-preserving 改寫；輸出的 gate basis 由
-polarity-DP lowering 在建構時保證。兩者都是結構保證，不是事後驗證。需要 SAT
-等價證明時請另外呼叫 `equiv_query`。
+changed candidate 不在本 tool 內執行 whole-design SAT。候選來自 mockturtle 的
+balancing / cut_rewriting / resubstitution，輸出的 gate basis 由 polarity-DP lowering
+建構；正式流程將這套受信任的 function-preserving pipeline 記為 `CertifiedRewrite`。
+這是 transformation certificate，不是 SAT proof。只有 prompt 明確要求 SAT/CEC proof
+時才另外呼叫 `equiv_query`。
 
 ## 2. 選擇條件
 
@@ -160,8 +161,18 @@ NAND/NOT-only basis 中，兩個獨立 boundary signals 的 NOT(NAND(a,b)) depth
 | `time_budget_seconds`, `elapsed_seconds` | 預算與耗時 |
 
 `whole_design_equivalence_checked`、`whole_design_equivalent`、`whole_design_timed_out`、
-`compared_output_count`、`compared_dff_d_count` 這幾個欄位保留自舊版，本 pass 不再填值，
-一律為 `false` / `0`。**不要據此回答等價相關的問題**——要等價結論請呼叫 `equiv_query`。
+`compared_output_count`、`compared_dff_d_count` 是舊版 SAT summary，本 pass 不再填值，
+一律為 `false` / `0`。等價結論改讀 `validation.equivalence_method`。
+
+等價結果分三類：
+
+| 類別 | 判讀方式 | 回答方式 |
+|---|---|---|
+| Structural identity | `changed:false`、`EquivalenceMethod:StructuralIdentity` | 說明 design 未改變，沒有執行 SAT |
+| Certified rewrite | changed candidate、`EquivalenceMethod:CertifiedRewrite` | 可說最佳化流程保持功能；不可稱為 SAT-proven |
+| SAT-proven | 獨立 `equiv_query` 回 `WholeDesignSat` 且 equivalent | 可說所比較的 PO/DFF.D 已由 SAT 證明等價 |
+
+因此，LLM 不可把 `CertifiedRewrite` 描述成 SAT/CEC proof。
 
 回答時必須直接報告 before/after depth。不可只因 `status:ok` 就說「depth 已降低」：
 若原設計違反明確 gate-type hard constraint，流程會接受合規但 depth 沒改善的候選，
@@ -175,7 +186,7 @@ NAND/NOT-only basis 中，兩個獨立 boundary signals 的 NOT(NAND(a,b)) depth
 ```text
 Prompt: Reduce the critical path depth through restructuring. Make sure nothing changes functionally.
 Command: opt_apply critical_path_depth --scope whole --objective global
-Read: before_depth, after_depth, improved, candidate_accepted
+Read: before_depth, after_depth, improved, candidate_accepted, equivalence_method
 ```
 
 ```text
@@ -210,8 +221,9 @@ Read: meets_target, report_success, rolled_back
 
 最佳化前可用 `depth_query global_critical` 取得 current baseline。
 
-本 pass **不**執行 whole-design SAT。若 prompt 要求驗證功能等價，或需要在提交後
-確認設計未被改壞，請另外呼叫：
+本 pass 不執行 whole-design SAT，changed candidate 由 `CertifiedRewrite` 表示
+function-preserving transformation。一般的「preserve functional equivalence」prompt
+不需要額外呼叫工具；只有 prompt 明確要求 SAT/CEC proof 時才呼叫：
 
 ```text
 equiv_query original           # 對照最初載入的 netlist
@@ -233,7 +245,7 @@ report_query last_edit
 - `--allow-no-improvement` 允許提交同 depth 的合規候選。若 optimizer 沒有造成
   graph change，回 `candidate_generated:false`、`candidate_accepted:false` 與
   `EquivalenceMethod:StructuralIdentity`。
-- 本 pass 不執行 whole-design SAT；等價結論一律以 `equiv_query` 為準。
+- 本 pass 不執行 whole-design SAT；changed candidate 使用 `CertifiedRewrite`，不可描述成 SAT proof。
 - `--basis-scope` 目前只支援單一 cone。同時對兩個不同 cone 施加不同 gate 限制尚未支援。
 - `--time-limit` 會依前一輪實測時間預測下一輪，時間不夠時停在目前最佳候選，
   但單次 mockturtle primitive 仍無 cooperative cancellation，超時最多會多跑一輪。

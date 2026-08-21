@@ -171,7 +171,7 @@ List all NAND gates in this design with their input and output signals.
 出現位置：
 
 ```text
-test35
+test70
 ```
 
 目前對應 API：
@@ -180,16 +180,14 @@ test35
 BasicQuery query;
 query.type = BasicQueryType::GatesByType;
 query.gateType = GateType::XOR; // or NAND
+query.includeConnectionDetails = true;
 BasicReport report = netlist.runBasicQuery(query);
 ```
 
-若需要 input/output pin connections：
+CLI：
 
-```cpp
-BasicQuery info;
-info.type = BasicQueryType::GateInfo;
-info.name = gateName;
-BasicReport gateInfo = netlist.runBasicQuery(info);
+```text
+structure_query gates_by_type NAND --with-pins
 ```
 
 Coverage：
@@ -201,8 +199,8 @@ OK
 注意：
 
 ```text
-「with their input and output signals」需要對 GatesByType 回傳的每個 gate 再呼叫 GateInfo。
-這屬於可接受的批次查詢，不一定要新增 API。
+`gateConnections` 一次回傳完整 structured records；大型結果由 tools 自動寫入 artifact，不能
+再對每個 gate 逐筆呼叫 GateInfo。current test70 實測 19,682 筆全部完成。
 ```
 
 ---
@@ -1856,13 +1854,13 @@ Does there exist any pair of internal signals (a, b) already in the netlist such
 出現位置：
 
 ```text
-test35
+test70
 ```
 
 Coverage：
 
 ```text
-OK（high-level C++ API 與 `func_search nand_pairs` tools CLI 均已串接）
+OK（high-level C++ API 與 `func_search nand_pair` tools CLI 均已串接）
 ```
 
 目前對應 API：
@@ -1883,7 +1881,7 @@ FunctionSearchReport report = netlist.runFunctionSearchQuery(query);
 func_search nand_pair n25
 ```
 
-command 會回傳 `complete`、`found`、candidate/SAT 統計，以及只包含 SAT-proven UNSAT miter 的 witness pairs。timeout、result limit 或 unsupported 不可解讀成不存在。
+command 會回傳 `complete`、`found`、candidate/SAT 統計，以及只包含已經 AIG literal equality 或 SAT UNSAT 證明的 witness pairs。timeout、result limit 或 unsupported 不可解讀成不存在。
 
 主要讀取：
 
@@ -1893,9 +1891,9 @@ report.matches[*].netNameA / netNameB
 report.matches[*].proofMethod / solverStatus
 ```
 
-實作使用 deterministic bit-parallel simulation 淘汰不可能的 pair，再以 SAT miter 驗證剩餘 candidates。simulation 不作為最終 proof；只有 UNSAT pair 會進入 `matches`。
+實作使用 deterministic bit-parallel simulation 淘汰不可能的 pair，再驗證剩餘 candidates。FindAny 使用共用 Functional Pattern/AIG backend，FindAll 使用 legacy cone-miter SAT；simulation 不作為最終 proof。
 
-test35/n25 實測約 6.0 秒找到 `(n26080, n6359)`，proof 為 `SAT_UNSAT_MITER / UNSAT`。
+test70/n25 實測搜尋約 0.99 秒找到 `(n26080, n6359)`，proof 為 `AIG_INCREMENTAL_SAT / UNSAT`。
 
 ---
 
@@ -1940,8 +1938,8 @@ sequential_query enable_hold all --summary-only
 
 - 支援 OR/AND、NAND/NAND、AND/OR、NOR/NOR canonical feedback-MUX。
 - 正規化 NOT、NAND(x,x)、NOR(x,x) 與成對反相 wrapper，可分析 basis mapping 後的 D-input logic。
-- C++ API 與 `sequential_query --functional-fallback` 可 opt-in 啟用 SAT cofactor fallback，辨識 XOR restructuring 或 internal selector 等非 canonical、但功能等價的 MUX-hold。
-- fallback 會驗證 control 的 0/1 可達性，並回傳 candidate/time/completeness report；CLI 預設關閉，且公開 candidate、simulation、per-DFF 與 query-wide time budget。
+- 預設自動以共用 AIG/Primitives 執行 Q-cofactor proof，可辨識 XOR restructuring、internal selector 與無單一具名 EN/DATA 的 MUX-hold。
+- canonical fast path 仍必須通過 target-pattern 功能等價證明，並確認 control/data cone 不含同顆 Q。candidate 上限只影響證明後的具名 role mapping，不影響 functional count completeness。
 - 回傳 DFF、D/Q、enable、data、feedback、active level 與 evidence gates。
 - matchedDffCount 依 DFF instance 去重。
 - AND-only D-input 只列為 DataGatingWithoutHoldFeedback non-match diagnostic，不計入 matched/candidate count。
@@ -1950,15 +1948,10 @@ sequential_query enable_hold all --summary-only
 驗證：
 
 ```text
-mini test/test19: 15/15 passed
-mini test/test20: 13/13 passed
-mini test/test21 CLI: 18/18 passed（canonical + opt-in functional）
-mini test/test28 functional pattern: 19/19 passed
-NewTestCase/test40 original design: 2585 DFF analyzed, 1583 canonical matches
-NewTestCase/test40 after NAND/NOT mapping and cleanup: 1590 confirmed matches, 1975 candidates
-post-edit query: about 0.050 seconds; complete pre-query flow: about 33.7 seconds
-CLI summary output: 1101 characters, complete aggregate; detail defaults to 50-record pages
-test40 functional FindAny + simulation-aware ranking + safe-Reject quota + hybrid SAT session benchmark: 12 顆抽樣連續執行皆 12/12 complete。quota 64 的 2 秒執行約開始 43 顆 fallback DFF、找到 27 筆額外 proven matches；quota 4/8 的 2 秒執行約找到 90–92 筆。quota 4 在 10 秒找到 193 筆；20 秒 budget 的執行實際約 13.4 秒走完全部 1002 顆 fallback DFF，找到 263 筆，matched DFF 1583 -> 1846。後者沒有 timeout/unknown，但 760 顆仍有 unexamined searchable candidates，因此仍為 PARTIAL，所有數字只能視為 proven lower bound
+mini test/test21 CLI: 18/18 passed
+mini test/test58 functional recognition: 11/11 passed
+NewTestCase/test91: 2585 DFF analyzed, 1796 functional matches,
+complete=true, timed_out=false, recent query runs about 21.55-29.63 seconds
 ```
 
 ---

@@ -82,7 +82,7 @@ if ($responses.Count -ge 10) {
          $findAny -match "report_status: MATCH_FOUND" -and
          $findAny -match "found: true" -and
          $findAny -match "complete: true" -and
-         $findAny -match "proof_method: SAT_UNSAT_MITER" -and
+         $findAny -match "proof_method: AIG_(LITERAL_EQUALITY|INCREMENTAL_SAT)" -and
          $findAny -match "solver_status: UNSAT") `
         "FindAny returns a complete SAT-proven witness"
 

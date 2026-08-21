@@ -46,8 +46,9 @@ src/SATEngine/Fraig.cpp
 scalar Function Query 曾完成試接與 correctness/performance benchmark，但官方 workload
 以大型電路、少量且非重複 query 為主，cold build 成本無法攤平，因此 production
 `runFunctionQuery()` 已切回 legacy backend。Function Search 的 `EquivalentGatePairs`
-已局部使用 private owner 做 batch class proof；NAND FindAny/FindAll 與其他 Function
-Query 仍維持 legacy。Phase B 不是獨立 public facade。
+已局部使用 private owner 做 batch class proof；NAND FindAny 使用共用
+`FunctionalPatternEngine`/Phase B proof，NAND FindAll 與其他 Function Query 維持
+legacy。Phase B 不是獨立 public facade。
 
 ## 3. Phase A 能力
 
@@ -172,7 +173,7 @@ mini test/test44/test44.cpp
 - test41：官方 60/300 秒 request 與各高階 API 預設 budget。
 - test42：Phase B assumptions、proof ledger、counterexample、mutation、FRAIG、memory-limit termination、untrusted report 與固定亂數 DAG（22 checks）。
 - test43：以官方 NewTestCase 直接比較獨立 Phase B runner 與 production legacy Function Analysis SAT 的 cold、warm、mutation rebuild 與同 testcase session 時間。
-- test44：以獨立 legacy scalar proof 比較 production EquivalentGatePairs Phase B；另保留 NAND prototype benchmark，不提供 public backend 開關。
+- test44：EquivalentGatePairs 以獨立 legacy scalar proof 比較 production Phase B；NAND 以 production reference 比較 pattern-engine runner，不提供 public backend 開關。
 
 Function Query、Function Search 等高階 API 的 regression 應繼續呼叫唯一既有入口，不透過獨立 AIG facade。
 
@@ -217,29 +218,29 @@ mini test/test43/newtestcase_phase_b_session_benchmark.tsv
 
 ### 10.2 Function Search batch 結論
 
-test44 在 NewTestCase 29/30 的 EquivalentGatePairs FindAll 與 test35 NAND FindAny
-得到相同完整結果，Phase B 約加速 `4.4x` 至 `7.8x`。這些 query 能反覆比較既有 AIG
-signals，符合 incremental SAT 的使用方式。
+test44 在 NewTestCase 29/30 的 EquivalentGatePairs FindAll 得到與 legacy 相同的
+完整結果，Phase B 約加速 `4.4x` 至 `7.8x`。current NewTestCase/test70
+NAND FindAny 的 legacy/engine 均找到同一組 witness，complete 且 Unknown=0，時間約
+7.16/2.21 秒，因此 production FindAny 已接入共用 pattern engine。
 
-test35 NAND FindAll 則不同：每個 surviving pair 都要建立新的 `NAND(a,b)` candidate。
-重複 55 秒測試分別得到 512/512 complete 與 timeout 506/512，Phase B 約
-54.46–55.76 秒；放寬到官方 290 秒後可穩定得到完整 512/512、Unknown=0，但仍約
-55.85 秒，legacy 約 28.13 秒。production 暫不接入；NAND FindAll 需先有不持續擴張
-常駐 AIG/SAT state 的 ephemeral 或 chunked proof backend。另以 mixed-gate synthetic
-case 驗證跨 AND/NAND/NOR/XOR 重構，equivalent 4/4、NAND 10/10 pairs 一致。
+test70 NAND FindAll 每個 surviving pair 都要建立新的 `NAND(a,b)` candidate。
+兩個 backend 都完整找到 512/512、Unknown=0，但 legacy 約 59.29 秒，
+Phase B 約 121.49 秒。production FindAll 因此保留 legacy；若要遷移，需先有
+不持續擴張常駐 AIG/SAT state 的 ephemeral 或 chunked proof backend。另以
+mixed-gate synthetic case 驗證跨 AND/NAND/NOR/XOR 重構，equivalent 4/4、
+NAND 10/10 pairs 一致。
 
 另以 8 組固定 seed、48 至 2048 個 mixed-gate random DAG 執行 16 個 differential
-cases，set/completion/Unknown 與植入 oracle 全部一致。EquivalentGatePairs FindAll
-穩定加速約 3.18x–8.98x；NAND FindAny 在只需一次 proof 時多數為 0.17x–0.94x。
-因此 Phase B 的適用條件是「可攤平 owner build 的重複 proof」，不能只依 query kind
-判斷。EquivalentGatePairs 已完成 production 局部接入：candidate/simulation/report
-保持原樣，只替換 bucket representative proof。最終 test44 為 22/22、Unknown=0、
-mismatch=0；test26 C++ 28/28、CLI 18/18，test24 9/9。NAND modes 仍維持 legacy。
+cases，set/completion/Unknown 與植入 oracle 全部一致。小型 random 的 NAND
+FindAny 因 cold build 多數略慢，但均為微秒級；官方 test70 的候選 proof 數可攤平
+owner build，則有明顯改善。因此 backend 依實際 mode/workload 固定於高階 API 內部，
+不對 caller 暴露開關。test24 最終為 9/9。
 
 詳細數據：
 
 ```text
 mini test/test44/function_search_phase_b_batch_benchmark.tsv
 mini test/test44/function_search_phase_b_batch_benchmark_random.tsv
-mini test/test44/function_search_phase_b_batch_benchmark_test35_nand_all_290.tsv
+mini test/test44/function_search_phase_b_batch_benchmark_test70_nand_any.tsv
+mini test/test44/function_search_phase_b_batch_benchmark_test70_nand_all.tsv
 ```

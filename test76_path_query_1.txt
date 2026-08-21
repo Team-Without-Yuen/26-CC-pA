@@ -1,0 +1,367 @@
+Total paths: 212
+Format: COMPACT_PATH_V3
+All IDs and path indices are unsigned base36 integers.
+Dictionary rows:
+  N <net_id> <net_name>
+  G <gate_id> <output_net_id> <gate_name> <gate_type>
+A decoded path token sequence is S = [start_net_id, gate_id_1, ..., gate_id_N].
+Token 0 is always the start net; tokens 1..N are always gates.
+First record: Path 0: F <every token in S>
+Delta record: P <path_index> <prefix_token_count> <suffix_token_count> <middle_tokens>...
+IMPORTANT: prefix/suffix counts apply to the entire S, including token 0 (start net).
+Decode delta: current S = previous S first <prefix> tokens + middle tokens + previous S last <suffix> tokens.
+Example: previous S=[0,0,2,6,7] and 'P 1 2 2 3' decodes to S=[0,0,3,6,7].
+Expand names: look up S[0] in net_dictionary; for each gate S[i], look up the gate and then its output_net_id.
+Expected paths: 212
+
+[net_dictionary]
+N	0	n0
+N	1	n1
+N	2	n2
+N	3	n3
+N	4	n4[2]
+N	5	n4[1]
+N	6	n4[0]
+N	7	n5[2]
+N	8	n5[1]
+N	9	n5[0]
+N	a	n6[3]
+N	b	n6[2]
+N	c	n6[1]
+N	d	n6[0]
+N	e	n50
+N	f	n51
+N	g	n49
+N	h	n7[0]
+N	i	n48
+N	j	n46
+N	k	n7[1]
+N	l	n47
+N	m	n7[2]
+N	n	1'b1
+N	o	n45
+N	p	n44
+N	q	n43
+N	r	n42
+N	s	n18
+N	t	n41
+N	u	n17
+N	v	n22
+N	w	n38
+N	x	n40
+N	y	n39
+N	z	n37
+N	10	n36
+N	11	n35
+N	12	n19
+N	13	n26
+N	14	n34
+N	15	n33
+N	16	n32
+N	17	n31
+N	18	n30
+N	19	n29
+N	1a	n28
+N	1b	n20
+N	1c	n25
+N	1d	n27
+N	1e	n24
+N	1f	n23
+N	1g	n16
+N	1h	n52
+N	1i	n21
+N	1j	n56
+N	1k	n55
+N	1l	n53
+N	1m	n54
+N	1n	n8
+N	1o	n9
+N	1p	n11
+N	1q	n10
+N	1r	n15
+N	1s	n13
+N	1t	n14
+N	1u	n12
+
+[gate_dictionary]
+G	0	9	g0	NOT
+G	1	5	g1	NOT
+G	2	6	g2	NOT
+G	3	f	g3	NAND
+G	4	8	g4	NOR
+G	5	g	g5	NAND
+G	6	e	g6	OR
+G	7	7	g7	NAND
+G	8	4	g8	NOT
+G	9	i	g9	NOR
+G	a	l	g10	NOT
+G	b	j	g11	NOT
+G	c	c	g12	DFF
+G	d	b	g13	DFF
+G	e	a	g14	DFF
+G	f	d	g15	DFF
+G	g	o	g16	NOR
+G	h	p	g17	NOR
+G	i	q	g18	NOR
+G	j	r	g19	NOR
+G	k	t	g20	NAND
+G	l	x	g21	NOR
+G	m	k	g22	DFF
+G	n	h	g23	DFF
+G	o	y	g24	NOR
+G	p	w	g25	OR
+G	q	z	g26	NAND
+G	r	11	g27	NOT
+G	s	10	g28	NAND
+G	t	14	g29	NAND
+G	u	m	g30	DFF
+G	v	15	g31	NAND
+G	w	16	g32	NOR
+G	x	18	g33	NOR
+G	y	17	g34	NOR
+G	z	19	g35	NOR
+G	10	1a	g36	NOR
+G	11	1d	g37	NOR
+G	12	13	g38	NAND
+G	13	1c	g39	NOR
+G	14	1e	g40	NOR
+G	15	1f	g41	NOR
+G	16	v	g42	NOT
+G	17	1i	g43	NOT
+G	18	1b	g44	NOT
+G	19	12	g45	NOT
+G	1a	s	g46	NOT
+G	1b	u	g47	NOT
+G	1c	1g	g48	NOT
+G	1d	1j	g49	NOR
+G	1e	1o	g50	NOR
+G	1f	1n	g51	NOT
+G	1g	1h	g52	NAND
+G	1h	1p	g53	NAND
+G	1i	1q	g54	NOR
+G	1j	1k	g55	XNOR
+G	1k	1m	g56	XNOR
+G	1l	1r	g57	NAND
+G	1m	1l	g58	NOR
+G	1n	1t	g59	NOT
+G	1o	1s	g60	NAND
+G	1p	1u	g61	NOR
+
+[paths]
+Path 0: F c 1e 1d 14 z w s p k g
+P 1 7 2 r o l
+P 2 3 2 15 10 w s p
+P 3 7 2 r o l
+P 4 1 2 1h 1g 1c 11 y v s p
+P 5 8 2 r o l
+P 6 1 1 1o 1n 1m 1a
+P 7 1 3 1p
+P 8 1 0 1e 1d 14 z w s p k h
+P 9 7 2 r o l
+P a 3 2 15 10 w s p
+P b 7 2 r o l
+P c 1 2 1h 1g 1c 11 y v s p
+P d 8 2 r o l
+P e 1 1 1o 1k 1b
+P f 1 0 1e 1d 14 z w s p k i
+P g 7 2 r o l
+P h 3 2 15 10 w s p
+P i 7 2 r o l
+P j 1 2 1h 1g 1c 11 y v s p
+P k 8 2 r o l
+P l 1 1 1o 1n 1l 1j 16
+P m 1 0 1e 1d 14 z w s p k j
+P n 7 2 r o l
+P o 3 2 15 10 w s p
+P p 7 2 r o l
+P q 1 2 1h 1g 1c 11 y v s p
+P r 8 2 r o l
+P s 3 0 12 q
+P t 3 1 1c 11 y t
+P u 1 0 1e 1d 14 z w s
+P v 3 2 15 10
+P w 1 1 1h 1g 1c 11 y v
+P x 0 0 b 1e 1d 14 z w s p k g
+P y 7 2 r o l
+P z 3 2 15 10 w s p
+P 10 7 2 r o l
+P 11 1 2 1i 1g 1c 11 y v s p
+P 12 8 2 r o l
+P 13 1 0 1e 1d 14 z w s p k h
+P 14 7 2 r o l
+P 15 3 2 15 10 w s p
+P 16 7 2 r o l
+P 17 1 2 1i 1g 1c 11 y v s p
+P 18 8 2 r o l
+P 19 1 1 1k 1b
+P 1a 1 0 1e 1d 14 z w s p k i
+P 1b 7 2 r o l
+P 1c 3 2 15 10 w s p
+P 1d 7 2 r o l
+P 1e 1 2 1i 1g 1c 11 y v s p
+P 1f 8 2 r o l
+P 1g 1 1 1l 1j 16
+P 1h 1 0 1e 1d 14 z w s p k j
+P 1i 7 2 r o l
+P 1j 3 2 15 10 w s p
+P 1k 7 2 r o l
+P 1l 1 2 1i 1g 1c 11 y v s p
+P 1m 8 2 r o l
+P 1n 3 0 12 q
+P 1o 3 1 1c 11 y t
+P 1p 1 0 1e 1d 14 z w s
+P 1q 3 2 15 10
+P 1r 1 1 1i 1g 1c 11 y v
+P 1s 0 0 a 1f 1d 14 z w s p k g
+P 1t 7 2 r o l
+P 1u 3 2 15 10 w s p
+P 1v 7 2 r o l
+P 1w 1 2 1i 1g 1c 11 y v s p
+P 1x 8 2 r o l
+P 1y 1 0 1f 1d 14 z w s p k h
+P 1z 7 2 r o l
+P 20 3 2 15 10 w s p
+P 21 7 2 r o l
+P 22 1 2 1i 1g 1c 11 y v s p
+P 23 8 2 r o l
+P 24 1 0 1f 1d 14 z w s p k i
+P 25 7 2 r o l
+P 26 3 2 15 10 w s p
+P 27 7 2 r o l
+P 28 1 2 1i 1g 1c 11 y v s p
+P 29 8 2 r o l
+P 2a 1 1 1j 16
+P 2b 1 0 1f 1d 14 z w s p k j
+P 2c 7 2 r o l
+P 2d 3 2 15 10 w s p
+P 2e 7 2 r o l
+P 2f 1 2 1i 1g 1c 11 y v s p
+P 2g 8 2 r o l
+P 2h 3 0 12 q
+P 2i 3 1 1c 11 y t
+P 2j 1 0 1f 1d 14 z w s
+P 2k 3 2 15 10
+P 2l 1 1 1i 1g 1c 11 y v
+P 2m 0 0 d 1h 1g 1c 11 y v s p k g
+P 2n 8 2 r o l
+P 2o 1 1 1o 1n 1m 1a
+P 2p 1 3 1p
+P 2q 1 0 1h 1g 1c 11 y v s p k h
+P 2r 8 2 r o l
+P 2s 1 1 1o 1k 1b
+P 2t 1 0 1h 1g 1c 11 y v s p k i
+P 2u 8 2 r o l
+P 2v 1 1 1o 1n 1l 1j 16
+P 2w 1 0 j
+P 2x 1 1 1h 1g 1c 11 y v s p k
+P 2y 8 2 r o l
+P 2z 3 0 12 q
+P 30 3 1 1c 11 y t
+P 31 6 0 v s
+P 32 0 0 k 7 6 z w s p k g
+P 33 6 2 r o l
+P 34 1 2 9 5 10 w s p
+P 35 6 2 r o l
+P 36 1 0 7 6 z w s p k h
+P 37 6 2 r o l
+P 38 1 2 9 5 10 w s p
+P 39 6 2 r o l
+P 3a 1 0 7 6 z w s p k i
+P 3b 6 2 r o l
+P 3c 1 2 9 5 10 w s p
+P 3d 6 2 r o l
+P 3e 1 0 7 6 z w s p k j
+P 3f 6 2 r o l
+P 3g 1 2 9 5 10 w s p
+P 3h 6 2 r o l
+P 3i 2 0 3 17 12 q
+P 3j 1 1 t
+P 3k 1 0 7 6 z w s
+P 3l 1 2 9 5 10
+P 3m 1 0 13 x
+P 3n 0 0 h 6 z w s p k g
+P 3o 5 2 r o l
+P 3p 1 2 b 5 10 w s p
+P 3q 6 2 r o l
+P 3r 1 4
+P 3s 1 2 v s p
+P 3t 3 2 r o l
+P 3u 1 2 19 p
+P 3v 2 3 11 y v s
+P 3w 6 2 r o l
+P 3x 1 0 6 z w s p k h
+P 3y 5 2 r o l
+P 3z 1 2 b 5 10 w s p
+P 40 6 2 r o l
+P 41 1 4
+P 42 1 2 v s p
+P 43 3 2 r o l
+P 44 1 2 19 p
+P 45 2 3 11 y v s
+P 46 6 2 r o l
+P 47 1 0 6 z w s p k i
+P 48 5 2 r o l
+P 49 1 2 b 5 10 w s p
+P 4a 6 2 r o l
+P 4b 1 4
+P 4c 1 2 v s p
+P 4d 3 2 r o l
+P 4e 1 2 19 p
+P 4f 2 3 11 y v s
+P 4g 6 2 r o l
+P 4h 1 0 6 z w s p k j
+P 4i 5 2 r o l
+P 4j 1 2 b 5 10 w s p
+P 4k 6 2 r o l
+P 4l 1 4
+P 4m 1 2 v s p
+P 4n 3 2 r o l
+P 4o 1 2 19 p
+P 4p 2 3 11 y v s
+P 4q 6 2 r o l
+P 4r 1 0 3 17 12 q
+P 4s 1 1 19 11 y t
+P 4t 1 0 6 z w s
+P 4u 1 2 b 5 10
+P 4v 1 1 v
+P 4w 1 2 19 11 y
+P 4x 1 0 13 x
+P 4y 0 0 m 9 5 10 w s p k g
+P 4z 6 2 r o l
+P 50 1 2 a 7 6 z w s p
+P 51 7 2 r o l
+P 52 1 3
+P 53 1 2 y v s p
+P 54 4 2 r o l
+P 55 1 0 9 5 10 w s p k h
+P 56 6 2 r o l
+P 57 1 2 a 7 6 z w s p
+P 58 7 2 r o l
+P 59 1 3
+P 5a 1 2 y v s p
+P 5b 4 2 r o l
+P 5c 1 0 9 5 10 w s p k i
+P 5d 6 2 r o l
+P 5e 1 2 a 7 6 z w s p
+P 5f 7 2 r o l
+P 5g 1 3
+P 5h 1 2 y v s p
+P 5i 4 2 r o l
+P 5j 1 0 9 5 10 w s p k j
+P 5k 6 2 r o l
+P 5l 1 2 a 7 6 z w s p
+P 5m 7 2 r o l
+P 5n 1 3
+P 5o 1 2 y v s p
+P 5p 4 2 r o l
+P 5q 1 0 9 3 17 12 q
+P 5r 1 1 y t
+P 5s 1 0 9 5 10 w s
+P 5t 1 2 a 7 6 z
+P 5u 1 1 y v
+P 5v 1 0 18 x
+
+[summary]
+Written paths: 212
+Complete: yes
+Timed out: no

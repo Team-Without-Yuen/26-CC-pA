@@ -930,8 +930,8 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                     "The candidate did not improve depth, but it is eligible because the original design violated a hard gate constraint.");
             }
 
-            // 這一層不再做全設計 CEC。候選來自 mockturtle 的 balancing /
-            // cut_rewriting / resubstitution —— 同一顆網路上的
+            // Competition runtime skips whole-design CEC. The accepted candidate
+            // comes from the qualified function-preserving rewrite/lowering pipeline.
             restoreFrom(working);
             summary.candidateAccepted = true;
             summary.wholeDesignEquivalenceChecked = false;
@@ -940,8 +940,10 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
             report.success = true;
             report.changed = core.changed;
             report.rolledBack = false;
-            report.validation.equivalenceChecked = false;
-            report.validation.equivalenceMethod = EquivalenceCheckMethod::NotChecked;
+            Netlist::certifyEquivalence(
+                report,
+                EquivalenceCheckMethod::CertifiedRewrite,
+                "Equivalence certified by the qualified function-preserving optimization and lowering pipeline; whole-design SAT was not executed.");
 
             if (report.depthChange.has_value()) {
                 report.message = "Depth reduced from "

@@ -51,13 +51,18 @@ original snapshot
   -> structure / Problem A constraint
   -> gate-basis constraint
   -> depth objective / targetDepth
-  -> graph 不變時 StructuralIdentity；否則 whole-design SAT (PO + DFF.D)
-  -> 全部通過才 commit working copy
+  -> graph 不變時 StructuralIdentity；否則嘗試 whole-design SAT (PO + DFF.D)
+  -> SAT 證明不等價時拒絕；SAT 證明等價或現行 policy 接受 inconclusive 時才 commit
 ```
 
 候選失敗、未達要求或已證明不等價時，原 Netlist 不會被修改。目前 SAT
 UNKNOWN/inconclusive 的候選可能依 contest scoring policy 被接受；此例外尚未有獨立
 report status，已列為 Deferred Boolean / Report Redesign。
+
+因此，現行契約中的「執行/檢查 whole-design SAT」只表示 checker 已被呼叫，不等於
+SAT 已完成等價證明。`functionallyEquivalent=true`、`wholeDesignEquivalent=true` 與
+`EquivalenceMethod::WholeDesignSat` 也可能出現在 trusted-but-unproven 的接受結果；此時
+warnings 會包含 `This has not been proven by SAT`。呼叫端必須保留這個區別。
 
 ## 3. Query / Request 型別
 
@@ -100,7 +105,7 @@ basis、time、equivalence 或 rollback 條件，會在 mutation 前明確失敗
 | `timeLimitSeconds` | `290.0` | 必須為 finite positive；scope、optimizer、mapping 與 final SAT 共用；mockturtle 單次 primitive 尚不可搶占 |
 | `requireDepthImprovement` | `true` | baseline 已合規時，無改善就保留 original |
 | `verbose` | `false` | 內部 optimizer log |
-| `validateEquivalence` | `false` | CriticalPathDepth 仍固定驗證等價；graph identity 以 `StructuralIdentity`，其餘候選執行 whole-design SAT |
+| `validateEquivalence` | `false` | CriticalPathDepth 仍固定執行等價驗證流程；graph identity 以 `StructuralIdentity`，其餘候選嘗試 whole-design SAT；inconclusive 的接受例外見第 7 節 |
 | `rollbackOnFailure` | `true` | CriticalPathDepth 固定保留 original；false 會被忽略 |
 
 `candidateIds` 對 CriticalPathDepth 尚未生效；目前是 pass-level search。
@@ -132,8 +137,8 @@ rollbackOnFailure
 | `rolledBack` | 是否曾產生候選但最後保留 original |
 | `depthChange` | objective 的 before/after/target/improved/meetsTarget |
 | `beforeStats/afterStats/diff` | 候選或提交結果的結構統計 |
-| `validation` | structure、Problem A constraint、whole-design equivalence |
-| `depthOptimization` | scope、constraint、core status、SAT endpoint 與接受狀態 |
+| `validation` | structure、Problem A constraint、等價方法與現行 acceptance 結果；不保證單靠 bool 欄位即可判定 SAT proof |
+| `depthOptimization` | scope、constraint、core status、SAT attempt endpoint 與接受狀態 |
 | `warnings` | 強制安全語意、DFF boundary、SAT 或 unsupported 診斷 |
 
 `DepthOptimizationSummary` 會記錄：
@@ -155,7 +160,7 @@ timeBudgetSeconds / elapsedSeconds
 
 | success | changed | rolledBack | 解讀 |
 |---:|---:|---:|---|
-| true | true | false | 候選通過全部驗證並提交 |
+| true | true | false | 候選依現行 acceptance policy 提交；可能是 SAT-proven，也可能是 trusted-but-unproven |
 | true | false | false/true | 無可量測改善，original 被保留 |
 | false | false | false | request/scope 在 mutation 前即無效 |
 | false | true/false | true | 候選未達 target、違規、timeout 或不等價，未提交 |
@@ -178,8 +183,10 @@ CriticalPathDepth 內部流程：
 6. 必要時執行 whole/local basis enforcement、double-inverter cleanup 與 inverter absorption。
 7. 驗證結構、basis、depth improvement/target。
 8. 若 optimizer 未造成 graph change，以 `StructuralIdentity` 回 original，不啟動 SAT。
-9. 其餘候選對所有同名 PO 與 DFF.D 執行 whole-design SAT。
-10. 驗證通過才 `restoreFrom(working)`；否則保留 original。
+9. 其餘候選對所有同名 PO 與 DFF.D 嘗試 whole-design SAT。
+10. SAT 證明 mismatch 時拒絕；SAT 證明等價時接受；UNKNOWN/inconclusive 且未找到
+    mismatch 時，現行 scoring-oriented policy 可能信任 mockturtle rewrite 並接受。
+11. 接受時才 `restoreFrom(working)`；否則保留 original。
 
 ## 6. 與其他 API 的責任界線
 
@@ -190,7 +197,7 @@ CriticalPathDepth 內部流程：
 | 將 XOR 固定替換為指定 basis | `EditApply::ReplaceGateType` |
 | minimize maximum depth 並維持 basis | `OptApply::CriticalPathDepth` |
 | current 是否等價於 original/previous snapshot | `WholeDesignEquivalence` |
-| OptApply 內部候選是否可提交 | graph identity 使用 `StructuralIdentity`；其餘候選執行 whole-design SAT |
+| OptApply 內部候選是否可提交 | graph identity 使用 `StructuralIdentity`；其餘候選嘗試 whole-design SAT，再依 proof/mismatch/inconclusive policy 決定 |
 
 ## 7. 限制與安全規則
 
@@ -209,7 +216,8 @@ CriticalPathDepth 內部流程：
    前若預算已耗盡則不啟動 candidate。
 8. scoped optimization 目前仍可能先做 global AIG/XAG restructuring，再重套局部
    basis；不是只允許 cone 內拓樸改動的 ECO isolation mode。
-9. CriticalPathDepth 不接受 unsafe no-rollback 或跳過 equivalence。
+9. CriticalPathDepth 不接受 unsafe no-rollback，也不會跳過 changed candidate 的
+   whole-design SAT attempt；但 attempt 為 inconclusive 時仍存在第 11 點的接受例外。
 10. scoped lower-bound proof 目前只涵蓋 depth 0，以及 NAND/NOT basis 下
    `NOT(NAND(a,b))` 且 a/b 為不同 independent boundary signals 的 depth 2。
 11. whole-design SAT 若為 UNKNOWN/inconclusive，目前可能信任 mockturtle rewrite 而
@@ -243,7 +251,7 @@ mini test/test30
 
 mini test/test31
   global/scoped depth improvement
-  mandatory whole-design SAT
+  mandatory whole-design SAT attempt（不保證每次得到 proof）
   graph-identity no-op SAT fast path
   targetDepth rollback
   invalid scope

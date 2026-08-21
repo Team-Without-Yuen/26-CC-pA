@@ -59,8 +59,8 @@ TOOL_RESULT_END
 
 ```text
 How many NAND gates are in the cone of n8?
--> cone_query net_fanin n8
-   讀 cone gate-type breakdown 的 NAND count
+-> cone_query net_fanin n8 --gate-types NAND
+   讀 filtered gates
 
 How many NAND gates are in the whole design?
 -> structure_query count_by_type NAND
@@ -137,6 +137,8 @@ structure_query net_loads n10
 ```
 
 送出 command 後必須核對回傳的 mode、resolved object/scope、objective 與 constraints。
+成功的 count/filter query 若沒有 matching object，工具會明確輸出 `gates: 0` 等有效零值；缺少
+某個 count 欄位代表該 mode 不提供它，不得自行猜成 0。
 若 `output` 被回報為不存在的 net，或回傳 scope 與 prompt 不同，代表參數擷取錯誤，
 應修正 command 後重試，不能把工具 error 當成題目答案。
 
@@ -226,6 +228,11 @@ List all pairs ... NAND(a,b)==n25.
 Does a path from A to B exist that does not traverse X?
 -> path_query exists net:A net:B -avoid net:X
 
+What is the maximum logic depth from any primary input to any DFF D-pin?
+-> path_query max_depth all_pi all_dff_d
+Reason: the prompt explicitly fixes the start/end scopes; do not substitute
+        depth_query all_dff_d, which also permits sequential startpoints.
+
 Which output (A or B) has the larger fanin cone?
 -> cone_query net_fanin A
 -> cone_query net_fanin B
@@ -243,8 +250,8 @@ LLM 應先辨識題目的主要動作：
 ```text
 count / list / inspect direct connection       -> StructureQuery
 find transitive fanin/fanout scope             -> ConeQuery
-find connectivity between two endpoints        -> PathQuery
-measure logic level or critical depth           -> DepthQuery
+find connectivity/depth between fixed endpoints -> PathQuery
+measure endpoint depth or global critical depth  -> DepthQuery
 prove a property of known signals               -> FunctionQuery
 search unknown signals satisfying a function    -> FunctionSearchQuery
 recognize DFF enable/hold semantics              -> SequentialPatternQuery
@@ -266,6 +273,7 @@ minimize / optimize / find best cost             -> Optimization flow
 
 - gate、net、PI、PO、DFF 的 active 數量與名稱列表。
 - gate type 的數量與 gate 列表。
+- 依 gate type 批次列出每顆 gate 的 input/output pin-net 明細。
 - 單一 gate、net、port 的基本資訊。
 - floating net、undriven net、unused gate 等 structural issue。
 - net 的直接 driver/load、gate 的 input/output、immediate fanin/fanout。
@@ -276,6 +284,7 @@ minimize / optimize / find best cost             -> Optimization flow
 ```text
 How many primary inputs and primary outputs does this design have?
 List all NOR gates.
+List all NAND gates with their input and output signals.
 How many floating signals were found?
 What gate drives n10?
 List all flip-flops driven by clock n0.
@@ -286,6 +295,22 @@ Which primary input has the highest direct fanout?
 
 大型 object/load/issue 名單會自動完整寫入 list artifact；LLM 讀取 count、
 `list artifact complete` 與 `output_file`，不需也不能指定輸出門檻或檔名。
+自動切換同時考慮 record 數與預估 serialized characters，避免少量但超長的 detail records
+超過 response token；這兩個門檻不改變查詢結果數量。
+
+一或多種 gate type 的 names-only list 使用 `gates_by_type --gate-types <type...>`；排除型別使用
+`--exclude-gate-types <type...>`。未指定 include 代表全部，include 後再套 exclude，且 exclude
+優先。單型別仍可使用 `gates_by_type <type>`。prompt 明確要求 pins、connections 或 input/output
+signals 時加 `--with-pins`。不要先列 names 再逐顆呼叫
+`gate_info`。
+
+constant-input gate 的 names-only list 使用 `const_input_gates [type|all] [0|1|any]`；prompt 還要求
+constant 位於哪個 pin、其他 input 或 output signal 時，加上 `--with-pins`。不要先取得 gate names
+再逐顆查詢。
+
+net driver/load 預設回 gate-level names；prompt 明確要求 exact pin、gate type 或 pin role 時使用
+`net_driver <net> --with-pins` / `net_loads <net> --with-pins`。其中 `count` 是去重 gate 數，
+`pin connection count` 才是逐 pin edge 數。
 
 詳細用法：[`STRUCTURE_QUERY_TOOL.md`](STRUCTURE_QUERY_TOOL.md)
 
@@ -299,6 +324,7 @@ Which primary input has the highest direct fanout?
 
 - 找出 cone 內所有 gates、nets、PIs、POs 與 DFF boundary。
 - 統計 cone 內 gate 數量或各 gate type 數量。
+- 以一種或多種 gate type 篩選 cone，並取得 filter 後 gates 或完整 pin/net details。
 - 比較或尋找 shared fanin gates。
 - 查詢 largest output cone 等 cone 層級摘要。
 
@@ -308,6 +334,7 @@ Which primary input has the highest direct fanout?
 Find the transitive fanin cone of n10.
 Which gates can affect output y?
 How many NOR gates are in the cone of n15?
+List all NAND, NOR, and NOT gates in n8's fanin cone with their connections.
 Which gates are shared by the fanin cones of n10 and n12?
 Which output has the largest fanin cone?
 ```
@@ -316,6 +343,9 @@ Which output has the largest fanin cone?
 
 大型 cone names 會自動完整寫入 list artifact，terminal 保留 cone counts、gate-type
 breakdown、完整性與 `output_file`；小型 cone 維持直接列出全部名稱。
+
+prompt 指定 gate type 時使用 `--gate-types <type...>`；支援 `AND OR NOT NAND NOR XOR
+XNOR BUF DFF`，多個 type 是聯集。prompt 要求 pin/net connection 時再加 `--with-pins`。
 
 詳細用法：[`CONE_QUERY_TOOL.md`](CONE_QUERY_TOOL.md)
 
@@ -402,9 +432,21 @@ Derive the Boolean expression for n15.
 
 責任邊界：候選 signal 名稱必須已知。若題目要求從全設計「找出任意一組」符合條件的 signals，使用 `FunctionSearchQuery`。若比較的是修改前後兩份 design，不是兩條 internal nets，使用 `WholeDesignEquivalence`。
 
+所有 `func_query` mode 必須照表提供完整參數；工具會拒絕缺值、trailing token、非 `0/1`
+condition/constant value，以及負數或非整數 expression depth，不會猜測缺少的參數。
+
 `func_query boolean_expression <net>` 會自動把完整 named-net DAG equations 寫入唯一
 artifact；LLM 不指定 path 或大小上限。response 只回完整性、equation/boundary counts
 與 `output_file`，不得把大型 artifact 全貼進自然語言答案。
+
+`func_query support_pi` 與 `func_query symmetry` 的完整 support/counterexample lists 若過大，
+會自動改寫入 `QUERY_LIST_ARTIFACT_V1`；response 保留 counts 與主要 Boolean 結論並回
+`output_file`。`boolean_expression` 不會再建立第二個 generic list artifact。
+
+Boolean artifact 使用 `NAMED_DAG_EQUATIONS_V2`。若 fanin 含 DFF.Q，方程式會使用
+`state_qN` current-state symbol，並在 `Current-state variables` 區段列出
+`state_qN = <DFF>.Q (net <net>)`。這是當前週期的 sequential boundary 對照，不會沿 Q
+穿越到 D pin，也不能宣稱是只含 top-level PI 的 expression。
 
 詳細用法：[`FUNCTION_QUERY_TOOL.md`](FUNCTION_QUERY_TOOL.md)
 
@@ -451,7 +493,7 @@ Find the hold condition of register ff1.
 Identify DFFs implemented with a feedback MUX pattern.
 ```
 
-責任邊界：一般 `List all DFFs`，或 `List all flip-flops driven by clock n0`，只是物件與直接 clock connectivity，應使用 `StructureQuery`。只有題目要求 enable、hold、feedback 或 register-control pattern 時才使用 `SequentialPatternQuery`。functional fallback 必須由 `--functional-fallback` 明確啟用，並以 `complete`、`timed_out` 與 candidate counters 判讀結果是否完整。
+責任邊界：一般 `List all DFFs`，或 `List all flip-flops driven by clock n0`，只是物件與直接 clock connectivity，應使用 `StructureQuery`。只有題目要求 enable、hold、feedback 或 register-control pattern 時才使用 `SequentialPatternQuery`。canonical 與 restructuring 的 functional proof 預設都會執行，並以 `complete`、`timed_out` 與 `confirmed` 判讀結果；candidate counters 只是 optional role mapping 診斷。
 
 詳細用法：[`SEQUENTIAL_QUERY_TOOL.md`](SEQUENTIAL_QUERY_TOOL.md)
 
@@ -556,7 +598,7 @@ Make sure nothing changes functionally.
 | 修改後回報移除數量 | `EditApply` → `EditReport` |
 | 修改後確認功能不變 | `EditApply` → `WholeDesignEquivalence` |
 | 修改、回報成果並確認功能不變 | `EditApply` → `EditReport` → `WholeDesignEquivalence` |
-| 最佳化 depth 並回報成果 | `Optimization` → `EditReport`；mandatory whole-design SAT 已內建 |
+| 最佳化 depth 並回報成果 | `Optimization` → `EditReport`；changed candidate 內建 whole-design SAT attempt，proof/inconclusive 依 `OPTIMIZATION_TOOL.md` 判讀 |
 | 找出未知候選，再對候選做詳細功能分析 | `FunctionSearchQuery` → `FunctionQuery` |
 | 列出某 clock 的 DFF，再分析這些 DFF 的 enable/hold | `StructureQuery` → `SequentialPatternQuery` |
 

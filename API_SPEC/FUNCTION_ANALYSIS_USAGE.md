@@ -42,6 +42,11 @@ named-net DAG streaming 寫入完整 artifact，不建立指數膨脹的平面�
 DFF.Q 視為 pseudo primary input，不穿越 DFF 回到 D pin。
 ```
 
+公開 CLI `func_query` 採 exact arity：缺值、option-like 名稱與 trailing token 都會在 parser
+層回 `status:error, complete:false`。condition/constant value 僅接受 strict integer `0/1`；
+`simplified_expression` depth 僅接受 `0..INT_MAX`。這是 CLI adapter 契約；直接建立 C++
+`FunctionQuery` 時仍由 `runFunctionQuery()` 驗證欄位。
+
 基本範例：
 
 ```cpp
@@ -147,11 +152,12 @@ if (report.ok && report.exists) {
 | `expressionArtifactTimedOut` | 是否因 request deadline 中止 |
 | `expressionEquationCount` | 寫出的 combinational equations 數 |
 | `expressionBoundaryCount` | PI/constant/DFF.Q/undriven boundary 數 |
-| `expressionArtifactFormat` | 目前為 `NAMED_DAG_EQUATIONS_V1` |
+| `expressionArtifactFormat` | 目前為 `NAMED_DAG_EQUATIONS_V2`；DFF.Q 以 current-state variable 呈現 |
 | `expressionOutputFilePath` | 完整 artifact 路徑 |
 | `supportPrimaryInputs` | real PI、DFF.Q pseudo-PI、undriven leaf 的排序聯集 |
 | `supportRealPrimaryInputs` | 真正宣告的 top-level PI |
 | `supportDffPseudoInputs` | 作為 sequential boundary 的 DFF.Q leaves |
+| `supportDffStateBoundaries` | `state_qN`、DFF instance、Q pin 與原 net 的結構化對照 |
 | `supportUndrivenLeaves` | 沒有 driver 且不是 PI 的 floating/undriven leaves |
 
 ---
@@ -479,6 +485,10 @@ undriven non-PI net 會列入 `supportUndrivenLeaves`，不會誤當成真正 PI
 PrimaryInputsOfNet 只回報 structural support，不能單獨證明 exact functional dependence。
 ```
 
+公開 CLI 的 support 清單過大時會自動寫入 `QUERY_LIST_ARTIFACT_V1`；terminal 保留
+`support leaf count`、三類 boundary counts、artifact completeness 與 `output_file`。這只屬於
+輸出層，不改變 `FunctionReport` vectors，也不限制 C++ API 的完整結果。
+
 ---
 
 ## 13. FunctionalDependence
@@ -543,6 +553,10 @@ CLI：
 ```text
 func_query symmetry n11 n3 n9[0]
 ```
+
+公開 CLI 的 mismatched target bits、counterexample assignments 與 swap 前後 target values
+若過大，會與 support 分類一起寫入 self-contained `QUERY_LIST_ARTIFACT_V1`。response 仍保留
+`symmetric`、`counterexample found` 和各 list count；小結果維持 inline。
 
 ---
 
@@ -682,6 +696,8 @@ Netlist::FunctionReport report = netlist.runFunctionQuery(query);
 7. 若 SAT solver timeout 或 UNKNOWN，`report.ok=false`，並透過 `solverTimedOut` / `solverUnknown` / `solverStatus` 明確回報，不應解讀成普通 false。
 8. FunctionalDependence 只接受 scalar target 與 scalar PI / DFF.Q pseudo-PI selected input，目前不回傳 SAT witness assignment。
 9. Symmetry target 支援 scalar/bus；交換輸入必須是兩個不同的 scalar PI / DFF.Q pseudo-PI。internal driven net 與 whole bus input 會明確回 unsupported/error。
+10. Public `support_pi` / `symmetry` 大型 list 由 CLI 自動寫 generic list artifact；
+    `boolean_expression` 只建立專用 equation artifact，避免同一 response 出現兩個 `output_file`。
 ```
 
 ---
@@ -698,6 +714,7 @@ artifact/scalability tester：mini test/test46/test46.cpp
 目前 test46：Summary: 8 passed, 0 failed.
 CLI integration regression test9-test17：150 passed, 0 failed。
 symmetry integration test22：14 passed, 0 failed。
+FunctionReport large-output test56：support/symmetry generic artifact 與 Boolean expression 單一 artifact 全通過。
 NewTestCase test36/test37：兩題皆回 SYMMETRIC；指定 inputs 均不在 target support，solverStatus=NOT_NEEDED。
 test39：test33/36/37 正式 prompts、四個 SAT-active dependence/symmetry 案例與兩個 timeout 參數邊界，共 9/9 通過。
 ```

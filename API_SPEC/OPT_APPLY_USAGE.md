@@ -63,8 +63,9 @@ NetlistEditReport report = netlist.runOptApply(request);
 
 ```text
 validateEquivalence=false
-  CriticalPathDepth 仍會驗證等價；graph identity 使用 StructuralIdentity，
-  其餘候選做 mandatory whole-design SAT。
+  CriticalPathDepth 仍會進入等價驗證流程；graph identity 使用 StructuralIdentity，
+  其餘 changed candidate 必定嘗試 whole-design SAT。SAT attempt 不保證一定得到 proof；
+  UNKNOWN/inconclusive 的接受例外見第 4 節。
 
 rollbackOnFailure=false
   CriticalPathDepth 仍會保留 original，並在 warnings 說明此值被忽略。
@@ -119,7 +120,20 @@ report.depthOptimization->comparedDffDCount
 
 目前已知例外：whole-design SAT 若回 UNKNOWN/inconclusive，contest scoring policy
 可能仍接受候選。此時 warning 會包含 `This has not been proven by SAT`；在 report
-redesign 完成前，不得只依 `functionallyEquivalent=true` 宣稱已有 SAT proof。
+redesign 完成前，不得只依 `equivalenceChecked=true`、`functionallyEquivalent=true`、
+`wholeDesignEquivalent=true` 或 `equivalenceMethod=WholeDesignSat` 宣稱已有 SAT proof。
+
+現行結果必須分成三類判讀：
+
+| 類別 | 判讀依據 | 可以宣稱的內容 |
+|---|---|---|
+| Structural identity | `changed=false` 且 `equivalenceMethod=StructuralIdentity` | design 未改變，因此功能自然相同；未執行 SAT |
+| SAT-proven | changed candidate、method 為 `WholeDesignSat`、等價欄位為 true，且沒有 `This has not been proven by SAT` warning | whole-design checker 已證明所比較的 PO/DFF.D 等價 |
+| Trusted but unproven | candidate 已接受，且 warning 包含 `This has not been proven by SAT` | candidate 依 mockturtle function-preserving 假設接受；不可稱為 SAT-proven |
+
+若外部 prompt 明確要求「證明」等價，而 OptApply 回 trusted-but-unproven，應再呼叫
+`WholeDesignEquivalence`／tools `equiv_query previous_edit`；若獨立 checker 仍為
+UNKNOWN，只能如實回報尚未取得 proof。
 
 若 optimizer 執行後 graph 完全不變，不會啟動 whole-design SAT。此時
 `equivalenceMethod=StructuralIdentity`、`wholeDesignEquivalenceChecked=false`，且
@@ -130,7 +144,8 @@ no-op，不是 SAT UNKNOWN。
 
 ```text
 success=true, changed=true:
-  新候選已提交。
+  新候選已依現行 acceptance policy 提交；仍須依 warnings 區分 SAT-proven 與
+  trusted-but-unproven。
 
 success=true, changed=false:
   找不到可接受的改善，或命中可證明的 lower bound；current design 仍是 original。
@@ -168,6 +183,9 @@ depthChange.beforeDepth / afterDepth / improved
 validation.functionallyEquivalent
 ```
 
+`validation.functionallyEquivalent` 是現行 acceptance 相容欄位，不可單獨當成 SAT proof；
+必須搭配 `equivalenceMethod` 與 warnings。
+
 ### 5.2 全設計維持 AND/NOT
 
 ```cpp
@@ -187,6 +205,8 @@ depthOptimization.finalConstraintsSatisfied
 depthChange
 validation.functionallyEquivalent
 ```
+
+同樣必須搭配 warnings 判斷是否為 SAT-proven。
 
 ### 5.3 n10 cone 維持 NOR/NOT，cost 是 global depth
 
@@ -308,7 +328,7 @@ DFF.Q boundary no-op
 targetDepth acceptance
 no-improvement original retention
 structure / Problem A validation
-mandatory whole-design SAT
+mandatory whole-design SAT attempt（可能得到 proof、mismatch 或 inconclusive）
 rollback / detailed NetlistEditReport
 ```
 

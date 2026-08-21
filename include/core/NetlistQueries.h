@@ -43,11 +43,14 @@ enum class BasicQueryType {
 struct BasicQuery {
     BasicQueryType type = BasicQueryType::Summary;
     std::string name;                       // GateInfo/NetInfo/PortInfo 使用的物件名稱
-    GateType gateType = GateType::UNKNOWN;  // gate type filter；UNKNOWN 表示不限制或列全部
+    GateType gateType = GateType::UNKNOWN;  // legacy single-type filter；new code should use gateTypeFilters
+    std::vector<GateType> gateTypeFilters;  // include set；空集合且 gateType=UNKNOWN 表示全部
+    std::vector<GateType> excludedGateTypeFilters; // exclude set；套用在 include set 之後
     int constValue = -1;                    // constant input filter：-1 不限制，0 表示 1'b0，1 表示 1'b1
     int inputCount = -1;                    // gate input-count filter：-1 表示不限制
     bool includeIds = true;                 // 回傳 report 時是否填 gateIds/netIds
     bool includeNames = true;               // 是否填 gateNames/netNames/portNames；不控制 structured ports
+    bool includeConnectionDetails = false;  // type/constant gate lists：附每顆 gate 的 input/output pin-net records
 };
 
 struct PortSummary {
@@ -60,15 +63,46 @@ struct PortSummary {
     bool isOutput = false;
 };
 
+struct PinConnectionSummary {
+    std::string pinName;
+    int netId = -1;
+    std::string netName;
+    bool connected = false;
+    bool isConstant = false;
+    int constantValue = -1;
+    bool isPrimaryInput = false;
+    bool isPrimaryOutput = false;
+};
+
+struct GateConnectionSummary {
+    int gateId = -1;
+    std::string gateName;
+    std::string typeName;
+    std::vector<PinConnectionSummary> inputs;
+    PinConnectionSummary output;
+};
+
 struct BasicReport {
     bool ok = false;                        // 查詢是否成功；名稱不存在或 type 不合法時為 false
     std::string message;                    // 給 debug / LLM response 使用的簡短訊息
 
+    bool hasGateCount = false;              // true 表示 gateCount 為此 query 的有效結果（可為 0）
+    bool hasNetCount = false;               // true 表示 netCount 為此 query 的有效結果（可為 0）
+    bool hasLogicalWireCount = false;       // true 表示 logicalWireCount 為有效結果
+    bool hasPrimaryInputCount = false;      // true 表示 primaryInputCount 為有效結果
+    bool hasPrimaryOutputCount = false;     // true 表示 primaryOutputCount 為有效結果
     size_t gateCount = 0;                   // design 或篩選後 gate 數量
     size_t netCount = 0;                    // design 或篩選後 net 數量
     size_t logicalWireCount = 0;            // Verilog declaration 層級的 wire 數量
     size_t primaryInputCount = 0;           // primary input port 數量
     size_t primaryOutputCount = 0;          // primary output port 數量
+
+    size_t scopeGateCount = 0;              // 套用 gate-type include/exclude 前的候選 gate 數
+    bool gateTypeFilterApplied = false;     // 是否套用 include filter
+    bool gateTypeExclusionApplied = false;  // 是否套用 exclude filter
+    bool gateDetailsIncluded = false;       // 是否要求 batch pin/net detail
+    std::vector<GateType> appliedGateTypeFilters;
+    std::vector<GateType> appliedExcludedGateTypeFilters;
 
     int objectId = -1;                      // GateInfo/NetInfo 的 ID
     std::string objectName;                 // GateInfo/NetInfo/PortInfo 的名稱
@@ -90,6 +124,7 @@ struct BasicReport {
     std::vector<std::string> netNames;      // 查詢得到的 net names
     std::vector<std::string> portNames;     // 查詢得到的 port names
     std::vector<PortSummary> ports;         // batch PI/PO name、width、range、direction
+    std::vector<GateConnectionSummary> gateConnections; // optional batch pin/net details
 
     std::map<GateType, int> gateTypeCounts; // 各 gate type 統計
 
@@ -126,6 +161,33 @@ struct DirectConnectivityQuery {
     bool includeZeroFanout = false; // GlobalFanoutReport 使用；true 時保留 0 fanout nets
     bool includeIds = true;   // 是否填 gateIds/netIds
     bool includeNames = true; // 是否填 gateNames/netNames
+    bool includePinDetails = false; // NetDriverGates/NetLoadGates：附逐 pin connection records
+};
+
+enum class ConnectivityPinDirection {
+    Driver,
+    Load
+};
+
+enum class ConnectivityPinRole {
+    Output,
+    CombinationalInput,
+    DffData,
+    DffClock,
+    DffResetSet,
+    DffOther
+};
+
+struct ConnectivityPinRecord {
+    int netId = -1;
+    std::string netName;
+    int gateId = -1;
+    std::string gateName;
+    std::string gateTypeName;
+    int pinIndex = -1; // input pin index；driver output 使用 -1
+    std::string pinName;
+    ConnectivityPinDirection direction = ConnectivityPinDirection::Load;
+    ConnectivityPinRole role = ConnectivityPinRole::CombinationalInput;
 };
 
 struct FanoutLoadReport {
@@ -183,11 +245,14 @@ struct DirectConnectivityReport {
     int gateId = -1;                    // 單一 gate ID 結果；沒有唯一 gate 時為 -1
     int netId = -1;                     // 單一 net ID 結果；沒有唯一 net 時為 -1
     size_t count = 0;                   // 結果數量
+    bool pinDetailsIncluded = false;     // true 表示本次 query 要求逐 pin details（可為空）
+    size_t pinConnectionCount = 0;       // pinConnections 的完整筆數；與去重 gate count 分開
 
     std::vector<int> gateIds;           // 查詢結果中的 gate IDs
     std::vector<int> netIds;            // 查詢結果中的 net IDs
     std::vector<std::string> gateNames; // 查詢結果中的 gate names
     std::vector<std::string> netNames;  // 查詢結果中的 net names
+    std::vector<ConnectivityPinRecord> pinConnections; // driver/load 的逐 pin records
 
     FanoutLoadReport fanoutLoadReport;  // FanoutLoadReport query 的完整分類結果
     GlobalFanoutReport globalFanoutReport; // GlobalFanoutReport query 的完整彙整結果
@@ -229,6 +294,15 @@ struct FunctionQuery {
     // choose this path or an output-size limit.
     bool writeExpressionToFile = false;
     std::string expressionOutputFilePath;
+};
+
+struct DffStateBoundaryRecord {
+    std::string stateVariableName; // artifact 中穩定的 current-state symbol，例如 state_q0
+    std::string netName;           // named netlist 中的 DFF.Q net
+    std::string dffName;           // 驅動此 Q net 的 DFF instance
+    std::string pinName = "Q";
+    int netId = -1;
+    int dffGateId = -1;
 };
 
 struct FunctionReport {
@@ -287,6 +361,7 @@ struct FunctionReport {
     // PrimaryInputsOfNet 都會填。
     std::vector<std::string> supportRealPrimaryInputs; // 真正宣告的 top-level primary input
     std::vector<std::string> supportDffPseudoInputs;   // DFF.Q pseudo primary input（跨 sequential boundary）
+    std::vector<DffStateBoundaryRecord> supportDffStateBoundaries; // DFF.Q net/state/DFF 對照
     std::vector<std::string> supportUndrivenLeaves;    // 沒有 driver 也不是 PI 的懸空 fanin leaf
 };
 
@@ -420,10 +495,14 @@ struct SequentialPatternQuery {
     SequentialPatternQueryType type = SequentialPatternQueryType::DffEnableHold;
     std::string dffName;              // 空字串表示分析所有 active DFF
     bool includeAndGatedCandidates = true;
+    // Compatibility switches retained for existing callers. Canonical candidates
+    // are always functionally proven and non-canonical D/Q cofactor analysis is
+    // always enabled; neither flag may weaken the formal classification.
     bool verifyCanonicalMatchesWithSat = false;
-    // Opt-in because full-design functional fallback can consume a bounded SAT budget.
     bool enableFunctionalFallback = false;
-    // Limits candidates that still require reachability/SAT; simulation-safe Rejects do not consume quota.
+    // These limits bound optional named-role mapping after the Boolean
+    // enable/hold classification has already been proven. Reaching a mapping
+    // limit does not make the functional classification partial.
     size_t maxFunctionalCandidates = 64;
     size_t maxFunctionalMatchesPerDff = 8;
     bool findAllFunctionalMatches = true;
@@ -431,7 +510,8 @@ struct SequentialPatternQuery {
     size_t maxFunctionalDataCandidatesPerMatch = 16;
     bool enableFunctionalSimulationFilter = true;
     size_t functionalSimulationPatternCount = 256;
-    // 0 selects automatic fair-share allocation from the total request budget.
+    // 0 lets each DFF use the remaining shared request budget. A positive
+    // value adds an explicit per-DFF cap without replacing the total deadline.
     double functionalPerDffTimeLimitSeconds = 0.0;
     double functionalTimeLimitSeconds =
         request_time_budget::kGeneralToolBudgetSeconds;
@@ -594,8 +674,10 @@ struct ConeQuery {
     std::string netName;       // NetTransitiveFanin / NetTransitiveFanout 使用
     std::string secondNetName; // SharedFaninGates 使用的第二個 net
     std::string gateName;      // GateTransitiveFanin / GateTransitiveFanout 使用
+    std::vector<GateType> gateTypeFilters; // 空集合表示全部；多個 type 採 OR semantics
     bool includeIds = true;    // 是否填 netIds/gateIds/rootNetIds
     bool includeNames = true;  // 是否填 netNames/gateNames/rootNetNames
+    bool includeGateDetails = false; // 是否填篩選後 gates 的 structured pin/net records
     bool includeLocalPaths = false; // 是否附帶 cone 內 longest/shortest net path
 };
 
@@ -611,16 +693,21 @@ struct ConeReport {
     int secondSourceId = -1;                // SharedFaninGates 的第二個來源 net ID
     ConeResult cone;                       // 原始 cone 結果，供底層演算法繼續使用
 
-    size_t netCount = 0;                   // cone 內有效 net 數量
-    size_t gateCount = 0;                  // cone 內有效 combinational gate 數量
+    size_t netCount = 0;                   // 完整 cone 內有效 net 數量
+    size_t scopeGateCount = 0;             // gate-type filter 前的有效 combinational gate 數量
+    size_t gateCount = 0;                  // filter 後 gate 數量；未篩選時等於 scopeGateCount
     size_t checkedOutputCount = 0;         // LargestOutputCone 掃描的 PO bit 數量
+    bool gateTypeFilterApplied = false;    // gateTypeFilters 是否非空
+    bool gateDetailsIncluded = false;      // query 是否要求 structured gate details
+    std::vector<GateType> appliedGateTypeFilters; // 去重後的實際 filters
     std::vector<int> rootNetIds;           // cone roots，支援 bus 多 root
     std::vector<std::string> rootNetNames; // root net names
     std::vector<int> netIds;               // cone 內 net IDs
-    std::vector<int> gateIds;              // cone 內 gate IDs
+    std::vector<int> gateIds;              // filter 後 gate IDs
     std::vector<std::string> netNames;     // cone 內 net names
-    std::vector<std::string> gateNames;    // cone 內 gate names
-    std::map<GateType, int> gateTypeCounts; // cone/shared result 內各 gate type 數量
+    std::vector<std::string> gateNames;    // filter 後 gate names
+    std::vector<GateConnectionSummary> gateConnections; // filter 後 structured pin/net details
+    std::map<GateType, int> gateTypeCounts; // filter 後各 gate type 數量
 
     int longestDepth = -1;                 // cone 內 longest net path depth
     int shortestDepth = -1;                // cone 內 shortest net path depth

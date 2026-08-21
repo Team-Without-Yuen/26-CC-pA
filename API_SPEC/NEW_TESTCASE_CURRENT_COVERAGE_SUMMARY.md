@@ -9,11 +9,15 @@
 | Prompt 類型 | 對應 API |
 | --- | --- |
 | gate total / gate type breakdown | `BasicQuery` / gate type count |
+| one/many/excluded gate-type list with input/output pin signals | `BasicQuery::GatesByType` include/exclude sets with `includeConnectionDetails`; CLI `gates_by_type --gate-types <type...> --exclude-gate-types <type...> --with-pins` |
+| constant-input gate list with constant pin and input/output signals | `BasicQuery::GatesWithConstantInput` with `includeConnectionDetails`; CLI `const_input_gates [type|all] [0|1|any] --with-pins` |
+| exact net driver/load gate pins and roles | `DirectConnectivityQuery` with `includePinDetails`; CLI `net_driver <net> --with-pins` / `net_loads <net> --with-pins` |
 | primary input / primary output count and bit width | `BasicQuery` |
 | constant-input gates / floating signals / structural issues | `BasicQuery` |
 | immediate fanout, direct loads, DFF clock/reset/data loads | `DirectConnectivityQuery` / `FanoutLoadReport` |
 | transitive fanin / fanout cone | `ConeQuery` |
 | fanin cone gate count / cone gate type breakdown / shared fanin gates | `ConeQuery` |
+| cone 內單一或多 gate-type gate list、pin/net details | `ConeQuery::gateTypeFilters` + `includeGateDetails`；CLI `--gate-types` / `--with-pins` 已完成 |
 | path existence, path avoiding node, PI-to-PO path list / depth-0 direct connections | `PathQuery` |
 | cone depth, global critical path, endpoints deeper than threshold | `DepthQuery` |
 | register-to-register path / DFF D-pin depth | path/depth API with DFF boundary rules |
@@ -68,7 +72,7 @@ Boolean expression / support PI 目前已整理進正式 `FunctionQuery`：
 | output 是否 functionally depend on 特定 PI | `FunctionQuery::FunctionalDependence` | exact dual-cone SAT/cofactor query 已 public 化 |
 | function 對兩個 inputs 是否 symmetric | `FunctionQuery::Symmetry` | exact swapped-cofactor SAT、bus target、反例 report 已 public 化 |
 | signal equivalence / constant / truth status | `FunctionQuery` SAT 類 mode | 已 public 化，且 report 可區分 timeout / UNKNOWN |
-| DFF enable/hold structure 與 unique DFF count | `sequential_query enable_hold` | canonical 與 opt-in functional SAT fallback API/CLI 已完成；AND-only 官方語意仍待確認 |
+| DFF enable/hold structure 與 unique DFF count | `sequential_query enable_hold` | canonical safe fast path 與預設 Q-cofactor functional proof 已完成；AND-only data gating 不計 match |
 
 逐 prompt 的 command、必要 report 欄位、完整性條件與缺口已整理在：
 

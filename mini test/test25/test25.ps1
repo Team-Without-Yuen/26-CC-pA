@@ -65,9 +65,9 @@ if ($responses.Count -ge 8) {
 
     Check-Result `
         ($badValue -match "status: error" -and
-         $badValue -match "conditionValue 0 or 1" -and
+         $badValue -match "conditional_equivalence requires condition value 0 or 1" -and
          $badValue -match "complete: false") `
-        "invalid condition values are rejected"
+        "invalid condition values are rejected by the strict parser"
 
     Check-Result `
         ($missingCondition -match "status: error" -and

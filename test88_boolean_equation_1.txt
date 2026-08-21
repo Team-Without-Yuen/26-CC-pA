@@ -1,0 +1,14 @@
+# Complete named-net Boolean DAG equation artifact
+Format: NAMED_DAG_EQUATIONS_V1
+Target: n12
+Boundary semantics: PI, CONSTANT, DFF_Q, and UNDRIVEN are leaves
+
+Boundaries:
+  n12 : DFF_Q
+
+Equations:
+
+Root: n12
+Equation count: 0
+Boundary count: 1
+Complete: yes

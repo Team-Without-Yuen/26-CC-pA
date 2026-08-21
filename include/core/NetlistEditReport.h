@@ -35,6 +35,7 @@ enum class EquivalenceCheckMethod {
     NotChecked,
     StructuralIdentity,
     LocalRewriteRule,
+    CertifiedRewrite,
     WholeDesignSat
 };
 

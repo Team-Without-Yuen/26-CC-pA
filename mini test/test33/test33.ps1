@@ -79,9 +79,9 @@ if ($responses.Count -ge 13) {
          $responses[4] -match "Total paths: 2" -and
          $responses[4] -match "Wrote paths to file: yes" -and
          (First-Line $smallOut) -eq "Total paths: 2" -and
-         (Get-Content -LiteralPath $smallOut -Raw) -match "Format: COMPACT_PATH_V3" -and
+         (Get-Content -LiteralPath $smallOut -Raw) -match "Format: LITERAL_PATH_V1" -and
          (Get-Content -LiteralPath $smallOut -Raw) -match "Written paths: 2") `
-        "small streaming output writes the compact exact-count artifact"
+        "small streaming output writes the literal exact-count artifact"
 
     Check-Result `
         ($responses[6] -match "status: ok" -and
@@ -95,9 +95,10 @@ if ($responses.Count -ge 13) {
          $responses[7] -match "Total paths: 289366" -and
          $responses[7] -match "Wrote paths to file: yes" -and
          (First-Line $largeOut) -eq "Total paths: 289366" -and
-         (Get-Content -LiteralPath $largeOut -Raw) -match "Written paths: 289366" -and
-         (Get-Content -LiteralPath $largeOut -Raw) -match "Complete: yes") `
-        "released test14 streaming output completes in compact format"
+         ((Get-Content -LiteralPath $largeOut -TotalCount 6) -join "`n") -match "Format: LITERAL_PATH_V1" -and
+         ((Get-Content -LiteralPath $largeOut -Tail 6) -join "`n") -match "Written paths: 289366" -and
+         ((Get-Content -LiteralPath $largeOut -Tail 6) -join "`n") -match "Complete: yes") `
+        "released test14 streaming output completes in literal format"
 
     Check-Result `
         ($responses[9] -match "status: ok" -and

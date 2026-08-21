@@ -4,6 +4,7 @@
 #include <functional>
 #include <iterator>
 #include <queue>
+#include <set>
 #include <string>
 #include <unordered_map>
 #include <unordered_set>
@@ -322,6 +323,55 @@ size_t Netlist::getGateTransitiveFanoutConeGateCount(const std::string& gateName
 Netlist::ConeReport Netlist::runConeQuery(const ConeQuery& query) const {
     ConeReport report;
     report.type = query.type;
+    report.gateDetailsIncluded = query.includeGateDetails;
+
+    std::set<GateType> gateTypeFilterSet;
+    for (GateType gateType : query.gateTypeFilters) {
+        if (gateType == GateType::UNKNOWN) {
+            report.message = "gateTypeFilters cannot contain UNKNOWN";
+            return report;
+        }
+        gateTypeFilterSet.insert(gateType);
+    }
+    report.gateTypeFilterApplied = !gateTypeFilterSet.empty();
+    report.appliedGateTypeFilters.assign(
+        gateTypeFilterSet.begin(), gateTypeFilterSet.end());
+
+    const auto populateGateResults = [&](const std::vector<int>& scopeGateIds) {
+        std::vector<int> filteredGateIds;
+        filteredGateIds.reserve(scopeGateIds.size());
+        std::unordered_set<int> seenGateIds;
+        seenGateIds.reserve(scopeGateIds.size());
+
+        for (int gateId : scopeGateIds) {
+            if (!isActiveConeGate(*this, gateId) ||
+                !seenGateIds.insert(gateId).second) {
+                continue;
+            }
+            ++report.scopeGateCount;
+
+            const GateType gateType = gates[gateId].type;
+            if (!gateTypeFilterSet.empty() &&
+                gateTypeFilterSet.find(gateType) == gateTypeFilterSet.end()) {
+                continue;
+            }
+
+            filteredGateIds.push_back(gateId);
+            ++report.gateTypeCounts[gateType];
+            if (query.includeNames) {
+                report.gateNames.push_back(gates[gateId].instName);
+            }
+            if (query.includeGateDetails) {
+                report.gateConnections.push_back(
+                    buildGateConnectionSummary(gateId));
+            }
+        }
+
+        report.gateCount = filteredGateIds.size();
+        if (query.includeIds) {
+            report.gateIds = std::move(filteredGateIds);
+        }
+    };
 
     switch (query.type) {
     case ConeQueryType::NetTransitiveFanin: {
@@ -483,7 +533,6 @@ Netlist::ConeReport Netlist::runConeQuery(const ConeQuery& query) const {
 
         report.ok = true;
         report.exists = true;
-        report.gateCount = sharedGateIds.size();
         report.message = !sharedGateIds.empty()
             ? "Shared fanin cone gates"
             : "No gates are shared between the two fanin cones";
@@ -495,18 +544,7 @@ Netlist::ConeReport Netlist::runConeQuery(const ConeQuery& query) const {
             report.rootNetNames = {report.sourceName, report.secondSourceName};
         }
 
-        for (int gateId : sharedGateIds) {
-            if (!isActiveConeGate(*this, gateId)) {
-                continue;
-            }
-            ++report.gateTypeCounts[gates[gateId].type];
-            if (query.includeNames) {
-                report.gateNames.push_back(gates[gateId].instName);
-            }
-        }
-        if (query.includeIds) {
-            report.gateIds = std::move(sharedGateIds);
-        }
+        populateGateResults(sharedGateIds);
         return report;
     }
     }
@@ -519,18 +557,12 @@ Netlist::ConeReport Netlist::runConeQuery(const ConeQuery& query) const {
     report.ok = true;
     report.exists = true;
     report.netCount = getConeNetCount(report.cone);
-    report.gateCount = getConeGateCount(report.cone);
     const std::vector<int> coneGateIds = getConeGateIds(report.cone);
-    for (int gateId : coneGateIds) {
-        if (isActiveConeGate(*this, gateId)) {
-            ++report.gateTypeCounts[gates[gateId].type];
-        }
-    }
+    populateGateResults(coneGateIds);
 
     if (query.includeIds) {
         report.rootNetIds = report.cone.rootNetIds;
         report.netIds = getConeNetIds(report.cone);
-        report.gateIds = coneGateIds;
     }
 
     if (query.includeNames) {
@@ -540,7 +572,6 @@ Netlist::ConeReport Netlist::runConeQuery(const ConeQuery& query) const {
             }
         }
         report.netNames = getConeNetNames(report.cone);
-        report.gateNames = getConeGateNames(report.cone);
     }
 
     if (query.includeLocalPaths) {

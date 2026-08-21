@@ -37,6 +37,10 @@ LLM 不應把 `unknown`、`maybe`、`cannot determine` 或只描述工具失敗�
 best-effort 不能改寫工具事實：不得把 partial 標成 complete，也不得宣稱未完成的 SAT
 已證明等價。對 transformation/optimization，未通過 structure、constraint 與
 functional-equivalence validation 的候選不得輸出；應保留 original 或最後一個已驗證版本。
+目前 `opt_apply` 有一個明確例外：changed candidate 的 whole-design SAT 若為
+UNKNOWN/inconclusive 且未找到 mismatch，可能依 mockturtle function-preserving 假設被接受。
+這種結果不是 SAT-proven；判讀與 follow-up 規則以
+[`OPTIMIZATION_TOOL.md`](OPTIMIZATION_TOOL.md) 為準。
 
 ## 2.1 Routing And Answer Checklist
 
@@ -56,10 +60,24 @@ functional-equivalence validation 的候選不得輸出；應保留 original 或
 constraints 與 complete status；若 prompt 有 avoid X，但回傳 command/result 沒有 X，即使結果
 為 `ok` 仍屬 routing 錯誤。
 
+不要在 command grammar 後附加自然語言、註解或未定義 token。Structure Query 的固定 arity
+modes 會 fail closed：零參數 mode 不接受任何 token，object-info mode 只接受一個名稱。
+
 複合答案必須完成最後一步推導：
 
 - `Which of A or B...`：分別查 A、B 的相同 metric，再明確回答 winner 或 tie；不能只貼兩份 report。
-- `gate type and pin connections`：組合 gate type、input nets 與 output net 成一個答案。
+- 單一 gate 的 `gate type and pin connections`：使用 `gate_info` 組合 type、input nets 與 output net。
+- 某 type 的全部 gates 並附 pin connections：使用
+  `structure_query gates_by_type --gate-types <type...> --with-pins`，不得逐顆呼叫 `gate_info`。
+- prompt 指定多個 gate type 時，把它們放在同一個 `--gate-types` 後，語意為 OR；prompt 說
+  `except`、`excluding`、`not TYPE` 時使用 `--exclude-gate-types`。未指定 include 代表全部，
+  exclude 優先，不要自行取得全名單後在文字中過濾。
+- constant-input gates 若還要求 constant 所在 pin、其他 inputs 或 output signal：使用
+  `structure_query const_input_gates [type|all] [0|1|any] --with-pins`；只問數量或名稱時不要加旗標。
+- 成功的 list/filter query 明確回傳 `gates: 0` 時，回答沒有 matching gates；若欄位根本未輸出，
+  不能自行當作 0，應依 mode 文件判斷或改用正確 query。
+- net driver/load 題目若要求 exact pin、gate type 或 DFF pin role，加 `--with-pins`；回答 gate 數讀
+  `count`，回答 pin/edge 數讀 `pin connection count`，兩者不得交換。
 - `List DFFs driven by clock n0`：使用 fanout-load report 的 `DFF clock-pin loads`，不能把所有 load
   類型或只有總 fanout count 當成 DFF 名單。
 - cone gate-type count 為空時，若 query complete 且 root 是 DFF.Q boundary，明答各 gate type
@@ -99,7 +117,8 @@ constraints 與 complete status；若 prompt 有 avoid X，但回傳 command/res
 depth_query 取得 before depth
 → opt_apply 並重送所有 scope/basis/target constraints
 → report_query last_edit
-→ 檢查 candidate_accepted、before/after depth、constraints 與 whole-design equivalence
+→ 檢查 candidate_accepted、before/after depth、constraints、equivalence method 與 warnings
+→ 若出現 `This has not been proven by SAT`，不得稱為已證明等價；題目要求 proof 時再呼叫 equiv_query previous_edit
 → depth_query 與 structure_query 驗證 final design
 → write
 ```
@@ -117,7 +136,7 @@ depth_query 取得 before depth
 | bus/port 解析失敗 | 保留完整 bit token；確認題目要 port count 還是 bit count |
 | paginated/records truncated | 使用 next offset 續查，直到沒有下一頁 |
 | path count timeout | 若只問數量，改用 `-count_only`；不要先要求完整 path file |
-| path list timeout | 保留原 `all paths` 語意；確認使用 `enumerate` 自動 artifact，不自行加入 `-out`、`-max_print`、`-max_paths` 或 `-time_limit` |
+| path list timeout | 保留原 `all paths` 語意；使用 `enumerate` 自動 artifact，不自行加入輸出量、檔名或時間控制 |
 | function search timeout | existence 題改 find-any；all-pairs 題保留 confirmed pairs 並依完整性規則處理 |
 | SAT timeout/unknown | 縮小合法 scope、增加可用 budget 或改用其他已完成 query 交叉推定 |
 | edit/optimization rollback | 不輸出失敗候選；保留 original 或最後一個已驗證版本 |
@@ -145,12 +164,16 @@ scope、輸出模式或時間配置；仍無法完成才使用 best-effort infer
 - 若 backend 具有無法關閉的 hard result cap，必須把結果視為 incomplete，依該 tool 文件
   的重試方式處理；不能因為達到預設上限就宣稱已找到全部。
 - 先選 summary/count-only mode；只有題目明確要求列出全部物件或路徑時才要求 list。
-- `path_query enumerate` 的完整性只看 `complete:true` 與 `Complete enumeration: yes`。`-max_paths` 是 legacy compatibility 參數，不會保證或限制完整列舉。
-- all-path count 只加 `-count_only`；完整 path list 直接使用 `enumerate`，由 CLI 自動寫入唯一 artifact。除非 prompt 明確指定，不能主動加入 `-out`、`-max_print`、`-max_paths` 或 `-time_limit`，也不要在答案中使用省略號冒充完整列表。
+- `path_query enumerate` 的完整性只看 `complete:true` 與 `Complete enumeration: yes`。
+- all-path count 只加 `-count_only`；完整 path list 直接使用 `enumerate`，由 CLI 自動寫入唯一 artifact。不要自行加入輸出量、檔名、截斷或時間控制，也不要在答案中使用省略號冒充完整列表。
 - 有 pagination 的 list query 必須持續讀取直到 `records_truncated:false` 或沒有 next offset。
   若因總時限無法完成，正式答案仍依 Competition Answer Policy，根據 partial count、
   stop reason 與已取得 records 提交最可能答案。
-- `cone_query` 若只問數量或 type breakdown，只讀計數欄位，不搬運 `Cone gates` / `Cone nets` 的完整清單。
+- `cone_query` 若 prompt 指定一種或多種 gate type，必須原樣傳給 `--gate-types <type...>`，
+  再讀 `filtered gates`；不可只查完整 cone 後由自然語言自行估算。合法 type 為 `AND OR
+  NOT NAND NOR XOR XNOR BUF DFF`。若只問數量或 type breakdown，不搬運完整 gate/net 清單。
+- `cone_query --with-pins` 只在 prompt 要求 connection/pin/detail 時使用。大型 details 會自動
+  寫入 artifact，答案回 `filtered gates`、完整性與 `output_file`。
 
 完整輸出配方：
 
@@ -167,8 +190,11 @@ scope、輸出模式或時間配置；仍無法完成才使用 best-effort infer
 
 Boolean expression 若回 `primary-input-only combinational expression available: no`，必須查看
 `DFF.Q boundary count` 與 `undriven boundary count`。DFF.Q 是 current-state pseudo input，不是
-top-level PI；不得為滿足 `using only primary input names` 而跨越 DFF 回追 D pin。此時應明確
-回答在 current combinational frame 下無法只用 top-level PI 表示，並指出實際 boundary。
+top-level PI。完整 artifact 的 `Current-state variables` 會把 `state_qN` 對照到
+`<DFF>.Q` 與原 net；回答時應以「top-level PI + current-state variables」描述，不得把
+state variable 說成 primary input，也不得沿 Q 回追 D pin。
+此時應明確回答在 current combinational frame 下無法只用 top-level PI 表示，並指出實際
+boundary。
 
 FunctionSearch 不再要求 LLM 推算 unordered pair 上界。Prompt 未明確限制數量時不得加入
 `--max-results`；`--all` 的完整 records 從 `output_file` 取得，只有 `complete:true`、
@@ -178,16 +204,18 @@ Boolean equation artifact 不設 gate/depth/字元上限。只有 envelope `comp
 `expression artifact complete: yes` 且檔案 footer 為 `Complete: yes` 時才可宣稱完整；
 自然語言 response 不重貼大型 equations，只提供簡答與 `output_file` 路徑。
 
-Structure/Cone 的自動 list artifact 同樣不限制結果數量；內部門檻只決定 terminal 或檔案
-呈現。看到 `list artifact complete:yes` 時，完整名單位於 `output_file`，自然語言答案提供
+通用自動 list artifact 同時依 record 數與預估 serialized characters 決定 terminal 或檔案
+呈現，且不限制結果數量。看到 `list artifact complete:yes` 時，完整名單位於 `output_file`，自然語言答案提供
 總數與路徑。若沒有 artifact metadata，代表結果規模小，完整清單已直接出現在 data。
 
 ## 6. Sequential Boundaries
 
 - DFF.Q 是 combinational boundary。`cone_query net_fanin <dff_q_net>` 不會回到同一顆 DFF 的 D input，且不含 combinational gate；report 可能仍列出 root net 本身。
 - `D = EN & DATA` 沒有 Q feedback，不是 enable/hold。它只能當 `DATA_GATING_WITHOUT_HOLD_FEEDBACK` diagnostic，不能計入 matched/candidate DFF 數。
-- `sequential_query --functional-fallback` 是有成本的 opt-in bounded search；不能將它視為
-  任意 Boolean restructuring 的完整保證。
+- `sequential_query enable_hold` 預設已使用 canonical safe fast path 與 Q-cofactor
+  functional proof。數量讀 `matched_dff_count`，並先確認 `complete:true`。
+- enable/data 名稱為空不代表 non-match；可能是已證明但無單一具名 net 的
+  Q-free Boolean function。
 
 ## 7. Edit, Optimization And Constraints
 
@@ -206,4 +234,4 @@ Structure/Cone 的自動 list artifact 同樣不限制結果數量；內部門�
 
 ## 9. Functional Analysis Boundary
 
-目前 Boolean/function 類 tool 只可依各自文件中已列出的 mode 與 complete status 使用。任意 Boolean expression canonicalization、unbounded symmetry、完整 functional enable/hold decomposition 與大型 functional-merge 策略均不應由 LLM 自行假設存在。
+目前 Boolean/function 類 tool 只可依各自文件中已列出的 mode 與 complete status 使用。任意 Boolean expression canonicalization、unbounded symmetry 與大型 functional-merge 策略不應由 LLM 自行假設存在；DFF enable/hold 則依 `SEQUENTIAL_QUERY_TOOL.md` 的 Q-cofactor 契約處理。

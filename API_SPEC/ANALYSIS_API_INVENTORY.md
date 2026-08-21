@@ -44,7 +44,7 @@
 
 | 高階 API | 主要實作檔案 |
 |---|---|
-| `BasicQuery` | `src/analysis/BasicAnalysis.cpp` |
+| `BasicQuery` | `src/analysis/BasicAnalysis.cpp`；包含 opt-in gate-type batch pin/net projection |
 | `DirectConnectivityQuery` | `src/analysis/ConnectivityAnalysis.cpp` |
 | `FunctionQuery` | `src/analysis/FunctionAnalysis.cpp`（含 equivalence、dependence、symmetry、constant/truth） |
 | `FunctionSearchQuery` | `src/analysis/FunctionAnalysis.cpp`（共用 bit-parallel simulation + SAT proof） |
@@ -156,8 +156,8 @@ Find floating nets.
 | 設計規模 | `Summary` |
 | 列 gate/net/PI/PO/DFF | `ListGates`, `ListNets`, `ListPrimaryInputs`, `ListPrimaryOutputs`, `ListDffs` |
 | 查單一物件資訊 | `GateInfo`, `NetInfo`, `PortInfo` |
-| gate type 統計 | `CountByGateType`, `GatesByType` |
-| 直接接 constant input 的 gates | `GatesWithConstantInput` |
+| gate type 統計或 type-filtered pin/net snapshot | `CountByGateType`, `GatesByType`；details 由 `includeConnectionDetails` opt-in |
+| 直接接 constant input 的 gates | `GatesWithConstantInput`；可用 `includeConnectionDetails` 取得 constant 所在 pin、其他 inputs 與 output |
 | 結構問題 | `StructuralIssues` |
 
 邊界：
@@ -206,8 +206,8 @@ Is gate g1 directly connected to net n3?
 
 | 問題類型 | Query type |
 |---|---|
-| net 的直接 driver | `NetDriverGates` |
-| net 的直接 loads | `NetLoadGates` |
+| net 的直接 driver | `NetDriverGates`；可用 `includePinDetails` 取得 output-pin record |
+| net 的直接 loads | `NetLoadGates`；可用 `includePinDetails` 取得逐 input-pin/type/role records |
 | gate 的 input nets | `GateInputs` |
 | gate 的 output net | `GateOutput` |
 | gate 的 immediate fanin gates | `GateFanin` |
@@ -316,7 +316,7 @@ Enable 是 active-high 或 active-low？
 符合條件的 unique DFF 數量是多少？
 ```
 
-它不重做 `ListDffs`、clock/reset load、fanin cone 或 SAT encoding，而是重用既有 API。預設只跑 canonical fast path；C++ caller 可開啟有 candidate/time/completeness 限制的 functional cofactor fallback。AND-only D-input 只回報 `DataGatingWithoutHoldFeedback` non-match diagnostic，不計入 `matchedDffCount` 或 `candidateDffCount`。
+它不重做 `ListDffs`、clock/reset load 或 fanin cone。預設先嘗試「Q-free role + AIG/SAT proof」的 canonical 快速路徑，其餘實作自動使用共用 `Primitives` 執行 Q-cofactor 功能判定。AND-only D-input 只回報 `DataGatingWithoutHoldFeedback` non-match diagnostic，不計入 `matchedDffCount` 或 `candidateDffCount`。具名 EN/DATA 映射不完整不會否定已證明的 Boolean match。
 
 文件：
 
@@ -332,7 +332,8 @@ API_SPEC/SEQUENTIAL_PATTERN_USAGE.md
 定位：
 
 ```text
-回答 transitive fanin/fanout cone 中有哪些 nets/gates。
+回答 transitive fanin/fanout cone 中有哪些 nets/gates；可依一或多個 gate type 篩選 gate
+結果，並選擇回傳 structured pin/net details。
 ```
 
 高階入口：
@@ -359,6 +360,10 @@ Find the fanout cone of gate g1.
 | net transitive fanout | `NetTransitiveFanout` |
 | gate output transitive fanin | `GateTransitiveFanin` |
 | gate output transitive fanout | `GateTransitiveFanout` |
+
+所有 mode 都可選 `gateTypeFilters`（多個 type 採 OR semantics）與
+`includeGateDetails`。filter 不改變完整 cone/net scope；`scopeGateCount` 保存篩選前數量，
+`gateCount/gateNames/gateConnections/gateTypeCounts` 對應篩選後結果。
 
 邊界：
 
@@ -884,13 +889,10 @@ runDepthQuery()
 目前驗證結果：
 
 ```text
-Sequential pattern mini test: 15 passed, 0 failed.
-Sequential edit-flow mini test: 13 passed, 0 failed.
-Sequential CLI mini test: 12 passed, 0 failed.
-Functional pattern engine mini test: 12 passed, 0 failed.
-NewTestCase/test40 original: 2585 DFF analyzed, 1583 canonical matches.
-NewTestCase/test40 post-edit: 1590 confirmed matches, 1975 candidates, query about 0.050 s.
-Full mapping/edit/PO+DFF.D-equivalence/query flow: about 33.7 s.
+Sequential CLI mini test/test21: 18 passed, 0 failed.
+Functional recognition mini test/test58: 11 passed, 0 failed.
+NewTestCase/test91: 2585 DFF analyzed, 1796 functional matches,
+complete=true, no timeout, recent query runs about 21.55-29.63 s.
 ```
 
 Windows 目前建議使用：

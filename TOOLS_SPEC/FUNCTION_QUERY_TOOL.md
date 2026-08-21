@@ -9,6 +9,12 @@
 gate、depth 或輸出字元上限；只受 request deadline 與 I/O 錯誤限制。LLM 不提供
 output path，也不得省略 artifact 內的中間 equations。
 
+`support_pi` 的 support lists，以及 `symmetry` 的 support/counterexample/detail lists，若超過
+通用 entry-count 或 serialized-character 門檻，會自動寫入完整 `QUERY_LIST_ARTIFACT_V1`。
+response 保留 target、proof status、主要 bool 與各類 count，再提供 `output_file`；門檻只改變
+呈現位置，不會限制分析筆數。`boolean_expression` 已有專用 equation artifact，因此明確跳過
+generic list artifact，單次 response 只會有一個 `output_file`。
+
 ## 2. 選擇條件
 
 已知要分析的 net/bus 名稱，且 prompt 出現 `functionally equivalent`、`when condition`、`always 0/1`、`can be`、`depends on`、`symmetric`、`Boolean expression` 或 `support inputs` 時使用本 tool。
@@ -40,6 +46,12 @@ func_query <mode> [args]
 
 `equivalence_when` 是 `conditional_equivalence` 的 parser alias，但 LLM 應使用正式名稱 `conditional_equivalence`。
 
+所有 mode 採 exact arity。名稱缺失、option-like 名稱或 trailing token 都回
+`status:error, complete:false`，不得忽略後繼 token。`condition_value` 與 `const_value` 僅接受
+strict integer `0/1`；`simplified_expression` 的 `max_depth` 僅接受 `0..INT_MAX`。文字、小數、
+負數與 overflow 必須在 CLI parser 層拒絕。recognized-mode argument error 不得誤報為
+`Unknown func_query mode`。
+
 ## 5. SAT 輸出判讀
 
 主要共同欄位包括：
@@ -70,6 +82,8 @@ Boolean expression 的 leaf 必須依輸出分類判讀：
 
 - `real primary input count`：真正 top-level PI。
 - `DFF.Q boundary count`：目前 state 的 sequential boundary，不是真正 PI。
+- `DFF.Q current-state variable mappings`：`state_qN = <DFF>.Q (net <net>)`，用來把
+  artifact 方程式中的狀態變數映射回 named netlist；`state_qN` 只代表當前週期狀態。
 - `undriven boundary count`：floating/undriven leaf，也不是真正 PI。
 - `primary-input-only combinational expression available: no`：不能在不跨 DFF cycle、也不
   假設 floating value 的前提下，寫成只含 top-level PI 的組合式。
@@ -77,6 +91,19 @@ Boolean expression 的 leaf 必須依輸出分類判讀：
 若 prompt 要求 `using only primary input names`，但此欄位為 `no`，LLM 必須說明完整的
 current-cycle combinational expression 以 DFF.Q 或 undriven signal 為 boundary；不得把
 pseudo-PI 說成 primary input，也不得沿 DFF.Q 回追 D pin。
+
+`support_pi` / `symmetry` 若出現：
+
+```text
+list artifact format: QUERY_LIST_ARTIFACT_V1
+list artifact complete: yes
+wrote list to file: yes
+output_file: <path>
+```
+
+表示完整 support 或 counterexample records 位於該檔案；response 中的 count 與主要判定仍可
+直接使用。只有 artifact footer 為 `Complete: yes` 才能視為完整。小結果不觸發 artifact，仍
+直接完整列於 response。
 
 ## 6. Prompt Examples
 
@@ -133,7 +160,8 @@ Read: 若 DFF.Q boundary count > 0 且 primary-input-only combinational expressi
 
 - `support_pi` 是 structural support，不等於 exact functional dependence；yes/no dependence 使用 `depends_on`。
 - `boolean_expression` artifact 使用具名中間 nets 表示 DAG；每個 boundary 與 equation
-  都有定義，語意完整，但不是將所有中間 nets 重複代入成單一指數級字串。
+  都有定義。`NAMED_DAG_EQUATIONS_V2` 會將 DFF.Q leaf 寫成 `state_qN`，並在
+  `Current-state variables` 區段列出 DFF instance、Q pin 與原 net；它不是跨週期展開。
 - `simplified_expression` 只在 prompt 明確要求 manageable、depth-limited 或指定深度時使用；
   不可為了縮短答案而自行取代完整 `boolean_expression`。
 - `conditional_equivalence` 的 condition 必須是存在的 scalar net，value 只能為 0 或 1。

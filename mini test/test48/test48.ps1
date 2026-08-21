@@ -53,9 +53,12 @@ Check-Result `
 Check-Result `
     ($artifact.Contains("Target: n30") -and
      $artifact.Contains("n30 : DFF_Q") -and
+     $artifact.Contains("state_variable=state_q0") -and
+     $artifact.Contains("state_q0 = g3869.Q (net n30)") -and
+     $artifact.Contains("Root: n30 (current-state variable state_q0)") -and
      $artifact.Contains("Equation count: 0") -and
      $artifact.Contains("Complete: yes")) `
-    "artifact is complete and self-describes n30 as DFF_Q"
+    "artifact maps n30 to an explicit DFF current-state variable"
 Check-Result `
     (([regex]::Matches($output, "TOOL_RESULT_BEGIN")).Count -eq 3 -and
      ([regex]::Matches($output, "TOOL_RESULT_END")).Count -eq 3) `

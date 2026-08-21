@@ -431,9 +431,13 @@ struct FunctionReport {
     std::vector<std::string> supportPrimaryInputs;
     std::vector<std::string> supportRealPrimaryInputs;
     std::vector<std::string> supportDffPseudoInputs;
+    std::vector<DffStateBoundaryRecord> supportDffStateBoundaries;
     std::vector<std::string> supportUndrivenLeaves;
 };
 ```
+
+`DffStateBoundaryRecord` 將 `state_qN` current-state symbol 對照到 named netlist 中的
+DFF instance、Q pin 與 Q net。Boolean equation 不會沿 Q 回追 D，也不進行跨週期展開。
 
 ---
 
@@ -504,6 +508,8 @@ family 對 can-be-0 與 can-be-1 各使用最多一半預算；`FunctionalDepend
 7. SAT solver timeout / UNKNOWN 會回報 `ok=false` 與 `solverTimedOut` / `solverUnknown`，不再被混成普通 false。
 8. FunctionalDependence 目前要求 scalar target 與 scalar PI / DFF.Q pseudo-PI input，不把 internal driven net 當成可獨立切換的 input。
 9. Symmetry target 支援 scalar/bus；交換輸入只接受兩個不同的 scalar PI / DFF.Q pseudo-PI，不把 internal driven net 當成獨立變數。
+10. `FunctionReport` 仍保存完整 support/counterexample vectors；public CLI 若清單過大會自動
+    寫 `QUERY_LIST_ARTIFACT_V1`。Boolean expression 使用自己的 equation artifact，不疊加 generic artifact。
 ```
 
 ---
@@ -547,6 +553,8 @@ AlwaysZero / AlwaysOne / TruthStatus / CanBeValue / Equivalence、invalid query�
 mini test/test46：named-DAG artifact、5000-level chain、reconvergence、deadline、
 DFF.Q boundary 共 8 passed, 0 failed。
 CLI integration regression test9-test17：150 passed, 0 failed。
+mini test/test56：大型 support、非對稱 witness generic artifact，以及 Boolean expression 單一
+artifact contract 全通過。
 ```
 
 未來可補：

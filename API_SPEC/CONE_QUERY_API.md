@@ -229,8 +229,10 @@ struct ConeQuery {
     std::string netName;
     std::string secondNetName;
     std::string gateName;
+    std::vector<GateType> gateTypeFilters;
     bool includeIds = true;
     bool includeNames = true;
+    bool includeGateDetails = false;
     bool includeLocalPaths = false;
 };
 
@@ -247,7 +249,11 @@ struct ConeReport {
     ConeResult cone;
 
     size_t netCount = 0;
+    size_t scopeGateCount = 0;
     size_t gateCount = 0;
+    bool gateTypeFilterApplied = false;
+    bool gateDetailsIncluded = false;
+    std::vector<GateType> appliedGateTypeFilters;
     std::map<GateType, int> gateTypeCounts;
     size_t checkedOutputCount = 0;
     std::vector<int> rootNetIds;
@@ -256,6 +262,7 @@ struct ConeReport {
     std::vector<int> gateIds;
     std::vector<std::string> netNames;
     std::vector<std::string> gateNames;
+    std::vector<GateConnectionSummary> gateConnections;
 
     int longestDepth = -1;
     int shortestDepth = -1;
@@ -266,14 +273,28 @@ struct ConeReport {
 };
 ```
 
+Gate-type filter 契約：
+
+```text
+1. gateTypeFilters 空集合表示不篩選；一個或多個 type 採 OR semantics。
+2. 重複 type 會去重；GateType::UNKNOWN 是 invalid argument，query 回 ok=false。
+3. cone/net payload 與 ConeResult 永遠保存完整 scope。
+4. scopeGateCount 是篩選前 gate 數；gateCount、gateIds、gateNames、
+   gateTypeCounts、gateConnections 都是篩選後結果。
+5. includeGateDetails=true 時，gateConnections 重用 BasicQuery 的
+   GateConnectionSummary，pin order、constant、PI/PO 與 bus-bit 語意一致。
+6. filter 沒有 match 是成功的 valid-zero result，不是 source 不存在。
+```
+
 `LargestOutputCone` 回傳規則：
 
 ```text
 1. sourceName/sourceId 是最大 fanin cone 的 primary output net。
 2. cone/rootNetIds/netNames/gateNames 等欄位對應該 output 的 fanin cone。
-3. gateCount 使用 getConeGateCount()，只計算有效 combinational gates，不計 DFF boundary。
-4. checkedOutputCount 表示實際掃描了多少個 active primary output bit。
-5. 若多個 output gateCount 相同，會以 netCount 較大者優先；仍相同時保留先遇到的 output。
+3. output 選擇使用完整 cone 的 gate count，不受 gateTypeFilters 影響；回傳後才套 filter。
+4. scopeGateCount 是選中 output 的完整 cone gate 數，gateCount 是 filter 後數量。
+5. checkedOutputCount 表示實際掃描了多少個 active primary output bit。
+6. 若多個 output 完整 cone gate count 相同，會以 netCount 較大者優先；仍相同時保留先遇到的 output。
 ```
 
 `SharedFaninGates` 會分別建立兩個 transitive fanin cones，對排序後的 gate IDs 做 intersection，並回傳 shared `gateIds/gateNames/gateTypeCounts`。兩個名稱都合法但沒有交集時回 `ok=true`、`exists=true`、`gateCount=0`，不是來源不存在。`includeIds/includeNames` 只控制對應 payload，不影響成功狀態與 count。
@@ -300,6 +321,8 @@ ConeQuery / ConeReport 高階 API
 LargestOutputCone
 Cone gateTypeCounts
 SharedFaninGates
+Gate-type OR filter 與 scope/filter count 分離
+GateConnectionSummary structured gate details
 ```
 
 測試狀態：
@@ -307,12 +330,10 @@ SharedFaninGates
 ```text
 mini test/tester.cpp 已覆蓋 runConeQuery() 的 NetTransitiveFanin / NetTransitiveFanout / GateTransitiveFanin。
 mini test/test6/test6.cpp 已覆蓋 GateTransitiveFanout、LargestOutputCone、tombstone/bus/stale driver、
-SharedFanin empty result/include flags、empty/reconvergent/multi-root/cycle local path，
-以及 100000-level iterative longest-path chain；目前 16/16 PASS。
+none/one/many/duplicate/UNKNOWN gate-type filters、valid zero、structured details、SharedFanin filter、
+empty/reconvergent/multi-root/cycle local path、100000-level iterative longest-path chain，並讀取
+NewTestCase/test70 驗證大型 cone filter/detail consistency；目前 24/24 PASS。
 ```
 
-後續可補：
-
-```text
-1. 增加 scope-aware cone query，供 transformation / optimization 限定修改範圍。
-```
+CLI parser/help/printer 尚未同步 gate-type filters 與 structured details；追蹤於
+`API_SPEC/TOOLS待更新表.md`。

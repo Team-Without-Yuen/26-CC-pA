@@ -85,8 +85,8 @@ Check-Result `
     ($output -match "(?s)record_offset: 1.*?record_limit: 1.*?next_record_offset: 2.*?dff_name: ff_low") `
     "pagination offset resumes at the correct DFF record"
 Check-Result `
-    ($output -match "(?s)dff_name: ff_high.*?kind: MuxHold.*?active_level_name: active_high.*?detection_method: StructuralCanonicalWithSat.*?solver_status: PROVEN.*?hold_functionally_proven: true.*?load_functionally_proven: true") `
-    "specific DFF optional SAT proof is fully exposed"
+    ($output -match "(?s)dff_name: ff_high.*?kind: MuxHold.*?detection_method: FunctionalCofactorSat.*?active_level_name: active_high.*?solver_status: PROVEN.*?hold_functionally_proven: true.*?load_functionally_proven: true") `
+    "specific DFF functional proof is fully exposed"
 Check-Result `
     ($output -match "(?s)dff_name: ff_and.*?status: DATA_GATING_WITHOUT_HOLD_FEEDBACK.*?kind: DataGatingWithoutHoldFeedback.*?confirmed: false.*?semantics_pending: false") `
     "AND-only structure is reported as a non-match data-gating diagnostic"
@@ -104,11 +104,11 @@ Check-Result `
     ($output.Contains("Unknown sequential_query option: --unknown-option")) `
     "unknown sequential option is rejected"
 Check-Result `
-    ($output -match "(?s)command: sequential_query.*?mode: enable_hold.*?status: ok.*?complete: true.*?matched_dff_count: 1.*?functional_candidates_examined: 1.*?functional_match_count: 1.*?dff_name: ff_internal.*?detection_method: FunctionalCofactorSat.*?data_search_attempted: false.*?data_search_complete: false") `
-    "functional FindAny proves a non-canonical hold pattern without named-data search"
+    ($output -match "(?s)command: sequential_query.*?mode: enable_hold.*?status: ok.*?complete: true.*?matched_dff_count: 1.*?functional_match_count: 1.*?dff_name: ff_internal.*?detection_method: FunctionalCofactorSat.*?confirmed: true.*?data_search_attempted: false.*?data_search_complete: false") `
+    "functional cofactor proof recognizes a non-canonical hold pattern without named-data search"
 Check-Result `
-    ($output -match "(?s)status: partial.*?complete: false.*?report_status: PARTIAL.*?dff_name: ff_internal.*?functional_candidate_limit_reached: true.*?functional_unexamined_candidate_count: [1-9][0-9]*") `
-    "functional candidate truncation is exposed as partial"
+    ($output -match "(?s)status: ok.*?complete: true.*?report_status: OK.*?matched_dff_count: 1.*?dff_name: ff_internal.*?functional_candidate_limit_reached: true.*?functional_unexamined_candidate_count: [1-9][0-9]*.*?confirmed: true") `
+    "named-role mapping limits do not invalidate a proven functional match"
 Check-Result `
     ($output -match "(?s)status: timeout.*?complete: false.*?timed_out: true.*?dff_name: ff_xor.*?functional_fallback_timed_out: true") `
     "functional query-wide timeout is explicit"

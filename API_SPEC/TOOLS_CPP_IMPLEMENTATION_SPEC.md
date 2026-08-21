@@ -421,9 +421,9 @@ written = true
 | `gate_info` | `gate_name` | type、pins、connections | `What type of gate is g0?` |
 | `net_info` | `net_name` | PI/PO/constant/internal | signal information |
 | `port_info` | `port_name` | width、bus、bit nets | `list PI/PO with bit widths` |
-| `count_by_type` | optional `gate_type` | count / all type counts | `How many NOT gates...` |
-| `gates_by_type` | `gate_type` | names/count | `List all XOR gates` |
-| `const_input_gates` | optional `gate_type`, optional `const_value` | matching gates | constant propagation 前置查詢 |
+| `count_by_type` | optional positional type or include/exclude type sets | count / selected type counts | `How many NOT gates...`、`count all except DFF` |
+| `gates_by_type` | optional positional type or include/exclude type sets；optional `--with-pins` | names/count；optional structured pin/net artifact | 多型別 OR list、except/excluding、pin details |
+| `const_input_gates` | optional type include/exclude、constant value、`--with-pins` | matching gates；detail mode 回傳 input/output pin-net records | constant propagation 前置查詢或 constant pin 詳細盤查 |
 | `structural_issues` | 無 | undriven/no-load/floating/unconnected | floating signals |
 
 規格要求：
@@ -433,6 +433,11 @@ written = true
 2. count 為 0 時仍必須輸出欄位。
 3. GateInfo 必須輸出 pin connections，不能只輸出 formattedInfo 字串。
 4. `list_pi/list_po` 必須一次回傳全部 port width/range；`PortInfo` 仍保留單一 port 的 bus bit names。
+5. `--gate-types` 採 OR，`--exclude-gate-types` 後套且優先；未指定 include 代表全部 active gates。
+6. positional concrete type 與 `--gate-types` 同時出現必須 fail closed；重複/空 option 需精確診斷。
+7. `summary`、`list_*`、`structural_issues` 必須拒絕所有 trailing token；
+   `gate_info/net_info/port_info` 必須恰好一個名稱。recognized mode 的 arity error 不得落入
+   connectivity fallback 或被改寫成 unknown mode。
 ```
 
 ---
@@ -441,16 +446,28 @@ written = true
 
 | mode | 必要參數 | 主要輸出 | Prompt 用途 |
 |---|---|---|---|
-| `net_driver` | `net_name` | direct driver gates | net driver |
-| `net_loads` | `net_name` | direct load gates | direct loads |
+| `net_driver` | `net_name`, optional `--with-pins` | direct driver gates；detail mode 回 output-pin records | net driver |
+| `net_loads` | `net_name`, optional `--with-pins` | direct load gates；detail mode 回逐 input-pin/type/role records | direct loads |
 | `fanout_load` | `net_name` | QA fanout count + pin categories | `fanout of n0` |
 | `global_fanout` | optional `fanout_limit` | max fanout / violations | global constraint |
 | `pi_fanout` | optional `fanout_limit` | highest fanout PI | test36/test38 |
+| `fanout_violations` | non-negative `fanout_limit` | nets exceeding the limit | fanout constraint |
 | `gate_inputs` | `gate_name` | input nets | pin connections |
 | `gate_output` | `gate_name` | output net | gate output |
 | `gate_fanin` | `gate_name` | immediate predecessor gates | one-level fanin |
 | `gate_fanout` | `gate_name` | immediate successor gates | `connected to output of g0` |
 | `is_connected` | `gate_name`, `net_name` | connected yes/no | direct connection |
+
+Direct Connectivity CLI parser 規格：
+
+```text
+1. 所有 object mode 必須恰好收到表列名稱數量，缺值與 trailing token 均 fail closed。
+2. net_driver/net_loads 只接受 optional --with-pins，未知或重複 option 必須拒絕。
+3. global_fanout/pi_fanout 的 limit 可省略；fanout_violations 的 limit 必填。
+4. fanout limit 僅接受 0..INT_MAX 的 strict integer；文字、小數、負數與 overflow 必須拒絕。
+5. recognized-mode argument error 必須保留具體診斷並回 complete:false，不可落入 unknown-mode fallback。
+6. structure_query 與 legacy conn_query 共用同一個 builder，避免兩套 grammar 漂移。
+```
 
 `fanout_load` 必須完整輸出：
 
@@ -477,7 +494,17 @@ What is the fanout of primary input n0?
 
 ## 10. cone_query
 
-### 10.1 已有核心 API，可直接 expose
+### 10.1 CLI grammar 與核心 API
+
+```text
+cone_query <mode> [name] [with_paths|--with-paths]
+           [--gate-types <type...>] [--with-pins]
+```
+
+`--gate-types` 經 `stringToGateType()` 解析，支援 `AND OR NOT NAND NOR XOR XNOR BUF DFF`；
+多值寫入 `ConeQuery.gateTypeFilters`，重複值由 backend 去重。`--with-pins` 對應
+`ConeQuery.includeGateDetails=true`。parser 必須拒絕未知 option、未知 type 及空的
+`--gate-types`，不能靜默忽略。
 
 | mode | API type | 參數 |
 |---|---|---|
@@ -498,7 +525,16 @@ net_names
 root_net_names
 checked_output_count
 longest_depth / shortest_depth（有要求時）
+scope_gate_count
+gate_type_filter_applied / applied_gate_type_filters
+gate_details_included / gate_connections（有要求時）
 ```
+
+CLI 保留 `gates` 作為 filter 後相容欄位，另明確輸出 `scope gates` 與 `filtered gates`。
+大型 names/details 使用 `QUERY_LIST_ARTIFACT_V1`；artifact 必須包含 filter metadata、
+完整 gate details 與 `Complete: yes` footer。
+通用 writer 以 record count 與 estimated serialized characters 的雙門檻決定是否寫檔，
+並在 response/header 記錄 trigger。門檻只屬於 printer policy，不得截斷 API report。
 
 ### 10.2 Batch 5 已補 ConeReport 並 expose
 
@@ -506,6 +542,8 @@ longest_depth / shortest_depth（有要求時）
 |---|---|---|
 | cone 內各 gate type 數量 | `ConeReport.gateTypeCounts` | 不應由 LLM 對 gate list 自行統計 |
 | 兩個 fanin cone shared gates | `ConeQueryType::SharedFaninGates` + second net field | 不應由 tools.cpp 自行做集合交集 |
+| 一種或多種 gate type 篩選 | `ConeQuery.gateTypeFilters` | 不應由 LLM 取得全清單後自行統計 |
+| gate pin/net detail | `ConeQuery.includeGateDetails` | 重用 shared `GateConnectionSummary` |
 
 對應 prompt：
 
@@ -735,7 +773,18 @@ gate_on_critical_path
 | `simplified_expression` | `SimplifiedBooleanExpression` | `net`, `max_depth` |
 | `support_pi` | `PrimaryInputsOfNet` | `net` |
 
-### 14.2 SAT response 規則
+### 14.2 CLI parser 契約
+
+```text
+1. 每個 recognized mode 必須 exact arity；缺值、option-like name 與 trailing token 均 fail closed。
+2. conditional_equivalence 的 condition value 與 can_be_value/constant 的 value 僅接受 strict 0/1。
+3. simplified_expression max_depth 僅接受 0..INT_MAX；負數、小數、文字與 overflow 均拒絕。
+4. argument error 回具體訊息與 complete:false，不得落入 unknown-mode fallback。
+5. equivalence_when、functional_dependence、symmetric、expression、primary_inputs_of_net alias
+   與正式 mode 共用相同 grammar；公開文件仍優先使用正式 mode 名稱。
+```
+
+### 14.3 SAT response 規則
 
 SAT 類 mode 必須輸出：
 
@@ -764,7 +813,7 @@ truth_status
 
 只有 `solver_status=SAT/UNSAT` 且 `complete=true` 時，LLM 才能把主要 bool 當最終答案。
 
-### 14.3 Expression response
+### 14.4 Expression response
 
 ```text
 expression
@@ -776,7 +825,18 @@ support_primary_inputs
 
 若 expression 太長，tool response 可同時提供檔案輸出，但不可靜默截斷後仍宣稱是完整 equation。
 
-### 14.4 Search API 與剩餘缺口
+### 14.5 FunctionReport 大型輸出
+
+`support_pi` 與 `symmetry` 使用通用 `QUERY_LIST_ARTIFACT_V1` 雙門檻。artifact 內容必須包含
+support union/三分類、mismatched target bits、counterexample assignments、swap 前後 target
+values，以及足以獨立判讀的 target/status/count fields。成功寫檔後 terminal 抑制上述大型
+lists，但保留 proof fields、主要 bool、counts、artifact completeness 與 `output_file`。
+
+`boolean_expression` 已使用 `NAMED_DAG_EQUATIONS_V2`，不得再建立 generic list artifact，
+避免同一個 response 出現兩個意義不同的 `output_file`。generic artifact I/O 失敗時回退為
+terminal 全量輸出，不能截斷後仍回 `complete:true`。
+
+### 14.6 Search API 與剩餘缺口
 
 | Prompt | API / 狀態 |
 |---|---|

@@ -278,6 +278,7 @@ struct DirectConnectivityQuery {
     std::string netName;
     bool includeIds = true;
     bool includeNames = true;
+    bool includePinDetails = false;
 };
 
 struct DirectConnectivityReport {
@@ -291,13 +292,21 @@ struct DirectConnectivityReport {
     int gateId = -1;
     int netId = -1;
     size_t count = 0;
+    bool pinDetailsIncluded = false;
+    size_t pinConnectionCount = 0;
 
     std::vector<int> gateIds;
     std::vector<int> netIds;
     std::vector<std::string> gateNames;
     std::vector<std::string> netNames;
+    std::vector<ConnectivityPinRecord> pinConnections;
 };
 ```
+
+`NetDriverGates` / `NetLoadGates` 設定 `includePinDetails=true` 時會填入逐 pin 的
+`ConnectivityPinRecord`。每筆包含 scalar net ID/name、gate ID/name/type、pin index/name、
+`Driver/Load` direction 與 `Output/CombinationalInput/DffData/DffClock/DffResetSet/DffOther` role。
+`count` 維持去重 gate instance 數；`pinConnectionCount` 是實際 pin edge 數，兩者不可混用。
 
 ---
 
@@ -306,7 +315,9 @@ struct DirectConnectivityReport {
 | Prompt 類型 | 高階 query |
 |---|---|
 | Which gate drives net n1? | `NetDriverGates` |
+| Which exact output pin drives net n1? | `NetDriverGates` with `includePinDetails=true` |
 | Report every gate connected to net n1. | `NetLoadGates` |
+| Report every gate pin connected to net n1. | `NetLoadGates` with `includePinDetails=true` |
 | How many fanout loads does net n1 have? | `FanoutLoadReport` |
 | List DFF clock/reset loads driven by n1. | `FanoutLoadReport` |
 | Which primary input has the highest fanout? | `GlobalFanoutReport` with `primaryInputsOnly = true` |
@@ -347,9 +358,5 @@ mini test/tester.cpp 已覆蓋 runDirectConnectivityQuery() 的 NetDriverGates /
 目前 regression 結果：Summary: 57 passed, 0 failed.
 ```
 
-後續可補：
-
-```text
-1. 若需要更細的 pin-level output，可補 gate input pin index/name 的文字化 report。
-2. 其他非 fanout-limit transformation / optimization pass 若有 fanout 判斷，也應逐步改用 pin-level sink。
-```
+逐 pin driver/load detail 已由 `ConnectivityPinRecord` 完成。其他非 fanout-limit transformation /
+optimization pass 若有 fanout 判斷，仍應逐步改用 pin-level sink。

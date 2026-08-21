@@ -186,10 +186,11 @@ FunctionSearchReport runFunctionSearchQuery(
 
 不同 simulation bucket 的 outputs 已有 concrete simulation assignment 證明不同，因此不需 SAT。相同 bucket 仍逐步做 SAT，避免把 simulation collision 當成 proof。
 
-Phase B 只替換 `EquivalentGatePairs` 的 class proof backend。scope、gate filter、candidate
-順序、simulation、FindAny/FindAll、timeout 與 report assembly 都沿用原本流程；同一個
-`Netlist` 使用 private lazy `Primitives` owner，caller 不提供 backend 選項。NAND pair
-search 目前仍使用 legacy cone-miter SAT。
+Phase B 替換 `EquivalentGatePairs` 的 class proof backend，並用於 NAND pair
+`FindAny` 的 surviving-candidate proof。NAND pair `FindAll` 仍使用 legacy cone-miter
+SAT，避免大量臨時 pattern 擴張常駐 AIG/SAT state。scope、candidate 順序、
+simulation、timeout 與 report assembly 均沿用原本流程；同一個 `Netlist`
+使用 private lazy `Primitives` owner，caller 不提供 backend 選項。
 
 ---
 
@@ -236,18 +237,18 @@ gate output 等價不等於該 gate 在 observability 上 redundant；本 API �
 | NAND API regression | `mini test/test23` |
 | NAND CLI regression | `mini test/test24` |
 | equivalent-gate API/CLI regression | `mini test/test26` |
-| legacy/Phase B differential 與大型 random DAG | `mini test/test44` |
+| reference/Phase B differential 與大型 random DAG | `mini test/test44` |
 
-`test24` 覆蓋 NAND FindAny/FindAll、完整 artifact、明確 result limit、no-match、invalid input 與 timeout。`test26` 覆蓋跨 gate type 等價、多個 equivalence classes、FindAny/FindAll、完整 artifact、scope、gate filter、result limit、直接 timeout、functional merge 與 rollback。`test44` 以獨立 legacy scalar proof 對 production Phase B 做官方、synthetic 與最大 2048-gate random DAG differential。
+`test24` 覆蓋 NAND FindAny/FindAll、完整 artifact、明確 result limit、no-match、invalid input 與 timeout。`test26` 覆蓋跨 gate type 等價、多個 equivalence classes、FindAny/FindAll、完整 artifact、scope、gate filter、result limit、直接 timeout、functional merge 與 rollback。`test44` 以 reference/engine 雙路徑做官方、synthetic 與最大 2048-gate random DAG 比對；EquivalentGatePairs 的 reference 為獨立 legacy proof，NAND reference 為 production adapter。
 
-NewTestCase production differential 實測（2026-08-15）：
+NewTestCase production differential 實測（2026-08-20）：
 
 | Case | Command | 結果 | Elapsed |
 |---|---|---|---:|
 | test29 原始設計 | `func_search equivalent_pairs whole --all` | 7/7 records；complete；約 6.27x | 約 0.44 秒 |
 | test30 原始設計 | `func_search equivalent_pairs whole --all` | 1/1 record；complete；約 6.07x | 約 0.04 秒 |
-| test35 | `func_search nand_pair n25` | 1 SAT-proven witness；complete；維持 legacy | 環境相依 |
+| test70 | `func_search nand_pair n25` | 1 SAT-proven witness；complete；FindAny 使用 AIG incremental SAT | 約 0.99 秒（搜尋） |
 
-test29/test30 的 artifact record 數與 `match_count` 完全一致；test35 是存在性問題，FindAny 直接在 envelope 回 witness。上述 7/1 是直接分析官方原始設計的結果，不代表 prompt session 執行前序 transformation 後的數量。
+test29/test30 的 artifact record 數與 `match_count` 完全一致；test70 是存在性問題，FindAny 直接在 envelope 回 witness。test70 differential 的 legacy/AIG 結果同為 1 組、complete、Unknown=0，時間約 7.16/2.21 秒。FindAll 則同為 512 組、complete、Unknown=0，legacy/AIG 約 59.29/121.49 秒，因此保留 legacy。
 
 `mini test/test45` 另重播 test29/test30 在 functional merge 前的官方順序：AND/NOT basis conversion、dead/dangling cleanup、double-inverter collapse，再建立只讀 oracle 並呼叫 `EditApply::MergeFunctionallyEquivalentGates`。此時分別完整合併 361/494 顆；oracle class size、merge records、`mergedGateCount` 與 active-gate delta 完全一致，mandatory CEC、獨立 CEC、write/readback CEC 皆通過。

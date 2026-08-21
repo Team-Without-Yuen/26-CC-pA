@@ -1,0 +1,284 @@
+# Complete query list artifact
+Format: QUERY_LIST_ARTIFACT_V1
+Command: depth_query
+Mode: deepest_output
+Loaded design: NewTestCase/test70/test70.v
+Design revision: 0
+
+Automatic artifact trigger:
+  entry count: 259
+  estimated serialized characters: 4709
+  triggered by entry count: yes
+  triggered by character count: no
+
+Fields:
+  report_count: 214
+  worst_endpoint: n42[7]
+  worst_depth: 22
+
+Lists:
+Endpoint depth reports (214):
+  n25 depth=3
+  n26 depth=2
+  n27 depth=3
+  n28 depth=2
+  n29 depth=3
+  n30 depth=0
+  n31 depth=3
+  n32 depth=2
+  n33 depth=3
+  n34 depth=0
+  n35 depth=7
+  n36 depth=0
+  n43[1] depth=0
+  n43[0] depth=0
+  n44[1] depth=0
+  n44[0] depth=0
+  n45[1] depth=0
+  n45[0] depth=0
+  n46[1] depth=0
+  n46[0] depth=0
+  n47[1] depth=0
+  n47[0] depth=0
+  n37[31] depth=0
+  n37[30] depth=0
+  n37[29] depth=0
+  n37[28] depth=0
+  n37[27] depth=0
+  n37[26] depth=0
+  n37[25] depth=0
+  n37[24] depth=0
+  n37[23] depth=0
+  n37[22] depth=0
+  n37[21] depth=0
+  n37[20] depth=0
+  n37[19] depth=0
+  n37[18] depth=0
+  n37[17] depth=0
+  n37[16] depth=0
+  n37[15] depth=0
+  n37[14] depth=0
+  n37[13] depth=0
+  n37[12] depth=0
+  n37[11] depth=0
+  n37[10] depth=0
+  n37[9] depth=0
+  n37[8] depth=0
+  n37[7] depth=0
+  n37[6] depth=0
+  n37[5] depth=0
+  n37[4] depth=0
+  n37[3] depth=0
+  n37[2] depth=0
+  n37[1] depth=0
+  n37[0] depth=0
+  n38[31] depth=0
+  n38[30] depth=0
+  n38[29] depth=0
+  n38[28] depth=0
+  n38[27] depth=0
+  n38[26] depth=0
+  n38[25] depth=0
+  n38[24] depth=0
+  n38[23] depth=0
+  n38[22] depth=0
+  n38[21] depth=0
+  n38[20] depth=0
+  n38[19] depth=0
+  n38[18] depth=0
+  n38[17] depth=0
+  n38[16] depth=0
+  n38[15] depth=0
+  n38[14] depth=0
+  n38[13] depth=0
+  n38[12] depth=0
+  n38[11] depth=0
+  n38[10] depth=0
+  n38[9] depth=0
+  n38[8] depth=0
+  n38[7] depth=0
+  n38[6] depth=0
+  n38[5] depth=0
+  n38[4] depth=0
+  n38[3] depth=0
+  n38[2] depth=0
+  n38[1] depth=0
+  n38[0] depth=0
+  n39[31] depth=0
+  n39[30] depth=0
+  n39[29] depth=0
+  n39[28] depth=0
+  n39[27] depth=0
+  n39[26] depth=0
+  n39[25] depth=0
+  n39[24] depth=0
+  n39[23] depth=0
+  n39[22] depth=0
+  n39[21] depth=0
+  n39[20] depth=0
+  n39[19] depth=0
+  n39[18] depth=0
+  n39[17] depth=0
+  n39[16] depth=0
+  n39[15] depth=0
+  n39[14] depth=0
+  n39[13] depth=0
+  n39[12] depth=0
+  n39[11] depth=0
+  n39[10] depth=0
+  n39[9] depth=0
+  n39[8] depth=0
+  n39[7] depth=0
+  n39[6] depth=0
+  n39[5] depth=0
+  n39[4] depth=0
+  n39[3] depth=0
+  n39[2] depth=0
+  n39[1] depth=0
+  n39[0] depth=0
+  n40[31] depth=0
+  n40[30] depth=0
+  n40[29] depth=0
+  n40[28] depth=0
+  n40[27] depth=0
+  n40[26] depth=0
+  n40[25] depth=0
+  n40[24] depth=0
+  n40[23] depth=0
+  n40[22] depth=0
+  n40[21] depth=0
+  n40[20] depth=0
+  n40[19] depth=0
+  n40[18] depth=0
+  n40[17] depth=0
+  n40[16] depth=0
+  n40[15] depth=0
+  n40[14] depth=0
+  n40[13] depth=0
+  n40[12] depth=0
+  n40[11] depth=0
+  n40[10] depth=0
+  n40[9] depth=0
+  n40[8] depth=0
+  n40[7] depth=0
+  n40[6] depth=0
+  n40[5] depth=0
+  n40[4] depth=0
+  n40[3] depth=0
+  n40[2] depth=0
+  n40[1] depth=0
+  n40[0] depth=0
+  n41[31] depth=0
+  n41[30] depth=0
+  n41[29] depth=0
+  n41[28] depth=0
+  n41[27] depth=0
+  n41[26] depth=0
+  n41[25] depth=0
+  n41[24] depth=0
+  n41[23] depth=0
+  n41[22] depth=0
+  n41[21] depth=0
+  n41[20] depth=0
+  n41[19] depth=0
+  n41[18] depth=0
+  n41[17] depth=0
+  n41[16] depth=0
+  n41[15] depth=0
+  n41[14] depth=0
+  n41[13] depth=0
+  n41[12] depth=0
+  n41[11] depth=0
+  n41[10] depth=0
+  n41[9] depth=0
+  n41[8] depth=0
+  n41[7] depth=0
+  n41[6] depth=0
+  n41[5] depth=0
+  n41[4] depth=0
+  n41[3] depth=0
+  n41[2] depth=0
+  n41[1] depth=0
+  n41[0] depth=0
+  n42[31] depth=15
+  n42[30] depth=15
+  n42[29] depth=15
+  n42[28] depth=15
+  n42[27] depth=15
+  n42[26] depth=15
+  n42[25] depth=15
+  n42[24] depth=15
+  n42[23] depth=15
+  n42[22] depth=15
+  n42[21] depth=15
+  n42[20] depth=15
+  n42[19] depth=16
+  n42[18] depth=16
+  n42[17] depth=18
+  n42[16] depth=18
+  n42[15] depth=16
+  n42[14] depth=16
+  n42[13] depth=16
+  n42[12] depth=16
+  n42[11] depth=17
+  n42[10] depth=17
+  n42[9] depth=17
+  n42[8] depth=17
+  n42[7] depth=22
+  n42[6] depth=22
+  n42[5] depth=22
+  n42[4] depth=18
+  n42[3] depth=17
+  n42[2] depth=17
+  n42[1] depth=18
+  n42[0] depth=16
+Worst path nets in start-to-end order (23):
+  n24[1]
+  n23212
+  n23295
+  n23296
+  n23773
+  n23889
+  n24146
+  n25191
+  n27407
+  n27897
+  n28122
+  n28204
+  n28346
+  n28414
+  n28480
+  n28500
+  n28555
+  n28579
+  n28621
+  n28651
+  n28699
+  n28714
+  n42[7]
+Worst path gates in start-to-end order (22):
+  g6514
+  g6454
+  g6407
+  g6085
+  g5843
+  g5519
+  g4364
+  g2130
+  g1639
+  g1412
+  g1331
+  g1187
+  g1114
+  g1047
+  g1025
+  g953
+  g915
+  g872
+  g839
+  g794
+  g778
+  g735
+
+Total list entries: 259
+Complete: yes

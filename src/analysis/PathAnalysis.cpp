@@ -30,14 +30,14 @@ struct SearchState {
     int previousGateId;
 };
 
-class CompactPathArtifactWriter;
+class LiteralPathArtifactWriter;
 
 struct PathEnumerationOptions {
     double timeLimitSeconds = 0.0;
     bool countOnly = false;
     bool storePaths = true;
     size_t maxStoredPaths = 0;
-    CompactPathArtifactWriter* pathWriter = nullptr;
+    LiteralPathArtifactWriter* pathWriter = nullptr;
 };
 
 struct PathEnumerationState {
@@ -113,15 +113,14 @@ bool rewritePathFileCount(std::fstream& file, size_t pathCount) {
     return static_cast<bool>(file);
 }
 
-// 完整保留每條 path，但將重複名稱移到 dictionary，record 只寫 start-net ID 與 gate IDs。
-// 由 start net 和每個 gate 的 output net 可無損重建原本的 net/gate sequence。
-class CompactPathArtifactWriter {
+// 逐條輸出具名 net/gate sequence，讓 artifact 不需額外解碼即可直接作答。
+class LiteralPathArtifactWriter {
 public:
-    CompactPathArtifactWriter(std::ostream& output,
+    LiteralPathArtifactWriter(std::ostream& output,
                               const Netlist& netlist,
                               bool expectedCountKnown,
                               size_t expectedPathCount)
-        : output_(output), expectedCountKnown_(expectedCountKnown) {
+        : output_(output), netlist_(netlist), expectedCountKnown_(expectedCountKnown) {
         buffer_.reserve(kBufferCapacity);
         appendText("Total paths: ");
         if (expectedCountKnown_) {
@@ -130,56 +129,12 @@ public:
             appendRepeated(' ', kPathCountHeaderWidth - 1);
             appendText("0");
         }
-        appendText("\nFormat: COMPACT_PATH_V3\n");
-        appendText("All IDs and path indices are unsigned base36 integers.\n");
-        appendText("Dictionary rows:\n");
-        appendText("  N <net_id> <net_name>\n");
-        appendText("  G <gate_id> <output_net_id> <gate_name> <gate_type>\n");
-        appendText("A decoded path token sequence is S = [start_net_id, gate_id_1, ..., gate_id_N].\n");
-        appendText("Token 0 is always the start net; tokens 1..N are always gates.\n");
-        appendText("First record: Path 0: F <every token in S>\n");
-        appendText("Delta record: P <path_index> <prefix_token_count> <suffix_token_count> <middle_tokens>...\n");
-        appendText("IMPORTANT: prefix/suffix counts apply to the entire S, including token 0 (start net).\n");
-        appendText("Decode delta: current S = previous S first <prefix> tokens + middle tokens + previous S last <suffix> tokens.\n");
-        appendText("Example: previous S=[0,0,2,6,7] and 'P 1 2 2 3' decodes to S=[0,0,3,6,7].\n");
-        appendText("Expand names: look up S[0] in net_dictionary; for each gate S[i], look up the gate and then its output_net_id.\n");
+        appendText("\nFormat: LITERAL_PATH_V1\n");
+        appendText("Each record is a complete start-to-end sequence.\n");
+        appendText("Record syntax: Path <index>: <net> -> <gate>(<type>) -> <net> ...\n");
         if (expectedCountKnown_) {
             appendText("Expected paths: ");
             appendUnsigned(expectedPathCount);
-            appendText("\n");
-        }
-
-        appendText("\n[net_dictionary]\n");
-        for (size_t i = 0; i < netlist.getNetCount(); ++i) {
-            const Net& net = netlist.getNet(static_cast<int>(i));
-            if (net.isRemoved || net.name.empty()) {
-                continue;
-            }
-            appendText("N\t");
-            appendBase36(i);
-            appendText("\t");
-            appendText(net.name);
-            appendText("\n");
-        }
-
-        appendText("\n[gate_dictionary]\n");
-        for (size_t i = 0; i < netlist.getGateCount(); ++i) {
-            const Gate& gate = netlist.getGate(static_cast<int>(i));
-            if (gate.type == GateType::UNKNOWN || gate.instName.empty()) {
-                continue;
-            }
-            appendText("G\t");
-            appendBase36(i);
-            appendText("\t");
-            if (gate.outputNetId >= 0) {
-                appendBase36(static_cast<size_t>(gate.outputNetId));
-            } else {
-                appendText("-1");
-            }
-            appendText("\t");
-            appendText(gate.instName);
-            appendText("\t");
-            appendText(netlist.gateTypeToString(gate.type));
             appendText("\n");
         }
         appendText("\n[paths]\n");
@@ -191,51 +146,36 @@ public:
             return false;
         }
 
-        const size_t currentSize = path.gateIds.size() + 1;
-        auto currentToken = [&](size_t index) {
-            return index == 0 ? path.netIds.front() : path.gateIds[index - 1];
-        };
+        if (path.netIds.size() != path.gateIds.size() + 1) {
+            failed_ = true;
+            return false;
+        }
 
-        if (previousPath_.empty()) {
-            appendText("Path 0: F");
-            for (size_t i = 0; i < currentSize; ++i) {
-                appendText(" ");
-                appendBase36(static_cast<size_t>(currentToken(i)));
+        appendText("Path ");
+        appendUnsigned(pathIndex);
+        appendText(": ");
+        for (size_t i = 0; i < path.netIds.size(); ++i) {
+            const int netId = path.netIds[i];
+            if (!netlist_.isValidNetId(netId)) {
+                failed_ = true;
+                return false;
             }
-        } else {
-            size_t commonPrefix = 0;
-            const size_t comparable = std::min(previousPath_.size(), currentSize);
-            while (commonPrefix < comparable &&
-                   previousPath_[commonPrefix] == currentToken(commonPrefix)) {
-                ++commonPrefix;
-            }
-
-            size_t commonSuffix = 0;
-            while (commonSuffix < previousPath_.size() - commonPrefix &&
-                   commonSuffix < currentSize - commonPrefix &&
-                   previousPath_[previousPath_.size() - 1 - commonSuffix] ==
-                       currentToken(currentSize - 1 - commonSuffix)) {
-                ++commonSuffix;
-            }
-
-            appendText("P ");
-            appendBase36(pathIndex);
-            appendText(" ");
-            appendBase36(commonPrefix);
-            appendText(" ");
-            appendBase36(commonSuffix);
-            const size_t middleEnd = currentSize - commonSuffix;
-            for (size_t i = commonPrefix; i < middleEnd; ++i) {
-                appendText(" ");
-                appendBase36(static_cast<size_t>(currentToken(i)));
+            appendText(netlist_.getNet(netId).name);
+            if (i < path.gateIds.size()) {
+                const int gateId = path.gateIds[i];
+                if (!netlist_.isValidGateId(gateId)) {
+                    failed_ = true;
+                    return false;
+                }
+                const Gate& gate = netlist_.getGate(gateId);
+                appendText(" -> ");
+                appendText(gate.instName);
+                appendText("(");
+                appendText(netlist_.gateTypeToString(gate.type));
+                appendText(") -> ");
             }
         }
         appendText("\n");
-
-        previousPath_.resize(currentSize);
-        for (size_t i = 0; i < currentSize; ++i) {
-            previousPath_[i] = currentToken(i);
-        }
         return !failed_;
     }
 
@@ -286,23 +226,6 @@ private:
     }
 
     void appendUnsigned(size_t value) { appendInteger(value); }
-    void appendSigned(int value) { appendInteger(value); }
-
-    void appendBase36(size_t value) {
-        static constexpr char kDigits[] = "0123456789abcdefghijklmnopqrstuvwxyz";
-        char encoded[32];
-        char* cursor = encoded + sizeof(encoded);
-        do {
-            *--cursor = kDigits[value % 36U];
-            value /= 36U;
-        } while (value != 0);
-        const size_t length = static_cast<size_t>(encoded + sizeof(encoded) - cursor);
-        if (buffer_.size() + length > kBufferCapacity && !flush()) {
-            return;
-        }
-        buffer_.append(cursor, length);
-    }
-
     bool flush() {
         if (failed_) {
             return false;
@@ -318,8 +241,8 @@ private:
     }
 
     std::ostream& output_;
+    const Netlist& netlist_;
     std::string buffer_;
-    std::vector<int> previousPath_;
     bool expectedCountKnown_ = false;
     bool failed_ = false;
 };
@@ -1941,7 +1864,7 @@ Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
         options.maxStoredPaths = 0;
         PathEnumerationState state;
         std::fstream pathOutput;
-        std::unique_ptr<CompactPathArtifactWriter> pathWriter;
+        std::unique_ptr<LiteralPathArtifactWriter> pathWriter;
         bool expectedPathCountKnown = false;
         size_t expectedPathCount = 0;
 
@@ -1973,7 +1896,7 @@ Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
                                  result.outputFilePath;
                 return result;
             }
-            pathWriter = std::make_unique<CompactPathArtifactWriter>(
+            pathWriter = std::make_unique<LiteralPathArtifactWriter>(
                 pathOutput, *this, expectedPathCountKnown, expectedPathCount);
             options.pathWriter = pathWriter.get();
             options.storePaths = query.maxPrintedPaths > 0;

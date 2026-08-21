@@ -48,7 +48,7 @@
 |---|---|---|---|
 | 4 `g0` on any maximum-depth path | `depth_query gate_on_critical g0` | explicit yes/no | `Ready` |
 | 5 number of PIs and POs | `structure_query summary` | PI/PO counts | `Ready` |
-| 6 all register-to-register paths | `path_query enumerate all_dff_q all_dff_d -out ...` | path count/list + complete flag | `Conditional` |
+| 6 all register-to-register paths | `path_query enumerate all_dff_q all_dff_d` | automatic artifact + path count/complete flag | `Conditional` |
 | 7 NAND with constant-1 to NOT | query candidates, then typed simplification | only selected NAND gates rewritten | `Partial` |
 | 8 current NOT count | `structure_query count_by_type NOT` | active NOT count | `Ready` |
 | 9 every `n2` to `n12` path through `g0` | `path_query every_through pi:n2 po:n12 -req gate:g0` | explicit yes/no | `Ready` |
@@ -61,7 +61,7 @@
 | 16 NAND gates with constant inputs | `structure_query const_input_gates NAND` | matching gate names/count | `Ready` |
 | 17 simplify only reported NAND gates | `edit_apply simplify_constants NAND any` | selected NAND candidates/rewrites | `Ready` |
 | 18 NAND gates eliminated | `report_query last_edit` | `eliminated_target_gate_count` | `Ready` |
-| 19 all `n2` to `n12` paths | `path_query enumerate pi:n2 po:n12 -out ...` | paths + complete flag | `Conditional` |
+| 19 all `n2` to `n12` paths | `path_query enumerate pi:n2 po:n12` | automatic artifact + path count/complete flag | `Conditional` |
 
 ## test33
 
@@ -73,9 +73,9 @@
 | 7 remove dangling/dead gates | `edit_apply trim_dead_logic` | removed gate delta | `Ready` |
 | 8 dangling gates removed | `report_query last_edit` | removed active gates | `Ready` |
 | 9 cone `n8` to NAND/NOT basis | `edit_apply convert_basis net_fanin n8 -allow NAND NOT` | no disallowed cone gates + certificate | `Ready` |
-| 10 NAND count in cone `n8` | `cone_query net_fanin n8` | `gateTypeCounts.NAND` | `Ready` |
+| 10 NAND count in cone `n8` | `cone_query net_fanin n8 --gate-types NAND` | `filtered gates` | `Ready` |
 | 11 equivalence `n55146/n55104` | `func_query equivalence n55146 n55104` | complete + equivalent | `Ready` |
-| 12 every `n3` to `n9` path | `path_query enumerate pi:n3 po:n9 -out ...` | paths + complete flag | `Conditional` |
+| 12 every `n3` to `n9` path | `path_query enumerate pi:n3 po:n9` | automatic artifact + path count/complete flag | `Conditional` |
 | 13 whether `n8` functionally depends on `n1` | `func_query depends_on n8 n1` | complete exact SAT/cofactor yes/no | `Ready` |
 | 14 current vs loaded equivalence | `equiv_query original` | complete + equivalent | `Ready` |
 | 15 whether `n55104` is a PI-to-PO cut | `path_query pi_po_cut n55104` | complete cut yes/no + witness pair | `Ready` |
@@ -106,7 +106,7 @@
 | 6 path PI `n2` to PO `n25` | `path_query exists pi:n2 po:n25` | explicit yes/no | `Ready` |
 | 7 gates connected to output of `g0` | `structure_query gate_fanout g0` | load gate names | `Ready` |
 | 8 deepest output bit | `depth_query deepest_output` | output name + depth | `Ready` |
-| 9 all NAND gates with pins | `structure_query gates_by_type NAND`, then `gate_info` per gate | names and all input/output signals | `Composite` |
+| 9 all NAND gates with pins | `structure_query gates_by_type NAND --with-pins` | 19,682 structured gate/input/output records；完整 artifact | `Ready`；test70 實測 19,682/19,682 complete |
 | 10 rename `n7431` | `edit_apply rename_net n7431 renamed_wire` | changed names + certificate | `Ready` |
 | 11 pre/post transformation equivalence | `equiv_query previous_edit` | complete + equivalent | `Ready` |
 | 12 equivalence `n29498/n29471` | `func_query equivalence n29498 n29471` | complete + equivalent | `Ready` |
@@ -142,10 +142,10 @@
 |---|---|---|---|
 | 4 gate type count in cone `n8` | `cone_query net_fanin n8` | all cone gate type counts | `Ready` |
 | 5 cone `n8` to NAND/NOT | `edit_apply convert_basis net_fanin n8 -allow NAND NOT` | final cone basis + certificate | `Ready` |
-| 6 current NAND count in cone | `cone_query net_fanin n8` | `gateTypeCounts.NAND` | `Ready` |
+| 6 current NAND count in cone | `cone_query net_fanin n8 --gate-types NAND` | `filtered gates` | `Ready` |
 | 7 prune unused gates | `edit_apply trim_dead_logic` | removed active gates + certificate | `Ready` |
 | 8 current vs loaded equivalence | `equiv_query original` | complete + equivalent | `Ready` |
-| 9 all register paths | `path_query enumerate all_dff_q all_dff_d -out ...` | paths + complete flag | `Conditional` |
+| 9 all register paths | `path_query enumerate all_dff_q all_dff_d` | automatic artifact + path count/complete flag | `Conditional` |
 | 10 PI/PO counts | `structure_query summary` | PI/PO counts | `Ready` |
 | 11 list POs with widths | `structure_query list_po` | ordered name/width/range summaries | `Ready` |
 | 12 gates with input tied to `1'b1` | `structure_query const_input_gates all 1` | gate names/count | `Ready` |
@@ -209,8 +209,8 @@
 | 9 POs with widths | `structure_query list_po` | ordered name/width/range summaries | `Ready` |
 | 10 list XOR gates | `structure_query gates_by_type XOR` | names/count | `Ready` |
 | 11 max register-to-register depth | `path_query max_depth all_dff_q all_dff_d` | representative DFF pair + depth/path | `Ready` |
-| 12 report DFF enable/hold structures | `sequential_query enable_hold all --confirmed-only` 自動完整寫入 artifact；需要非 canonical functional search 時才 opt-in `--functional-fallback` | DFF names、pattern、D-input logic、artifact path、functional completeness | `Ready (Canonical + Bounded Functional)` |
-| 13 count DFFs with enable/hold | canonical：`sequential_query enable_hold all --summary-only`；functional lower bound：再加 `--functional-fallback --functional-find-any --no-resolve-functional-data` 與明確 budget | `matched_dff_count` unique confirmed DFF count；只有 `complete:true` 才是完整數量 | `Ready (Canonical + Bounded Functional)` |
+| 12 report DFF enable/hold structures | `sequential_query enable_hold all --confirmed-only` 自動完整寫入 artifact；預設包含 canonical 與 restructuring functional proof | DFF names、pattern、D-input logic、artifact path、functional completeness | `Ready` |
+| 13 count DFFs with enable/hold | `sequential_query enable_hold all --summary-only` | `matched_dff_count` unique confirmed DFF count；只有 `complete:true` 才是完整數量 | `Ready` |
 | 14 `g0` type and pins | `structure_query gate_info g0` | type + pin connections | `Ready` |
 | 15 output with largest fanin cone | `cone_query largest_output` | selected output + gate count | `Ready` |
 | 16 optimize `n14` depth under NAND/NOT | `opt_apply critical_path_depth --scope net_fanin n14 --objective cone --allowed NAND NOT` | `NOT(NAND(n514,n412))` is proven optimal at depth 2；original retained | `Ready` |
@@ -222,7 +222,7 @@
 | Priority | Gap | Blocking prompts |
 |---|---|---|
 | Completed | symmetry analysis | test36、test37 與 mini test22 已驗證 |
-| Completed | NAND witness-pair function search | test35；API + CLI + mini test23/test24 |
+| Completed | NAND witness-pair function search | test70；API + CLI + mini test23/test24 |
 | Completed | test38 structural redundancy removal | official flow 實測移除 14 gates，且 whole-design SAT 通過 |
 | Partial | constrained depth optimization flow | test40 official flow PASS；test33 large D-pin cone blocked by non-preemptible global XAG core |
 | P1 | cooperative timeout / cone-isolated resynthesis | `--time-limit` cannot interrupt one mockturtle primitive；blocks test33 bounded completion |
@@ -272,13 +272,13 @@
 | test40 | PASS，約 3.6 秒 | 完整前置 NAND/NOT mapping/cleanup 後，n14 depth 2 命中安全 lower-bound proof，回 original |
 | test33 | 待重測 | 若 n8 為 DFF.Q，應以 boundary depth 0 回 original；hidden 中非 DFF.Q 大型 cone 仍可能卡在不可搶占的 global XAG primitive |
 
-### test35 Function Search 實測
+### test70 Function Search 實測
 
 ```text
-command: func_search nand_pair n25 --time-limit 45
+command: func_search nand_pair n25
 status: ok
 complete: true
-elapsed: 6.51 s
+elapsed: 0.99 s (search)
 match: (n26080, n6359)
-proof: SAT_UNSAT_MITER / UNSAT
+proof: AIG_INCREMENTAL_SAT / UNSAT
 ```

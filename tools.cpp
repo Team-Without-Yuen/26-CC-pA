@@ -54,7 +54,15 @@ struct ToolResponse {
     bool complete = false;
 };
 
-constexpr size_t kAutomaticListArtifactThreshold = 200;
+constexpr size_t kAutomaticListArtifactEntryThreshold = 200;
+constexpr size_t kAutomaticListArtifactCharacterThreshold = 12000;
+
+size_t saturatingAdd(size_t value, size_t increment) {
+    if (increment > std::numeric_limits<size_t>::max() - value) {
+        return std::numeric_limits<size_t>::max();
+    }
+    return value + increment;
+}
 
 struct ListArtifactSection {
     std::string title;
@@ -72,6 +80,24 @@ struct ListArtifactContent {
         }
         return count;
     }
+
+    size_t estimatedSerializedCharacters() const {
+        size_t characters = 128;
+        for (const auto& field : fields) {
+            characters = saturatingAdd(characters, field.first.size());
+            characters = saturatingAdd(characters, field.second.size());
+            characters = saturatingAdd(characters, 6);
+        }
+        for (const ListArtifactSection& section : sections) {
+            characters = saturatingAdd(characters, section.title.size());
+            characters = saturatingAdd(characters, 32);
+            for (const std::string& entry : section.entries) {
+                characters = saturatingAdd(characters, entry.size());
+                characters = saturatingAdd(characters, 3);
+            }
+        }
+        return characters;
+    }
 };
 
 struct ListArtifactResult {
@@ -79,6 +105,9 @@ struct ListArtifactResult {
     bool complete = false;
     bool wroteFile = false;
     size_t entryCount = 0;
+    size_t estimatedCharacterCount = 0;
+    bool triggeredByEntryCount = false;
+    bool triggeredByCharacterCount = false;
     std::string format = "QUERY_LIST_ARTIFACT_V1";
     std::string outputFilePath;
     std::string message;
@@ -151,6 +180,47 @@ bool isIntegerToken(const std::string& text) {
         }
     }
     return true;
+}
+
+bool isOptionToken(const std::string& text) {
+    return !text.empty() && text.front() == '-';
+}
+
+bool parseNonNegativeSize(const std::string& text, size_t& value) {
+    if (text.empty()) {
+        return false;
+    }
+    for (char ch : text) {
+        if (!std::isdigit(static_cast<unsigned char>(ch))) {
+            return false;
+        }
+    }
+    try {
+        size_t parsedCharacters = 0;
+        const unsigned long long parsed = std::stoull(text, &parsedCharacters, 10);
+        if (parsedCharacters != text.size() ||
+            parsed > static_cast<unsigned long long>(std::numeric_limits<size_t>::max())) {
+            return false;
+        }
+        value = static_cast<size_t>(parsed);
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
+}
+
+bool parsePositiveFiniteSeconds(const std::string& text, double& value) {
+    try {
+        size_t parsedCharacters = 0;
+        const double parsed = std::stod(text, &parsedCharacters);
+        if (parsedCharacters != text.size() || !std::isfinite(parsed) || parsed <= 0.0) {
+            return false;
+        }
+        value = parsed;
+        return true;
+    } catch (const std::exception&) {
+        return false;
+    }
 }
 
 // 依 delimiter 切字串；這裡只用於解析 CLI endpoint/node token。
@@ -418,18 +488,106 @@ std::vector<std::string> gateNamesFromIds(
 std::vector<std::string> fanoutReportEntries(
     const std::vector<Netlist::FanoutLoadReport>& reports);
 
+std::string formatPinConnection(const PinConnectionSummary& pin) {
+    std::string result = pin.pinName + "=";
+    if (!pin.connected) return result + "<unconnected>";
+    if (pin.isConstant && (pin.constantValue == 0 || pin.constantValue == 1)) {
+        result += "1'b" + std::to_string(pin.constantValue);
+    } else {
+        result += pin.netName;
+    }
+    if (pin.isPrimaryInput) result += "(PI)";
+    if (pin.isPrimaryOutput) result += "(PO)";
+    return result;
+}
+
+std::string formatGateConnection(const GateConnectionSummary& gate) {
+    std::string result = "gate=" + gate.gateName + " type=" + gate.typeName +
+                         " inputs=[";
+    for (size_t i = 0; i < gate.inputs.size(); ++i) {
+        if (i != 0) result += ", ";
+        result += formatPinConnection(gate.inputs[i]);
+    }
+    result += "] output=" + formatPinConnection(gate.output);
+    return result;
+}
+
+std::string connectivityPinRoleName(ConnectivityPinRole role) {
+    switch (role) {
+    case ConnectivityPinRole::Output: return "output";
+    case ConnectivityPinRole::CombinationalInput: return "combinational_input";
+    case ConnectivityPinRole::DffData: return "data";
+    case ConnectivityPinRole::DffClock: return "clock";
+    case ConnectivityPinRole::DffResetSet: return "reset_set";
+    case ConnectivityPinRole::DffOther: return "dff_other";
+    }
+    return "unknown";
+}
+
+std::string formatConnectivityPinRecord(const ConnectivityPinRecord& record) {
+    return "net=" + record.netName +
+           " direction=" +
+           (record.direction == ConnectivityPinDirection::Driver ? "driver" : "load") +
+           " gate=" + record.gateName +
+           " type=" + record.gateTypeName +
+           " pin=" + record.pinName +
+           " role=" + connectivityPinRoleName(record.role);
+}
+
+std::string formatGateTypeList(const Netlist& netlist,
+                               const std::vector<GateType>& types,
+                               const std::string& emptyText) {
+    if (types.empty()) return emptyText;
+    std::string result;
+    for (GateType type : types) {
+        if (!result.empty()) result += ", ";
+        result += netlist.gateTypeToString(type);
+    }
+    return result;
+}
+
 ListArtifactContent makeBasicListArtifactContent(
     const Netlist& netlist,
     const Netlist::BasicReport& report) {
     ListArtifactContent content;
-    content.fields = {
-        {"message", report.message},
-        {"gate count", std::to_string(report.gateCount)},
-        {"net count", std::to_string(report.netCount)},
-        {"logical wire count", std::to_string(report.logicalWireCount)},
-        {"primary input count", std::to_string(report.primaryInputCount)},
-        {"primary output count", std::to_string(report.primaryOutputCount)}
-    };
+    content.fields.push_back({"message", report.message});
+    if (report.hasGateCount) {
+        content.fields.push_back({"gate count", std::to_string(report.gateCount)});
+    }
+    if (report.hasNetCount) {
+        content.fields.push_back({"net count", std::to_string(report.netCount)});
+    }
+    if (report.hasLogicalWireCount) {
+        content.fields.push_back(
+            {"logical wire count", std::to_string(report.logicalWireCount)});
+    }
+    if (report.hasPrimaryInputCount) {
+        content.fields.push_back(
+            {"primary input count", std::to_string(report.primaryInputCount)});
+    }
+    if (report.hasPrimaryOutputCount) {
+        content.fields.push_back(
+            {"primary output count", std::to_string(report.primaryOutputCount)});
+    }
+    if (report.gateTypeFilterApplied || report.gateTypeExclusionApplied) {
+        content.fields.push_back(
+            {"scope gate count", std::to_string(report.scopeGateCount)});
+        content.fields.push_back(
+            {"filtered gate count", std::to_string(report.gateCount)});
+        content.fields.push_back({"gate type filter applied",
+                                  report.gateTypeFilterApplied ? "yes" : "no"});
+        content.fields.push_back({"gate type filters",
+            formatGateTypeList(netlist, report.appliedGateTypeFilters, "all")});
+        content.fields.push_back({"gate type exclusion applied",
+                                  report.gateTypeExclusionApplied ? "yes" : "no"});
+        content.fields.push_back({"excluded gate type filters",
+            formatGateTypeList(netlist, report.appliedExcludedGateTypeFilters, "none")});
+    }
+    if (report.gateDetailsIncluded) {
+        content.fields.push_back({"gate details included", "yes"});
+        content.fields.push_back(
+            {"gate detail count", std::to_string(report.gateConnections.size())});
+    }
 
     std::vector<std::string> gateTypeCounts;
     for (const auto& item : report.gateTypeCounts) {
@@ -437,7 +595,16 @@ ListArtifactContent makeBasicListArtifactContent(
                                  std::to_string(item.second));
     }
     addListSection(content, "Gate type counts", gateTypeCounts);
-    addListSection(content, "Gate names", report.gateNames);
+    std::vector<std::string> gateConnections;
+    gateConnections.reserve(report.gateConnections.size());
+    for (const GateConnectionSummary& gate : report.gateConnections) {
+        gateConnections.push_back(formatGateConnection(gate));
+    }
+    if (gateConnections.empty()) {
+        addListSection(content, "Gate names", report.gateNames);
+    } else {
+        addListSection(content, "Gate connection details", gateConnections);
+    }
     addListSection(content, "Net names", report.netNames);
     addListSection(content, "Port names", report.portNames);
 
@@ -513,7 +680,17 @@ ListArtifactContent makeConnectivityListArtifactContent(
         addListSection(content, "Violating nets",
                        fanoutReportEntries(global.violatingReports));
     }
-    if (!report.fanoutLoadReport.ok) {
+    if (report.pinDetailsIncluded) {
+        content.fields.push_back(
+            {"pin connection count", std::to_string(report.pinConnectionCount)});
+        std::vector<std::string> pinConnections;
+        pinConnections.reserve(report.pinConnections.size());
+        for (const ConnectivityPinRecord& record : report.pinConnections) {
+            pinConnections.push_back(formatConnectivityPinRecord(record));
+        }
+        addListSection(content, "Pin connection details", pinConnections);
+    }
+    if (!report.fanoutLoadReport.ok && !report.pinDetailsIncluded) {
         addListSection(content, "Gate names", report.gateNames);
     }
     addListSection(content, "Net names", report.netNames);
@@ -524,11 +701,24 @@ ListArtifactContent makeConeListArtifactContent(
     const Netlist& netlist,
     const Netlist::ConeReport& report) {
     ListArtifactContent content;
+    std::string appliedGateTypes = "all";
+    if (!report.appliedGateTypeFilters.empty()) {
+        appliedGateTypes.clear();
+        for (GateType type : report.appliedGateTypeFilters) {
+            if (!appliedGateTypes.empty()) appliedGateTypes += ", ";
+            appliedGateTypes += netlist.gateTypeToString(type);
+        }
+    }
     content.fields = {
         {"message", report.message},
         {"source", report.sourceName},
         {"second source", report.secondSourceName},
-        {"gate count", std::to_string(report.gateCount)},
+        {"scope gate count", std::to_string(report.scopeGateCount)},
+        {"filtered gate count", std::to_string(report.gateCount)},
+        {"gate type filter applied", report.gateTypeFilterApplied ? "yes" : "no"},
+        {"gate type filters", appliedGateTypes},
+        {"gate details included", report.gateDetailsIncluded ? "yes" : "no"},
+        {"gate detail count", std::to_string(report.gateConnections.size())},
         {"net count", std::to_string(report.netCount)},
         {"checked primary outputs", std::to_string(report.checkedOutputCount)},
         {"longest local path depth", std::to_string(report.longestDepth)},
@@ -542,12 +732,192 @@ ListArtifactContent makeConeListArtifactContent(
     }
     addListSection(content, "Gate type counts", gateTypeCounts);
     addListSection(content, "Root nets", report.rootNetNames);
-    addListSection(content, "Cone gates", report.gateNames);
+    if (report.gateDetailsIncluded) {
+        std::vector<std::string> gateConnections;
+        gateConnections.reserve(report.gateConnections.size());
+        for (const GateConnectionSummary& gate : report.gateConnections) {
+            gateConnections.push_back(formatGateConnection(gate));
+        }
+        addListSection(content, "Gate connection details", gateConnections);
+    } else {
+        addListSection(content, "Cone gates", report.gateNames);
+    }
     addListSection(content, "Cone nets", report.netNames);
     addListSection(content, "Longest local path nets",
                    report.longestPathNetNames);
     addListSection(content, "Shortest local path nets",
                    report.shortestPathNetNames);
+    return content;
+}
+
+ListArtifactContent makePathListArtifactContent(
+    const Netlist& netlist,
+    const Netlist::PathQuery& query,
+    const Netlist::PathQueryResult& result) {
+    ListArtifactContent content;
+    if (query.mode == Netlist::PathQueryMode::DirectPiPoConnections) {
+        content.fields.emplace_back("total_direct_connections",
+                                    std::to_string(result.pathCount));
+        content.fields.emplace_back("logic_depth", "0");
+        std::vector<std::string> connections;
+        connections.reserve(result.paths.size());
+        for (size_t index = 0; index < result.paths.size(); ++index) {
+            const Netlist::CombinationalPath& path = result.paths[index];
+            std::string entry = "connection " + std::to_string(index + 1) + ": ";
+            if (path.netIds.empty()) {
+                entry += "<empty>";
+            } else {
+                for (size_t netIndex = 0; netIndex < path.netIds.size(); ++netIndex) {
+                    if (netIndex != 0) entry += " -> ";
+                    const int netId = path.netIds[netIndex];
+                    entry += netlist.isValidNetId(netId)
+                        ? netlist.getNet(netId).name
+                        : "<invalid-net:" + std::to_string(netId) + ">";
+                }
+            }
+            connections.push_back(std::move(entry));
+        }
+        addListSection(content, "Direct PI-to-PO connections", connections);
+        return content;
+    }
+
+    if (query.mode == Netlist::PathQueryMode::FindMandatoryNodes) {
+        content.fields.emplace_back("path_exists", result.pathExists ? "yes" : "no");
+        content.fields.emplace_back("mandatory_internal_net_count",
+                                    std::to_string(result.mandatoryNetNames.size()));
+        addListSection(content, "Mandatory internal nets", result.mandatoryNetNames);
+        return content;
+    }
+
+    if (result.path.exists()) {
+        content.fields.emplace_back("depth", std::to_string(result.path.depth()));
+        std::vector<std::string> netNames;
+        netNames.reserve(result.path.netIds.size());
+        for (int netId : result.path.netIds) {
+            netNames.push_back(netlist.isValidNetId(netId)
+                ? netlist.getNet(netId).name
+                : "<invalid-net:" + std::to_string(netId) + ">");
+        }
+        addListSection(content, "Path nets in start-to-end order", netNames);
+        std::vector<std::string> gateNames;
+        gateNames.reserve(result.path.gateIds.size());
+        for (int gateId : result.path.gateIds) {
+            gateNames.push_back(netlist.isValidGateId(gateId)
+                ? netlist.getGate(gateId).instName
+                : "<invalid-gate:" + std::to_string(gateId) + ">");
+        }
+        addListSection(content, "Path gates in start-to-end order", gateNames);
+    }
+    return content;
+}
+
+ListArtifactContent makeDepthListArtifactContent(
+    const Netlist& netlist,
+    const Netlist::DepthReportSet& report) {
+    ListArtifactContent content;
+    content.fields.emplace_back("report_count", std::to_string(report.count));
+    if (report.threshold >= 0) {
+        content.fields.emplace_back("threshold", std::to_string(report.threshold));
+    }
+    if (!report.gateName.empty()) {
+        content.fields.emplace_back("gate", report.gateName);
+        content.fields.emplace_back("gate_on_critical_path",
+                                    report.gateOnCriticalPath ? "yes" : "no");
+    }
+    if (report.worst.depth >= 0) {
+        content.fields.emplace_back("worst_endpoint", report.worst.endpointName);
+        content.fields.emplace_back("worst_depth", std::to_string(report.worst.depth));
+    }
+
+    std::vector<std::string> endpoints;
+    endpoints.reserve(report.reports.size());
+    for (const DepthReport& item : report.reports) {
+        endpoints.push_back(item.endpointName + " depth=" + std::to_string(item.depth));
+    }
+    addListSection(content, "Endpoint depth reports", endpoints);
+
+    if (report.worst.criticalPath.exists()) {
+        std::vector<std::string> netNames;
+        netNames.reserve(report.worst.criticalPath.netIds.size());
+        for (int netId : report.worst.criticalPath.netIds) {
+            netNames.push_back(netlist.isValidNetId(netId)
+                ? netlist.getNet(netId).name
+                : "<invalid-net:" + std::to_string(netId) + ">");
+        }
+        std::vector<std::string> gateNames;
+        gateNames.reserve(report.worst.criticalPath.gateIds.size());
+        for (int gateId : report.worst.criticalPath.gateIds) {
+            gateNames.push_back(netlist.isValidGateId(gateId)
+                ? netlist.getGate(gateId).instName
+                : "<invalid-gate:" + std::to_string(gateId) + ">");
+        }
+        addListSection(content, "Worst path nets in start-to-end order", netNames);
+        addListSection(content, "Worst path gates in start-to-end order", gateNames);
+    }
+    return content;
+}
+
+ListArtifactContent makeFunctionListArtifactContent(
+    const Netlist::FunctionReport& report) {
+    ListArtifactContent content;
+    content.fields = {
+        {"message", report.message},
+        {"status", report.status},
+        {"target net", report.netNameA},
+        {"support leaf count", std::to_string(report.supportPrimaryInputs.size())},
+        {"real primary input count",
+         std::to_string(report.supportRealPrimaryInputs.size())},
+        {"DFF.Q boundary count",
+         std::to_string(report.supportDffPseudoInputs.size())},
+        {"undriven boundary count",
+         std::to_string(report.supportUndrivenLeaves.size())}
+    };
+    if (!report.symmetryInputNameA.empty() || !report.symmetryInputNameB.empty()) {
+        content.fields.emplace_back("symmetry input A", report.symmetryInputNameA);
+        content.fields.emplace_back("symmetry input B", report.symmetryInputNameB);
+        content.fields.emplace_back("symmetric", report.symmetric ? "yes" : "no");
+        content.fields.emplace_back(
+            "counterexample found", report.counterexampleFound ? "yes" : "no");
+        content.fields.emplace_back(
+            "mismatched target bit count",
+            std::to_string(report.mismatchedTargetBitNames.size()));
+        content.fields.emplace_back(
+            "counterexample assignment count",
+            std::to_string(report.counterexampleAssignments.size()));
+    }
+
+    addListSection(content, "Support leaves", report.supportPrimaryInputs);
+    addListSection(content, "Real primary inputs", report.supportRealPrimaryInputs);
+    addListSection(content, "DFF.Q pseudo primary inputs",
+                   report.supportDffPseudoInputs);
+    std::vector<std::string> stateBoundaryMappings;
+    stateBoundaryMappings.reserve(report.supportDffStateBoundaries.size());
+    for (const auto& boundary : report.supportDffStateBoundaries) {
+        stateBoundaryMappings.push_back(
+            boundary.stateVariableName + " = " + boundary.dffName + "." +
+            boundary.pinName + " (net " + boundary.netName + ")");
+    }
+    addListSection(content, "DFF.Q current-state variable mappings",
+                   stateBoundaryMappings);
+    addListSection(content, "Undriven leaves", report.supportUndrivenLeaves);
+    addListSection(content, "Mismatched target bits",
+                   report.mismatchedTargetBitNames);
+
+    const auto assignmentEntries = [](const auto& assignments) {
+        std::vector<std::string> entries;
+        entries.reserve(assignments.size());
+        for (const auto& item : assignments) {
+            entries.push_back(item.first + " = " + std::to_string(item.second));
+        }
+        std::sort(entries.begin(), entries.end());
+        return entries;
+    };
+    addListSection(content, "Counterexample assignments",
+                   assignmentEntries(report.counterexampleAssignments));
+    addListSection(content, "Target values before swap (A=0, B=1)",
+                   assignmentEntries(report.outputValuesBeforeSwap));
+    addListSection(content, "Target values after swap (A=1, B=0)",
+                   assignmentEntries(report.outputValuesAfterSwap));
     return content;
 }
 
@@ -561,13 +931,38 @@ void printBasicReport(const Netlist& netlist,
     }
 
     std::cout << "OK: " << report.message << "\n";
-    if (report.gateCount || report.netCount || report.logicalWireCount ||
-        report.primaryInputCount || report.primaryOutputCount) {
+    if (report.hasGateCount) {
         std::cout << "  gates: " << report.gateCount << "\n";
+    }
+    if (report.hasNetCount) {
         std::cout << "  nets: " << report.netCount << "\n";
+    }
+    if (report.hasLogicalWireCount) {
         std::cout << "  logical wires: " << report.logicalWireCount << "\n";
+    }
+    if (report.hasPrimaryInputCount) {
         std::cout << "  primary inputs: " << report.primaryInputCount << "\n";
+    }
+    if (report.hasPrimaryOutputCount) {
         std::cout << "  primary outputs: " << report.primaryOutputCount << "\n";
+    }
+    if (report.gateTypeFilterApplied || report.gateTypeExclusionApplied) {
+        std::cout << "  scope gates: " << report.scopeGateCount << "\n";
+        std::cout << "  filtered gates: " << report.gateCount << "\n";
+        std::cout << "  gate type filter applied: "
+                  << (report.gateTypeFilterApplied ? "yes" : "no") << "\n";
+        std::cout << "  gate type filters: "
+                  << formatGateTypeList(
+                         netlist, report.appliedGateTypeFilters, "all") << "\n";
+        std::cout << "  gate type exclusion applied: "
+                  << (report.gateTypeExclusionApplied ? "yes" : "no") << "\n";
+        std::cout << "  excluded gate type filters: "
+                  << formatGateTypeList(
+                         netlist, report.appliedExcludedGateTypeFilters, "none") << "\n";
+    }
+    if (report.gateDetailsIncluded) {
+        std::cout << "  gate details included: yes\n";
+        std::cout << "  gate detail count: " << report.gateConnections.size() << "\n";
     }
     if (!report.objectName.empty()) {
         std::cout << "  object: " << report.objectName << "\n";
@@ -596,8 +991,16 @@ void printBasicReport(const Netlist& netlist,
                       << " : " << item.second << "\n";
         }
     }
-    if (!suppressLists && !report.gateNames.empty()) {
+    if (!suppressLists && !report.gateNames.empty() &&
+        report.gateConnections.empty()) {
         printStringList("Gate names", report.gateNames);
+    }
+    if (!suppressLists && !report.gateConnections.empty()) {
+        std::cout << "Gate connection details ("
+                  << report.gateConnections.size() << "):\n";
+        for (const GateConnectionSummary& gate : report.gateConnections) {
+            std::cout << "  " << formatGateConnection(gate) << "\n";
+        }
     }
     if (!suppressLists && !report.netNames.empty()) {
         printStringList("Net names", report.netNames);
@@ -682,7 +1085,17 @@ ListArtifactResult writeAutomaticListArtifact(
 
     ListArtifactResult result;
     result.entryCount = content.entryCount();
-    if (result.entryCount <= kAutomaticListArtifactThreshold) return result;
+    result.estimatedCharacterCount = content.estimatedSerializedCharacters();
+    result.estimatedCharacterCount = saturatingAdd(
+        result.estimatedCharacterCount,
+        command.size() + mode.size() + session.loadedFilePath.size() + 128);
+    result.triggeredByEntryCount =
+        result.entryCount > kAutomaticListArtifactEntryThreshold;
+    result.triggeredByCharacterCount =
+        result.estimatedCharacterCount > kAutomaticListArtifactCharacterThreshold;
+    if (!result.triggeredByEntryCount && !result.triggeredByCharacterCount) {
+        return result;
+    }
 
     result.attempted = true;
     result.outputFilePath = makeAutomaticListOutputPath(session, command);
@@ -699,6 +1112,14 @@ ListArtifactResult writeAutomaticListArtifact(
            << "Mode: " << mode << "\n"
            << "Loaded design: " << session.loadedFilePath << "\n"
            << "Design revision: " << session.designRevision << "\n\n"
+           << "Automatic artifact trigger:\n"
+           << "  entry count: " << result.entryCount << "\n"
+           << "  estimated serialized characters: "
+           << result.estimatedCharacterCount << "\n"
+           << "  triggered by entry count: "
+           << (result.triggeredByEntryCount ? "yes" : "no") << "\n"
+           << "  triggered by character count: "
+           << (result.triggeredByCharacterCount ? "yes" : "no") << "\n\n"
            << "Fields:\n";
     for (const auto& field : content.fields) {
         output << "  " << field.first << ": " << field.second << "\n";
@@ -745,6 +1166,12 @@ void printListArtifactMetadata(const ListArtifactResult& artifact) {
     std::cout << "  list artifact complete: "
               << (artifact.complete ? "yes" : "no") << "\n";
     std::cout << "  list entry count: " << artifact.entryCount << "\n";
+    std::cout << "  estimated list characters: "
+              << artifact.estimatedCharacterCount << "\n";
+    std::cout << "  artifact triggered by entry count: "
+              << (artifact.triggeredByEntryCount ? "yes" : "no") << "\n";
+    std::cout << "  artifact triggered by character count: "
+              << (artifact.triggeredByCharacterCount ? "yes" : "no") << "\n";
     std::cout << "  wrote list to file: "
               << (artifact.wroteFile ? "yes" : "no") << "\n";
     if (artifact.wroteFile) {
@@ -817,6 +1244,10 @@ void printConnectivityReport(const Netlist& netlist,
         std::cout << "  net: " << report.netName << "\n";
     }
     std::cout << "  count: " << report.count << "\n";
+    if (report.pinDetailsIncluded) {
+        std::cout << "  pin connection count: "
+                  << report.pinConnectionCount << "\n";
+    }
     if (query.type == Netlist::DirectConnectivityQueryType::DirectlyConnected) {
         std::cout << "  connected: " << (report.connected ? "yes" : "no") << "\n";
     }
@@ -853,7 +1284,16 @@ void printConnectivityReport(const Netlist& netlist,
             }
         }
     }
+    if (!suppressLists && report.pinDetailsIncluded &&
+        !report.pinConnections.empty()) {
+        std::cout << "Pin connection details ("
+                  << report.pinConnections.size() << "):\n";
+        for (const ConnectivityPinRecord& record : report.pinConnections) {
+            std::cout << "  " << formatConnectivityPinRecord(record) << "\n";
+        }
+    }
     if (!suppressLists && !report.fanoutLoadReport.ok &&
+        !report.pinDetailsIncluded &&
         !report.gateNames.empty()) {
         printStringList("Gate names", report.gateNames);
     }
@@ -877,6 +1317,23 @@ void printConeReport(const Netlist& netlist,
         std::cout << "  second source: " << report.secondSourceName << "\n";
     }
     std::cout << "  gates: " << report.gateCount << "\n";
+    std::cout << "  scope gates: " << report.scopeGateCount << "\n";
+    std::cout << "  filtered gates: " << report.gateCount << "\n";
+    std::cout << "  gate type filter applied: "
+              << (report.gateTypeFilterApplied ? "yes" : "no") << "\n";
+    std::cout << "  gate type filters: ";
+    if (report.appliedGateTypeFilters.empty()) {
+        std::cout << "all\n";
+    } else {
+        for (size_t i = 0; i < report.appliedGateTypeFilters.size(); ++i) {
+            if (i != 0) std::cout << ", ";
+            std::cout << netlist.gateTypeToString(report.appliedGateTypeFilters[i]);
+        }
+        std::cout << "\n";
+    }
+    std::cout << "  gate details included: "
+              << (report.gateDetailsIncluded ? "yes" : "no") << "\n";
+    std::cout << "  gate detail count: " << report.gateConnections.size() << "\n";
     std::cout << "  nets: " << report.netCount << "\n";
     if (!report.gateTypeCounts.empty()) {
         std::cout << "Gate type counts (" << report.gateTypeCounts.size() << "):\n";
@@ -891,7 +1348,14 @@ void printConeReport(const Netlist& netlist,
     if (!suppressLists && !report.rootNetNames.empty()) {
         printStringList("Root nets", report.rootNetNames);
     }
-    if (!suppressLists && !report.gateNames.empty()) {
+    if (!suppressLists && report.gateDetailsIncluded &&
+        !report.gateConnections.empty()) {
+        std::cout << "Gate connection details ("
+                  << report.gateConnections.size() << "):\n";
+        for (const GateConnectionSummary& gate : report.gateConnections) {
+            std::cout << "  " << formatGateConnection(gate) << "\n";
+        }
+    } else if (!suppressLists && !report.gateNames.empty()) {
         printStringList("Cone gates", report.gateNames);
     }
     if (!suppressLists && !report.netNames.empty()) {
@@ -913,7 +1377,8 @@ void printConeReport(const Netlist& netlist,
 // 印出 PathQuery 的統一 result。
 void printPathResult(const Netlist& netlist,
                      const Netlist::PathQuery& query,
-                     const Netlist::PathQueryResult& result) {
+                     const Netlist::PathQueryResult& result,
+                     bool suppressLargeLists = false) {
     if (!result.ok) {
         std::cout << "Error: " << result.message << "\n";
         if (!result.unresolvedStartpoints.empty()) {
@@ -933,7 +1398,9 @@ void printPathResult(const Netlist& netlist,
 
     if (query.mode == Netlist::PathQueryMode::DirectPiPoConnections) {
         std::cout << "Total direct PI-to-PO connections: " << result.pathCount << "\n";
-        const size_t pathsToPrint = std::min(query.maxPrintedPaths, result.paths.size());
+        const size_t pathsToPrint = suppressLargeLists
+            ? 0
+            : std::min(query.maxPrintedPaths, result.paths.size());
         for (size_t i = 0; i < pathsToPrint; ++i) {
             std::cout << "Connection " << (i + 1) << ":\n";
             printPath(netlist, result.paths[i]);
@@ -948,7 +1415,12 @@ void printPathResult(const Netlist& netlist,
     if (query.mode == Netlist::PathQueryMode::FindMandatoryNodes) {
         std::cout << "Status: " << result.status << "\n";
         std::cout << "Path exists: " << (result.pathExists ? "yes" : "no") << "\n";
-        printStringList("Mandatory internal nets", result.mandatoryNetNames);
+        if (!suppressLargeLists) {
+            printStringList("Mandatory internal nets", result.mandatoryNetNames);
+        } else {
+            std::cout << "Mandatory internal net count: "
+                      << result.mandatoryNetNames.size() << "\n";
+        }
         return;
     }
 
@@ -1006,7 +1478,11 @@ void printPathResult(const Netlist& netlist,
         std::cout << "No path found.\n";
         return;
     }
-    printPath(netlist, result.path);
+    if (!suppressLargeLists) {
+        printPath(netlist, result.path);
+    } else {
+        std::cout << "Depth: " << result.path.depth() << "\n";
+    }
 }
 
 // 印出 RegisterPathQuery 的統一 report。
@@ -1077,7 +1553,9 @@ void printRegisterPathReport(const Netlist& netlist,
 }
 
 // 印出 DepthQuery 的統一 report。
-void printDepthReportSet(const Netlist& netlist, const Netlist::DepthReportSet& report) {
+void printDepthReportSet(const Netlist& netlist,
+                         const Netlist::DepthReportSet& report,
+                         bool suppressLargeLists = false) {
     if (!report.ok) {
         std::cout << "Error: " << report.message << "\n";
         return;
@@ -1091,18 +1569,23 @@ void printDepthReportSet(const Netlist& netlist, const Netlist::DepthReportSet& 
                   << (report.gateOnCriticalPath ? "yes" : "no") << "\n";
     }
     std::cout << "Report count: " << report.count << "\n";
-    for (const DepthReport& item : report.reports) {
-        std::cout << "  " << item.endpointName << " depth=" << item.depth << "\n";
+    if (!suppressLargeLists) {
+        for (const DepthReport& item : report.reports) {
+            std::cout << "  " << item.endpointName << " depth=" << item.depth << "\n";
+        }
     }
     if (report.worst.depth >= 0) {
         std::cout << "Worst endpoint: " << report.worst.endpointName
                   << " depth=" << report.worst.depth << "\n";
-        printPath(netlist, report.worst.criticalPath);
+        if (!suppressLargeLists) {
+            printPath(netlist, report.worst.criticalPath);
+        }
     }
 }
 
 // 印出 FunctionQuery 的統一 report。
-void printFunctionReport(const Netlist::FunctionReport& report) {
+void printFunctionReport(const Netlist::FunctionReport& report,
+                         bool suppressLargeLists = false) {
     std::cout << (report.ok ? "OK: " : "Error: ") << report.message << "\n";
     if (!report.netNameA.empty()) {
         std::cout << "  net A: " << report.netNameA << "\n";
@@ -1166,7 +1649,11 @@ void printFunctionReport(const Netlist::FunctionReport& report) {
         !report.supportDffPseudoInputs.empty() ||
         !report.supportUndrivenLeaves.empty();
     if (hasSupportBreakdown) {
-        printStringList("Support leaves", report.supportPrimaryInputs);
+        std::cout << "  support leaf count: "
+                  << report.supportPrimaryInputs.size() << "\n";
+        if (!suppressLargeLists) {
+            printStringList("Support leaves", report.supportPrimaryInputs);
+        }
         std::cout << "  real primary input count: "
                   << report.supportRealPrimaryInputs.size() << "\n";
         std::cout << "  DFF.Q boundary count: "
@@ -1180,13 +1667,23 @@ void printFunctionReport(const Netlist::FunctionReport& report) {
                           : "no")
                   << "\n";
     }
-    if (!report.supportRealPrimaryInputs.empty()) {
+    if (!suppressLargeLists && !report.supportRealPrimaryInputs.empty()) {
         printStringList("  - real primary inputs", report.supportRealPrimaryInputs);
     }
-    if (!report.supportDffPseudoInputs.empty()) {
+    if (!suppressLargeLists && !report.supportDffPseudoInputs.empty()) {
         printStringList("  - DFF.Q pseudo primary inputs", report.supportDffPseudoInputs);
     }
-    if (!report.supportUndrivenLeaves.empty()) {
+    if (!suppressLargeLists && !report.supportDffStateBoundaries.empty()) {
+        std::vector<std::string> mappings;
+        mappings.reserve(report.supportDffStateBoundaries.size());
+        for (const auto& boundary : report.supportDffStateBoundaries) {
+            mappings.push_back(
+                boundary.stateVariableName + " = " + boundary.dffName + "." +
+                boundary.pinName + " (net " + boundary.netName + ")");
+        }
+        printStringList("  - DFF.Q current-state variable mappings", mappings);
+    }
+    if (!suppressLargeLists && !report.supportUndrivenLeaves.empty()) {
         printStringList("  - undriven leaves (no driver, not a primary input)", report.supportUndrivenLeaves);
     }
     if (report.status == "FUNCTIONALLY_DEPENDENT" ||
@@ -1206,23 +1703,31 @@ void printFunctionReport(const Netlist::FunctionReport& report) {
         std::cout << "  symmetric: " << (report.symmetric ? "yes" : "no") << "\n";
         std::cout << "  counterexample found: "
                   << (report.counterexampleFound ? "yes" : "no") << "\n";
-        if (!report.mismatchedTargetBitNames.empty()) {
+        std::cout << "  mismatched target bit count: "
+                  << report.mismatchedTargetBitNames.size() << "\n";
+        std::cout << "  counterexample assignment count: "
+                  << report.counterexampleAssignments.size() << "\n";
+        std::cout << "  target value count before swap: "
+                  << report.outputValuesBeforeSwap.size() << "\n";
+        std::cout << "  target value count after swap: "
+                  << report.outputValuesAfterSwap.size() << "\n";
+        if (!suppressLargeLists && !report.mismatchedTargetBitNames.empty()) {
             printStringList("Mismatched target bits", report.mismatchedTargetBitNames);
         }
-        if (!report.counterexampleAssignments.empty()) {
+        if (!suppressLargeLists && !report.counterexampleAssignments.empty()) {
             std::cout << "Counterexample assignments ("
                       << report.counterexampleAssignments.size() << "):\n";
             for (const auto& item : report.counterexampleAssignments) {
                 std::cout << "  " << item.first << " = " << item.second << "\n";
             }
         }
-        if (!report.outputValuesBeforeSwap.empty()) {
+        if (!suppressLargeLists && !report.outputValuesBeforeSwap.empty()) {
             std::cout << "Target values before swap (A=0, B=1):\n";
             for (const auto& item : report.outputValuesBeforeSwap) {
                 std::cout << "  " << item.first << " = " << item.second << "\n";
             }
         }
-        if (!report.outputValuesAfterSwap.empty()) {
+        if (!suppressLargeLists && !report.outputValuesAfterSwap.empty()) {
             std::cout << "Target values after swap (A=1, B=0):\n";
             for (const auto& item : report.outputValuesAfterSwap) {
                 std::cout << "  " << item.first << " = " << item.second << "\n";
@@ -1692,6 +2197,7 @@ std::string equivalenceMethodName(EquivalenceCheckMethod method) {
     switch (method) {
         case EquivalenceCheckMethod::StructuralIdentity: return "StructuralIdentity";
         case EquivalenceCheckMethod::LocalRewriteRule: return "LocalRewriteRule";
+        case EquivalenceCheckMethod::CertifiedRewrite: return "CertifiedRewrite";
         case EquivalenceCheckMethod::WholeDesignSat: return "WholeDesignSat";
         case EquivalenceCheckMethod::NotChecked:
         default:
@@ -2215,74 +2721,300 @@ bool buildSequentialPatternQuery(
     return true;
 }
 
-// 將 basic_query 的 mode 轉成 BasicQuery。
+bool parseBasicGateType(const Netlist& netlist,
+                        const std::string& token,
+                        GateType& type,
+                        std::string& error) {
+    type = netlist.stringToGateType(token);
+    if (type != GateType::UNKNOWN) return true;
+    error = "Unsupported gate type '" + token +
+            "'. Supported types: AND OR NOT NAND NOR XOR XNOR BUF DFF";
+    return false;
+}
+
+bool consumeBasicGateTypeList(const Netlist& netlist,
+                              const std::vector<std::string>& tokens,
+                              size_t& index,
+                              const std::string& option,
+                              std::vector<GateType>& destination,
+                              std::string& error) {
+    const size_t firstType = index;
+    while (index < tokens.size() && !isOptionToken(tokens[index])) {
+        GateType type = GateType::UNKNOWN;
+        if (!parseBasicGateType(netlist, tokens[index], type, error)) return false;
+        destination.push_back(type);
+        ++index;
+    }
+    if (index == firstType) {
+        error = option + " requires at least one gate type";
+        return false;
+    }
+    return true;
+}
+
+bool parseBasicGateSelectionOptions(const Netlist& netlist,
+                                    const std::vector<std::string>& tokens,
+                                    bool allowWithPins,
+                                    Netlist::BasicQuery& query,
+                                    std::string& error) {
+    size_t index = 0;
+    bool concretePositionalType = false;
+    if (index < tokens.size() && !isOptionToken(tokens[index])) {
+        const std::string lowered = toLower(tokens[index]);
+        if (lowered != "all" && lowered != "any") {
+            if (!parseBasicGateType(netlist, tokens[index], query.gateType, error)) {
+                return false;
+            }
+            concretePositionalType = true;
+        }
+        ++index;
+    }
+
+    bool sawGateTypes = false;
+    bool sawExcludedGateTypes = false;
+    bool sawWithPins = false;
+    while (index < tokens.size()) {
+        const std::string option = toLower(tokens[index++]);
+        if (option == "--gate-types") {
+            if (sawGateTypes) {
+                error = "Duplicate structure_query option: --gate-types";
+                return false;
+            }
+            if (concretePositionalType) {
+                error = "Cannot combine a positional gate type with --gate-types";
+                return false;
+            }
+            sawGateTypes = true;
+            if (!consumeBasicGateTypeList(netlist, tokens, index, "--gate-types",
+                                          query.gateTypeFilters, error)) {
+                return false;
+            }
+            continue;
+        }
+        if (option == "--exclude-gate-types") {
+            if (sawExcludedGateTypes) {
+                error = "Duplicate structure_query option: --exclude-gate-types";
+                return false;
+            }
+            sawExcludedGateTypes = true;
+            if (!consumeBasicGateTypeList(netlist, tokens, index,
+                                          "--exclude-gate-types",
+                                          query.excludedGateTypeFilters, error)) {
+                return false;
+            }
+            continue;
+        }
+        if (option == "--with-pins") {
+            if (!allowWithPins) {
+                error = "count_by_type does not support --with-pins";
+                return false;
+            }
+            if (sawWithPins) {
+                error = "Duplicate structure_query option: --with-pins";
+                return false;
+            }
+            sawWithPins = true;
+            query.includeConnectionDetails = true;
+            continue;
+        }
+        error = isOptionToken(option)
+            ? "Unknown structure_query option: " + option
+            : "Unexpected structure_query argument: " + option;
+        return false;
+    }
+    return true;
+}
+
+bool parseBasicConstantGateOptions(const Netlist& netlist,
+                                   const std::vector<std::string>& tokens,
+                                   Netlist::BasicQuery& query,
+                                   std::string& error) {
+    size_t index = 0;
+    bool concretePositionalType = false;
+    bool positionalConst = false;
+    if (index < tokens.size() && !isOptionToken(tokens[index])) {
+        const std::string lowered = toLower(tokens[index]);
+        if (lowered != "all" && lowered != "any") {
+            if (!parseBasicGateType(netlist, tokens[index], query.gateType, error)) {
+                return false;
+            }
+            concretePositionalType = true;
+        }
+        ++index;
+    }
+    if (index < tokens.size() && !isOptionToken(tokens[index])) {
+        if (!parseConstantFilter(tokens[index++], query.constValue)) {
+            error = "Constant filter must be 0, 1, or any";
+            return false;
+        }
+        positionalConst = true;
+    }
+
+    bool sawGateTypes = false;
+    bool sawExcludedGateTypes = false;
+    bool sawConst = false;
+    bool sawInputs = false;
+    bool sawWithPins = false;
+    while (index < tokens.size()) {
+        const std::string option = toLower(tokens[index++]);
+        if (option == "--gate-types") {
+            if (sawGateTypes) {
+                error = "Duplicate structure_query option: --gate-types";
+                return false;
+            }
+            if (concretePositionalType) {
+                error = "Cannot combine a positional gate type with --gate-types";
+                return false;
+            }
+            sawGateTypes = true;
+            if (!consumeBasicGateTypeList(netlist, tokens, index, "--gate-types",
+                                          query.gateTypeFilters, error)) {
+                return false;
+            }
+            continue;
+        }
+        if (option == "--exclude-gate-types") {
+            if (sawExcludedGateTypes) {
+                error = "Duplicate structure_query option: --exclude-gate-types";
+                return false;
+            }
+            sawExcludedGateTypes = true;
+            if (!consumeBasicGateTypeList(netlist, tokens, index,
+                                          "--exclude-gate-types",
+                                          query.excludedGateTypeFilters, error)) {
+                return false;
+            }
+            continue;
+        }
+        if (option == "--const") {
+            if (sawConst || positionalConst) {
+                error = "Constant filter was specified more than once";
+                return false;
+            }
+            sawConst = true;
+            if (index >= tokens.size() || isOptionToken(tokens[index]) ||
+                !parseConstantFilter(tokens[index++], query.constValue)) {
+                error = "--const requires 0, 1, or any";
+                return false;
+            }
+            continue;
+        }
+        if (option == "--inputs" || option == "-inputs") {
+            if (sawInputs || index >= tokens.size() ||
+                !parseStrictInteger(tokens[index++], query.inputCount) ||
+                query.inputCount < 1) {
+                error = "--inputs requires one positive integer";
+                return false;
+            }
+            sawInputs = true;
+            continue;
+        }
+        if (option == "--with-pins") {
+            if (sawWithPins) {
+                error = "Duplicate structure_query option: --with-pins";
+                return false;
+            }
+            sawWithPins = true;
+            query.includeConnectionDetails = true;
+            continue;
+        }
+        error = isOptionToken(option)
+            ? "Unknown structure_query option: " + option
+            : "Unexpected structure_query argument: " + option;
+        return false;
+    }
+    return true;
+}
+
+bool requireNoBasicArguments(std::istringstream& iss,
+                             const std::string& mode,
+                             std::string& error) {
+    std::string trailing;
+    if (!(iss >> trailing)) return true;
+    error = mode + " does not accept arguments; unexpected argument: " + trailing;
+    return false;
+}
+
+bool requireOneBasicObjectArgument(std::istringstream& iss,
+                                   const std::string& mode,
+                                   const std::string& argumentName,
+                                   std::string& value,
+                                   std::string& error) {
+    if (!(iss >> value) || isOptionToken(value)) {
+        error = mode + " requires <" + argumentName + ">";
+        return false;
+    }
+    std::string trailing;
+    if (iss >> trailing) {
+        error = "Unexpected structure_query argument: " + trailing;
+        return false;
+    }
+    return true;
+}
+
+// 將 basic_query 的 mode 轉成 BasicQuery；recognized mode 的參數錯誤寫入 error。
 bool buildBasicQuery(const Netlist& netlist,
                      std::istringstream& iss,
                      const std::string& mode,
-                     Netlist::BasicQuery& query) {
+                     Netlist::BasicQuery& query,
+                     std::string& error) {
     const std::string m = toLower(mode);
     if (m == "summary") {
         query.type = Netlist::BasicQueryType::Summary;
         query.includeIds = false;
         query.includeNames = false;
+        return requireNoBasicArguments(iss, m, error);
     } else if (m == "list_gates") {
         query.type = Netlist::BasicQueryType::ListGates;
+        return requireNoBasicArguments(iss, m, error);
     } else if (m == "list_nets") {
         query.type = Netlist::BasicQueryType::ListNets;
+        return requireNoBasicArguments(iss, m, error);
     } else if (m == "list_pi") {
         query.type = Netlist::BasicQueryType::ListPrimaryInputs;
+        return requireNoBasicArguments(iss, m, error);
     } else if (m == "list_po") {
         query.type = Netlist::BasicQueryType::ListPrimaryOutputs;
+        return requireNoBasicArguments(iss, m, error);
     } else if (m == "list_dffs") {
         query.type = Netlist::BasicQueryType::ListDffs;
+        return requireNoBasicArguments(iss, m, error);
     } else if (m == "list_comb" || m == "list_comb_gates") {
         query.type = Netlist::BasicQueryType::ListCombinationalGates;
+        return requireNoBasicArguments(iss, m, error);
     } else if (m == "gate_info") {
         query.type = Netlist::BasicQueryType::GateInfo;
-        iss >> query.name;
+        return requireOneBasicObjectArgument(
+            iss, m, "gate", query.name, error);
     } else if (m == "net_info") {
         query.type = Netlist::BasicQueryType::NetInfo;
-        iss >> query.name;
+        return requireOneBasicObjectArgument(
+            iss, m, "net", query.name, error);
     } else if (m == "port_info") {
         query.type = Netlist::BasicQueryType::PortInfo;
-        iss >> query.name;
+        return requireOneBasicObjectArgument(
+            iss, m, "port", query.name, error);
     } else if (m == "count_by_type") {
         query.type = Netlist::BasicQueryType::CountByGateType;
-        std::string gateType;
-        if (iss >> gateType) {
-            query.gateType = netlist.stringToGateType(gateType);
-        }
+        std::vector<std::string> tokens;
+        std::string token;
+        while (iss >> token) tokens.push_back(token);
+        return parseBasicGateSelectionOptions(netlist, tokens, false, query, error);
     } else if (m == "gates_by_type") {
         query.type = Netlist::BasicQueryType::GatesByType;
-        std::string gateType;
-        iss >> gateType;
-        query.gateType = netlist.stringToGateType(gateType);
+        std::vector<std::string> tokens;
+        std::string token;
+        while (iss >> token) tokens.push_back(token);
+        return parseBasicGateSelectionOptions(netlist, tokens, true, query, error);
     } else if (m == "const_input_gates") {
         query.type = Netlist::BasicQueryType::GatesWithConstantInput;
+        std::vector<std::string> tokens;
         std::string token;
-        if (!(iss >> token)) return true;
-
-        const std::string loweredType = toLower(token);
-        if (loweredType == "all" || loweredType == "any") {
-            query.gateType = GateType::UNKNOWN;
-        } else {
-            query.gateType = netlist.stringToGateType(token);
-            if (query.gateType == GateType::UNKNOWN) return false;
-        }
-
-        if (!(iss >> token)) return true;
-        if (token != "--inputs" && token != "-inputs") {
-            if (!parseConstantFilter(token, query.constValue)) return false;
-            if (!(iss >> token)) return true;
-        }
-
-        if (token != "--inputs" && token != "-inputs") return false;
-        if (!(iss >> token) || !parseStrictInteger(token, query.inputCount) || query.inputCount < 1) {
-            return false;
-        }
-        if (iss >> token) return false;
+        while (iss >> token) tokens.push_back(token);
+        return parseBasicConstantGateOptions(netlist, tokens, query, error);
     } else if (m == "structural_issues") {
         query.type = Netlist::BasicQueryType::StructuralIssues;
+        return requireNoBasicArguments(iss, m, error);
     } else {
         return false;
     }
@@ -2292,44 +3024,126 @@ bool buildBasicQuery(const Netlist& netlist,
 // 將 conn_query 的 mode 轉成 DirectConnectivityQuery。
 bool buildConnectivityQuery(std::istringstream& iss,
                             const std::string& mode,
-                            Netlist::DirectConnectivityQuery& query) {
+                            Netlist::DirectConnectivityQuery& query,
+                            std::string& error) {
     const std::string m = toLower(mode);
+
+    const auto requireOneName = [&](const std::string& argumentName,
+                                    std::string& value) {
+        if (!(iss >> value) || isOptionToken(value)) {
+            error = m + " requires <" + argumentName + ">";
+            return false;
+        }
+        std::string trailing;
+        if (iss >> trailing) {
+            error = "Unexpected structure_query argument: " + trailing;
+            return false;
+        }
+        return true;
+    };
+
+    const auto parseOptionalFanoutLimit = [&]() {
+        std::string token;
+        if (!(iss >> token)) return true;
+        if (!parseStrictInteger(token, query.fanoutLimit) || query.fanoutLimit < 0) {
+            error = m + " accepts only a non-negative integer fanout limit";
+            return false;
+        }
+        std::string trailing;
+        if (iss >> trailing) {
+            error = "Unexpected structure_query argument: " + trailing;
+            return false;
+        }
+        return true;
+    };
+
     if (m == "net_driver") {
         query.type = Netlist::DirectConnectivityQueryType::NetDriverGates;
-        iss >> query.netName;
+        if (!(iss >> query.netName) || isOptionToken(query.netName)) {
+            error = m + " requires <net>";
+            return false;
+        }
+        std::string option;
+        if (iss >> option) {
+            if (option != "--with-pins") {
+                error = isOptionToken(option)
+                    ? "Unknown structure_query option: " + option
+                    : "Unexpected structure_query argument: " + option;
+                return false;
+            }
+            query.includePinDetails = true;
+            if (iss >> option) {
+                error = "Unexpected structure_query argument: " + option;
+                return false;
+            }
+        }
     } else if (m == "net_loads") {
         query.type = Netlist::DirectConnectivityQueryType::NetLoadGates;
-        iss >> query.netName;
+        if (!(iss >> query.netName) || isOptionToken(query.netName)) {
+            error = m + " requires <net>";
+            return false;
+        }
+        std::string option;
+        if (iss >> option) {
+            if (option != "--with-pins") {
+                error = isOptionToken(option)
+                    ? "Unknown structure_query option: " + option
+                    : "Unexpected structure_query argument: " + option;
+                return false;
+            }
+            query.includePinDetails = true;
+            if (iss >> option) {
+                error = "Unexpected structure_query argument: " + option;
+                return false;
+            }
+        }
     } else if (m == "fanout_load" || m == "fanout_report") {
         query.type = Netlist::DirectConnectivityQueryType::FanoutLoadReport;
-        iss >> query.netName;
+        return requireOneName("net", query.netName);
     } else if (m == "global_fanout") {
         query.type = Netlist::DirectConnectivityQueryType::GlobalFanoutReport;
-        iss >> query.fanoutLimit;
+        return parseOptionalFanoutLimit();
     } else if (m == "pi_fanout") {
         query.type = Netlist::DirectConnectivityQueryType::GlobalFanoutReport;
         query.primaryInputsOnly = true;
-        iss >> query.fanoutLimit;
+        return parseOptionalFanoutLimit();
     } else if (m == "fanout_violations") {
         query.type = Netlist::DirectConnectivityQueryType::GlobalFanoutReport;
-        if (!(iss >> query.fanoutLimit)) {
+        std::string token;
+        if (!(iss >> token) || !parseStrictInteger(token, query.fanoutLimit) ||
+            query.fanoutLimit < 0) {
+            error = m + " requires a non-negative integer <limit>";
+            return false;
+        }
+        std::string trailing;
+        if (iss >> trailing) {
+            error = "Unexpected structure_query argument: " + trailing;
             return false;
         }
     } else if (m == "gate_inputs") {
         query.type = Netlist::DirectConnectivityQueryType::GateInputs;
-        iss >> query.gateName;
+        return requireOneName("gate", query.gateName);
     } else if (m == "gate_output") {
         query.type = Netlist::DirectConnectivityQueryType::GateOutput;
-        iss >> query.gateName;
+        return requireOneName("gate", query.gateName);
     } else if (m == "gate_fanin") {
         query.type = Netlist::DirectConnectivityQueryType::GateFanin;
-        iss >> query.gateName;
+        return requireOneName("gate", query.gateName);
     } else if (m == "gate_fanout") {
         query.type = Netlist::DirectConnectivityQueryType::GateFanout;
-        iss >> query.gateName;
+        return requireOneName("gate", query.gateName);
     } else if (m == "is_connected") {
         query.type = Netlist::DirectConnectivityQueryType::DirectlyConnected;
-        iss >> query.gateName >> query.netName;
+        if (!(iss >> query.gateName) || isOptionToken(query.gateName) ||
+            !(iss >> query.netName) || isOptionToken(query.netName)) {
+            error = m + " requires <gate> <net>";
+            return false;
+        }
+        std::string trailing;
+        if (iss >> trailing) {
+            error = "Unexpected structure_query argument: " + trailing;
+            return false;
+        }
     } else {
         return false;
     }
@@ -2337,36 +3151,106 @@ bool buildConnectivityQuery(std::istringstream& iss,
 }
 
 // 將 cone_query 的 mode 轉成 ConeQuery。
-bool buildConeQuery(std::istringstream& iss,
+bool buildConeQuery(const Netlist& netlist,
+                    std::istringstream& iss,
                     const std::string& mode,
-                    Netlist::ConeQuery& query) {
+                    Netlist::ConeQuery& query,
+                    std::string& errorMessage) {
     const std::string m = toLower(mode);
     if (m == "net_fanin") {
         query.type = Netlist::ConeQueryType::NetTransitiveFanin;
-        iss >> query.netName;
+        if (!(iss >> query.netName)) {
+            errorMessage = "net_fanin requires <net>";
+            return false;
+        }
     } else if (m == "net_fanout") {
         query.type = Netlist::ConeQueryType::NetTransitiveFanout;
-        iss >> query.netName;
+        if (!(iss >> query.netName)) {
+            errorMessage = "net_fanout requires <net>";
+            return false;
+        }
     } else if (m == "gate_fanin") {
         query.type = Netlist::ConeQueryType::GateTransitiveFanin;
-        iss >> query.gateName;
+        if (!(iss >> query.gateName)) {
+            errorMessage = "gate_fanin requires <gate>";
+            return false;
+        }
     } else if (m == "gate_fanout") {
         query.type = Netlist::ConeQueryType::GateTransitiveFanout;
-        iss >> query.gateName;
+        if (!(iss >> query.gateName)) {
+            errorMessage = "gate_fanout requires <gate>";
+            return false;
+        }
     } else if (m == "largest_output") {
         query.type = Netlist::ConeQueryType::LargestOutputCone;
     } else if (m == "shared_fanin") {
         query.type = Netlist::ConeQueryType::SharedFaninGates;
-        iss >> query.netName >> query.secondNetName;
+        if (!(iss >> query.netName >> query.secondNetName)) {
+            errorMessage = "shared_fanin requires <net_a> <net_b>";
+            return false;
+        }
     } else {
+        errorMessage = "Unknown cone_query mode: " + mode;
         return false;
     }
 
-    std::string option;
-    while (iss >> option) {
-        if (toLower(option) == "with_paths") {
+    std::vector<std::string> tokens;
+    std::string token;
+    while (iss >> token) tokens.push_back(token);
+
+    bool sawPaths = false;
+    bool sawPins = false;
+    bool sawGateTypes = false;
+    for (size_t i = 0; i < tokens.size();) {
+        const std::string option = toLower(tokens[i]);
+        if (option == "with_paths" || option == "--with-paths") {
+            if (sawPaths) {
+                errorMessage = "Duplicate cone_query path option";
+                return false;
+            }
+            sawPaths = true;
             query.includeLocalPaths = true;
+            ++i;
+            continue;
         }
+        if (option == "--with-pins") {
+            if (sawPins) {
+                errorMessage = "Duplicate cone_query option: --with-pins";
+                return false;
+            }
+            sawPins = true;
+            query.includeGateDetails = true;
+            ++i;
+            continue;
+        }
+        if (option == "--gate-types") {
+            if (sawGateTypes) {
+                errorMessage = "Duplicate cone_query option: --gate-types";
+                return false;
+            }
+            sawGateTypes = true;
+            ++i;
+            const size_t firstType = i;
+            while (i < tokens.size()) {
+                const std::string candidate = toLower(tokens[i]);
+                if (candidate.rfind("--", 0) == 0 || candidate == "with_paths") break;
+                const GateType type = netlist.stringToGateType(tokens[i]);
+                if (type == GateType::UNKNOWN) {
+                    errorMessage = "Unsupported gate type '" + tokens[i] +
+                        "'. Supported types: AND OR NOT NAND NOR XOR XNOR BUF DFF";
+                    return false;
+                }
+                query.gateTypeFilters.push_back(type);
+                ++i;
+            }
+            if (i == firstType) {
+                errorMessage = "--gate-types requires at least one gate type";
+                return false;
+            }
+            continue;
+        }
+        errorMessage = "Unknown cone_query option: " + tokens[i];
+        return false;
     }
     return true;
 }
@@ -2374,11 +3258,19 @@ bool buildConeQuery(std::istringstream& iss,
 // 將 depth_query 的 mode 轉成 DepthQuery。
 bool buildDepthQuery(std::istringstream& iss,
                      const std::string& mode,
-                     Netlist::DepthQuery& query) {
+                     Netlist::DepthQuery& query,
+                     std::string& error) {
     const std::string m = toLower(mode);
+    auto requireValue = [&](const std::string& name, std::string& value) -> bool {
+        if (!(iss >> value) || isOptionToken(value)) {
+            error = name + " requires one value.";
+            return false;
+        }
+        return true;
+    };
     if (m == "net") {
         query.type = Netlist::DepthQueryType::SpecificNet;
-        iss >> query.netName;
+        if (!requireValue("depth_query net", query.netName)) return false;
     } else if (m == "all_po") {
         query.type = Netlist::DepthQueryType::PrimaryOutputs;
     } else if (m == "all_dff_d") {
@@ -2387,16 +3279,40 @@ bool buildDepthQuery(std::istringstream& iss,
         query.type = Netlist::DepthQueryType::GlobalCriticalPath;
     } else if (m == "exceeding") {
         query.type = Netlist::DepthQueryType::EndpointsExceedingDepth;
-        iss >> query.threshold;
+        std::string value;
+        size_t threshold = 0;
+        if (!requireValue("depth_query exceeding", value) ||
+            !parseNonNegativeSize(value, threshold) ||
+            threshold > static_cast<size_t>(std::numeric_limits<int>::max())) {
+            error = "depth_query exceeding requires a non-negative integer depth.";
+            return false;
+        }
+        query.threshold = static_cast<int>(threshold);
+        query.includeCriticalPath = false;
     } else if (m == "po_exceeding") {
         query.type = Netlist::DepthQueryType::PrimaryOutputsExceedingDepth;
-        iss >> query.threshold;
+        std::string value;
+        size_t threshold = 0;
+        if (!requireValue("depth_query po_exceeding", value) ||
+            !parseNonNegativeSize(value, threshold) ||
+            threshold > static_cast<size_t>(std::numeric_limits<int>::max())) {
+            error = "depth_query po_exceeding requires a non-negative integer depth.";
+            return false;
+        }
+        query.threshold = static_cast<int>(threshold);
+        query.includeCriticalPath = false;
     } else if (m == "gate_on_critical") {
         query.type = Netlist::DepthQueryType::GateOnCriticalPath;
-        iss >> query.gateName;
+        if (!requireValue("depth_query gate_on_critical", query.gateName)) return false;
     } else if (m == "deepest_output") {
         query.type = Netlist::DepthQueryType::DeepestOutputCone;
     } else {
+        error = "Unknown depth_query mode: " + mode;
+        return false;
+    }
+    std::string trailing;
+    if (iss >> trailing) {
+        error = "Unexpected depth_query token: " + trailing;
         return false;
     }
     return true;
@@ -2405,46 +3321,111 @@ bool buildDepthQuery(std::istringstream& iss,
 // 將 func_query 的 mode 轉成 FunctionQuery。
 bool buildFunctionQuery(std::istringstream& iss,
                         const std::string& mode,
-                        Netlist::FunctionQuery& query) {
+                        Netlist::FunctionQuery& query,
+                        std::string& error) {
     const std::string m = toLower(mode);
+    std::vector<std::string> tokens;
+    std::string token;
+    while (iss >> token) tokens.push_back(token);
+
+    const auto requireArity = [&](size_t expected,
+                                  size_t nameCount,
+                                  const std::string& usage) {
+        if (tokens.size() < expected) {
+            error = m + " requires " + usage;
+            return false;
+        }
+        if (tokens.size() > expected) {
+            error = "Unexpected func_query argument: " + tokens[expected];
+            return false;
+        }
+        for (size_t index = 0; index < nameCount; ++index) {
+            if (isOptionToken(tokens[index])) {
+                error = m + " requires " + usage;
+                return false;
+            }
+        }
+        return true;
+    };
+
     if (m == "equivalence") {
         query.type = Netlist::FunctionQueryType::Equivalence;
-        iss >> query.netNameA >> query.netNameB;
+        if (!requireArity(2, 2, "<net_a> <net_b>")) return false;
+        query.netNameA = tokens[0];
+        query.netNameB = tokens[1];
     } else if (m == "conditional_equivalence" || m == "equivalence_when") {
         query.type = Netlist::FunctionQueryType::ConditionalEquivalence;
-        iss >> query.netNameA >> query.netNameB
-            >> query.conditionNetName >> query.conditionValue;
+        if (!requireArity(4, 3, "<net_a> <net_b> <condition_net> <0|1>")) {
+            return false;
+        }
+        query.netNameA = tokens[0];
+        query.netNameB = tokens[1];
+        query.conditionNetName = tokens[2];
+        if (!parseStrictInteger(tokens[3], query.conditionValue) ||
+            (query.conditionValue != 0 && query.conditionValue != 1)) {
+            error = m + " requires condition value 0 or 1";
+            return false;
+        }
     } else if (m == "can_be_value") {
         query.type = Netlist::FunctionQueryType::CanBeValue;
-        iss >> query.netNameA >> query.constValue;
+        if (!requireArity(2, 1, "<net> <0|1>")) return false;
+        query.netNameA = tokens[0];
+        if (!parseStrictInteger(tokens[1], query.constValue) ||
+            (query.constValue != 0 && query.constValue != 1)) {
+            error = m + " requires value 0 or 1";
+            return false;
+        }
     } else if (m == "constant") {
         query.type = Netlist::FunctionQueryType::ConstantFunction;
-        iss >> query.netNameA >> query.constValue;
+        if (!requireArity(2, 1, "<net> <0|1>")) return false;
+        query.netNameA = tokens[0];
+        if (!parseStrictInteger(tokens[1], query.constValue) ||
+            (query.constValue != 0 && query.constValue != 1)) {
+            error = m + " requires value 0 or 1";
+            return false;
+        }
     } else if (m == "always_zero") {
         query.type = Netlist::FunctionQueryType::AlwaysZero;
-        iss >> query.netNameA;
+        if (!requireArity(1, 1, "<net>")) return false;
+        query.netNameA = tokens[0];
     } else if (m == "always_one") {
         query.type = Netlist::FunctionQueryType::AlwaysOne;
-        iss >> query.netNameA;
+        if (!requireArity(1, 1, "<net>")) return false;
+        query.netNameA = tokens[0];
     } else if (m == "truth_status") {
         query.type = Netlist::FunctionQueryType::TruthStatus;
-        iss >> query.netNameA;
+        if (!requireArity(1, 1, "<net>")) return false;
+        query.netNameA = tokens[0];
     } else if (m == "depends_on" || m == "functional_dependence") {
         query.type = Netlist::FunctionQueryType::FunctionalDependence;
-        iss >> query.netNameA >> query.netNameB;
+        if (!requireArity(2, 2, "<target_net> <input_net>")) return false;
+        query.netNameA = tokens[0];
+        query.netNameB = tokens[1];
     } else if (m == "symmetry" || m == "symmetric") {
         query.type = Netlist::FunctionQueryType::Symmetry;
-        iss >> query.netNameA >> query.symmetryInputNameA >> query.symmetryInputNameB;
+        if (!requireArity(3, 3, "<target_net_or_bus> <input_a> <input_b>")) {
+            return false;
+        }
+        query.netNameA = tokens[0];
+        query.symmetryInputNameA = tokens[1];
+        query.symmetryInputNameB = tokens[2];
     } else if (m == "boolean_expression" || m == "expression") {
         query.type = Netlist::FunctionQueryType::BooleanExpression;
-        iss >> query.netNameA;
+        if (!requireArity(1, 1, "<net>")) return false;
+        query.netNameA = tokens[0];
     } else if (m == "simplified_expression") {
         query.type = Netlist::FunctionQueryType::SimplifiedBooleanExpression;
-        query.maxExpressionDepth = -1;
-        iss >> query.netNameA >> query.maxExpressionDepth;
+        if (!requireArity(2, 1, "<net> <non_negative_max_depth>")) return false;
+        query.netNameA = tokens[0];
+        if (!parseStrictInteger(tokens[1], query.maxExpressionDepth) ||
+            query.maxExpressionDepth < 0) {
+            error = m + " requires a non-negative integer max depth";
+            return false;
+        }
     } else if (m == "support_pi" || m == "primary_inputs_of_net") {
         query.type = Netlist::FunctionQueryType::PrimaryInputsOfNet;
-        iss >> query.netNameA;
+        if (!requireArity(1, 1, "<net>")) return false;
+        query.netNameA = tokens[0];
     } else {
         return false;
     }
@@ -3247,24 +4228,29 @@ void printHelp() {
         << "  structure_query <mode> [args]\n"
         << "  mode: summary | list_gates | list_nets | list_pi | list_po\n"
         << "        list_dffs | list_comb | gate_info <gate> | net_info <net>\n"
-        << "        port_info <port> | count_by_type [type] | gates_by_type <type>\n"
-        << "        const_input_gates [type|all] [0|1|any] [--inputs N] | structural_issues\n"
-        << "        net_driver <net> | net_loads <net> | gate_inputs <gate>\n"
+        << "        port_info <port> | count_by_type [type] [gate-type filters]\n"
+        << "        gates_by_type [type] [gate-type filters] [--with-pins]\n"
+        << "        const_input_gates [type|all] [0|1|any] [gate-type filters] [--with-pins]\n"
+        << "        gate-type filters: [--gate-types <type...>] [--exclude-gate-types <type...>]\n"
+        << "        structural_issues\n"
+        << "        net_driver <net> [--with-pins]\n"
+        << "        net_loads <net> [--with-pins] | gate_inputs <gate>\n"
         << "        fanout_load <net> | fanout_report <net>\n"
         << "        global_fanout [limit] | pi_fanout [limit] | fanout_violations <limit>\n"
         << "        gate_output <gate> | gate_fanin <gate> | gate_fanout <gate>\n"
         << "        is_connected <gate> <net>\n"
         << "\nCone query\n"
-        << "  cone_query <mode> [name] [with_paths]\n"
+        << "  cone_query <mode> [name] [options]\n"
         << "  mode: net_fanin | net_fanout | gate_fanin | gate_fanout | largest_output\n"
         << "        shared_fanin <net_a> <net_b>\n"
+        << "  options: [with_paths|--with-paths] [--gate-types <type...>] [--with-pins]\n"
+        << "  gate types: AND OR NOT NAND NOR XOR XNOR BUF DFF\n"
         << "\nPath query\n"
         << "  path_query <mode> <start_endpoint> <end_endpoint> [-req node...] [-avoid node...]\n"
         << "  path_query enumerate <start_endpoint> <end_endpoint> [-count_only]\n"
         << "  path_query direct_pi_po\n"
         << "  enumerate automatically writes the complete list to a unique file and returns a summary\n"
-        << "  use -out, -max_print, -max_paths, or -time_limit only when the prompt explicitly requests that control\n"
-        << "  -max_paths is legacy-only and does not truncate enumeration\n"
+        << "  output files, display size, and execution budget are managed automatically\n"
         << "  mode: exists | find_any | enumerate | min_depth | max_depth\n"
         << "        every_through | every_avoids | mandatory_nodes | articulation_between\n"
         << "        is_separator | pi_po_cut <internal_net> | direct_pi_po\n"
@@ -3314,8 +4300,9 @@ void printHelp() {
         << "                   [--functional-time-limit seconds]\n"
         << "  all-DFF detail writes all records to a unique file and returns a summary\n"
         << "  use offset/limit only when a prompt explicitly requests a record window\n"
-        << "  --verify-sat is accepted only for a specific DFF target\n"
-        << "  functional search options require the opt-in --functional-fallback flag\n"
+        << "  functional classification is always enabled for canonical and restructured logic\n"
+        << "  --verify-sat/--functional-fallback are retained for compatibility;\n"
+        << "  explicit functional tuning options still require --functional-fallback\n"
         << "\nDepth optimization\n"
         << "  opt_query critical_path_depth\n"
         << "  opt_apply critical_path_depth [--scope <scope> [scope_name]]\n"
@@ -3327,7 +4314,7 @@ void printHelp() {
         << "  --scope/--objective select the cost function; --basis-scope selects where\n"
         << "  the gate-type constraint applies (default: the whole netlist)\n"
         << "  gate-type lists accept spaces or commas, for example NOR NOT or nor,not\n"
-        << "  this pass does not run whole-design SAT; use equiv_query for that\n"
+        << "  accepted rewrites use CertifiedRewrite; use equiv_query only for explicit SAT proof\n"
         << "\nEdit apply\n"
         << "  edit_apply rename_gate <old> <new> | rename_net <old> <new>\n"
         << "  edit_apply cleanup_buffers | collapse_double_inverter | local_simplification_fixpoint\n"
@@ -3485,8 +4472,9 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         std::string remainingArgs;
         std::getline(iss, remainingArgs);
         Netlist::BasicQuery basicQuery;
+        std::string basicError;
         std::istringstream basicArgs(remainingArgs);
-        if (buildBasicQuery(session.current, basicArgs, mode, basicQuery)) {
+        if (buildBasicQuery(session.current, basicArgs, mode, basicQuery, basicError)) {
             const Netlist::BasicReport report = session.current.runBasicQuery(basicQuery);
             const ListArtifactResult artifact = report.ok
                 ? writeAutomaticListArtifact(
@@ -3506,10 +4494,16 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             });
             return true;
         }
+        if (!basicError.empty()) {
+            emitToolError(session, command, toLower(mode), basicError);
+            return true;
+        }
 
         Netlist::DirectConnectivityQuery connectivityQuery;
         std::istringstream connectivityArgs(remainingArgs);
-        if (buildConnectivityQuery(connectivityArgs, mode, connectivityQuery)) {
+        std::string connectivityError;
+        if (buildConnectivityQuery(
+                connectivityArgs, mode, connectivityQuery, connectivityError)) {
             const Netlist::DirectConnectivityReport report =
                 session.current.runDirectConnectivityQuery(connectivityQuery);
             const ListArtifactResult artifact = report.ok
@@ -3532,8 +4526,13 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             return true;
         }
 
+        if (!connectivityError.empty()) {
+            emitToolError(session, command, mode, connectivityError);
+            return true;
+        }
+
         emitToolError(session, command, mode,
-                      "Unknown structure_query mode or invalid arguments: " + mode);
+                      "Unknown structure_query mode: " + mode);
         return true;
     }
 
@@ -3545,8 +4544,11 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             return true;
         }
         Netlist::BasicQuery query;
-        if (!buildBasicQuery(session.current, iss, mode, query)) {
-            emitToolError(session, command, mode, "Unknown basic_query mode or invalid arguments: " + mode);
+        std::string basicError;
+        if (!buildBasicQuery(session.current, iss, mode, query, basicError)) {
+            emitToolError(session, command, mode, basicError.empty()
+                ? "Unknown basic_query mode: " + mode
+                : basicError);
             return true;
         }
         const Netlist::BasicReport report = session.current.runBasicQuery(query);
@@ -3577,8 +4579,11 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             return true;
         }
         Netlist::DirectConnectivityQuery query;
-        if (!buildConnectivityQuery(iss, mode, query)) {
-            emitToolError(session, command, mode, "Unknown conn_query mode: " + mode);
+        std::string connectivityError;
+        if (!buildConnectivityQuery(iss, mode, query, connectivityError)) {
+            emitToolError(session, command, mode, connectivityError.empty()
+                ? "Unknown conn_query mode: " + mode
+                : connectivityError);
             return true;
         }
         const Netlist::DirectConnectivityReport report =
@@ -3606,12 +4611,13 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         if (!requireDesign()) return true;
         std::string mode;
         if (!(iss >> mode)) {
-            emitToolError(session, command, "", "Usage: cone_query <mode> <name> [with_paths]");
+            emitToolError(session, command, "", "Usage: cone_query <mode> [name] [options]");
             return true;
         }
         Netlist::ConeQuery query;
-        if (!buildConeQuery(iss, mode, query)) {
-            emitToolError(session, command, mode, "Unknown cone_query mode: " + mode);
+        std::string parseError;
+        if (!buildConeQuery(session.current, iss, mode, query, parseError)) {
+            emitToolError(session, command, mode, parseError);
             return true;
         }
         const Netlist::ConeReport report = session.current.runConeQuery(query);
@@ -3681,28 +4687,48 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         }
 
         int listMode = 0;
+        bool listHasValue = false;
+        const auto requireCompletedNodeList = [&]() -> bool {
+            if (listMode != 0 && !listHasValue) {
+                emitToolError(session, command, modeText,
+                              listMode == 1 ? "-req requires at least one node."
+                                            : "-avoid requires at least one node.");
+                return false;
+            }
+            return true;
+        };
         std::string token;
         while (iss >> token) {
             if (token == "-req") {
+                if (!requireCompletedNodeList()) return true;
                 listMode = 1;
+                listHasValue = false;
                 continue;
             }
             if (token == "-avoid") {
+                if (!requireCompletedNodeList()) return true;
                 listMode = 2;
+                listHasValue = false;
                 continue;
             }
             if (token == "-out") {
+                if (!requireCompletedNodeList()) return true;
                 std::string outputPath;
-                if (iss >> outputPath) {
-                    query.writePathsToFile = true;
-                    query.outputFilePath = outputPath;
+                if (!(iss >> outputPath) || isOptionToken(outputPath)) {
+                    emitToolError(session, command, modeText,
+                                  "-out requires a file path value.");
+                    return true;
                 }
+                query.writePathsToFile = true;
+                query.outputFilePath = outputPath;
                 listMode = 0;
                 continue;
             }
             if (token == "-max_print") {
+                if (!requireCompletedNodeList()) return true;
+                std::string valueToken;
                 size_t maxPrinted = 0;
-                if (!(iss >> maxPrinted)) {
+                if (!(iss >> valueToken) || !parseNonNegativeSize(valueToken, maxPrinted)) {
                     emitToolError(session, command, modeText, "-max_print requires a non-negative integer.");
                     return true;
                 }
@@ -3711,8 +4737,10 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
                 continue;
             }
             if (token == "-max_paths") {
+                if (!requireCompletedNodeList()) return true;
+                std::string valueToken;
                 size_t maxPaths = 0;
-                if (!(iss >> maxPaths)) {
+                if (!(iss >> valueToken) || !parseNonNegativeSize(valueToken, maxPaths)) {
                     emitToolError(session, command, modeText, "-max_paths requires a non-negative integer.");
                     return true;
                 }
@@ -3721,9 +4749,11 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
                 continue;
             }
             if (token == "-time_limit") {
+                if (!requireCompletedNodeList()) return true;
+                std::string valueToken;
                 double timeLimit = 0.0;
-                if (!(iss >> timeLimit)) {
-                    emitToolError(session, command, modeText, "-time_limit requires a number of seconds.");
+                if (!(iss >> valueToken) || !parsePositiveFiniteSeconds(valueToken, timeLimit)) {
+                    emitToolError(session, command, modeText, "-time_limit requires a positive finite number of seconds.");
                     return true;
                 }
                 query.enumerationTimeLimitSeconds = timeLimit;
@@ -3731,14 +4761,32 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
                 continue;
             }
             if (token == "-count_only") {
+                if (!requireCompletedNodeList()) return true;
                 query.countOnly = true;
                 query.writePathsToFile = false;
                 listMode = 0;
                 continue;
             }
-            if (listMode == 1) query.requiredNodes.push_back(parsePathNode(token));
-            else if (listMode == 2) query.avoidedNodes.push_back(parsePathNode(token));
+            if (isOptionToken(token)) {
+                emitToolError(session, command, modeText,
+                              "Unknown path_query option: " + token +
+                              ". Supported public options: -req -avoid -count_only.");
+                return true;
+            }
+            if (listMode == 1) {
+                query.requiredNodes.push_back(parsePathNode(token));
+                listHasValue = true;
+            } else if (listMode == 2) {
+                query.avoidedNodes.push_back(parsePathNode(token));
+                listHasValue = true;
+            } else {
+                emitToolError(session, command, modeText,
+                              "Unexpected token '" + token +
+                              "'. Supported public options: -req -avoid -count_only.");
+                return true;
+            }
         }
+        if (!requireCompletedNodeList()) return true;
 
         if (query.mode == Netlist::PathQueryMode::EnumerateAll &&
             !query.countOnly && query.outputFilePath.empty()) {
@@ -3747,6 +4795,11 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         }
 
         const Netlist::PathQueryResult result = session.current.runPathQuery(query);
+        const ListArtifactResult artifact = result.ok
+            ? writeAutomaticListArtifact(
+                  session, command, toLower(modeText),
+                  makePathListArtifactContent(session.current, query, result))
+            : ListArtifactResult{};
         ToolResponse response;
         response.ok = result.ok;
         response.command = command;
@@ -3766,7 +4819,8 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             response.message = result.message;
         }
         emitToolResponse(session, response, [&]() {
-            printPathResult(session.current, query, result);
+            printPathResult(session.current, query, result, artifact.complete);
+            printListArtifactMetadata(artifact);
         });
         return true;
     }
@@ -3786,21 +4840,41 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         }
 
         int listMode = 0;
+        bool listHasValue = false;
+        const auto requireCompletedList = [&]() -> bool {
+            if (listMode != 0 && !listHasValue) {
+                static const char* names[] = {"", "-from", "-to", "-req", "-avoid"};
+                emitToolError(session, command, modeText,
+                              std::string(names[listMode]) + " requires at least one value.");
+                return false;
+            }
+            return true;
+        };
         std::string token;
         while (iss >> token) {
-            if (token == "-from") { listMode = 1; continue; }
-            if (token == "-to") { listMode = 2; continue; }
-            if (token == "-req") { listMode = 3; continue; }
-            if (token == "-avoid") { listMode = 4; continue; }
+            if (token == "-from" || token == "-to" || token == "-req" || token == "-avoid") {
+                if (!requireCompletedList()) return true;
+                listMode = token == "-from" ? 1 : token == "-to" ? 2 : token == "-req" ? 3 : 4;
+                listHasValue = false;
+                continue;
+            }
             if (token == "-out") {
+                if (!requireCompletedList()) return true;
                 std::string outputPath;
-                if (iss >> outputPath) query.outputFilePath = outputPath;
+                if (!(iss >> outputPath) || isOptionToken(outputPath)) {
+                    emitToolError(session, command, modeText,
+                                  "-out requires a file path value.");
+                    return true;
+                }
+                query.outputFilePath = outputPath;
                 listMode = 0;
                 continue;
             }
             if (token == "-max_print") {
+                if (!requireCompletedList()) return true;
+                std::string valueToken;
                 size_t maxPrinted = 0;
-                if (!(iss >> maxPrinted)) {
+                if (!(iss >> valueToken) || !parseNonNegativeSize(valueToken, maxPrinted)) {
                     emitToolError(session, command, modeText, "-max_print requires a non-negative integer.");
                     return true;
                 }
@@ -3809,8 +4883,10 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
                 continue;
             }
             if (token == "-max_paths") {
+                if (!requireCompletedList()) return true;
+                std::string valueToken;
                 size_t maxPaths = 0;
-                if (!(iss >> maxPaths)) {
+                if (!(iss >> valueToken) || !parseNonNegativeSize(valueToken, maxPaths)) {
                     emitToolError(session, command, modeText, "-max_paths requires a non-negative integer.");
                     return true;
                 }
@@ -3819,9 +4895,11 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
                 continue;
             }
             if (token == "-time_limit") {
+                if (!requireCompletedList()) return true;
+                std::string valueToken;
                 double timeLimit = 0.0;
-                if (!(iss >> timeLimit)) {
-                    emitToolError(session, command, modeText, "-time_limit requires a number of seconds.");
+                if (!(iss >> valueToken) || !parsePositiveFiniteSeconds(valueToken, timeLimit)) {
+                    emitToolError(session, command, modeText, "-time_limit requires a positive finite number of seconds.");
                     return true;
                 }
                 query.enumerationTimeLimitSeconds = timeLimit;
@@ -3829,15 +4907,30 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
                 continue;
             }
             if (token == "-count_only") {
+                if (!requireCompletedList()) return true;
                 query.countOnly = true;
                 listMode = 0;
                 continue;
+            }
+            if (isOptionToken(token)) {
+                emitToolError(session, command, modeText,
+                              "Unknown reg_path_query option: " + token +
+                              ". Supported public options: -from -to -req -avoid -count_only.");
+                return true;
             }
             if (listMode == 1) query.startDffNames.push_back(token);
             else if (listMode == 2) query.endDffNames.push_back(token);
             else if (listMode == 3) query.requiredNodes.push_back(parsePathNode(token));
             else if (listMode == 4) query.avoidedNodes.push_back(parsePathNode(token));
+            else {
+                emitToolError(session, command, modeText,
+                              "Unexpected token '" + token +
+                              "'. Supported public options: -from -to -req -avoid -count_only.");
+                return true;
+            }
+            listHasValue = true;
         }
+        if (!requireCompletedList()) return true;
 
         const Netlist::RegisterPathReport report = session.current.runRegisterPathQuery(query);
         ToolResponse response;
@@ -3872,11 +4965,17 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             return true;
         }
         Netlist::DepthQuery query;
-        if (!buildDepthQuery(iss, mode, query)) {
-            emitToolError(session, command, mode, "Unknown depth_query mode: " + mode);
+        std::string parseError;
+        if (!buildDepthQuery(iss, mode, query, parseError)) {
+            emitToolError(session, command, mode, parseError);
             return true;
         }
         const Netlist::DepthReportSet report = session.current.runDepthQuery(query);
+        const ListArtifactResult artifact = report.ok
+            ? writeAutomaticListArtifact(
+                  session, command, toLower(mode),
+                  makeDepthListArtifactContent(session.current, report))
+            : ListArtifactResult{};
         ToolResponse response;
         response.ok = report.ok;
         response.status = report.ok ? ToolStatus::Ok : ToolStatus::Error;
@@ -3885,7 +4984,8 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         response.message = report.message;
         response.complete = report.ok;
         emitToolResponse(session, response, [&]() {
-            printDepthReportSet(session.current, report);
+            printDepthReportSet(session.current, report, artifact.complete);
+            printListArtifactMetadata(artifact);
         });
         return true;
     }
@@ -3898,8 +4998,11 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             return true;
         }
         Netlist::FunctionQuery query;
-        if (!buildFunctionQuery(iss, mode, query)) {
-            emitToolError(session, command, mode, "Unknown func_query mode: " + mode);
+        std::string functionError;
+        if (!buildFunctionQuery(iss, mode, query, functionError)) {
+            emitToolError(session, command, mode, functionError.empty()
+                ? "Unknown func_query mode: " + mode
+                : functionError);
             return true;
         }
         if (query.type == Netlist::FunctionQueryType::BooleanExpression) {
@@ -3908,6 +5011,16 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
                 makeAutomaticFunctionExpressionOutputPath(session);
         }
         const Netlist::FunctionReport report = session.current.runFunctionQuery(query);
+        const bool allowGenericListArtifact =
+            query.type != Netlist::FunctionQueryType::BooleanExpression;
+        const ListArtifactResult listArtifact =
+            report.ok && allowGenericListArtifact
+                ? writeAutomaticListArtifact(
+                    session,
+                    command,
+                    toLower(mode),
+                    makeFunctionListArtifactContent(report))
+                : ListArtifactResult{};
         ToolResponse response;
         response.ok = report.ok;
         response.command = command;
@@ -3928,7 +5041,10 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         }
         else response.status = report.ok ? ToolStatus::Ok : ToolStatus::Error;
         response.message = report.message;
-        emitToolResponse(session, response, [&]() { printFunctionReport(report); });
+        emitToolResponse(session, response, [&]() {
+            printFunctionReport(report, listArtifact.complete);
+            printListArtifactMetadata(listArtifact);
+        });
         return true;
     }
 

@@ -54,6 +54,11 @@ private:
     // SigRef/AIG objects must never escape into public reports.
     eqeng::Primitives& booleanPrimitives() const;
 
+    // Shared structured gate snapshot used by BasicQuery and ConeQuery.
+    // Keeping it on Netlist prevents the two facades from drifting on pin order,
+    // tombstone handling, constants, and bus-bit names.
+    GateConnectionSummary buildGateConnectionSummary(int gateId) const;
+
 public:
     Netlist();
     ~Netlist();
@@ -1353,6 +1358,7 @@ public:
         std::vector<std::string> all;               // 三桶的聯集，內容等同 getPrimaryInputsOfNet()
         std::vector<std::string> realPrimaryInputs;  // 真正宣告的 top-level primary input
         std::vector<std::string> dffPseudoInputs;    // DFF.Q pseudo primary input（跨 sequential boundary）
+        std::vector<DffStateBoundaryRecord> dffStateBoundaries; // current-state symbol 與 DFF.Q 對照
         std::vector<std::string> undrivenLeaves;     // 沒有 driver 且不是 PI（懸空/floating fanin）
     };
 
@@ -1497,6 +1503,9 @@ public:
     using DirectConnectivityQueryType = ::DirectConnectivityQueryType;
     using DirectConnectivityQuery = ::DirectConnectivityQuery;
     using DirectConnectivityReport = ::DirectConnectivityReport;
+    using ConnectivityPinDirection = ::ConnectivityPinDirection;
+    using ConnectivityPinRole = ::ConnectivityPinRole;
+    using ConnectivityPinRecord = ::ConnectivityPinRecord;
     using FanoutLoadReport = ::FanoutLoadReport;
     using GlobalFanoutReport = ::GlobalFanoutReport;
 

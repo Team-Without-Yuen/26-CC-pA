@@ -1,0 +1,1488 @@
+Total paths: 0
+Format: COMPACT_PATH_V3
+All IDs and path indices are unsigned base36 integers.
+Dictionary rows:
+  N <net_id> <net_name>
+  G <gate_id> <output_net_id> <gate_name> <gate_type>
+A decoded path token sequence is S = [start_net_id, gate_id_1, ..., gate_id_N].
+Token 0 is always the start net; tokens 1..N are always gates.
+First record: Path 0: F <every token in S>
+Delta record: P <path_index> <prefix_token_count> <suffix_token_count> <middle_tokens>...
+IMPORTANT: prefix/suffix counts apply to the entire S, including token 0 (start net).
+Decode delta: current S = previous S first <prefix> tokens + middle tokens + previous S last <suffix> tokens.
+Example: previous S=[0,0,2,6,7] and 'P 1 2 2 3' decodes to S=[0,0,3,6,7].
+Expand names: look up S[0] in net_dictionary; for each gate S[i], look up the gate and then its output_net_id.
+Expected paths: 0
+
+[net_dictionary]
+N	0	n3
+N	1	n4
+N	2	n5
+N	3	n6
+N	4	n7
+N	5	n8
+N	6	n9
+N	7	n10
+N	8	n1[25]
+N	9	n1[24]
+N	a	n1[23]
+N	b	n1[22]
+N	c	n1[21]
+N	d	n1[20]
+N	e	n1[19]
+N	f	n1[18]
+N	g	n1[17]
+N	h	n1[16]
+N	i	n1[15]
+N	j	n1[14]
+N	k	n1[13]
+N	l	n1[12]
+N	m	n1[11]
+N	n	n1[10]
+N	o	n1[9]
+N	p	n1[8]
+N	q	n1[7]
+N	r	n1[6]
+N	s	n1[5]
+N	t	n1[4]
+N	u	n1[3]
+N	v	n1[2]
+N	w	n1[1]
+N	x	n1[0]
+N	y	n2[25]
+N	z	n2[24]
+N	10	n2[23]
+N	11	n2[22]
+N	12	n2[21]
+N	13	n2[20]
+N	14	n2[19]
+N	15	n2[18]
+N	16	n2[17]
+N	17	n2[16]
+N	18	n2[15]
+N	19	n2[14]
+N	1a	n2[13]
+N	1b	n2[12]
+N	1c	n2[11]
+N	1d	n2[10]
+N	1e	n2[9]
+N	1f	n2[8]
+N	1g	n2[7]
+N	1h	n2[6]
+N	1i	n2[5]
+N	1j	n2[4]
+N	1k	n2[3]
+N	1l	n2[2]
+N	1m	n2[1]
+N	1n	n2[0]
+N	1o	n12[2]
+N	1p	n12[1]
+N	1q	n12[0]
+N	1r	n13[2]
+N	1s	n13[1]
+N	1t	n13[0]
+N	1u	n14[2]
+N	1v	n14[1]
+N	1w	n14[0]
+N	1x	n15[2]
+N	1y	n15[1]
+N	1z	n15[0]
+N	20	n16[2]
+N	21	n16[1]
+N	22	n16[0]
+N	23	n0[3]
+N	24	n0[2]
+N	25	n0[1]
+N	26	n0[0]
+N	27	n11[6]
+N	28	n11[5]
+N	29	n11[4]
+N	2a	n11[3]
+N	2b	n11[2]
+N	2c	n11[1]
+N	2d	n11[0]
+N	2e	n17[25]
+N	2f	n17[24]
+N	2g	n17[23]
+N	2h	n17[22]
+N	2i	n17[21]
+N	2j	n17[20]
+N	2k	n17[19]
+N	2l	n17[18]
+N	2m	n17[17]
+N	2n	n17[16]
+N	2o	n17[15]
+N	2p	n17[14]
+N	2q	n17[13]
+N	2r	n17[12]
+N	2s	n17[11]
+N	2t	n17[10]
+N	2u	n17[9]
+N	2v	n17[8]
+N	2w	n17[7]
+N	2x	n17[6]
+N	2y	n17[5]
+N	2z	n17[4]
+N	30	n17[3]
+N	31	n17[2]
+N	32	n17[1]
+N	33	n17[0]
+N	34	n295
+N	35	n296
+N	36	n376
+N	37	n367
+N	38	n269
+N	39	n294
+N	3a	n289
+N	3b	n293
+N	3c	n278
+N	3d	n288
+N	3e	n292
+N	3f	n279
+N	3g	n286
+N	3h	n363
+N	3i	n287
+N	3j	n285
+N	3k	n291
+N	3l	n290
+N	3m	n282
+N	3n	n276
+N	3o	n260
+N	3p	n280
+N	3q	n265
+N	3r	n277
+N	3s	n283
+N	3t	n281
+N	3u	n272
+N	3v	n284
+N	3w	n273
+N	3x	n275
+N	3y	n264
+N	3z	n271
+N	40	n263
+N	41	n274
+N	42	n259
+N	43	n297
+N	44	n270
+N	45	n267
+N	46	n261
+N	47	n266
+N	48	n366
+N	49	n262
+N	4a	n268
+N	4b	n365
+N	4c	n364
+N	4d	n369
+N	4e	n368
+N	4f	n679
+N	4g	n258
+N	4h	n240
+N	4i	n255
+N	4j	n257
+N	4k	n231
+N	4l	n246
+N	4m	n256
+N	4n	n241
+N	4o	n249
+N	4p	n230
+N	4q	n251
+N	4r	n354
+N	4s	n248
+N	4t	n244
+N	4u	n254
+N	4v	n233
+N	4w	n245
+N	4x	n352
+N	4y	n252
+N	4z	n253
+N	50	n351
+N	51	n247
+N	52	n250
+N	53	n232
+N	54	n239
+N	55	n243
+N	56	n220
+N	57	n229
+N	58	n238
+N	59	n223
+N	5a	n222
+N	5b	n228
+N	5c	n242
+N	5d	n236
+N	5e	n235
+N	5f	n226
+N	5g	n234
+N	5h	n360
+N	5i	n237
+N	5j	n359
+N	5k	n225
+N	5l	n358
+N	5m	n373
+N	5n	n374
+N	5o	n227
+N	5p	n370
+N	5q	n375
+N	5r	n371
+N	5s	n372
+N	5t	n224
+N	5u	n353
+N	5v	n355
+N	5w	n357
+N	5x	n356
+N	5y	n221
+N	5z	n219
+N	60	n511
+N	61	n424
+N	62	n510
+N	63	n436
+N	64	n509
+N	65	n435
+N	66	n508
+N	67	n434
+N	68	n507
+N	69	n433
+N	6a	n506
+N	6b	n432
+N	6c	n505
+N	6d	n431
+N	6e	n504
+N	6f	n430
+N	6g	n503
+N	6h	n429
+N	6i	n502
+N	6j	n428
+N	6k	n501
+N	6l	n500
+N	6m	n426
+N	6n	n499
+N	6o	n425
+N	6p	n498
+N	6q	n437
+N	6r	n497
+N	6s	n423
+N	6t	n496
+N	6u	n422
+N	6v	n495
+N	6w	n441
+N	6x	n494
+N	6y	n442
+N	6z	n493
+N	70	n443
+N	71	n492
+N	72	n445
+N	73	n491
+N	74	n446
+N	75	n490
+N	76	n440
+N	77	n489
+N	78	n444
+N	79	n488
+N	7a	n427
+N	7b	n487
+N	7c	n439
+N	7d	n486
+N	7e	n438
+N	7f	n485
+N	7g	n417
+N	7h	n458
+N	7i	n484
+N	7j	n416
+N	7k	n454
+N	7l	n483
+N	7m	n419
+N	7n	n466
+N	7o	n482
+N	7p	n414
+N	7q	n448
+N	7r	n472
+N	7s	n415
+N	7t	n451
+N	7u	n471
+N	7v	n413
+N	7w	n462
+N	7x	n470
+N	7y	n418
+N	7z	n420
+N	80	n469
+N	81	n380
+N	82	n468
+N	83	n397
+N	84	n467
+N	85	n394
+N	86	n382
+N	87	n465
+N	88	n378
+N	89	n464
+N	8a	n388
+N	8b	n463
+N	8c	n392
+N	8d	n461
+N	8e	n350
+N	8f	n395
+N	8g	n460
+N	8h	n459
+N	8i	n386
+N	8j	n457
+N	8k	n391
+N	8l	n456
+N	8m	n455
+N	8n	n389
+N	8o	n453
+N	8p	n452
+N	8q	n385
+N	8r	n383
+N	8s	n450
+N	8t	n398
+N	8u	n449
+N	8v	n447
+N	8w	n421
+N	8x	n402
+N	8y	n400
+N	8z	n410
+N	90	n403
+N	91	n412
+N	92	n406
+N	93	n411
+N	94	n405
+N	95	n408
+N	96	n409
+N	97	n407
+N	98	n404
+N	99	n401
+N	9a	n399
+N	9b	n325
+N	9c	n330
+N	9d	n327
+N	9e	n326
+N	9f	n328
+N	9g	n331
+N	9h	n329
+N	9i	n336
+N	9j	n346
+N	9k	n345
+N	9l	n340
+N	9m	n335
+N	9n	n347
+N	9o	n338
+N	9p	n334
+N	9q	n337
+N	9r	n341
+N	9s	n344
+N	9t	n348
+N	9u	n343
+N	9v	n339
+N	9w	n333
+N	9x	n349
+N	9y	n342
+N	9z	n332
+N	a0	n396
+N	a1	n393
+N	a2	n390
+N	a3	n387
+N	a4	n384
+N	a5	n381
+N	a6	n379
+N	a7	n377
+N	a8	n675
+N	a9	n674
+N	aa	n673
+N	ab	n672
+N	ac	n671
+N	ad	n670
+N	ae	n669
+N	af	n668
+N	ag	n667
+N	ah	n666
+N	ai	n665
+N	aj	n664
+N	ak	n663
+N	al	n662
+N	am	n473
+N	an	n661
+N	ao	n660
+N	ap	n659
+N	aq	n658
+N	ar	n657
+N	as	n474
+N	at	n656
+N	au	n475
+N	av	n655
+N	aw	n476
+N	ax	n654
+N	ay	n477
+N	az	n653
+N	b0	n478
+N	b1	n652
+N	b2	n479
+N	b3	n651
+N	b4	n480
+N	b5	n650
+N	b6	n481
+N	b7	n324
+N	b8	n590
+N	b9	n612
+N	ba	n649
+N	bb	n595
+N	bc	n616
+N	bd	n648
+N	be	n597
+N	bf	n622
+N	bg	n647
+N	bh	n596
+N	bi	n621
+N	bj	n646
+N	bk	n593
+N	bl	n618
+N	bm	n645
+N	bn	n594
+N	bo	n620
+N	bp	n644
+N	bq	n592
+N	br	n619
+N	bs	n643
+N	bt	n584
+N	bu	n611
+N	bv	n642
+N	bw	n588
+N	bx	n615
+N	by	n641
+N	bz	n589
+N	c0	n617
+N	c1	n640
+N	c2	n587
+N	c3	n614
+N	c4	n639
+N	c5	n583
+N	c6	n609
+N	c7	n638
+N	c8	n585
+N	c9	n625
+N	ca	n637
+N	cb	n598
+N	cc	n613
+N	cd	n636
+N	ce	n574
+N	cf	n605
+N	cg	n635
+N	ch	n582
+N	ci	n610
+N	cj	n634
+N	ck	n581
+N	cl	n608
+N	cm	n633
+N	cn	n578
+N	co	n600
+N	cp	n632
+N	cq	n580
+N	cr	n607
+N	cs	n631
+N	ct	n579
+N	cu	n606
+N	cv	n630
+N	cw	n576
+N	cx	n602
+N	cy	n629
+N	cz	n577
+N	d0	n604
+N	d1	n628
+N	d2	n575
+N	d3	n603
+N	d4	n627
+N	d5	n591
+N	d6	n623
+N	d7	n626
+N	d8	n599
+N	d9	n601
+N	da	n299
+N	db	n586
+N	dc	n624
+N	dd	n521
+N	de	n527
+N	df	n515
+N	dg	n541
+N	dh	n538
+N	di	n517
+N	dj	n513
+N	dk	n549
+N	dl	n518
+N	dm	n546
+N	dn	n559
+N	do	n520
+N	dp	n548
+N	dq	n545
+N	dr	n526
+N	ds	n551
+N	dt	n555
+N	du	n530
+N	dv	n524
+N	dw	n523
+N	dx	n558
+N	dy	n535
+N	dz	n532
+N	e0	n552
+N	e1	n529
+N	e2	n554
+N	e3	n557
+N	e4	n533
+N	e5	n536
+N	e6	n573
+N	e7	n543
+N	e8	n572
+N	e9	n571
+N	ea	n562
+N	eb	n570
+N	ec	n561
+N	ed	n569
+N	ee	n568
+N	ef	n567
+N	eg	n565
+N	eh	n566
+N	ei	n560
+N	ej	n563
+N	ek	n556
+N	el	n553
+N	em	n550
+N	en	n564
+N	eo	n547
+N	ep	n544
+N	eq	n300
+N	er	n312
+N	es	n301
+N	et	n302
+N	eu	n313
+N	ev	n303
+N	ew	n314
+N	ex	n316
+N	ey	n319
+N	ez	n311
+N	f0	n304
+N	f1	n321
+N	f2	n318
+N	f3	n315
+N	f4	n307
+N	f5	n308
+N	f6	n309
+N	f7	n320
+N	f8	n322
+N	f9	n305
+N	fa	n317
+N	fb	n323
+N	fc	n310
+N	fd	n306
+N	fe	n542
+N	ff	n540
+N	fg	n539
+N	fh	n537
+N	fi	n534
+N	fj	n531
+N	fk	n528
+N	fl	n525
+N	fm	n522
+N	fn	n519
+N	fo	n516
+N	fp	n514
+N	fq	n512
+N	fr	n678
+N	fs	n677
+N	ft	n676
+N	fu	n298
+N	fv	n361
+N	fw	n35
+N	fx	n36
+N	fy	n21
+N	fz	n28
+N	g0	n34
+N	g1	n32
+N	g2	n30
+N	g3	n26
+N	g4	n33
+N	g5	n23
+N	g6	n29
+N	g7	n25
+N	g8	n31
+N	g9	n27
+N	ga	n24
+N	gb	n18
+N	gc	n22
+N	gd	n20
+N	ge	n19
+N	gf	n362
+N	gg	n68
+N	gh	n70
+N	gi	n38
+N	gj	n69
+N	gk	n53
+N	gl	n66
+N	gm	n54
+N	gn	n67
+N	go	n63
+N	gp	n64
+N	gq	n62
+N	gr	n65
+N	gs	n61
+N	gt	n47
+N	gu	n59
+N	gv	n45
+N	gw	n58
+N	gx	n56
+N	gy	n60
+N	gz	n44
+N	h0	n57
+N	h1	n55
+N	h2	n50
+N	h3	n51
+N	h4	n41
+N	h5	n43
+N	h6	n48
+N	h7	n52
+N	h8	n49
+N	h9	n46
+N	ha	n42
+N	hb	n40
+N	hc	n39
+N	hd	n37
+N	he	n88
+N	hf	n87
+N	hg	n73
+N	hh	n89
+N	hi	n79
+N	hj	n92
+N	hk	n71
+N	hl	n90
+N	hm	n81
+N	hn	n91
+N	ho	n80
+N	hp	n86
+N	hq	n82
+N	hr	n75
+N	hs	n85
+N	ht	n76
+N	hu	n84
+N	hv	n78
+N	hw	n83
+N	hx	n77
+N	hy	n74
+N	hz	n72
+N	i0	n153
+N	i1	n218
+N	i2	n111
+N	i3	n217
+N	i4	n216
+N	i5	n160
+N	i6	n94
+N	i7	n93
+N	i8	n215
+N	i9	n214
+N	ia	n159
+N	ib	n113
+N	ic	n118
+N	id	n213
+N	ie	n212
+N	if	n158
+N	ig	n108
+N	ih	n134
+N	ii	n211
+N	ij	n210
+N	ik	n143
+N	il	n117
+N	im	n138
+N	in	n209
+N	io	n208
+N	ip	n155
+N	iq	n115
+N	ir	n122
+N	is	n207
+N	it	n206
+N	iu	n154
+N	iv	n116
+N	iw	n141
+N	ix	n205
+N	iy	n204
+N	iz	n152
+N	j0	n109
+N	j1	n106
+N	j2	n203
+N	j3	n202
+N	j4	n151
+N	j5	n100
+N	j6	n103
+N	j7	n201
+N	j8	n200
+N	j9	n150
+N	ja	n96
+N	jb	n97
+N	jc	n199
+N	jd	n198
+N	je	n149
+N	jf	n99
+N	jg	n107
+N	jh	n197
+N	ji	n196
+N	jj	n148
+N	jk	n112
+N	jl	n105
+N	jm	n195
+N	jn	n194
+N	jo	n147
+N	jp	n95
+N	jq	n120
+N	jr	n193
+N	js	n192
+N	jt	n146
+N	ju	n130
+N	jv	n124
+N	jw	n191
+N	jx	n190
+N	jy	n145
+N	jz	n133
+N	k0	n136
+N	k1	n189
+N	k2	n188
+N	k3	n144
+N	k4	n127
+N	k5	n126
+N	k6	n187
+N	k7	n186
+N	k8	n156
+N	k9	n132
+N	ka	n137
+N	kb	n185
+N	kc	n184
+N	kd	n157
+N	ke	n104
+N	kf	n135
+N	kg	n183
+N	kh	n182
+N	ki	n162
+N	kj	n110
+N	kk	n102
+N	kl	n181
+N	km	n180
+N	kn	n167
+N	ko	n101
+N	kp	n142
+N	kq	n179
+N	kr	n178
+N	ks	n166
+N	kt	n98
+N	ku	n125
+N	kv	n177
+N	kw	n176
+N	kx	n165
+N	ky	n129
+N	kz	n131
+N	l0	n175
+N	l1	n174
+N	l2	n164
+N	l3	n140
+N	l4	n114
+N	l5	n173
+N	l6	n172
+N	l7	n163
+N	l8	n123
+N	l9	n128
+N	la	n171
+N	lb	n170
+N	lc	n168
+N	ld	n139
+N	le	n161
+N	lf	n119
+N	lg	n169
+N	lh	n121
+
+[gate_dictionary]
+G	0	34	g0	NOT
+G	1	36	g1	NOT
+G	2	37	g2	OR
+G	3	39	g3	AND
+G	4	3b	g4	OR
+G	5	3e	g5	OR
+G	6	3h	g6	OR
+G	7	3k	g7	AND
+G	8	3l	g8	AND
+G	9	3d	g9	OR
+G	a	3a	g10	AND
+G	b	3i	g11	OR
+G	c	3g	g12	OR
+G	d	3j	g13	OR
+G	e	3v	g14	AND
+G	f	3s	g15	AND
+G	g	3m	g16	AND
+G	h	3t	g17	AND
+G	i	35	g18	NOT
+G	j	3f	g19	OR
+G	k	3c	g20	OR
+G	l	3r	g21	AND
+G	m	3n	g22	AND
+G	n	3p	g23	AND
+G	o	41	g24	AND
+G	p	43	g25	OR
+G	q	3x	g26	AND
+G	r	48	g27	AND
+G	s	3u	g28	AND
+G	t	3z	g29	AND
+G	u	3w	g30	AND
+G	v	4a	g31	NOT
+G	w	45	g32	OR
+G	x	47	g33	NOR
+G	y	44	g34	AND
+G	z	38	g35	AND
+G	10	3q	g36	AND
+G	11	3y	g37	AND
+G	12	40	g38	AND
+G	13	49	g39	NOR
+G	14	46	g40	NOT
+G	15	3o	g41	NOT
+G	16	42	g42	NOT
+G	17	4b	g43	BUF
+G	18	4c	g44	BUF
+G	19	4d	g45	BUF
+G	1a	4e	g46	BUF
+G	1b	4f	g47	BUF
+G	1c	4g	g48	OR
+G	1d	4j	g49	OR
+G	1e	4m	g50	OR
+G	1f	4i	g51	OR
+G	1g	4r	g52	OR
+G	1h	4u	g53	OR
+G	1i	4x	g54	OR
+G	1j	50	g55	OR
+G	1k	4z	g56	OR
+G	1l	4y	g57	AND
+G	1m	4q	g58	AND
+G	1n	52	g59	OR
+G	1o	4o	g60	AND
+G	1p	4s	g61	AND
+G	1q	51	g62	AND
+G	1r	4l	g63	AND
+G	1s	4w	g64	AND
+G	1t	4t	g65	OR
+G	1u	4n	g66	OR
+G	1v	55	g67	AND
+G	1w	4h	g68	AND
+G	1x	54	g69	AND
+G	1y	58	g70	AND
+G	1z	5d	g71	AND
+G	20	5g	g72	NOR
+G	21	4v	g73	AND
+G	22	5i	g74	OR
+G	23	53	g75	AND
+G	24	4k	g76	AND
+G	25	4p	g77	AND
+G	26	57	g78	AND
+G	27	5b	g79	AND
+G	28	5o	g80	NOT
+G	29	5f	g81	NOT
+G	2a	5k	g82	NOT
+G	2b	5t	g83	NOT
+G	2c	5u	g84	BUF
+G	2d	5v	g85	BUF
+G	2e	5w	g86	BUF
+G	2f	5x	g87	BUF
+G	2g	59	g88	NOT
+G	2h	5a	g89	NOT
+G	2i	5y	g90	NOT
+G	2j	56	g91	NOT
+G	2k	5z	g92	NOT
+G	2l	60	g93	BUF
+G	2m	62	g94	BUF
+G	2n	64	g95	BUF
+G	2o	66	g96	BUF
+G	2p	68	g97	BUF
+G	2q	6a	g98	BUF
+G	2r	6c	g99	BUF
+G	2s	6e	g100	BUF
+G	2t	6g	g101	BUF
+G	2u	6i	g102	BUF
+G	2v	6k	g103	BUF
+G	2w	6l	g104	BUF
+G	2x	6n	g105	BUF
+G	2y	6p	g106	BUF
+G	2z	6r	g107	BUF
+G	30	6t	g108	BUF
+G	31	6v	g109	BUF
+G	32	6x	g110	BUF
+G	33	6z	g111	BUF
+G	34	71	g112	BUF
+G	35	73	g113	BUF
+G	36	75	g114	BUF
+G	37	77	g115	BUF
+G	38	79	g116	BUF
+G	39	7b	g117	BUF
+G	3a	7d	g118	BUF
+G	3b	7f	g119	OR
+G	3c	7i	g120	OR
+G	3d	7l	g121	OR
+G	3e	7o	g122	OR
+G	3f	7r	g123	OR
+G	3g	7u	g124	OR
+G	3h	7x	g125	OR
+G	3i	80	g126	AND
+G	3j	82	g127	AND
+G	3k	84	g128	AND
+G	3l	7n	g129	AND
+G	3m	87	g130	AND
+G	3n	89	g131	AND
+G	3o	8b	g132	AND
+G	3p	7w	g133	AND
+G	3q	8d	g134	AND
+G	3r	8e	g135	AND
+G	3s	8g	g136	AND
+G	3t	8h	g137	AND
+G	3u	7h	g138	AND
+G	3v	8j	g139	AND
+G	3w	8l	g140	AND
+G	3x	8m	g141	AND
+G	3y	7k	g142	AND
+G	3z	8o	g143	AND
+G	40	8p	g144	AND
+G	41	7t	g145	AND
+G	42	8s	g146	AND
+G	43	8u	g147	AND
+G	44	7q	g148	AND
+G	45	8v	g149	AND
+G	46	8w	g150	AND
+G	47	7z	g151	AND
+G	48	7m	g152	AND
+G	49	7y	g153	AND
+G	4a	7g	g154	AND
+G	4b	7j	g155	AND
+G	4c	7s	g156	AND
+G	4d	7p	g157	AND
+G	4e	7v	g158	AND
+G	4f	91	g159	NOT
+G	4g	93	g160	NOT
+G	4h	8z	g161	NOT
+G	4i	96	g162	NOT
+G	4j	95	g163	NOT
+G	4k	97	g164	NOT
+G	4l	92	g165	NOT
+G	4m	94	g166	NOT
+G	4n	98	g167	NOT
+G	4o	90	g168	NOT
+G	4p	8x	g169	NOT
+G	4q	99	g170	NOT
+G	4r	8y	g171	NOT
+G	4s	9a	g172	NOT
+G	4t	9b	g173	BUF
+G	4u	9c	g174	BUF
+G	4v	9d	g175	BUF
+G	4w	9e	g176	BUF
+G	4x	9f	g177	BUF
+G	4y	9g	g178	BUF
+G	4z	9h	g179	BUF
+G	50	9i	g180	BUF
+G	51	9j	g181	BUF
+G	52	9k	g182	BUF
+G	53	9l	g183	BUF
+G	54	9m	g184	BUF
+G	55	9n	g185	BUF
+G	56	9o	g186	BUF
+G	57	9p	g187	BUF
+G	58	9q	g188	BUF
+G	59	9r	g189	BUF
+G	5a	9s	g190	BUF
+G	5b	9t	g191	BUF
+G	5c	9u	g192	BUF
+G	5d	9v	g193	BUF
+G	5e	9w	g194	BUF
+G	5f	9x	g195	BUF
+G	5g	9y	g196	BUF
+G	5h	9z	g197	BUF
+G	5i	8t	g198	NOT
+G	5j	83	g199	NOT
+G	5k	a0	g200	NOT
+G	5l	8f	g201	NOT
+G	5m	85	g202	NOT
+G	5n	a1	g203	NOT
+G	5o	8c	g204	NOT
+G	5p	8k	g205	NOT
+G	5q	a2	g206	NOT
+G	5r	8n	g207	NOT
+G	5s	8a	g208	NOT
+G	5t	a3	g209	NOT
+G	5u	8i	g210	NOT
+G	5v	8q	g211	NOT
+G	5w	a4	g212	NOT
+G	5x	8r	g213	NOT
+G	5y	86	g214	NOT
+G	5z	a5	g215	NOT
+G	60	81	g216	NOT
+G	61	a6	g217	NOT
+G	62	88	g218	NOT
+G	63	a7	g219	NOT
+G	64	a8	g220	BUF
+G	65	a9	g221	BUF
+G	66	aa	g222	BUF
+G	67	ab	g223	BUF
+G	68	ac	g224	BUF
+G	69	ad	g225	BUF
+G	6a	ae	g226	BUF
+G	6b	af	g227	BUF
+G	6c	ag	g228	BUF
+G	6d	ah	g229	BUF
+G	6e	ai	g230	BUF
+G	6f	aj	g231	BUF
+G	6g	ak	g232	BUF
+G	6h	al	g233	BUF
+G	6i	an	g234	BUF
+G	6j	ao	g235	BUF
+G	6k	ap	g236	BUF
+G	6l	aq	g237	BUF
+G	6m	ar	g238	BUF
+G	6n	at	g239	BUF
+G	6o	av	g240	BUF
+G	6p	ax	g241	BUF
+G	6q	az	g242	BUF
+G	6r	b1	g243	BUF
+G	6s	b3	g244	BUF
+G	6t	b5	g245	BUF
+G	6u	b7	g246	OR
+G	6v	ba	g247	OR
+G	6w	bd	g248	OR
+G	6x	bg	g249	OR
+G	6y	bj	g250	OR
+G	6z	bm	g251	OR
+G	70	bp	g252	OR
+G	71	bs	g253	OR
+G	72	bv	g254	OR
+G	73	by	g255	OR
+G	74	c1	g256	OR
+G	75	c4	g257	OR
+G	76	c7	g258	OR
+G	77	ca	g259	OR
+G	78	cd	g260	OR
+G	79	cg	g261	OR
+G	7a	cj	g262	OR
+G	7b	cm	g263	OR
+G	7c	cp	g264	OR
+G	7d	cs	g265	OR
+G	7e	cv	g266	OR
+G	7f	cy	g267	OR
+G	7g	d1	g268	OR
+G	7h	d4	g269	OR
+G	7i	d7	g270	OR
+G	7j	da	g271	OR
+G	7k	c9	g272	AND
+G	7l	dc	g273	AND
+G	7m	d6	g274	AND
+G	7n	bf	g275	AND
+G	7o	bi	g276	AND
+G	7p	bo	g277	AND
+G	7q	br	g278	AND
+G	7r	bl	g279	AND
+G	7s	c0	g280	AND
+G	7t	bc	g281	AND
+G	7u	bx	g282	AND
+G	7v	c3	g283	AND
+G	7w	cc	g284	AND
+G	7x	b9	g285	AND
+G	7y	bu	g286	AND
+G	7z	ci	g287	AND
+G	80	c6	g288	AND
+G	81	cl	g289	AND
+G	82	cr	g290	AND
+G	83	cu	g291	AND
+G	84	cf	g292	AND
+G	85	d0	g293	AND
+G	86	d3	g294	AND
+G	87	cx	g295	AND
+G	88	d9	g296	AND
+G	89	co	g297	AND
+G	8a	d8	g298	AND
+G	8b	cb	g299	AND
+G	8c	be	g300	AND
+G	8d	bh	g301	AND
+G	8e	bb	g302	AND
+G	8f	bn	g303	AND
+G	8g	bk	g304	AND
+G	8h	bq	g305	AND
+G	8i	d5	g306	AND
+G	8j	b8	g307	AND
+G	8k	bz	g308	AND
+G	8l	bw	g309	AND
+G	8m	c2	g310	AND
+G	8n	db	g311	AND
+G	8o	c8	g312	AND
+G	8p	bt	g313	AND
+G	8q	c5	g314	AND
+G	8r	ch	g315	AND
+G	8s	ck	g316	AND
+G	8t	cq	g317	AND
+G	8u	ct	g318	AND
+G	8v	cn	g319	AND
+G	8w	cz	g320	AND
+G	8x	cw	g321	AND
+G	8y	d2	g322	AND
+G	8z	ce	g323	AND
+G	90	e6	g324	NOT
+G	91	e8	g325	NOT
+G	92	e9	g326	NOT
+G	93	eb	g327	NOT
+G	94	ed	g328	NOT
+G	95	ee	g329	NOT
+G	96	ef	g330	NOT
+G	97	eh	g331	NOT
+G	98	eg	g332	NOT
+G	99	ea	g333	NOT
+G	9a	ec	g334	NOT
+G	9b	ei	g335	NOT
+G	9c	dn	g336	NOT
+G	9d	ej	g337	NOT
+G	9e	dx	g338	NOT
+G	9f	e3	g339	NOT
+G	9g	ek	g340	NOT
+G	9h	dt	g341	NOT
+G	9i	e2	g342	NOT
+G	9j	el	g343	NOT
+G	9k	e0	g344	NOT
+G	9l	ds	g345	NOT
+G	9m	em	g346	NOT
+G	9n	dk	g347	NOT
+G	9o	dp	g348	NOT
+G	9p	eo	g349	NOT
+G	9q	dm	g350	NOT
+G	9r	dq	g351	NOT
+G	9s	ep	g352	NOT
+G	9t	e7	g353	NOT
+G	9u	en	g354	NOT
+G	9v	eq	g355	BUF
+G	9w	er	g356	BUF
+G	9x	es	g357	BUF
+G	9y	et	g358	BUF
+G	9z	eu	g359	BUF
+G	a0	ev	g360	BUF
+G	a1	ew	g361	BUF
+G	a2	ex	g362	BUF
+G	a3	ey	g363	BUF
+G	a4	ez	g364	BUF
+G	a5	f0	g365	BUF
+G	a6	f1	g366	BUF
+G	a7	f2	g367	BUF
+G	a8	f3	g368	BUF
+G	a9	f4	g369	BUF
+G	aa	f5	g370	BUF
+G	ab	f6	g371	BUF
+G	ac	f7	g372	BUF
+G	ad	f8	g373	BUF
+G	ae	f9	g374	BUF
+G	af	fa	g375	BUF
+G	ag	fb	g376	BUF
+G	ah	fc	g377	BUF
+G	ai	fd	g378	BUF
+G	aj	fe	g379	NOT
+G	ak	dg	g380	NOT
+G	al	ff	g381	NOT
+G	am	fg	g382	NOT
+G	an	dh	g383	NOT
+G	ao	fh	g384	NOT
+G	ap	e5	g385	NOT
+G	aq	dy	g386	NOT
+G	ar	fi	g387	NOT
+G	as	e4	g388	NOT
+G	at	dz	g389	NOT
+G	au	fj	g390	NOT
+G	av	du	g391	NOT
+G	aw	e1	g392	NOT
+G	ax	fk	g393	NOT
+G	ay	de	g394	NOT
+G	az	dr	g395	NOT
+G	b0	fl	g396	NOT
+G	b1	dv	g397	NOT
+G	b2	dw	g398	NOT
+G	b3	fm	g399	NOT
+G	b4	dd	g400	NOT
+G	b5	do	g401	NOT
+G	b6	fn	g402	NOT
+G	b7	dl	g403	NOT
+G	b8	di	g404	NOT
+G	b9	fo	g405	NOT
+G	ba	df	g406	NOT
+G	bb	fp	g407	NOT
+G	bc	dj	g408	NOT
+G	bd	fq	g409	NOT
+G	be	fr	g410	BUF
+G	bf	fs	g411	NOT
+G	bg	ft	g412	AND
+G	bh	fu	g413	BUF
+G	bi	fv	g414	XNOR
+G	bj	fx	g415	NOR
+G	bk	fw	g416	AND
+G	bl	5h	g417	XNOR
+G	bm	g0	g418	OR
+G	bn	5j	g419	XOR
+G	bo	g4	g420	NOT
+G	bp	g1	g421	OR
+G	bq	g8	g422	NOR
+G	br	5l	g423	AND
+G	bs	g2	g424	XNOR
+G	bt	g6	g425	XNOR
+G	bu	fz	g426	OR
+G	bv	g9	g427	NOR
+G	bw	g3	g428	NOR
+G	bx	g7	g429	AND
+G	by	ga	g430	OR
+G	bz	g5	g431	OR
+G	c0	gc	g432	NOT
+G	c1	fy	g433	NOT
+G	c2	gd	g434	NOT
+G	c3	ge	g435	NOT
+G	c4	gb	g436	NOT
+G	c5	gf	g437	BUF
+G	c6	5n	g438	XNOR
+G	c7	gh	g439	NOR
+G	c8	5m	g440	AND
+G	c9	gj	g441	OR
+G	ca	gg	g442	OR
+G	cb	5s	g443	XNOR
+G	cc	gn	g444	NOT
+G	cd	gl	g445	OR
+G	ce	gr	g446	AND
+G	cf	5r	g447	XNOR
+G	cg	gp	g448	XNOR
+G	ch	go	g449	OR
+G	ci	gq	g450	NOR
+G	cj	gs	g451	OR
+G	ck	gy	g452	NOR
+G	cl	gu	g453	XNOR
+G	cm	gw	g454	NOT
+G	cn	h0	g455	XNOR
+G	co	gx	g456	NOR
+G	cp	h1	g457	AND
+G	cq	gm	g458	NOT
+G	cr	gk	g459	OR
+G	cs	h7	g460	AND
+G	ct	5p	g461	AND
+G	cu	h3	g462	XNOR
+G	cv	h2	g463	XNOR
+G	cw	h8	g464	OR
+G	cx	h6	g465	AND
+G	cy	gt	g466	OR
+G	cz	h9	g467	OR
+G	d0	gz	g468	NOT
+G	d1	gv	g469	OR
+G	d2	h5	g470	NOT
+G	d3	ha	g471	NOT
+G	d4	h4	g472	NOT
+G	d5	hb	g473	NOT
+G	d6	hc	g474	NOT
+G	d7	gi	g475	NOT
+G	d8	hd	g476	NOT
+G	d9	5q	g477	BUF
+G	da	72	g478	XNOR
+G	db	70	g479	XOR
+G	dc	78	g480	XOR
+G	dd	b2	g481	OR
+G	de	6y	g482	OR
+G	df	b0	g483	OR
+G	dg	hj	g484	NOR
+G	dh	hn	g485	AND
+G	di	hl	g486	AND
+G	dj	76	g487	XNOR
+G	dk	aw	g488	XNOR
+G	dl	ay	g489	XNOR
+G	dm	hh	g490	XNOR
+G	dn	he	g491	XNOR
+G	do	hf	g492	XNOR
+G	dp	hp	g493	OR
+G	dq	hs	g494	NOR
+G	dr	hu	g495	NOR
+G	ds	hw	g496	NOR
+G	dt	hq	g497	OR
+G	du	hm	g498	AND
+G	dv	ho	g499	NOR
+G	dw	hi	g500	AND
+G	dx	am	g501	NOT
+G	dy	74	g502	NOT
+G	dz	6o	g503	NOT
+G	e0	6s	g504	NOT
+G	e1	6h	g505	NOT
+G	e2	7e	g506	NOT
+G	e3	6b	g507	NOT
+G	e4	hv	g508	NOT
+G	e5	6m	g509	NOT
+G	e6	as	g510	NOT
+G	e7	67	g511	NOT
+G	e8	hx	g512	NOT
+G	e9	7a	g513	NOT
+G	ea	b4	g514	NOT
+G	eb	65	g515	NOT
+G	ec	6q	g516	NOT
+G	ed	63	g517	NOT
+G	ee	6u	g518	NOT
+G	ef	6d	g519	NOT
+G	eg	61	g520	NOT
+G	eh	6f	g521	NOT
+G	ei	ht	g522	NOT
+G	ej	69	g523	NOT
+G	ek	6j	g524	NOT
+G	el	hr	g525	NOT
+G	em	hy	g526	NOT
+G	en	b6	g527	NOT
+G	eo	hg	g528	NOT
+G	ep	hz	g529	NOT
+G	eq	6w	g530	BUF
+G	er	7c	g531	BUF
+G	es	au	g532	BUF
+G	et	hk	g533	AND
+G	eu	2e	g534	XNOR
+G	ev	i1	g535	OR
+G	ew	2f	g536	XNOR
+G	ex	i3	g537	AND
+G	ey	i4	g538	OR
+G	ez	2g	g539	XNOR
+G	f0	i8	g540	AND
+G	f1	i9	g541	OR
+G	f2	2h	g542	XNOR
+G	f3	id	g543	AND
+G	f4	ie	g544	OR
+G	f5	2i	g545	XNOR
+G	f6	ii	g546	AND
+G	f7	ij	g547	OR
+G	f8	2j	g548	XNOR
+G	f9	in	g549	AND
+G	fa	io	g550	OR
+G	fb	2k	g551	XNOR
+G	fc	is	g552	AND
+G	fd	it	g553	OR
+G	fe	2l	g554	XNOR
+G	ff	ix	g555	AND
+G	fg	iy	g556	OR
+G	fh	2m	g557	XNOR
+G	fi	j2	g558	AND
+G	fj	j3	g559	OR
+G	fk	2n	g560	XNOR
+G	fl	j7	g561	AND
+G	fm	j8	g562	OR
+G	fn	2o	g563	XNOR
+G	fo	jc	g564	AND
+G	fp	jd	g565	OR
+G	fq	2p	g566	XNOR
+G	fr	jh	g567	AND
+G	fs	ji	g568	OR
+G	ft	2q	g569	XNOR
+G	fu	jm	g570	AND
+G	fv	jn	g571	OR
+G	fw	2r	g572	XNOR
+G	fx	jr	g573	AND
+G	fy	js	g574	OR
+G	fz	2s	g575	XNOR
+G	g0	jw	g576	AND
+G	g1	jx	g577	OR
+G	g2	2t	g578	XNOR
+G	g3	k1	g579	AND
+G	g4	k2	g580	OR
+G	g5	2u	g581	XNOR
+G	g6	k6	g582	AND
+G	g7	k7	g583	OR
+G	g8	2v	g584	XNOR
+G	g9	kb	g585	AND
+G	ga	kc	g586	OR
+G	gb	2w	g587	XNOR
+G	gc	kg	g588	AND
+G	gd	kh	g589	OR
+G	ge	2x	g590	XNOR
+G	gf	kl	g591	AND
+G	gg	km	g592	OR
+G	gh	2y	g593	XNOR
+G	gi	kq	g594	AND
+G	gj	kr	g595	OR
+G	gk	2z	g596	XNOR
+G	gl	kv	g597	AND
+G	gm	kw	g598	OR
+G	gn	30	g599	XNOR
+G	go	l0	g600	AND
+G	gp	l1	g601	OR
+G	gq	31	g602	XNOR
+G	gr	l5	g603	AND
+G	gs	l6	g604	OR
+G	gt	32	g605	XNOR
+G	gu	la	g606	AND
+G	gv	33	g607	XNOR
+G	gw	lb	g608	OR
+G	gx	lg	g609	AND
+G	gy	lc	g610	XNOR
+G	gz	kn	g611	XNOR
+G	h0	ks	g612	XNOR
+G	h1	kx	g613	XNOR
+G	h2	l2	g614	XNOR
+G	h3	l7	g615	XNOR
+G	h4	ki	g616	XNOR
+G	h5	le	g617	XNOR
+G	h6	i5	g618	XNOR
+G	h7	ia	g619	XNOR
+G	h8	if	g620	XNOR
+G	h9	kd	g621	XNOR
+G	ha	k8	g622	XNOR
+G	hb	ip	g623	XNOR
+G	hc	iu	g624	XNOR
+G	hd	i0	g625	XNOR
+G	he	iz	g626	XNOR
+G	hf	j4	g627	XNOR
+G	hg	j9	g628	XNOR
+G	hh	je	g629	XNOR
+G	hi	jj	g630	XNOR
+G	hj	jo	g631	XNOR
+G	hk	jt	g632	XNOR
+G	hl	jy	g633	XNOR
+G	hm	k3	g634	XNOR
+G	hn	ik	g635	XNOR
+G	ho	kp	g636	AND
+G	hp	iw	g637	AND
+G	hq	l3	g638	OR
+G	hr	ld	g639	OR
+G	hs	im	g640	AND
+G	ht	ka	g641	AND
+G	hu	k0	g642	AND
+G	hv	kf	g643	AND
+G	hw	ih	g644	AND
+G	hx	jz	g645	OR
+G	hy	k9	g646	OR
+G	hz	kz	g647	AND
+G	i0	ju	g648	OR
+G	i1	ky	g649	OR
+G	i2	l9	g650	AND
+G	i3	k4	g651	OR
+G	i4	k5	g652	AND
+G	i5	ku	g653	AND
+G	i6	jv	g654	AND
+G	i7	l8	g655	OR
+G	i8	ir	g656	AND
+G	i9	lh	g657	OR
+G	ia	jq	g658	AND
+G	ib	lf	g659	AND
+G	ic	ic	g660	AND
+G	id	il	g661	OR
+G	ie	iv	g662	OR
+G	if	iq	g663	OR
+G	ig	l4	g664	AND
+G	ih	ib	g665	OR
+G	ii	jk	g666	OR
+G	ij	i2	g667	AND
+G	ik	kj	g668	OR
+G	il	j0	g669	OR
+G	im	ig	g670	OR
+G	in	jg	g671	AND
+G	io	j1	g672	AND
+G	ip	jl	g673	AND
+G	iq	ke	g674	OR
+G	ir	j6	g675	AND
+G	is	kk	g676	AND
+G	it	ko	g677	OR
+G	iu	j5	g678	OR
+G	iv	jf	g679	OR
+G	iw	kt	g680	OR
+G	ix	jb	g681	AND
+G	iy	ja	g682	OR
+G	iz	jp	g683	OR
+G	j0	i6	g684	OR
+G	j1	i7	g685	AND
+G	j2	5c	g686	BUF
+G	j3	5e	g687	BUF
+
+[paths]
+
+[summary]
+Written paths: 0
+Complete: yes
+Timed out: no

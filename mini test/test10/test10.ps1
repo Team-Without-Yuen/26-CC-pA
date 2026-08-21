@@ -50,7 +50,7 @@ Check-Result ($output.Contains("mode: gate_on_critical")) "gate-on-critical mode
 Check-Result ($output.Contains("Gate on critical path: yes")) "g0 lies on a maximum-depth path"
 Check-Result ($output.Contains("mode: deepest_output")) "deepest output mode is exposed"
 Check-Result ($output.Contains("Worst endpoint: y depth=3")) "deepest output is y at depth 3"
-Check-Result ($output.Contains("expression artifact format: NAMED_DAG_EQUATIONS_V1") -and
+Check-Result ($output.Contains("expression artifact format: NAMED_DAG_EQUATIONS_V2") -and
               $output.Contains("expression artifact complete: yes")) "complete Boolean equation artifact is returned"
 Check-Result ($artifact.Contains("n1 = AND(a, b)") -and
               $artifact.Contains("n2 = OR(n1, c)") -and
