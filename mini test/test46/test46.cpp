@@ -69,7 +69,7 @@ void testSmallFunctionQueryArtifact(TestReport& report) {
                      !result.expressionArtifactTimedOut &&
                      result.expressionEquationCount == 3 &&
                      result.expressionBoundaryCount == 3 &&
-                     result.expressionArtifactFormat == "NAMED_DAG_EQUATIONS_V1",
+                     result.expressionArtifactFormat == "NAMED_DAG_EQUATIONS_V2",
                  "FunctionReport exposes complete artifact metadata");
     report.check(artifact.find("n_and = AND(a, b)") != std::string::npos &&
                      artifact.find("n_not = NOT(c)") != std::string::npos &&
@@ -164,10 +164,22 @@ void testDffBoundary(TestReport& report) {
     const auto result = netlist.writeBooleanEquationArtifact(
         "q_expr", path, 5.0);
     const std::string artifact = readAll(path);
+    FunctionQuery query;
+    query.type = FunctionQueryType::BooleanExpression;
+    query.netNameA = "q_expr";
+    const FunctionReport functionReport = netlist.runFunctionQuery(query);
     report.check(result.ok && result.complete && result.equationCount == 1 &&
-                     artifact.find("q : DFF_Q") != std::string::npos &&
-                     artifact.find("q_expr = OR(q, a)") != std::string::npos,
-                 "DFF.Q is an explicit sequential boundary");
+                     artifact.find(
+                         "q : DFF_Q (state_variable=state_q0, source=ff1.Q)") !=
+                         std::string::npos &&
+                     artifact.find("state_q0 = ff1.Q (net q)") != std::string::npos &&
+                     artifact.find("q_expr = OR(state_q0, a)") != std::string::npos &&
+                     functionReport.supportDffStateBoundaries.size() == 1 &&
+                     functionReport.supportDffStateBoundaries.front().stateVariableName ==
+                         "state_q0" &&
+                     functionReport.supportDffStateBoundaries.front().netName == "q" &&
+                     functionReport.supportDffStateBoundaries.front().dffName == "ff1",
+                 "DFF.Q has an explicit current-state variable and DFF mapping");
     std::remove(path.c_str());
 }
 

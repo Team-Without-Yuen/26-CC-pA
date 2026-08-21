@@ -832,7 +832,7 @@ support union/三分類、mismatched target bits、counterexample assignments、
 values，以及足以獨立判讀的 target/status/count fields。成功寫檔後 terminal 抑制上述大型
 lists，但保留 proof fields、主要 bool、counts、artifact completeness 與 `output_file`。
 
-`boolean_expression` 已使用 `NAMED_DAG_EQUATIONS_V1`，不得再建立 generic list artifact，
+`boolean_expression` 已使用 `NAMED_DAG_EQUATIONS_V2`，不得再建立 generic list artifact，
 避免同一個 response 出現兩個意義不同的 `output_file`。generic artifact I/O 失敗時回退為
 terminal 全量輸出，不能截斷後仍回 `complete:true`。
 

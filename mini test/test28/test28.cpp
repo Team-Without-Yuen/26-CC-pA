@@ -1,5 +1,7 @@
 #include "include/core/Netlist.h"
 #include "include/core/FunctionalPatternEngine.h"
+#include "include/core/RequestTimeBudget.h"
+#include "include/SATEngine/Primitives.h"
 #include "include/io/VerilogReader.h"
 
 #include <algorithm>
@@ -107,11 +109,16 @@ FunctionalPatternSearchResult runFindAnyAfterUnsupportedCandidate() {
     options.timeLimitSeconds = 2.0;
 
     FunctionalPatternEngine engine;
+    eqeng::Primitives primitives(netlist);
+    primitives.enable_phase_b(true);
+    request_time_budget::RequestDeadline deadline(options.timeLimitSeconds);
     return engine.search(
         FunctionalPatternKind::MuxHold,
         netlist,
+        primitives,
         context,
-        options);
+        options,
+        deadline);
 }
 
 int runBenchmark(int argc, char** argv) {

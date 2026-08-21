@@ -1,12 +1,10 @@
 #include "include/core/Netlist.h"
-#include "include/core/BitParallelSimulation.h"
 #include "include/core/FunctionalPatternEngine.h"
 
 #include <algorithm>
 #include <array>
 #include <chrono>
 #include <cmath>
-#include <optional>
 #include <unordered_set>
 
 namespace {
@@ -204,8 +202,10 @@ bool matchBranchPair(const Netlist& netlist,
             pattern.dataInverted = data.inverted;
             pattern.dataFunctionResolved = true;
             pattern.structuralMatch = true;
-            pattern.confirmed = true;
-            pattern.message = "Canonical feedback multiplexer detected.";
+            pattern.confirmed = false;
+            pattern.semanticsPending = true;
+            pattern.message =
+                "Canonical feedback multiplexer candidate detected; functional proof is pending.";
 
             appendUnique(pattern.evidenceGateIds, rootGateId);
             appendUnique(pattern.evidenceGateIds, holdBranch.gateId);
@@ -342,32 +342,6 @@ DffInputPattern makeAndCandidate(const Netlist& netlist, int dNetId) {
     return pattern;
 }
 
-void mergeSatEvidence(DffInputPattern& pattern,
-                      const FunctionReport& hold,
-                      const FunctionReport& load) {
-    pattern.solverRan = hold.solverRan || load.solverRan;
-    pattern.solverTimedOut = hold.solverTimedOut || load.solverTimedOut;
-    pattern.solverUnknown = hold.solverUnknown || load.solverUnknown;
-    pattern.holdFunctionallyProven = hold.ok && hold.equivalent;
-    pattern.loadFunctionallyProven = load.ok && load.equivalent;
-
-    if (pattern.solverTimedOut) {
-        pattern.solverStatus = "TIMEOUT";
-    } else if (pattern.solverUnknown) {
-        pattern.solverStatus = "UNKNOWN";
-    } else if (!hold.ok || !load.ok) {
-        pattern.solverStatus = "UNSUPPORTED";
-    } else if (pattern.holdFunctionallyProven && pattern.loadFunctionallyProven) {
-        pattern.solverStatus = "PROVEN";
-        pattern.detectionMethod =
-            SequentialPatternDetectionMethod::StructuralCanonicalWithSat;
-    } else {
-        pattern.solverStatus = "FAILED";
-        pattern.confirmed = false;
-        pattern.message = "Canonical pattern failed conditional-equivalence verification.";
-    }
-}
-
 const FunctionalPatternRoleBinding* findRoleBinding(
     const FunctionalPatternMatch& match,
     FunctionalPatternRole role) {
@@ -456,20 +430,16 @@ Netlist::SequentialPatternReportSet Netlist::runSequentialPatternQuery(
         result.elapsedSeconds = elapsedSeconds(queryStart);
         return result;
     }
-    const bool invalidFunctionalSearchLimits = query.enableFunctionalFallback &&
-        (query.maxFunctionalCandidates == 0 ||
-         query.maxFunctionalMatchesPerDff == 0 ||
-         (query.resolveFunctionalDataNets &&
-          query.maxFunctionalDataCandidatesPerMatch == 0) ||
-         (query.enableFunctionalSimulationFilter &&
-          (query.functionalSimulationPatternCount == 0 ||
-           query.functionalSimulationPatternCount > 4096)));
+    const bool invalidFunctionalSearchLimits =
+        query.maxFunctionalCandidates == 0 ||
+        query.maxFunctionalMatchesPerDff == 0 ||
+        (query.resolveFunctionalDataNets &&
+         query.maxFunctionalDataCandidatesPerMatch == 0);
     const bool invalidFunctionalTimeLimits =
-        (query.enableFunctionalFallback || query.verifyCanonicalMatchesWithSat) &&
-        (!std::isfinite(query.functionalPerDffTimeLimitSeconds) ||
-         !std::isfinite(query.functionalTimeLimitSeconds) ||
-         query.functionalPerDffTimeLimitSeconds < 0.0 ||
-         query.functionalTimeLimitSeconds <= 0.0);
+        !std::isfinite(query.functionalPerDffTimeLimitSeconds) ||
+        !std::isfinite(query.functionalTimeLimitSeconds) ||
+        query.functionalPerDffTimeLimitSeconds < 0.0 ||
+        query.functionalTimeLimitSeconds <= 0.0;
     if (invalidFunctionalSearchLimits || invalidFunctionalTimeLimits) {
         result.status = "INVALID_ARGUMENT";
         result.message =
@@ -506,13 +476,13 @@ Netlist::SequentialPatternReportSet Netlist::runSequentialPatternQuery(
 
     bool partial = false;
     FunctionalPatternEngine functionalEngine;
-    std::optional<BitParallelSimulationResult> functionalSimulation;
+    eqeng::Primitives& primitives = booleanPrimitives();
+    const request_time_budget::RequestDeadline functionalDeadline(
+        query.functionalTimeLimitSeconds);
     for (size_t targetIndex = 0; targetIndex < targets.size(); ++targetIndex) {
         const std::string& dffName = targets[targetIndex];
-        const size_t remainingTargetCount = targets.size() - targetIndex;
         auto currentPerDffBudget = [&]() {
-            const double remaining =
-                query.functionalTimeLimitSeconds - elapsedSeconds(queryStart);
+            const double remaining = functionalDeadline.remainingSeconds();
             if (remaining <= 0.0) {
                 return 0.0;
             }
@@ -521,7 +491,10 @@ Netlist::SequentialPatternReportSet Netlist::runSequentialPatternQuery(
                     remaining,
                     query.functionalPerDffTimeLimitSeconds);
             }
-            return remaining / static_cast<double>(remainingTargetCount);
+            // Automatic mode shares one request deadline. Dividing the
+            // remaining time evenly can time out a difficult DFF even when
+            // most of the request budget is still unused.
+            return remaining;
         };
         DffInputPatternReport report;
         report.dffName = dffName;
@@ -541,58 +514,72 @@ Netlist::SequentialPatternReportSet Netlist::runSequentialPatternQuery(
         report.dNetName = getNet(report.dNetId).name;
         report.qNetName = getNet(report.qNetId).name;
 
-        DffInputPattern muxPattern;
-        if (detectCanonicalMux(*this, report.dNetId, report.qNetId, muxPattern)) {
+        FunctionalPatternContext context = buildSequentialPatternContext(
+            *this,
+            report.dffGateId,
+            report.dNetId,
+            report.qNetId);
+
+        DffInputPattern structuralHint;
+        const bool hasStructuralHint = detectCanonicalMux(
+            *this, report.dNetId, report.qNetId, structuralHint);
+        if (hasStructuralHint) {
             report.qFeedbackObserved = true;
-
-            if (query.verifyCanonicalMatchesWithSat) {
-                const int holdValue = 1 - muxPattern.activeLevel;
-                const double verificationBudget = currentPerDffBudget();
-
-                FunctionQuery holdQuery;
-                holdQuery.type = FunctionQueryType::ConditionalEquivalence;
-                holdQuery.netNameA = report.dNetName;
-                holdQuery.netNameB = report.qNetName;
-                holdQuery.conditionNetName = muxPattern.enableNetName;
-                holdQuery.conditionValue = holdValue;
-                holdQuery.timeLimitSeconds = std::max(
-                    0.001,
-                    verificationBudget / 2.0);
-
-                FunctionQuery loadQuery = holdQuery;
-                loadQuery.netNameB = muxPattern.dataBranchNetName;
-                loadQuery.conditionValue = muxPattern.activeLevel;
-
-                mergeSatEvidence(
-                    muxPattern,
-                    runFunctionQuery(holdQuery),
-                    runFunctionQuery(loadQuery));
-                if (muxPattern.solverTimedOut) {
-                    result.timedOut = true;
-                }
-                if (!muxPattern.confirmed) {
-                    partial = true;
-                }
-            }
-            report.patterns.push_back(std::move(muxPattern));
+            context.preferredControlNetIds.push_back(structuralHint.enableNetId);
+            context.preferredDataNetIds.push_back(structuralHint.dataBranchNetId);
         }
 
-        const bool canonicalConfirmed = std::any_of(
-            report.patterns.begin(),
-            report.patterns.end(),
-            [](const DffInputPattern& pattern) { return pattern.confirmed; });
-        if (query.enableFunctionalFallback && !canonicalConfirmed) {
-            report.functionalFallbackAttempted = true;
-            if (query.enableFunctionalSimulationFilter && !functionalSimulation.has_value()) {
-                const Clock::time_point simulationStart = Clock::now();
-                functionalSimulation.emplace(simulateNetlistBitParallel(
-                    *this,
-                    query.functionalSimulationPatternCount));
-                result.functionalSimulationPatternCount =
-                    query.functionalSimulationPatternCount;
-                result.functionalSimulationSeconds =
-                    elapsedSeconds(simulationStart);
+        bool canonicalConfirmed = false;
+        if (hasStructuralHint) {
+            const bool controlStructurallyQFree =
+                structuralHint.enableNetId != report.qNetId &&
+                !hasCombinationalPath(
+                    report.qNetName,
+                    getNet(structuralHint.enableNetId).name);
+            const bool dataStructurallyQFree =
+                structuralHint.dataBranchNetId != report.qNetId &&
+                !hasCombinationalPath(
+                    report.qNetName,
+                    getNet(structuralHint.dataBranchNetId).name);
+            if (controlStructurallyQFree && dataStructurallyQFree) {
+                FunctionalPatternProofRequest proofRequest;
+                proofRequest.kind = FunctionalPatternKind::Mux;
+                proofRequest.targetNetId = report.dNetId;
+                proofRequest.operandNetIds = structuralHint.activeLevel == 1
+                    ? std::vector<int>{
+                        structuralHint.enableNetId,
+                        structuralHint.dataBranchNetId,
+                        report.qNetId}
+                    : std::vector<int>{
+                        structuralHint.enableNetId,
+                        report.qNetId,
+                        structuralHint.dataBranchNetId};
+                const FunctionalPatternEvaluation evaluation =
+                    functionalEngine.proveSpecifiedOperands(
+                        *this, primitives, proofRequest, functionalDeadline);
+                canonicalConfirmed =
+                    evaluation.status == FunctionalPatternProofStatus::ProvenMatch;
+                if (canonicalConfirmed) {
+                    structuralHint.confirmed = true;
+                    structuralHint.semanticsPending = false;
+                    structuralHint.holdFunctionallyProven = true;
+                    structuralHint.loadFunctionallyProven = true;
+                    structuralHint.solverRan = evaluation.solverRan;
+                    structuralHint.solverTimedOut = evaluation.timedOut;
+                    structuralHint.solverUnknown = false;
+                    structuralHint.solverStatus = evaluation.solverStatus;
+                    structuralHint.detectionMethod =
+                        SequentialPatternDetectionMethod::StructuralCanonicalWithSat;
+                    structuralHint.message = evaluation.message;
+                    report.patterns.push_back(std::move(structuralHint));
+                }
             }
+        }
+
+        // Non-canonical or Q-dependent structural candidates use the general
+        // D/Q cofactor proof. Canonical topology remains only a safe hint.
+        report.functionalFallbackAttempted = !canonicalConfirmed;
+        if (!canonicalConfirmed) {
             const double perDffBudget = currentPerDffBudget();
             if (perDffBudget <= 0.0) {
                 report.functionalFallbackComplete = false;
@@ -608,19 +595,13 @@ Netlist::SequentialPatternReportSet Netlist::runSequentialPatternQuery(
                 options.maxDataCandidatesPerMatch =
                     query.maxFunctionalDataCandidatesPerMatch;
                 options.timeLimitSeconds = perDffBudget;
-                FunctionalPatternContext context = buildSequentialPatternContext(
-                    *this,
-                    report.dffGateId,
-                    report.dNetId,
-                    report.qNetId);
-                if (functionalSimulation.has_value()) {
-                    context.simulation = &functionalSimulation.value();
-                }
                 const FunctionalPatternSearchResult search = functionalEngine.search(
                     FunctionalPatternKind::MuxHold,
                     *this,
+                    primitives,
                     context,
-                    options);
+                    options,
+                    functionalDeadline);
 
                 report.functionalFallbackComplete = search.complete;
                 report.functionalFallbackTimedOut = search.timedOut;
@@ -660,7 +641,23 @@ Netlist::SequentialPatternReportSet Netlist::runSequentialPatternQuery(
                     report.qFeedbackObserved = true;
                 }
                 for (const FunctionalPatternMatch& match : search.matches) {
-                    report.patterns.push_back(makeFunctionalMuxPattern(*this, match));
+                    DffInputPattern pattern = makeFunctionalMuxPattern(*this, match);
+                    if (hasStructuralHint) {
+                        pattern.structuralMatch = true;
+                        for (int gateId : structuralHint.evidenceGateIds) {
+                            appendUnique(pattern.evidenceGateIds, gateId);
+                        }
+                        for (const std::string& gateName :
+                             structuralHint.evidenceGateNames) {
+                            if (std::find(
+                                    pattern.evidenceGateNames.begin(),
+                                    pattern.evidenceGateNames.end(),
+                                    gateName) == pattern.evidenceGateNames.end()) {
+                                pattern.evidenceGateNames.push_back(gateName);
+                            }
+                        }
+                    }
+                    report.patterns.push_back(std::move(pattern));
                 }
             }
         }

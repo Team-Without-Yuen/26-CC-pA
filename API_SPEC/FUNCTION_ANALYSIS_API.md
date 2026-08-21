@@ -431,9 +431,13 @@ struct FunctionReport {
     std::vector<std::string> supportPrimaryInputs;
     std::vector<std::string> supportRealPrimaryInputs;
     std::vector<std::string> supportDffPseudoInputs;
+    std::vector<DffStateBoundaryRecord> supportDffStateBoundaries;
     std::vector<std::string> supportUndrivenLeaves;
 };
 ```
+
+`DffStateBoundaryRecord` 將 `state_qN` current-state symbol 對照到 named netlist 中的
+DFF instance、Q pin 與 Q net。Boolean equation 不會沿 Q 回追 D，也不進行跨週期展開。
 
 ---
 

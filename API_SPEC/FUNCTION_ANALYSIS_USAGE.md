@@ -152,11 +152,12 @@ if (report.ok && report.exists) {
 | `expressionArtifactTimedOut` | 是否因 request deadline 中止 |
 | `expressionEquationCount` | 寫出的 combinational equations 數 |
 | `expressionBoundaryCount` | PI/constant/DFF.Q/undriven boundary 數 |
-| `expressionArtifactFormat` | 目前為 `NAMED_DAG_EQUATIONS_V1` |
+| `expressionArtifactFormat` | 目前為 `NAMED_DAG_EQUATIONS_V2`；DFF.Q 以 current-state variable 呈現 |
 | `expressionOutputFilePath` | 完整 artifact 路徑 |
 | `supportPrimaryInputs` | real PI、DFF.Q pseudo-PI、undriven leaf 的排序聯集 |
 | `supportRealPrimaryInputs` | 真正宣告的 top-level PI |
 | `supportDffPseudoInputs` | 作為 sequential boundary 的 DFF.Q leaves |
+| `supportDffStateBoundaries` | `state_qN`、DFF instance、Q pin 與原 net 的結構化對照 |
 | `supportUndrivenLeaves` | 沒有 driver 且不是 PI 的 floating/undriven leaves |
 
 ---

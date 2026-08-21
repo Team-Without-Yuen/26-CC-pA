@@ -72,7 +72,7 @@ Boolean expression / support PI 目前已整理進正式 `FunctionQuery`：
 | output 是否 functionally depend on 特定 PI | `FunctionQuery::FunctionalDependence` | exact dual-cone SAT/cofactor query 已 public 化 |
 | function 對兩個 inputs 是否 symmetric | `FunctionQuery::Symmetry` | exact swapped-cofactor SAT、bus target、反例 report 已 public 化 |
 | signal equivalence / constant / truth status | `FunctionQuery` SAT 類 mode | 已 public 化，且 report 可區分 timeout / UNKNOWN |
-| DFF enable/hold structure 與 unique DFF count | `sequential_query enable_hold` | canonical 與 opt-in functional SAT fallback API/CLI 已完成；AND-only 官方語意仍待確認 |
+| DFF enable/hold structure 與 unique DFF count | `sequential_query enable_hold` | canonical safe fast path 與預設 Q-cofactor functional proof 已完成；AND-only data gating 不計 match |
 
 逐 prompt 的 command、必要 report 欄位、完整性條件與缺口已整理在：
 

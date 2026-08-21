@@ -209,8 +209,8 @@
 | 9 POs with widths | `structure_query list_po` | ordered name/width/range summaries | `Ready` |
 | 10 list XOR gates | `structure_query gates_by_type XOR` | names/count | `Ready` |
 | 11 max register-to-register depth | `path_query max_depth all_dff_q all_dff_d` | representative DFF pair + depth/path | `Ready` |
-| 12 report DFF enable/hold structures | `sequential_query enable_hold all --confirmed-only` 自動完整寫入 artifact；需要非 canonical functional search 時才 opt-in `--functional-fallback` | DFF names、pattern、D-input logic、artifact path、functional completeness | `Ready (Canonical + Bounded Functional)` |
-| 13 count DFFs with enable/hold | canonical：`sequential_query enable_hold all --summary-only`；functional lower bound：再加 `--functional-fallback --functional-find-any --no-resolve-functional-data` 與明確 budget | `matched_dff_count` unique confirmed DFF count；只有 `complete:true` 才是完整數量 | `Ready (Canonical + Bounded Functional)` |
+| 12 report DFF enable/hold structures | `sequential_query enable_hold all --confirmed-only` 自動完整寫入 artifact；預設包含 canonical 與 restructuring functional proof | DFF names、pattern、D-input logic、artifact path、functional completeness | `Ready` |
+| 13 count DFFs with enable/hold | `sequential_query enable_hold all --summary-only` | `matched_dff_count` unique confirmed DFF count；只有 `complete:true` 才是完整數量 | `Ready` |
 | 14 `g0` type and pins | `structure_query gate_info g0` | type + pin connections | `Ready` |
 | 15 output with largest fanin cone | `cone_query largest_output` | selected output + gate count | `Ready` |
 | 16 optimize `n14` depth under NAND/NOT | `opt_apply critical_path_depth --scope net_fanin n14 --objective cone --allowed NAND NOT` | `NOT(NAND(n514,n412))` is proven optimal at depth 2；original retained | `Ready` |
@@ -222,7 +222,7 @@
 | Priority | Gap | Blocking prompts |
 |---|---|---|
 | Completed | symmetry analysis | test36、test37 與 mini test22 已驗證 |
-| Completed | NAND witness-pair function search | test35；API + CLI + mini test23/test24 |
+| Completed | NAND witness-pair function search | test70；API + CLI + mini test23/test24 |
 | Completed | test38 structural redundancy removal | official flow 實測移除 14 gates，且 whole-design SAT 通過 |
 | Partial | constrained depth optimization flow | test40 official flow PASS；test33 large D-pin cone blocked by non-preemptible global XAG core |
 | P1 | cooperative timeout / cone-isolated resynthesis | `--time-limit` cannot interrupt one mockturtle primitive；blocks test33 bounded completion |
@@ -272,13 +272,13 @@
 | test40 | PASS，約 3.6 秒 | 完整前置 NAND/NOT mapping/cleanup 後，n14 depth 2 命中安全 lower-bound proof，回 original |
 | test33 | 待重測 | 若 n8 為 DFF.Q，應以 boundary depth 0 回 original；hidden 中非 DFF.Q 大型 cone 仍可能卡在不可搶占的 global XAG primitive |
 
-### test35 Function Search 實測
+### test70 Function Search 實測
 
 ```text
-command: func_search nand_pair n25 --time-limit 45
+command: func_search nand_pair n25
 status: ok
 complete: true
-elapsed: 6.51 s
+elapsed: 0.99 s (search)
 match: (n26080, n6359)
-proof: SAT_UNSAT_MITER / UNSAT
+proof: AIG_INCREMENTAL_SAT / UNSAT
 ```

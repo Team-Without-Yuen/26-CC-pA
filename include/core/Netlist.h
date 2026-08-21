@@ -1358,6 +1358,7 @@ public:
         std::vector<std::string> all;               // 三桶的聯集，內容等同 getPrimaryInputsOfNet()
         std::vector<std::string> realPrimaryInputs;  // 真正宣告的 top-level primary input
         std::vector<std::string> dffPseudoInputs;    // DFF.Q pseudo primary input（跨 sequential boundary）
+        std::vector<DffStateBoundaryRecord> dffStateBoundaries; // current-state symbol 與 DFF.Q 對照
         std::vector<std::string> undrivenLeaves;     // 沒有 driver 且不是 PI（懸空/floating fanin）
     };
 

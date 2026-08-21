@@ -56,15 +56,45 @@ AIG 只能作為既有高階 API 的 private Boolean backend；named netlist 仍
 
 ## P2：Function Search backend
 
-目前 `EquivalentGatePairs` 已適合使用 Phase B，NAND modes 維持 legacy。後續候選：
+目前 `EquivalentGatePairs` 與 NAND FindAny 已使用 Phase B/共用 pattern engine。
+尚未完成的候選：
 
 ```text
-- NAND FindAny：只有可預估 surviving proof 數並能攤平 owner build 時才評估 adaptive backend。
 - NAND FindAll：需要 ephemeral/chunked proof 或可控制 solver growth 的設計。
 ```
 
-test35 目前 legacy FindAll 約 28.13 秒；直接使用 Phase B incremental candidate 約 55.85 秒，
-因此不得只因 AIG 已存在就切換 backend。
+test70 FindAny 的 legacy/engine 約 7.16/2.21 秒，結果一致且 Unknown=0；
+FindAll 的 legacy/engine 約 59.29/121.49 秒，兩者均完整找到 512 組。
+因此 production 依 mode 固定選擇 backend，不得只因 AIG 已存在就全面切換。
+
+## P2：Function Search pattern type 擴充
+
+目前 public operand search 只開放 `NAND(a,b)==target`。後續保留現有
+`nand_pair` 相容入口，再新增統一 pattern search，覆蓋：
+
+```text
+BUF/NOT：單 operand search。
+AND/NAND/OR/NOR/XOR/XNOR：雙 operand search。
+MUX：不做 O(n^3) 直接窮舉，需獨立 functional decomposition/candidate reduction。
+```
+
+底層已有通用 `FunctionalPatternEngine` pattern builder/proof，但 public candidate
+generation、simulation prefilter、report 與 CLI 尚未擴充。NAND benchmark 可作為
+mode-aware backend 設計的基準，不能直接代表其他 gate type 的效能；正式接入前
+至少要對每個 arity/type family 做 correctness differential，並對代表性大電路比較
+FindAny/FindAll 的 surviving candidate 數與 runtime。
+
+## P2：Sequential enable/hold report 與 role mapping
+
+目前 Boolean enable/hold match 與具名 EN/DATA role mapping 共用部分 `complete`/candidate
+診斷，容易讓呼叫端把「功能已證明」誤讀成「所有具名 role 都已完整搜尋」。處理順序固定為：
+
+1. 先修 report 契約，分開 `patternDetectionComplete` 與 `roleMappingComplete`；
+   `matchedDffCount` 只計功能已證明的 DFF。
+2. 再以 D 對同顆 Q 的 AIG cofactor 建立 canonical enable/data function，並透過
+   literal-to-name index 對照 named net；找不到單一 net 時仍保留 derived function。
+
+第二階段不得先於 report 契約落地，且不改現有 public CLI 參數。
 
 ## 後期 Boolean/AIG 重構
 

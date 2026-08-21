@@ -6,9 +6,8 @@
 
 ## 已確認待同步
 
-| ID | 來源 | 問題 | 預定處理 |
-|---|---|---|---|
-| TOOL-001 | Path artifact V3 | `TOOLS_SPEC/PATH_QUERY_TOOL.md` 尚未完整說明 `COMPACT_PATH_V3` | 補 dictionary、base36、prefix/suffix delta、重建方式與 footer 完整性判讀 |
+目前沒有已確認但尚未同步的 path artifact 項目。`LITERAL_PATH_V1` 已同步至
+`tools.cpp` 對應 backend、`TOOLS_SPEC/PATH_QUERY_TOOL.md` 與 Path API 文件。
 
 ## 完整輸出待盤查
 

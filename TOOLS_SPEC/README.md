@@ -228,6 +228,11 @@ List all pairs ... NAND(a,b)==n25.
 Does a path from A to B exist that does not traverse X?
 -> path_query exists net:A net:B -avoid net:X
 
+What is the maximum logic depth from any primary input to any DFF D-pin?
+-> path_query max_depth all_pi all_dff_d
+Reason: the prompt explicitly fixes the start/end scopes; do not substitute
+        depth_query all_dff_d, which also permits sequential startpoints.
+
 Which output (A or B) has the larger fanin cone?
 -> cone_query net_fanin A
 -> cone_query net_fanin B
@@ -245,8 +250,8 @@ LLM 應先辨識題目的主要動作：
 ```text
 count / list / inspect direct connection       -> StructureQuery
 find transitive fanin/fanout scope             -> ConeQuery
-find connectivity between two endpoints        -> PathQuery
-measure logic level or critical depth           -> DepthQuery
+find connectivity/depth between fixed endpoints -> PathQuery
+measure endpoint depth or global critical depth  -> DepthQuery
 prove a property of known signals               -> FunctionQuery
 search unknown signals satisfying a function    -> FunctionSearchQuery
 recognize DFF enable/hold semantics              -> SequentialPatternQuery
@@ -438,6 +443,11 @@ artifact；LLM 不指定 path 或大小上限。response 只回完整性、equat
 會自動改寫入 `QUERY_LIST_ARTIFACT_V1`；response 保留 counts 與主要 Boolean 結論並回
 `output_file`。`boolean_expression` 不會再建立第二個 generic list artifact。
 
+Boolean artifact 使用 `NAMED_DAG_EQUATIONS_V2`。若 fanin 含 DFF.Q，方程式會使用
+`state_qN` current-state symbol，並在 `Current-state variables` 區段列出
+`state_qN = <DFF>.Q (net <net>)`。這是當前週期的 sequential boundary 對照，不會沿 Q
+穿越到 D pin，也不能宣稱是只含 top-level PI 的 expression。
+
 詳細用法：[`FUNCTION_QUERY_TOOL.md`](FUNCTION_QUERY_TOOL.md)
 
 ---
@@ -483,7 +493,7 @@ Find the hold condition of register ff1.
 Identify DFFs implemented with a feedback MUX pattern.
 ```
 
-責任邊界：一般 `List all DFFs`，或 `List all flip-flops driven by clock n0`，只是物件與直接 clock connectivity，應使用 `StructureQuery`。只有題目要求 enable、hold、feedback 或 register-control pattern 時才使用 `SequentialPatternQuery`。functional fallback 必須由 `--functional-fallback` 明確啟用，並以 `complete`、`timed_out` 與 candidate counters 判讀結果是否完整。
+責任邊界：一般 `List all DFFs`，或 `List all flip-flops driven by clock n0`，只是物件與直接 clock connectivity，應使用 `StructureQuery`。只有題目要求 enable、hold、feedback 或 register-control pattern 時才使用 `SequentialPatternQuery`。canonical 與 restructuring 的 functional proof 預設都會執行，並以 `complete`、`timed_out` 與 `confirmed` 判讀結果；candidate counters 只是 optional role mapping 診斷。
 
 詳細用法：[`SEQUENTIAL_QUERY_TOOL.md`](SEQUENTIAL_QUERY_TOOL.md)
 

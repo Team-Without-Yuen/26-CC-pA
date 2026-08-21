@@ -1,0 +1,3 @@
+design	mode	expectation_met	set_match	complete_match	legacy_complete	phase_b_complete	legacy_pairs	phase_b_pairs	legacy_sat_checks	phase_b_sat_checks	legacy_unknown	phase_b_unknown	legacy_seconds	phase_b_seconds	speedup
+test70	nand_any	yes	yes	yes	yes	yes	1	1	1485	1485	0	0	7.161630	2.206025	3.246396
+SUMMARY	passed=1	total=1

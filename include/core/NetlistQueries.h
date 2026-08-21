@@ -296,6 +296,15 @@ struct FunctionQuery {
     std::string expressionOutputFilePath;
 };
 
+struct DffStateBoundaryRecord {
+    std::string stateVariableName; // artifact 中穩定的 current-state symbol，例如 state_q0
+    std::string netName;           // named netlist 中的 DFF.Q net
+    std::string dffName;           // 驅動此 Q net 的 DFF instance
+    std::string pinName = "Q";
+    int netId = -1;
+    int dffGateId = -1;
+};
+
 struct FunctionReport {
     bool ok = false;              // query 是否成功；名稱不存在或參數不合法時為 false
     bool exists = false;          // 對 yes/no 問題的主要布林答案
@@ -352,6 +361,7 @@ struct FunctionReport {
     // PrimaryInputsOfNet 都會填。
     std::vector<std::string> supportRealPrimaryInputs; // 真正宣告的 top-level primary input
     std::vector<std::string> supportDffPseudoInputs;   // DFF.Q pseudo primary input（跨 sequential boundary）
+    std::vector<DffStateBoundaryRecord> supportDffStateBoundaries; // DFF.Q net/state/DFF 對照
     std::vector<std::string> supportUndrivenLeaves;    // 沒有 driver 也不是 PI 的懸空 fanin leaf
 };
 
@@ -485,10 +495,14 @@ struct SequentialPatternQuery {
     SequentialPatternQueryType type = SequentialPatternQueryType::DffEnableHold;
     std::string dffName;              // 空字串表示分析所有 active DFF
     bool includeAndGatedCandidates = true;
+    // Compatibility switches retained for existing callers. Canonical candidates
+    // are always functionally proven and non-canonical D/Q cofactor analysis is
+    // always enabled; neither flag may weaken the formal classification.
     bool verifyCanonicalMatchesWithSat = false;
-    // Opt-in because full-design functional fallback can consume a bounded SAT budget.
     bool enableFunctionalFallback = false;
-    // Limits candidates that still require reachability/SAT; simulation-safe Rejects do not consume quota.
+    // These limits bound optional named-role mapping after the Boolean
+    // enable/hold classification has already been proven. Reaching a mapping
+    // limit does not make the functional classification partial.
     size_t maxFunctionalCandidates = 64;
     size_t maxFunctionalMatchesPerDff = 8;
     bool findAllFunctionalMatches = true;
@@ -496,7 +510,8 @@ struct SequentialPatternQuery {
     size_t maxFunctionalDataCandidatesPerMatch = 16;
     bool enableFunctionalSimulationFilter = true;
     size_t functionalSimulationPatternCount = 256;
-    // 0 selects automatic fair-share allocation from the total request budget.
+    // 0 lets each DFF use the remaining shared request budget. A positive
+    // value adds an explicit per-DFF cap without replacing the total deadline.
     double functionalPerDffTimeLimitSeconds = 0.0;
     double functionalTimeLimitSeconds =
         request_time_budget::kGeneralToolBudgetSeconds;

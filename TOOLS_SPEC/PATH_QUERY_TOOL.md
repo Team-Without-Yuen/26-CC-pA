@@ -12,7 +12,7 @@
 
 ## 2. 選擇條件
 
-prompt 出現 `path from A to B`、`through`、`avoid`、`every path`、`shortest`、`longest between endpoints`、`register-to-register`、`mandatory`、`articulation points between A and B`、`separator` 或 `cut` 時使用本 tool。
+prompt 出現 `path from A to B`、`through`、`avoid`、`every path`、`shortest`、`longest between endpoints`、`register-to-register`、`mandatory`、`articulation points between A and B`、`separator` 或 `cut` 時使用本 tool。即使題目使用 `logic depth` 字樣，只要明確限定 start scope 與 end scope（例如 `from any primary input to any DFF D-pin`），仍使用本 tool 的 `max_depth`，不能改用包含其他 startpoints 的全域 depth query。
 
 只問某物件可到達的完整範圍使用 `cone_query`；全設計 maximum depth/critical endpoint 使用 `depth_query`。
 
@@ -95,6 +95,14 @@ required/avoided nodes 使用 `gate:<g>`、`net:<n>` 或 bare net；bare token �
 停止原因與輸出檔，再依 `LLM_NOTES.md` 的 Competition Answer Policy 產生正式候選答案；
 不得把 partial count 偽裝成精確總數。
 
+完整檔案格式為 `LITERAL_PATH_V1`，每筆可直接閱讀，不需要額外 mapping 或 decoder：
+
+```text
+Path 0: a -> g0(BUF) -> n0 -> g2(AND) -> n2 -> g7(BUF) -> y
+```
+
+只有 header count、`Written paths`、`Complete: yes` 與 envelope 完整性一致時，才能宣稱已列出全部 paths。
+
 `direct_pi_po` 的小型結果直接完整顯示；record 數或預估字元量過大的結果由工具自動寫入 self-contained artifact，
 response 回傳總數、完整性、格式與 `output_file`，不需要先取得總數後重跑。
 
@@ -116,6 +124,13 @@ Read: Total paths；只有 Complete enumeration=yes 才是完整答案
 Prompt: Find the longest path from ff1.Q to ff2.D.
 Command: path_query max_depth dff_q:ff1 dff_d:ff2
 Read: Depth, Nets, Gates
+```
+
+```text
+Prompt: What is the maximum logic depth from any primary input to any DFF D-pin?
+Command: path_query max_depth all_pi all_dff_d
+Read: Depth, Nets, Gates
+Do not use: depth_query all_dff_d（它允許 DFF.Q 等 sequential startpoints，scope 不同）
 ```
 
 ```text

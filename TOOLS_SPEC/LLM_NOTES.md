@@ -190,8 +190,11 @@ scope、輸出模式或時間配置；仍無法完成才使用 best-effort infer
 
 Boolean expression 若回 `primary-input-only combinational expression available: no`，必須查看
 `DFF.Q boundary count` 與 `undriven boundary count`。DFF.Q 是 current-state pseudo input，不是
-top-level PI；不得為滿足 `using only primary input names` 而跨越 DFF 回追 D pin。此時應明確
-回答在 current combinational frame 下無法只用 top-level PI 表示，並指出實際 boundary。
+top-level PI。完整 artifact 的 `Current-state variables` 會把 `state_qN` 對照到
+`<DFF>.Q` 與原 net；回答時應以「top-level PI + current-state variables」描述，不得把
+state variable 說成 primary input，也不得沿 Q 回追 D pin。
+此時應明確回答在 current combinational frame 下無法只用 top-level PI 表示，並指出實際
+boundary。
 
 FunctionSearch 不再要求 LLM 推算 unordered pair 上界。Prompt 未明確限制數量時不得加入
 `--max-results`；`--all` 的完整 records 從 `output_file` 取得，只有 `complete:true`、
@@ -209,8 +212,10 @@ Boolean equation artifact 不設 gate/depth/字元上限。只有 envelope `comp
 
 - DFF.Q 是 combinational boundary。`cone_query net_fanin <dff_q_net>` 不會回到同一顆 DFF 的 D input，且不含 combinational gate；report 可能仍列出 root net 本身。
 - `D = EN & DATA` 沒有 Q feedback，不是 enable/hold。它只能當 `DATA_GATING_WITHOUT_HOLD_FEEDBACK` diagnostic，不能計入 matched/candidate DFF 數。
-- `sequential_query --functional-fallback` 是有成本的 opt-in bounded search；不能將它視為
-  任意 Boolean restructuring 的完整保證。
+- `sequential_query enable_hold` 預設已使用 canonical safe fast path 與 Q-cofactor
+  functional proof。數量讀 `matched_dff_count`，並先確認 `complete:true`。
+- enable/data 名稱為空不代表 non-match；可能是已證明但無單一具名 net 的
+  Q-free Boolean function。
 
 ## 7. Edit, Optimization And Constraints
 
@@ -229,4 +234,4 @@ Boolean equation artifact 不設 gate/depth/字元上限。只有 envelope `comp
 
 ## 9. Functional Analysis Boundary
 
-目前 Boolean/function 類 tool 只可依各自文件中已列出的 mode 與 complete status 使用。任意 Boolean expression canonicalization、unbounded symmetry、完整 functional enable/hold decomposition 與大型 functional-merge 策略均不應由 LLM 自行假設存在。
+目前 Boolean/function 類 tool 只可依各自文件中已列出的 mode 與 complete status 使用。任意 Boolean expression canonicalization、unbounded symmetry 與大型 functional-merge 策略不應由 LLM 自行假設存在；DFF enable/hold 則依 `SEQUENTIAL_QUERY_TOOL.md` 的 Q-cofactor 契約處理。

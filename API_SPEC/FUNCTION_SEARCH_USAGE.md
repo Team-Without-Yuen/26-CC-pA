@@ -152,7 +152,9 @@ func_search nand_pair n25
 func_search nand_pair n25 --all
 ```
 
-成功 match 的 proof 應為 `SAT_UNSAT_MITER / UNSAT`。
+成功 match 的 `solver_status` 應為 `UNSAT`。FindAny 的 `proof_method`
+為 `AIG_LITERAL_EQUALITY` 或 `AIG_INCREMENTAL_SAT`；FindAll 目前為
+`SAT_UNSAT_MITER`。caller 不應根據 proof method 選擇 backend。
 
 ### 5.2 搜尋 whole-design equivalent gate pairs
 
@@ -178,7 +180,8 @@ func_search equivalent_pairs whole --all
 
 此 mode 內部使用 private lazy Phase B owner 重用 equivalence proof；呼叫方式、參數與
 `FunctionSearchReport` 不因 backend 改變。caller 不需也不能指定 backend。NAND pair
-mode 仍使用 legacy SAT，兩者都遵守同一個 `timeLimitSeconds` 與 partial-report 契約。
+FindAny 使用共用 `FunctionalPatternEngine`/Phase B proof，FindAll 保留 legacy SAT；
+兩者都遵守同一個 `timeLimitSeconds` 與 partial-report 契約。
 
 ### 5.3 限制在 cone
 
@@ -275,7 +278,7 @@ Equivalent gate-pair search + functional merge C++ API / CLI：mini test/test26
 
 目前兩種 public modes 均只回 SAT-proven matches；simulation-only 結果不會出現在 `matches`、artifact 或 `equivalenceClasses`。沒有有效 driver 的 net 目前視為 unconstrained Boolean leaf。官方 netlist 只包含題目規定的 gate types；prompt 中的 MUX 等語意屬合法 gates 所形成的 Boolean pattern，不以 direct MUX primitive 處理。
 
-`test24` 為 9/9 通過，`test26` 為 18/18 通過；NewTestCase test29/test30 原始設計的 FindAll artifact 分別為 7/7 與 1/1 records，test35 FindAny 回完整 SAT witness。`mini test/test45` 另驗證官方前序 edit session 後的 oracle 與 functional merge，test29/test30 分別完整移除 361/494 顆，且 report、gate delta、CEC 與 write/readback 一致。
+`test24` 為 9/9 通過，`test26` 為 18/18 通過；NewTestCase test29/test30 原始設計的 FindAll artifact 分別為 7/7 與 1/1 records，test70 FindAny 回完整 AIG/SAT witness。test70 differential 證明 FindAny 結果一致且約由 7.16 秒降至 2.21 秒；FindAll 保留約快 2.05 倍的 legacy backend。`mini test/test45` 另驗證官方前序 edit session 後的 oracle 與 functional merge，test29/test30 分別完整移除 361/494 顆，且 report、gate delta、CEC 與 write/readback 一致。
 
 `Blup/function_search_runs/candidate_scope_probe` 另驗證 PI、PO、internal、DFF.Q、floating、
 target exclusion、unordered/self pair、whole/net_fanin scope 與 BUF gate-type filter。

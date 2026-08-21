@@ -1,0 +1,28 @@
+# Complete named-net Boolean DAG equation artifact
+Format: NAMED_DAG_EQUATIONS_V1
+Target: n7
+Boundary semantics: PI, CONSTANT, DFF_Q, and UNDRIVEN are leaves
+
+Boundaries:
+  n6[0] : DFF_Q
+  n6[1] : DFF_Q
+  n6[2] : DFF_Q
+  n6[3] : DFF_Q
+  n6[4] : DFF_Q
+  n6[5] : DFF_Q
+  n6[6] : DFF_Q
+  n6[7] : DFF_Q
+
+Equations:
+  n102 = OR(n6[6], n6[5])
+  n101 = NOR(n6[3], n6[2])
+  n100 = NOR(n6[1], n6[0])
+  n107 = NAND(n101, n100)
+  n108 = OR(n6[7], n107)
+  n111 = OR(n6[4], n108)
+  n7 = NOR(n102, n111)
+
+Root: n7
+Equation count: 7
+Boundary count: 8
+Complete: yes

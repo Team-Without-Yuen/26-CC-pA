@@ -1,0 +1,6487 @@
+Total paths: 0
+Format: COMPACT_PATH_V3
+All IDs and path indices are unsigned base36 integers.
+Dictionary rows:
+  N <net_id> <net_name>
+  G <gate_id> <output_net_id> <gate_name> <gate_type>
+A decoded path token sequence is S = [start_net_id, gate_id_1, ..., gate_id_N].
+Token 0 is always the start net; tokens 1..N are always gates.
+First record: Path 0: F <every token in S>
+Delta record: P <path_index> <prefix_token_count> <suffix_token_count> <middle_tokens>...
+IMPORTANT: prefix/suffix counts apply to the entire S, including token 0 (start net).
+Decode delta: current S = previous S first <prefix> tokens + middle tokens + previous S last <suffix> tokens.
+Example: previous S=[0,0,2,6,7] and 'P 1 2 2 3' decodes to S=[0,0,3,6,7].
+Expand names: look up S[0] in net_dictionary; for each gate S[i], look up the gate and then its output_net_id.
+Expected paths: 0
+
+[net_dictionary]
+N	0	n7
+N	1	n8
+N	2	n9
+N	3	n10
+N	4	n11
+N	5	n12
+N	6	n13
+N	7	n14
+N	8	n15
+N	9	n16
+N	a	n17
+N	b	n18
+N	c	n19
+N	d	n20
+N	e	n21
+N	f	n22
+N	g	n23
+N	h	n24
+N	i	n25
+N	j	n26
+N	k	n27
+N	l	n28
+N	m	n29
+N	n	n30
+N	o	n31
+N	p	n32
+N	q	n33
+N	r	n0[12]
+N	s	n0[11]
+N	t	n0[10]
+N	u	n0[9]
+N	v	n0[8]
+N	w	n0[7]
+N	x	n0[6]
+N	y	n0[5]
+N	z	n0[4]
+N	10	n0[3]
+N	11	n0[2]
+N	12	n0[1]
+N	13	n0[0]
+N	14	n1[12]
+N	15	n1[11]
+N	16	n1[10]
+N	17	n1[9]
+N	18	n1[8]
+N	19	n1[7]
+N	1a	n1[6]
+N	1b	n1[5]
+N	1c	n1[4]
+N	1d	n1[3]
+N	1e	n1[2]
+N	1f	n1[1]
+N	1g	n1[0]
+N	1h	n2[12]
+N	1i	n2[11]
+N	1j	n2[10]
+N	1k	n2[9]
+N	1l	n2[8]
+N	1m	n2[7]
+N	1n	n2[6]
+N	1o	n2[5]
+N	1p	n2[4]
+N	1q	n2[3]
+N	1r	n2[2]
+N	1s	n2[1]
+N	1t	n2[0]
+N	1u	n40[2]
+N	1v	n40[1]
+N	1w	n40[0]
+N	1x	n41[2]
+N	1y	n41[1]
+N	1z	n41[0]
+N	20	n34[3]
+N	21	n34[2]
+N	22	n34[1]
+N	23	n34[0]
+N	24	n35[3]
+N	25	n35[2]
+N	26	n35[1]
+N	27	n35[0]
+N	28	n36[5]
+N	29	n36[4]
+N	2a	n36[3]
+N	2b	n36[2]
+N	2c	n36[1]
+N	2d	n36[0]
+N	2e	n3[6]
+N	2f	n3[5]
+N	2g	n3[4]
+N	2h	n3[3]
+N	2i	n3[2]
+N	2j	n3[1]
+N	2k	n3[0]
+N	2l	n4[6]
+N	2m	n4[5]
+N	2n	n4[4]
+N	2o	n4[3]
+N	2p	n4[2]
+N	2q	n4[1]
+N	2r	n4[0]
+N	2s	n5[6]
+N	2t	n5[5]
+N	2u	n5[4]
+N	2v	n5[3]
+N	2w	n5[2]
+N	2x	n5[1]
+N	2y	n5[0]
+N	2z	n6[6]
+N	30	n6[5]
+N	31	n6[4]
+N	32	n6[3]
+N	33	n6[2]
+N	34	n6[1]
+N	35	n6[0]
+N	36	n37[8]
+N	37	n37[7]
+N	38	n37[6]
+N	39	n37[5]
+N	3a	n37[4]
+N	3b	n37[3]
+N	3c	n37[2]
+N	3d	n37[1]
+N	3e	n37[0]
+N	3f	n38[8]
+N	3g	n38[7]
+N	3h	n38[6]
+N	3i	n38[5]
+N	3j	n38[4]
+N	3k	n38[3]
+N	3l	n38[2]
+N	3m	n38[1]
+N	3n	n38[0]
+N	3o	n39[8]
+N	3p	n39[7]
+N	3q	n39[6]
+N	3r	n39[5]
+N	3s	n39[4]
+N	3t	n39[3]
+N	3u	n39[2]
+N	3v	n39[1]
+N	3w	n39[0]
+N	3x	n42[12]
+N	3y	n42[11]
+N	3z	n42[10]
+N	40	n42[9]
+N	41	n42[8]
+N	42	n42[7]
+N	43	n42[6]
+N	44	n42[5]
+N	45	n42[4]
+N	46	n42[3]
+N	47	n42[2]
+N	48	n42[1]
+N	49	n42[0]
+N	4a	n43[12]
+N	4b	n43[11]
+N	4c	n43[10]
+N	4d	n43[9]
+N	4e	n43[8]
+N	4f	n43[7]
+N	4g	n43[6]
+N	4h	n43[5]
+N	4i	n43[4]
+N	4j	n43[3]
+N	4k	n43[2]
+N	4l	n43[1]
+N	4m	n43[0]
+N	4n	n2124
+N	4o	n2123
+N	4p	n2122
+N	4q	n2121
+N	4r	n2120
+N	4s	n2119
+N	4t	n2118
+N	4u	n2117
+N	4v	n2116
+N	4w	n2440
+N	4x	n2437
+N	4y	n2435
+N	4z	n2439
+N	50	n2434
+N	51	n2436
+N	52	n2438
+N	53	n2255
+N	54	n1878
+N	55	n2110
+N	56	n2260
+N	57	n1923
+N	58	n2115
+N	59	n2259
+N	5a	n1921
+N	5b	n2114
+N	5c	n2258
+N	5d	n1920
+N	5e	n2113
+N	5f	n2257
+N	5g	n1919
+N	5h	n2112
+N	5i	n2256
+N	5j	n1879
+N	5k	n2111
+N	5l	n2153
+N	5m	n2102
+N	5n	n2081
+N	5o	n2248
+N	5p	n1869
+N	5q	n2103
+N	5r	n2253
+N	5s	n1876
+N	5t	n2108
+N	5u	n2252
+N	5v	n1875
+N	5w	n2107
+N	5x	n2251
+N	5y	n1874
+N	5z	n2106
+N	60	n2250
+N	61	n1872
+N	62	n2105
+N	63	n2249
+N	64	n2104
+N	65	n2071
+N	66	n2254
+N	67	n1877
+N	68	n2109
+N	69	n2161
+N	6a	n2091
+N	6b	n2088
+N	6c	n2152
+N	6d	n2101
+N	6e	n2100
+N	6f	n2158
+N	6g	n2098
+N	6h	n2097
+N	6i	n2157
+N	6j	n2090
+N	6k	n2087
+N	6l	n1748
+N	6m	n2096
+N	6n	n2163
+N	6o	n2092
+N	6p	n2083
+N	6q	n1768
+N	6r	n2094
+N	6s	n1766
+N	6t	n2089
+N	6u	n2156
+N	6v	n2082
+N	6w	n2080
+N	6x	n1765
+N	6y	n2086
+N	6z	n2023
+N	70	n2085
+N	71	n2019
+N	72	n2084
+N	73	n2015
+N	74	n2062
+N	75	n2011
+N	76	n2079
+N	77	n2008
+N	78	n2077
+N	79	n2155
+N	7a	n2076
+N	7b	n2074
+N	7c	n2006
+N	7d	n2075
+N	7e	n2164
+N	7f	n2095
+N	7g	n2093
+N	7h	n2004
+N	7i	n2073
+N	7j	n2160
+N	7k	n2078
+N	7l	n2070
+N	7m	n2154
+N	7n	n2069
+N	7o	n2067
+N	7p	n1745
+N	7q	n2072
+N	7r	n1997
+N	7s	n2068
+N	7t	n2162
+N	7u	n2066
+N	7v	n2099
+N	7w	n2159
+N	7x	n2065
+N	7y	n2064
+N	7z	n1776
+N	80	n2063
+N	81	n1991
+N	82	n2041
+N	83	n2033
+N	84	n2178
+N	85	n2034
+N	86	n2061
+N	87	n1990
+N	88	n2032
+N	89	n2059
+N	8a	n2184
+N	8b	n1989
+N	8c	n2058
+N	8d	n1969
+N	8e	n2038
+N	8f	n1988
+N	8g	n2057
+N	8h	n2017
+N	8i	n2190
+N	8j	n1982
+N	8k	n2007
+N	8l	n1984
+N	8m	n2052
+N	8n	n1986
+N	8o	n2055
+N	8p	n1987
+N	8q	n2056
+N	8r	n2022
+N	8s	n2187
+N	8t	n2025
+N	8u	n2031
+N	8v	n1985
+N	8w	n2054
+N	8x	n2053
+N	8y	n2021
+N	8z	n2050
+N	90	n2018
+N	91	n2051
+N	92	n2028
+N	93	n1980
+N	94	n2014
+N	95	n1462
+N	96	n2024
+N	97	n2048
+N	98	n2182
+N	99	n2047
+N	9a	n2009
+N	9b	n1962
+N	9c	n2043
+N	9d	n2046
+N	9e	n2026
+N	9f	n1993
+N	9g	n2045
+N	9h	n2044
+N	9i	n2005
+N	9j	n2003
+N	9k	n2030
+N	9l	n2042
+N	9m	n2001
+N	9n	n2060
+N	9o	n1999
+N	9p	n1914
+N	9q	n1998
+N	9r	n2000
+N	9s	n2186
+N	9t	n1970
+N	9u	n2010
+N	9v	n2040
+N	9w	n2002
+N	9x	n2179
+N	9y	n2012
+N	9z	n2039
+N	a0	n2029
+N	a1	n1967
+N	a2	n2036
+N	a3	n1968
+N	a4	n2016
+N	a5	n2035
+N	a6	n2027
+N	a7	n2037
+N	a8	n2020
+N	a9	n2049
+N	aa	n2013
+N	ab	n2347
+N	ac	n1642
+N	ad	n2319
+N	ae	n1639
+N	af	n2358
+N	ag	n1472
+N	ah	n2357
+N	ai	n1565
+N	aj	n2356
+N	ak	n1488
+N	al	n2318
+N	am	n1484
+N	an	n2355
+N	ao	n1564
+N	ap	n2354
+N	aq	n1526
+N	ar	n2322
+N	as	n1589
+N	at	n2324
+N	au	n1486
+N	av	n2353
+N	aw	n2352
+N	ax	n2317
+N	ay	n1588
+N	az	n2351
+N	b0	n2350
+N	b1	n1641
+N	b2	n2316
+N	b3	n1498
+N	b4	n2349
+N	b5	n2321
+N	b6	n2348
+N	b7	n1525
+N	b8	n2313
+N	b9	n2346
+N	ba	n2315
+N	bb	n2325
+N	bc	n1638
+N	bd	n2314
+N	be	n2323
+N	bf	n1497
+N	bg	n2320
+N	bh	n1633
+N	bi	n2241
+N	bj	n1595
+N	bk	n1482
+N	bl	n2242
+N	bm	n1592
+N	bn	n1586
+N	bo	n2243
+N	bp	n1594
+N	bq	n2247
+N	br	n1580
+N	bs	n2246
+N	bt	n1579
+N	bu	n2245
+N	bv	n2244
+N	bw	n1880
+N	bx	n1973
+N	by	n1925
+N	bz	n1965
+N	c0	n1924
+N	c1	n1964
+N	c2	n1567
+N	c3	n1470
+N	c4	n1953
+N	c5	n1992
+N	c6	n1899
+N	c7	n1983
+N	c8	n1585
+N	c9	n1568
+N	ca	n1495
+N	cb	n1897
+N	cc	n1981
+N	cd	n1896
+N	ce	n1979
+N	cf	n1955
+N	cg	n1894
+N	ch	n1978
+N	ci	n1632
+N	cj	n1892
+N	ck	n1977
+N	cl	n1891
+N	cm	n1976
+N	cn	n1591
+N	co	n1890
+N	cp	n1994
+N	cq	n1494
+N	cr	n1870
+N	cs	n1972
+N	ct	n1885
+N	cu	n1971
+N	cv	n1918
+N	cw	n1960
+N	cx	n1871
+N	cy	n1956
+N	cz	n1916
+N	d0	n1958
+N	d1	n1912
+N	d2	n1961
+N	d3	n1873
+N	d4	n1957
+N	d5	n1915
+N	d6	n1963
+N	d7	n1935
+N	d8	n1966
+N	d9	n1917
+N	da	n1959
+N	db	n1913
+N	dc	n1954
+N	dd	n1630
+N	de	n1683
+N	df	n1648
+N	dg	n1671
+N	dh	n1466
+N	di	n1698
+N	dj	n1571
+N	dk	n1662
+N	dl	n1544
+N	dm	n1503
+N	dn	n1583
+N	do	n1480
+N	dp	n1680
+N	dq	n1570
+N	dr	n1582
+N	ds	n1689
+N	dt	n1512
+N	du	n1501
+N	dv	n1692
+N	dw	n1686
+N	dx	n1629
+N	dy	n1996
+N	dz	n1738
+N	e0	n1951
+N	e1	n1995
+N	e2	n1736
+N	e3	n1952
+N	e4	n1902
+N	e5	n1944
+N	e6	n1500
+N	e7	n1677
+N	e8	n1674
+N	e9	n1647
+N	ea	n1665
+N	eb	n1668
+N	ec	n1511
+N	ed	n1860
+N	ee	n1946
+N	ef	n1859
+N	eg	n1947
+N	eh	n1857
+N	ei	n1945
+N	ej	n1861
+N	ek	n1948
+N	el	n1695
+N	em	n1837
+N	en	n1937
+N	eo	n1850
+N	ep	n1943
+N	eq	n1847
+N	er	n1941
+N	es	n1845
+N	et	n1942
+N	eu	n1886
+N	ev	n1938
+N	ew	n1887
+N	ex	n1940
+N	ey	n1911
+N	ez	n1838
+N	f0	n1939
+N	f1	n1975
+N	f2	n1974
+N	f3	n1950
+N	f4	n1829
+N	f5	n2169
+N	f6	n1949
+N	f7	n1827
+N	f8	n2170
+N	f9	n2312
+N	fa	n1636
+N	fb	n2300
+N	fc	n1464
+N	fd	n2307
+N	fe	n1553
+N	ff	n2310
+N	fg	n1514
+N	fh	n2306
+N	fi	n1552
+N	fj	n2305
+N	fk	n1532
+N	fl	n2304
+N	fm	n2309
+N	fn	n2303
+N	fo	n2308
+N	fp	n1635
+N	fq	n2311
+N	fr	n2302
+N	fs	n1531
+N	ft	n1936
+N	fu	n1826
+N	fv	n2171
+N	fw	n1747
+N	fx	n1907
+N	fy	n1934
+N	fz	n1823
+N	g0	n2175
+N	g1	n1933
+N	g2	n1836
+N	g3	n2174
+N	g4	n1932
+N	g5	n1828
+N	g6	n2173
+N	g7	n1931
+N	g8	n1825
+N	g9	n2172
+N	ga	n2301
+N	gb	n1730
+N	gc	n1909
+N	gd	n1739
+N	ge	n1928
+N	gf	n1862
+N	gg	n2168
+N	gh	n1927
+N	gi	n1863
+N	gj	n2167
+N	gk	n1926
+N	gl	n1821
+N	gm	n1868
+N	gn	n2201
+N	go	n1835
+N	gp	n2165
+N	gq	n1769
+N	gr	n1906
+N	gs	n1755
+N	gt	n1905
+N	gu	n1858
+N	gv	n1904
+N	gw	n1922
+N	gx	n1822
+N	gy	n2176
+N	gz	n1855
+N	h0	n1903
+N	h1	n1854
+N	h2	n1901
+N	h3	n2213
+N	h4	n1824
+N	h5	n2177
+N	h6	n1853
+N	h7	n1900
+N	h8	n1763
+N	h9	n1898
+N	ha	n1771
+N	hb	n1895
+N	hc	n1797
+N	hd	n1893
+N	he	n1752
+N	hf	n1889
+N	hg	n1840
+N	hh	n1888
+N	hi	n1783
+N	hj	n1884
+N	hk	n1753
+N	hl	n1910
+N	hm	n2166
+N	hn	n1777
+N	ho	n1881
+N	hp	n1930
+N	hq	n1929
+N	hr	n1908
+N	hs	n2410
+N	ht	n1654
+N	hu	n1865
+N	hv	n2415
+N	hw	n1538
+N	hx	n2408
+N	hy	n1556
+N	hz	n2418
+N	i0	n1536
+N	i1	n1624
+N	i2	n1492
+N	i3	n2414
+N	i4	n1555
+N	i5	n1559
+N	i6	n1476
+N	i7	n1558
+N	i8	n2413
+N	i9	n1523
+N	ia	n1517
+N	ib	n2417
+N	ic	n2412
+N	id	n1623
+N	ie	n2420
+N	if	n1516
+N	ig	n2411
+N	ih	n1653
+N	ii	n2419
+N	ij	n2416
+N	ik	n1522
+N	il	n1731
+N	im	n1866
+N	in	n1609
+N	io	n1833
+N	ip	n1746
+N	iq	n1856
+N	ir	n1773
+N	is	n1852
+N	it	n1761
+N	iu	n1851
+N	iv	n1767
+N	iw	n1849
+N	ix	n1756
+N	iy	n1848
+N	iz	n1754
+N	j0	n1846
+N	j1	n1782
+N	j2	n1844
+N	j3	n1751
+N	j4	n1843
+N	j5	n1749
+N	j6	n1842
+N	j7	n1758
+N	j8	n1841
+N	j9	n1864
+N	ja	n1744
+N	jb	n1839
+N	jc	n1883
+N	jd	n2409
+N	je	n1700
+N	jf	n1814
+N	jg	n1813
+N	jh	n1775
+N	ji	n1816
+N	jj	n1812
+N	jk	n1762
+N	jl	n1811
+N	jm	n1741
+N	jn	n1809
+N	jo	n1784
+N	jp	n1808
+N	jq	n1764
+N	jr	n1807
+N	js	n1757
+N	jt	n1806
+N	ju	n1743
+N	jv	n1805
+N	jw	n1785
+N	jx	n1804
+N	jy	n1796
+N	jz	n1810
+N	k0	n1882
+N	k1	n1676
+N	k2	n1608
+N	k3	n1682
+N	k4	n1621
+N	k5	n2299
+N	k6	n1645
+N	k7	n2294
+N	k8	n1490
+N	k9	n2287
+N	ka	n1562
+N	kb	n1651
+N	kc	n2297
+N	kd	n1474
+N	ke	n2293
+N	kf	n1561
+N	kg	n2298
+N	kh	n1542
+N	ki	n1577
+N	kj	n2296
+N	kk	n1540
+N	kl	n2295
+N	km	n1576
+N	kn	n1509
+N	ko	n2292
+N	kp	n1520
+N	kq	n2291
+N	kr	n2290
+N	ks	n1650
+N	kt	n2289
+N	ku	n1644
+N	kv	n2288
+N	kw	n1508
+N	kx	n1519
+N	ky	n2192
+N	kz	n1717
+N	l0	n1611
+N	l1	n1688
+N	l2	n1605
+N	l3	n1697
+N	l4	n1618
+N	l5	n1834
+N	l6	n1723
+N	l7	n2198
+N	l8	n1707
+N	l9	n1612
+N	la	n2196
+N	lb	n1709
+N	lc	n1620
+N	ld	n2194
+N	le	n1722
+N	lf	n1867
+N	lg	n1737
+N	lh	n1759
+N	li	n1733
+N	lj	n1742
+N	lk	n2193
+N	ll	n1720
+N	lm	n1830
+N	ln	n1715
+N	lo	n1685
+N	lp	n1615
+N	lq	n1694
+N	lr	n1679
+N	ls	n1617
+N	lt	n2197
+N	lu	n1705
+N	lv	n1614
+N	lw	n2195
+N	lx	n1711
+N	ly	n1661
+N	lz	n1664
+N	m0	n1606
+N	m1	n2199
+N	m2	n1713
+N	m3	n1673
+N	m4	n1667
+N	m5	n1691
+N	m6	n1670
+N	m7	n2481
+N	m8	n2482
+N	m9	n1786
+N	ma	n2480
+N	mb	n1778
+N	mc	n1787
+N	md	n2479
+N	me	n1779
+N	mf	n1791
+N	mg	n1820
+N	mh	n1795
+N	mi	n1794
+N	mj	n1819
+N	mk	n1772
+N	ml	n1788
+N	mm	n1818
+N	mn	n1770
+N	mo	n1793
+N	mp	n1817
+N	mq	n1750
+N	mr	n1789
+N	ms	n2278
+N	mt	n1781
+N	mu	n1792
+N	mv	n1627
+N	mw	n1815
+N	mx	n1760
+N	my	n1790
+N	mz	n1478
+N	n0	n1574
+N	n1	n1468
+N	n2	n1573
+N	n3	n1506
+N	n4	n1626
+N	n5	n1505
+N	n6	n1832
+N	n7	n1740
+N	n8	n1831
+N	n9	n1780
+N	na	n1801
+N	nb	n1798
+N	nc	n1800
+N	nd	n1799
+N	ne	n2265
+N	nf	n1718
+N	ng	n2448
+N	nh	n1599
+N	ni	n2443
+N	nj	n1600
+N	nk	n1529
+N	nl	n1547
+N	nm	n1549
+N	nn	n2450
+N	no	n2446
+N	np	n1546
+N	nq	n1528
+N	nr	n2442
+N	ns	n2447
+N	nt	n1602
+N	nu	n1656
+N	nv	n2441
+N	nw	n2444
+N	nx	n1603
+N	ny	n2452
+N	nz	n1534
+N	o0	n2445
+N	o1	n1550
+N	o2	n2453
+N	o3	n2449
+N	o4	n2451
+N	o5	n2282
+N	o6	n2264
+N	o7	n1725
+N	o8	n1597
+N	o9	n1703
+N	oa	n1803
+N	ob	n1729
+N	oc	n1802
+N	od	n1734
+N	oe	n1732
+N	of	n2283
+N	og	n1702
+N	oh	n2261
+N	oi	n2285
+N	oj	n2280
+N	ok	n2284
+N	ol	n2279
+N	om	n2281
+N	on	n2263
+N	oo	n2286
+N	op	n2262
+N	oq	n1774
+N	or	n1735
+N	os	n1728
+N	ot	n1727
+N	ou	n1726
+N	ov	n1724
+N	ow	n1721
+N	ox	n2375
+N	oy	n1719
+N	oz	n2374
+N	p0	n1716
+N	p1	n2373
+N	p2	n1714
+N	p3	n2359
+N	p4	n1712
+N	p5	n2380
+N	p6	n1710
+N	p7	n2376
+N	p8	n1708
+N	p9	n2377
+N	pa	n1706
+N	pb	n2379
+N	pc	n1704
+N	pd	n2378
+N	pe	n1701
+N	pf	n1699
+N	pg	n1696
+N	ph	n2454
+N	pi	n1693
+N	pj	n2462
+N	pk	n1690
+N	pl	n2465
+N	pm	n1687
+N	pn	n2463
+N	po	n1684
+N	pp	n2458
+N	pq	n1681
+N	pr	n2457
+N	ps	n1678
+N	pt	n2459
+N	pu	n1675
+N	pv	n2456
+N	pw	n1672
+N	px	n2466
+N	py	n1669
+N	pz	n2455
+N	q0	n1666
+N	q1	n2464
+N	q2	n1663
+N	q3	n2461
+N	q4	n1660
+N	q5	n2460
+N	q6	n2183
+N	q7	n2188
+N	q8	n2181
+N	q9	n2180
+N	qa	n2189
+N	qb	n2185
+N	qc	n2206
+N	qd	n2204
+N	qe	n2208
+N	qf	n2203
+N	qg	n2202
+N	qh	n2212
+N	qi	n2211
+N	qj	n2210
+N	qk	n2209
+N	ql	n2207
+N	qm	n2205
+N	qn	n2477
+N	qo	n2478
+N	qp	n2476
+N	qq	n2475
+N	qr	n2474
+N	qs	n2200
+N	qt	n2191
+N	qu	n1659
+N	qv	n1658
+N	qw	n1657
+N	qx	n1655
+N	qy	n1652
+N	qz	n1649
+N	r0	n1646
+N	r1	n1643
+N	r2	n1640
+N	r3	n1637
+N	r4	n1634
+N	r5	n1631
+N	r6	n1628
+N	r7	n1625
+N	r8	n1622
+N	r9	n2381
+N	ra	n1619
+N	rb	n1616
+N	rc	n1613
+N	rd	n1610
+N	re	n1607
+N	rf	n1604
+N	rg	n1601
+N	rh	n1598
+N	ri	n1596
+N	rj	n1593
+N	rk	n1590
+N	rl	n1587
+N	rm	n1584
+N	rn	n1581
+N	ro	n1578
+N	rp	n1575
+N	rq	n1572
+N	rr	n1569
+N	rs	n1566
+N	rt	n1563
+N	ru	n1560
+N	rv	n1557
+N	rw	n1554
+N	rx	n1551
+N	ry	n1548
+N	rz	n1545
+N	s0	n1543
+N	s1	n1541
+N	s2	n1539
+N	s3	n1537
+N	s4	n1535
+N	s5	n1533
+N	s6	n1530
+N	s7	n1527
+N	s8	n1524
+N	s9	n1521
+N	sa	n1518
+N	sb	n1515
+N	sc	n1513
+N	sd	n1510
+N	se	n1507
+N	sf	n1504
+N	sg	n1502
+N	sh	n1499
+N	si	n1496
+N	sj	n1493
+N	sk	n1491
+N	sl	n1489
+N	sm	n1487
+N	sn	n1485
+N	so	n1483
+N	sp	n1481
+N	sq	n1479
+N	sr	n1477
+N	ss	n1475
+N	st	n1473
+N	su	n1471
+N	sv	n1469
+N	sw	n1467
+N	sx	n1465
+N	sy	n1463
+N	sz	n1461
+N	t0	n1460
+N	t1	n1459
+N	t2	n1458
+N	t3	n1457
+N	t4	n1456
+N	t5	n1455
+N	t6	n2345
+N	t7	n2342
+N	t8	n2340
+N	t9	n2344
+N	ta	n2339
+N	tb	n2341
+N	tc	n2343
+N	td	n2473
+N	te	n2471
+N	tf	n2469
+N	tg	n1454
+N	th	n2472
+N	ti	n1453
+N	tj	n2470
+N	tk	n2467
+N	tl	n2468
+N	tm	n2631
+N	tn	n2527
+N	to	n2630
+N	tp	n2514
+N	tq	n2629
+N	tr	n2528
+N	ts	n2628
+N	tt	n2515
+N	tu	n2627
+N	tv	n2529
+N	tw	n2626
+N	tx	n2516
+N	ty	n2625
+N	tz	n2530
+N	u0	n2624
+N	u1	n2517
+N	u2	n2623
+N	u3	n2531
+N	u4	n2622
+N	u5	n2518
+N	u6	n2621
+N	u7	n2532
+N	u8	n2620
+N	u9	n2519
+N	ua	n2619
+N	ub	n2533
+N	uc	n2618
+N	ud	n2520
+N	ue	n2617
+N	uf	n2534
+N	ug	n2616
+N	uh	n2521
+N	ui	n2615
+N	uj	n2535
+N	uk	n2614
+N	ul	n2522
+N	um	n2613
+N	un	n2536
+N	uo	n2612
+N	up	n2537
+N	uq	n2611
+N	ur	n2524
+N	us	n2610
+N	ut	n2538
+N	uu	n2609
+N	uv	n2539
+N	uw	n2608
+N	ux	n2523
+N	uy	n2607
+N	uz	n2525
+N	v0	n2606
+N	v1	n2526
+N	v2	n2240
+N	v3	n2550
+N	v4	n2594
+N	v5	n2605
+N	v6	n2552
+N	v7	n2589
+N	v8	n2604
+N	v9	n2579
+N	va	n2591
+N	vb	n2603
+N	vc	n2551
+N	vd	n2590
+N	ve	n2602
+N	vf	n2547
+N	vg	n2586
+N	vh	n2601
+N	vi	n2548
+N	vj	n2588
+N	vk	n2228
+N	vl	n2549
+N	vm	n2593
+N	vn	n2600
+N	vo	n2580
+N	vp	n2587
+N	vq	n2599
+N	vr	n2544
+N	vs	n2583
+N	vt	n2598
+N	vu	n2543
+N	vv	n2581
+N	vw	n2597
+N	vx	n2545
+N	vy	n2584
+N	vz	n2596
+N	w0	n2542
+N	w1	n2582
+N	w2	n2595
+N	w3	n2546
+N	w4	n2585
+N	w5	n2508
+N	w6	n2506
+N	w7	n2505
+N	w8	n2484
+N	w9	n2491
+N	wa	n2486
+N	wb	n2490
+N	wc	n2488
+N	wd	n2496
+N	we	n2499
+N	wf	n2500
+N	wg	n2497
+N	wh	n2503
+N	wi	n2502
+N	wj	n2494
+N	wk	n2493
+N	wl	n2541
+N	wm	n2513
+N	wn	n2540
+N	wo	n2511
+N	wp	n2512
+N	wq	n2510
+N	wr	n2231
+N	ws	n2229
+N	wt	n2230
+N	wu	n2235
+N	wv	n2238
+N	ww	n2239
+N	wx	n2234
+N	wy	n2236
+N	wz	n2233
+N	x0	n2232
+N	x1	n2237
+N	x2	n2509
+N	x3	n2507
+N	x4	n2504
+N	x5	n2501
+N	x6	n2498
+N	x7	n2495
+N	x8	n2492
+N	x9	n2489
+N	xa	n2487
+N	xb	n2485
+N	xc	n2483
+N	xd	n2804
+N	xe	n2266
+N	xf	n2803
+N	xg	n2273
+N	xh	n2802
+N	xi	n2267
+N	xj	n2801
+N	xk	n2268
+N	xl	n2800
+N	xm	n2269
+N	xn	n2799
+N	xo	n2270
+N	xp	n2798
+N	xq	n2271
+N	xr	n2797
+N	xs	n2272
+N	xt	n2796
+N	xu	n2274
+N	xv	n2795
+N	xw	n2275
+N	xx	n2794
+N	xy	n2276
+N	xz	n2793
+N	y0	n2277
+N	y1	n2792
+N	y2	n2407
+N	y3	n2759
+N	y4	n2780
+N	y5	n2406
+N	y6	n2762
+N	y7	n2785
+N	y8	n2402
+N	y9	n2764
+N	ya	n2788
+N	yb	n2396
+N	yc	n2763
+N	yd	n2787
+N	ye	n2401
+N	yf	n2760
+N	yg	n2778
+N	yh	n2395
+N	yi	n2761
+N	yj	n2786
+N	yk	n2397
+N	yl	n2752
+N	ym	n2790
+N	yn	n2400
+N	yo	n2757
+N	yp	n2782
+N	yq	n2791
+N	yr	n2753
+N	ys	n2789
+N	yt	n2403
+N	yu	n2755
+N	yv	n2779
+N	yw	n2399
+N	yx	n2756
+N	yy	n2781
+N	yz	n2398
+N	z0	n2754
+N	z1	n2784
+N	z2	n2404
+N	z3	n2758
+N	z4	n2783
+N	z5	n2710
+N	z6	n2776
+N	z7	n2692
+N	z8	n2773
+N	z9	n2708
+N	za	n2774
+N	zb	n2707
+N	zc	n2775
+N	zd	n2703
+N	ze	n2772
+N	zf	n2696
+N	zg	n2768
+N	zh	n2685
+N	zi	n2766
+N	zj	n2695
+N	zk	n2769
+N	zl	n2694
+N	zm	n2770
+N	zn	n2690
+N	zo	n2767
+N	zp	n2702
+N	zq	n2777
+N	zr	n2686
+N	zs	n2771
+N	zt	n2699
+N	zu	n2765
+N	zv	n2717
+N	zw	n2741
+N	zx	n2715
+N	zy	n2751
+N	zz	n2721
+N	100	n2749
+N	101	n2736
+N	102	n2745
+N	103	n2735
+N	104	n2748
+N	105	n2719
+N	106	n2750
+N	107	n2720
+N	108	n2739
+N	109	n2737
+N	10a	n2746
+N	10b	n2714
+N	10c	n2744
+N	10d	n2716
+N	10e	n2743
+N	10f	n2713
+N	10g	n2742
+N	10h	n2712
+N	10i	n2740
+N	10j	n2718
+N	10k	n2747
+N	10l	n2665
+N	10m	n2645
+N	10n	n2654
+N	10o	n2638
+N	10p	n2655
+N	10q	n2636
+N	10r	n2666
+N	10s	n2635
+N	10t	n2709
+N	10u	n2668
+N	10v	n2700
+N	10w	n2633
+N	10x	n2706
+N	10y	n2657
+N	10z	n2701
+N	110	n2640
+N	111	n2697
+N	112	n2658
+N	113	n2693
+N	114	n2643
+N	115	n2689
+N	116	n2691
+N	117	n2687
+N	118	n2688
+N	119	n2669
+N	11a	n2698
+N	11b	n2704
+N	11c	n2642
+N	11d	n2711
+N	11e	n2649
+N	11f	n2647
+N	11g	n2671
+N	11h	n2652
+N	11i	n2672
+N	11j	n2660
+N	11k	n2661
+N	11l	n2650
+N	11m	n2675
+N	11n	n2674
+N	11o	n2679
+N	11p	n2738
+N	11q	n2684
+N	11r	n2663
+N	11s	n2677
+N	11t	n2678
+N	11u	n2683
+N	11v	n2705
+N	11w	n2681
+N	11x	n2682
+N	11y	n2680
+N	11z	n2676
+N	120	n2673
+N	121	n2405
+N	122	n2670
+N	123	n2667
+N	124	n2664
+N	125	n2662
+N	126	n2659
+N	127	n2656
+N	128	n2653
+N	129	n2651
+N	12a	n2648
+N	12b	n2646
+N	12c	n2644
+N	12d	n2641
+N	12e	n2639
+N	12f	n2637
+N	12g	n2634
+N	12h	n2632
+N	12i	n2836
+N	12j	n2360
+N	12k	n2835
+N	12l	n2361
+N	12m	n2834
+N	12n	n2363
+N	12o	n2833
+N	12p	n2369
+N	12q	n2832
+N	12r	n2371
+N	12s	n2831
+N	12t	n2364
+N	12u	n2830
+N	12v	n2368
+N	12w	n2829
+N	12x	n2372
+N	12y	n2828
+N	12z	n2362
+N	130	n2827
+N	131	n2365
+N	132	n2826
+N	133	n2367
+N	134	n2825
+N	135	n2370
+N	136	n2824
+N	137	n2366
+N	138	n2823
+N	139	n2822
+N	13a	n2394
+N	13b	n2809
+N	13c	n2393
+N	13d	n2808
+N	13e	n2390
+N	13f	n2385
+N	13g	n2807
+N	13h	n2384
+N	13i	n2806
+N	13j	n2383
+N	13k	n2819
+N	13l	n2386
+N	13m	n2805
+N	13n	n2389
+N	13o	n2821
+N	13p	n2388
+N	13q	n2391
+N	13r	n2387
+N	13s	n2817
+N	13t	n2820
+N	13u	n2818
+N	13v	n2814
+N	13w	n2815
+N	13x	n2810
+N	13y	n2816
+N	13z	n2392
+N	140	n2382
+N	141	n2813
+N	142	n2812
+N	143	n2811
+N	144	n2970
+N	145	n2564
+N	146	n2969
+N	147	n2565
+N	148	n2968
+N	149	n2576
+N	14a	n2967
+N	14b	n2578
+N	14c	n2966
+N	14d	n2563
+N	14e	n2965
+N	14f	n2577
+N	14g	n2964
+N	14h	n2566
+N	14i	n2963
+N	14j	n2553
+N	14k	n2962
+N	14l	n2567
+N	14m	n2961
+N	14n	n2554
+N	14o	n2960
+N	14p	n2568
+N	14q	n2959
+N	14r	n2555
+N	14s	n2958
+N	14t	n2569
+N	14u	n2957
+N	14v	n2556
+N	14w	n2956
+N	14x	n2570
+N	14y	n2955
+N	14z	n2557
+N	150	n2954
+N	151	n2571
+N	152	n2953
+N	153	n2558
+N	154	n2952
+N	155	n2572
+N	156	n2951
+N	157	n2559
+N	158	n2950
+N	159	n2573
+N	15a	n2949
+N	15b	n2560
+N	15c	n2948
+N	15d	n2574
+N	15e	n2947
+N	15f	n2561
+N	15g	n2946
+N	15h	n2575
+N	15i	n2945
+N	15j	n2562
+N	15k	n2227
+N	15l	n2915
+N	15m	n2932
+N	15n	n2944
+N	15o	n2917
+N	15p	n2928
+N	15q	n2943
+N	15r	n2918
+N	15s	n2930
+N	15t	n2942
+N	15u	n2916
+N	15v	n2929
+N	15w	n2941
+N	15x	n2912
+N	15y	n2925
+N	15z	n2940
+N	160	n2913
+N	161	n2927
+N	162	n2939
+N	163	n2914
+N	164	n2931
+N	165	n2938
+N	166	n2919
+N	167	n2926
+N	168	n2937
+N	169	n2909
+N	16a	n2922
+N	16b	n2936
+N	16c	n2908
+N	16d	n2920
+N	16e	n2935
+N	16f	n2910
+N	16g	n2923
+N	16h	n2934
+N	16i	n2907
+N	16j	n2921
+N	16k	n2933
+N	16l	n2911
+N	16m	n2924
+N	16n	n2898
+N	16o	n2895
+N	16p	n2838
+N	16q	n2858
+N	16r	n2840
+N	16s	n2857
+N	16t	n2842
+N	16u	n2863
+N	16v	n2866
+N	16w	n2867
+N	16x	n2864
+N	16y	n2892
+N	16z	n2861
+N	170	n2860
+N	171	n2893
+N	172	n2906
+N	173	n2903
+N	174	n2904
+N	175	n2901
+N	176	n2902
+N	177	n2900
+N	178	n2218
+N	179	n2216
+N	17a	n2217
+N	17b	n2222
+N	17c	n2225
+N	17d	n2220
+N	17e	n2221
+N	17f	n2219
+N	17g	n2223
+N	17h	n2224
+N	17i	n2215
+N	17j	n2226
+N	17k	n2899
+N	17l	n2897
+N	17m	n2896
+N	17n	n2894
+N	17o	n2868
+N	17p	n2865
+N	17q	n2862
+N	17r	n2859
+N	17s	n2856
+N	17t	n2841
+N	17u	n2839
+N	17v	n2837
+N	17w	n2977
+N	17x	n2976
+N	17y	n2592
+N	17z	n2975
+N	180	n2973
+N	181	n2974
+N	182	n2972
+N	183	n2971
+N	184	n2214
+N	185	n3073
+N	186	n2731
+N	187	n3072
+N	188	n2843
+N	189	n3071
+N	18a	n2722
+N	18b	n3070
+N	18c	n2844
+N	18d	n3069
+N	18e	n2723
+N	18f	n3068
+N	18g	n2845
+N	18h	n3067
+N	18i	n2724
+N	18j	n3066
+N	18k	n2846
+N	18l	n3065
+N	18m	n2725
+N	18n	n3064
+N	18o	n2847
+N	18p	n3063
+N	18q	n2726
+N	18r	n3062
+N	18s	n2848
+N	18t	n3061
+N	18u	n2727
+N	18v	n3060
+N	18w	n2849
+N	18x	n3059
+N	18y	n2728
+N	18z	n3058
+N	190	n2850
+N	191	n3057
+N	192	n2729
+N	193	n3056
+N	194	n2851
+N	195	n3055
+N	196	n2730
+N	197	n3054
+N	198	n2852
+N	199	n3053
+N	19a	n2734
+N	19b	n3052
+N	19c	n2853
+N	19d	n3051
+N	19e	n2732
+N	19f	n3050
+N	19g	n2854
+N	19h	n3049
+N	19i	n2733
+N	19j	n3048
+N	19k	n2855
+N	19l	n2151
+N	19m	n3019
+N	19n	n3036
+N	19o	n3047
+N	19p	n3021
+N	19q	n3032
+N	19r	n3046
+N	19s	n3022
+N	19t	n3034
+N	19u	n3045
+N	19v	n3020
+N	19w	n3033
+N	19x	n3044
+N	19y	n3016
+N	19z	n3029
+N	1a0	n3043
+N	1a1	n3017
+N	1a2	n3031
+N	1a3	n2139
+N	1a4	n3018
+N	1a5	n3035
+N	1a6	n3042
+N	1a7	n3023
+N	1a8	n3030
+N	1a9	n3041
+N	1aa	n3013
+N	1ab	n3026
+N	1ac	n3040
+N	1ad	n3012
+N	1ae	n3024
+N	1af	n3039
+N	1ag	n3014
+N	1ah	n3027
+N	1ai	n3038
+N	1aj	n3011
+N	1ak	n3025
+N	1al	n3037
+N	1am	n3015
+N	1an	n3028
+N	1ao	n3003
+N	1ap	n3001
+N	1aq	n3000
+N	1ar	n2979
+N	1as	n2986
+N	1at	n2981
+N	1au	n2985
+N	1av	n2983
+N	1aw	n2991
+N	1ax	n2994
+N	1ay	n2995
+N	1az	n2992
+N	1b0	n2998
+N	1b1	n2997
+N	1b2	n2989
+N	1b3	n2988
+N	1b4	n3010
+N	1b5	n3008
+N	1b6	n3009
+N	1b7	n3006
+N	1b8	n3007
+N	1b9	n3005
+N	1ba	n2142
+N	1bb	n2140
+N	1bc	n2141
+N	1bd	n2146
+N	1be	n2149
+N	1bf	n2150
+N	1bg	n2145
+N	1bh	n2147
+N	1bi	n2144
+N	1bj	n2143
+N	1bk	n2148
+N	1bl	n3004
+N	1bm	n3002
+N	1bn	n2999
+N	1bo	n2996
+N	1bp	n2993
+N	1bq	n2990
+N	1br	n2987
+N	1bs	n2984
+N	1bt	n2982
+N	1bu	n2980
+N	1bv	n2978
+N	1bw	n3170
+N	1bx	n2881
+N	1by	n3169
+N	1bz	n2869
+N	1c0	n3168
+N	1c1	n2882
+N	1c2	n3167
+N	1c3	n2870
+N	1c4	n3166
+N	1c5	n2883
+N	1c6	n3165
+N	1c7	n2871
+N	1c8	n3164
+N	1c9	n2884
+N	1ca	n3163
+N	1cb	n2872
+N	1cc	n3162
+N	1cd	n2885
+N	1ce	n3161
+N	1cf	n2873
+N	1cg	n3160
+N	1ch	n2886
+N	1ci	n3159
+N	1cj	n2874
+N	1ck	n3158
+N	1cl	n2887
+N	1cm	n3157
+N	1cn	n2888
+N	1co	n3156
+N	1cp	n2876
+N	1cq	n3155
+N	1cr	n2889
+N	1cs	n3154
+N	1ct	n2877
+N	1cu	n3153
+N	1cv	n2890
+N	1cw	n3152
+N	1cx	n2891
+N	1cy	n3151
+N	1cz	n2879
+N	1d0	n3150
+N	1d1	n3149
+N	1d2	n3148
+N	1d3	n3147
+N	1d4	n2880
+N	1d5	n3146
+N	1d6	n2875
+N	1d7	n3145
+N	1d8	n2878
+N	1d9	n2138
+N	1da	n3115
+N	1db	n3132
+N	1dc	n3144
+N	1dd	n3117
+N	1de	n3128
+N	1df	n3143
+N	1dg	n3118
+N	1dh	n3130
+N	1di	n3142
+N	1dj	n3116
+N	1dk	n3129
+N	1dl	n3141
+N	1dm	n3112
+N	1dn	n3125
+N	1do	n3140
+N	1dp	n3113
+N	1dq	n3127
+N	1dr	n3139
+N	1ds	n3114
+N	1dt	n3131
+N	1du	n3138
+N	1dv	n3119
+N	1dw	n3126
+N	1dx	n3137
+N	1dy	n3109
+N	1dz	n3122
+N	1e0	n3136
+N	1e1	n3108
+N	1e2	n3120
+N	1e3	n3135
+N	1e4	n3110
+N	1e5	n3123
+N	1e6	n3134
+N	1e7	n3107
+N	1e8	n3121
+N	1e9	n3133
+N	1ea	n3111
+N	1eb	n3124
+N	1ec	n3099
+N	1ed	n3097
+N	1ee	n3096
+N	1ef	n3075
+N	1eg	n3082
+N	1eh	n3077
+N	1ei	n3081
+N	1ej	n3079
+N	1ek	n3087
+N	1el	n3090
+N	1em	n3091
+N	1en	n3088
+N	1eo	n3094
+N	1ep	n3093
+N	1eq	n3085
+N	1er	n3084
+N	1es	n3106
+N	1et	n3104
+N	1eu	n3105
+N	1ev	n3102
+N	1ew	n3103
+N	1ex	n3101
+N	1ey	n2129
+N	1ez	n2127
+N	1f0	n2128
+N	1f1	n2133
+N	1f2	n2136
+N	1f3	n2131
+N	1f4	n2132
+N	1f5	n2130
+N	1f6	n2134
+N	1f7	n2135
+N	1f8	n2126
+N	1f9	n2137
+N	1fa	n3100
+N	1fb	n3098
+N	1fc	n3095
+N	1fd	n3092
+N	1fe	n3089
+N	1ff	n3086
+N	1fg	n3083
+N	1fh	n3080
+N	1fi	n3078
+N	1fj	n3076
+N	1fk	n3074
+N	1fl	n3177
+N	1fm	n3176
+N	1fn	n2905
+N	1fo	n3175
+N	1fp	n3173
+N	1fq	n3174
+N	1fr	n3172
+N	1fs	n3171
+N	1ft	n2125
+N	1fu	n91
+N	1fv	n2433
+N	1fw	n62
+N	1fx	n90
+N	1fy	n57
+N	1fz	n89
+N	1g0	n63
+N	1g1	n88
+N	1g2	n59
+N	1g3	n87
+N	1g4	n60
+N	1g5	n86
+N	1g6	n56
+N	1g7	n85
+N	1g8	n61
+N	1g9	n84
+N	1ga	n83
+N	1gb	n58
+N	1gc	n82
+N	1gd	n45
+N	1ge	n81
+N	1gf	n69
+N	1gg	n80
+N	1gh	n79
+N	1gi	n73
+N	1gj	n67
+N	1gk	n68
+N	1gl	n78
+N	1gm	n77
+N	1gn	n75
+N	1go	n66
+N	1gp	n65
+N	1gq	n74
+N	1gr	n72
+N	1gs	n76
+N	1gt	n70
+N	1gu	n71
+N	1gv	n48
+N	1gw	n53
+N	1gx	n51
+N	1gy	n44
+N	1gz	n54
+N	1h0	n50
+N	1h1	n47
+N	1h2	n55
+N	1h3	n64
+N	1h4	n52
+N	1h5	n2422
+N	1h6	n49
+N	1h7	n2424
+N	1h8	n46
+N	1h9	n2423
+N	1ha	n2426
+N	1hb	n2425
+N	1hc	n2429
+N	1hd	n2428
+N	1he	n2431
+N	1hf	n2432
+N	1hg	n2430
+N	1hh	n2427
+N	1hi	n2421
+N	1hj	n151
+N	1hk	n111
+N	1hl	n150
+N	1hm	n112
+N	1hn	n149
+N	1ho	n113
+N	1hp	n148
+N	1hq	n115
+N	1hr	n147
+N	1hs	n109
+N	1ht	n146
+N	1hu	n145
+N	1hv	n110
+N	1hw	n144
+N	1hx	n93
+N	1hy	n143
+N	1hz	n128
+N	1i0	n142
+N	1i1	n141
+N	1i2	n133
+N	1i3	n118
+N	1i4	n126
+N	1i5	n140
+N	1i6	n139
+N	1i7	n132
+N	1i8	n120
+N	1i9	n124
+N	1ia	n138
+N	1ib	n137
+N	1ic	n131
+N	1id	n127
+N	1ie	n119
+N	1if	n136
+N	1ig	n135
+N	1ih	n130
+N	1ii	n117
+N	1ij	n122
+N	1ik	n129
+N	1il	n121
+N	1im	n134
+N	1in	n123
+N	1io	n125
+N	1ip	n99
+N	1iq	n96
+N	1ir	n105
+N	1is	n102
+N	1it	n107
+N	1iu	n98
+N	1iv	n104
+N	1iw	n95
+N	1ix	n92
+N	1iy	n108
+N	1iz	n101
+N	1j0	n116
+N	1j1	n114
+N	1j2	n106
+N	1j3	n103
+N	1j4	n100
+N	1j5	n97
+N	1j6	n94
+N	1j7	n211
+N	1j8	n2338
+N	1j9	n171
+N	1ja	n210
+N	1jb	n172
+N	1jc	n209
+N	1jd	n173
+N	1je	n208
+N	1jf	n175
+N	1jg	n207
+N	1jh	n169
+N	1ji	n206
+N	1jj	n205
+N	1jk	n170
+N	1jl	n204
+N	1jm	n153
+N	1jn	n203
+N	1jo	n188
+N	1jp	n202
+N	1jq	n201
+N	1jr	n193
+N	1js	n178
+N	1jt	n186
+N	1ju	n200
+N	1jv	n199
+N	1jw	n192
+N	1jx	n180
+N	1jy	n184
+N	1jz	n198
+N	1k0	n197
+N	1k1	n191
+N	1k2	n187
+N	1k3	n179
+N	1k4	n196
+N	1k5	n195
+N	1k6	n190
+N	1k7	n177
+N	1k8	n182
+N	1k9	n189
+N	1ka	n181
+N	1kb	n194
+N	1kc	n183
+N	1kd	n185
+N	1ke	n159
+N	1kf	n156
+N	1kg	n165
+N	1kh	n162
+N	1ki	n167
+N	1kj	n158
+N	1kk	n164
+N	1kl	n155
+N	1km	n152
+N	1kn	n168
+N	1ko	n161
+N	1kp	n176
+N	1kq	n174
+N	1kr	n166
+N	1ks	n2327
+N	1kt	n163
+N	1ku	n2329
+N	1kv	n160
+N	1kw	n2328
+N	1kx	n157
+N	1ky	n2331
+N	1kz	n154
+N	1l0	n2330
+N	1l1	n2333
+N	1l2	n2334
+N	1l3	n2335
+N	1l4	n2337
+N	1l5	n2336
+N	1l6	n2332
+N	1l7	n2326
+N	1l8	n253
+N	1l9	n226
+N	1la	n252
+N	1lb	n223
+N	1lc	n251
+N	1ld	n227
+N	1le	n250
+N	1lf	n224
+N	1lg	n249
+N	1lh	n225
+N	1li	n248
+N	1lj	n222
+N	1lk	n247
+N	1ll	n220
+N	1lm	n246
+N	1ln	n228
+N	1lo	n244
+N	1lp	n245
+N	1lq	n213
+N	1lr	n242
+N	1ls	n221
+N	1lt	n243
+N	1lu	n236
+N	1lv	n241
+N	1lw	n240
+N	1lx	n237
+N	1ly	n232
+N	1lz	n233
+N	1m0	n238
+N	1m1	n231
+N	1m2	n239
+N	1m3	n234
+N	1m4	n235
+N	1m5	n218
+N	1m6	n216
+N	1m7	n215
+N	1m8	n212
+N	1m9	n219
+N	1ma	n229
+N	1mb	n230
+N	1mc	n217
+N	1md	n214
+N	1me	n301
+N	1mf	n297
+N	1mg	n300
+N	1mh	n296
+N	1mi	n299
+N	1mj	n298
+N	1mk	n293
+N	1ml	n255
+N	1mm	n294
+N	1mn	n295
+N	1mo	n292
+N	1mp	n254
+N	1mq	n291
+N	1mr	n290
+N	1ms	n261
+N	1mt	n288
+N	1mu	n289
+N	1mv	n287
+N	1mw	n272
+N	1mx	n268
+N	1my	n267
+N	1mz	n285
+N	1n0	n286
+N	1n1	n284
+N	1n2	n271
+N	1n3	n265
+N	1n4	n264
+N	1n5	n282
+N	1n6	n283
+N	1n7	n281
+N	1n8	n270
+N	1n9	n269
+N	1na	n259
+N	1nb	n279
+N	1nc	n280
+N	1nd	n277
+N	1ne	n274
+N	1nf	n258
+N	1ng	n278
+N	1nh	n263
+N	1ni	n273
+N	1nj	n260
+N	1nk	n276
+N	1nl	n266
+N	1nm	n275
+N	1nn	n262
+N	1no	n256
+N	1np	n257
+N	1nq	n399
+N	1nr	n374
+N	1ns	n356
+N	1nt	n398
+N	1nu	n397
+N	1nv	n377
+N	1nw	n346
+N	1nx	n343
+N	1ny	n396
+N	1nz	n395
+N	1o0	n376
+N	1o1	n358
+N	1o2	n359
+N	1o3	n394
+N	1o4	n393
+N	1o5	n375
+N	1o6	n362
+N	1o7	n345
+N	1o8	n392
+N	1o9	n391
+N	1oa	n370
+N	1ob	n363
+N	1oc	n361
+N	1od	n390
+N	1oe	n389
+N	1of	n369
+N	1og	n354
+N	1oh	n357
+N	1oi	n388
+N	1oj	n387
+N	1ok	n368
+N	1ol	n342
+N	1om	n349
+N	1on	n386
+N	1oo	n385
+N	1op	n367
+N	1oq	n352
+N	1or	n344
+N	1os	n384
+N	1ot	n383
+N	1ou	n373
+N	1ov	n348
+N	1ow	n351
+N	1ox	n382
+N	1oy	n381
+N	1oz	n372
+N	1p0	n364
+N	1p1	n347
+N	1p2	n380
+N	1p3	n379
+N	1p4	n366
+N	1p5	n365
+N	1p6	n353
+N	1p7	n371
+N	1p8	n360
+N	1p9	n378
+N	1pa	n350
+N	1pb	n355
+N	1pc	n307
+N	1pd	n304
+N	1pe	n309
+N	1pf	n311
+N	1pg	n324
+N	1ph	n333
+N	1pi	n329
+N	1pj	n327
+N	1pk	n315
+N	1pl	n318
+N	1pm	n321
+N	1pn	n336
+N	1po	n335
+N	1pp	n332
+N	1pq	n326
+N	1pr	n314
+N	1ps	n317
+N	1pt	n330
+N	1pu	n320
+N	1pv	n312
+N	1pw	n323
+N	1px	n303
+N	1py	n306
+N	1pz	n341
+N	1q0	n340
+N	1q1	n339
+N	1q2	n337
+N	1q3	n338
+N	1q4	n334
+N	1q5	n331
+N	1q6	n328
+N	1q7	n325
+N	1q8	n322
+N	1q9	n319
+N	1qa	n316
+N	1qb	n313
+N	1qc	n310
+N	1qd	n308
+N	1qe	n305
+N	1qf	n302
+N	1qg	n473
+N	1qh	n472
+N	1qi	n431
+N	1qj	n401
+N	1qk	n470
+N	1ql	n471
+N	1qm	n469
+N	1qn	n436
+N	1qo	n403
+N	1qp	n418
+N	1qq	n467
+N	1qr	n468
+N	1qs	n466
+N	1qt	n435
+N	1qu	n419
+N	1qv	n417
+N	1qw	n464
+N	1qx	n465
+N	1qy	n463
+N	1qz	n434
+N	1r0	n420
+N	1r1	n411
+N	1r2	n461
+N	1r3	n462
+N	1r4	n460
+N	1r5	n433
+N	1r6	n409
+N	1r7	n413
+N	1r8	n458
+N	1r9	n459
+N	1ra	n457
+N	1rb	n432
+N	1rc	n421
+N	1rd	n414
+N	1re	n455
+N	1rf	n456
+N	1rg	n454
+N	1rh	n427
+N	1ri	n400
+N	1rj	n404
+N	1rk	n452
+N	1rl	n453
+N	1rm	n451
+N	1rn	n426
+N	1ro	n416
+N	1rp	n422
+N	1rq	n449
+N	1rr	n450
+N	1rs	n448
+N	1rt	n425
+N	1ru	n406
+N	1rv	n410
+N	1rw	n446
+N	1rx	n447
+N	1ry	n445
+N	1rz	n430
+N	1s0	n407
+N	1s1	n412
+N	1s2	n443
+N	1s3	n444
+N	1s4	n442
+N	1s5	n424
+N	1s6	n405
+N	1s7	n408
+N	1s8	n440
+N	1s9	n441
+N	1sa	n438
+N	1sb	n429
+N	1sc	n415
+N	1sd	n439
+N	1se	n428
+N	1sf	n402
+N	1sg	n437
+N	1sh	n423
+N	1si	n547
+N	1sj	n546
+N	1sk	n505
+N	1sl	n475
+N	1sm	n544
+N	1sn	n545
+N	1so	n543
+N	1sp	n510
+N	1sq	n477
+N	1sr	n492
+N	1ss	n541
+N	1st	n542
+N	1su	n540
+N	1sv	n509
+N	1sw	n493
+N	1sx	n491
+N	1sy	n538
+N	1sz	n539
+N	1t0	n537
+N	1t1	n508
+N	1t2	n494
+N	1t3	n485
+N	1t4	n535
+N	1t5	n536
+N	1t6	n534
+N	1t7	n507
+N	1t8	n483
+N	1t9	n487
+N	1ta	n532
+N	1tb	n533
+N	1tc	n531
+N	1td	n506
+N	1te	n495
+N	1tf	n488
+N	1tg	n529
+N	1th	n530
+N	1ti	n528
+N	1tj	n501
+N	1tk	n474
+N	1tl	n478
+N	1tm	n526
+N	1tn	n527
+N	1to	n525
+N	1tp	n500
+N	1tq	n490
+N	1tr	n496
+N	1ts	n523
+N	1tt	n524
+N	1tu	n522
+N	1tv	n499
+N	1tw	n480
+N	1tx	n484
+N	1ty	n520
+N	1tz	n521
+N	1u0	n519
+N	1u1	n504
+N	1u2	n481
+N	1u3	n486
+N	1u4	n517
+N	1u5	n518
+N	1u6	n516
+N	1u7	n498
+N	1u8	n479
+N	1u9	n482
+N	1ua	n514
+N	1ub	n515
+N	1uc	n512
+N	1ud	n503
+N	1ue	n489
+N	1uf	n513
+N	1ug	n502
+N	1uh	n476
+N	1ui	n511
+N	1uj	n497
+N	1uk	n593
+N	1ul	n657
+N	1um	n580
+N	1un	n656
+N	1uo	n655
+N	1up	n585
+N	1uq	n581
+N	1ur	n576
+N	1us	n654
+N	1ut	n653
+N	1uu	n595
+N	1uv	n577
+N	1uw	n579
+N	1ux	n652
+N	1uy	n651
+N	1uz	n594
+N	1v0	n578
+N	1v1	n598
+N	1v2	n650
+N	1v3	n597
+N	1v4	n649
+N	1v5	n602
+N	1v6	n648
+N	1v7	n608
+N	1v8	n647
+N	1v9	n607
+N	1va	n646
+N	1vb	n609
+N	1vc	n645
+N	1vd	n606
+N	1ve	n644
+N	1vf	n642
+N	1vg	n615
+N	1vh	n604
+N	1vi	n643
+N	1vj	n603
+N	1vk	n641
+N	1vl	n640
+N	1vm	n616
+N	1vn	n610
+N	1vo	n626
+N	1vp	n639
+N	1vq	n638
+N	1vr	n627
+N	1vs	n625
+N	1vt	n631
+N	1vu	n637
+N	1vv	n635
+N	1vw	n632
+N	1vx	n630
+N	1vy	n636
+N	1vz	n624
+N	1w0	n633
+N	1w1	n629
+N	1w2	n634
+N	1w3	n628
+N	1w4	n574
+N	1w5	n619
+N	1w6	n614
+N	1w7	n623
+N	1w8	n621
+N	1w9	n613
+N	1wa	n622
+N	1wb	n620
+N	1wc	n587
+N	1wd	n611
+N	1we	n612
+N	1wf	n575
+N	1wg	n605
+N	1wh	n584
+N	1wi	n592
+N	1wj	n586
+N	1wk	n618
+N	1wl	n571
+N	1wm	n600
+N	1wn	n617
+N	1wo	n573
+N	1wp	n590
+N	1wq	n570
+N	1wr	n589
+N	1ws	n572
+N	1wt	n591
+N	1wu	n569
+N	1wv	n588
+N	1ww	n567
+N	1wx	n596
+N	1wy	n582
+N	1wz	n599
+N	1x0	n565
+N	1x1	n601
+N	1x2	n583
+N	1x3	n566
+N	1x4	n568
+N	1x5	n550
+N	1x6	n548
+N	1x7	n558
+N	1x8	n549
+N	1x9	n560
+N	1xa	n559
+N	1xb	n557
+N	1xc	n562
+N	1xd	n552
+N	1xe	n561
+N	1xf	n551
+N	1xg	n556
+N	1xh	n553
+N	1xi	n564
+N	1xj	n555
+N	1xk	n563
+N	1xl	n554
+N	1xm	n680
+N	1xn	n679
+N	1xo	n678
+N	1xp	n677
+N	1xq	n676
+N	1xr	n670
+N	1xs	n681
+N	1xt	n675
+N	1xu	n684
+N	1xv	n671
+N	1xw	n685
+N	1xx	n668
+N	1xy	n683
+N	1xz	n666
+N	1y0	n682
+N	1y1	n659
+N	1y2	n673
+N	1y3	n674
+N	1y4	n669
+N	1y5	n672
+N	1y6	n662
+N	1y7	n667
+N	1y8	n664
+N	1y9	n661
+N	1ya	n665
+N	1yb	n663
+N	1yc	n660
+N	1yd	n658
+N	1ye	n810
+N	1yf	n730
+N	1yg	n809
+N	1yh	n755
+N	1yi	n808
+N	1yj	n807
+N	1yk	n757
+N	1yl	n696
+N	1ym	n760
+N	1yn	n806
+N	1yo	n761
+N	1yp	n805
+N	1yq	n758
+N	1yr	n804
+N	1ys	n768
+N	1yt	n803
+N	1yu	n765
+N	1yv	n802
+N	1yw	n767
+N	1yx	n801
+N	1yy	n770
+N	1yz	n800
+N	1z0	n763
+N	1z1	n799
+N	1z2	n762
+N	1z3	n798
+N	1z4	n796
+N	1z5	n774
+N	1z6	n759
+N	1z7	n797
+N	1z8	n782
+N	1z9	n795
+N	1za	n794
+N	1zb	n783
+N	1zc	n781
+N	1zd	n788
+N	1ze	n793
+N	1zf	n792
+N	1zg	n789
+N	1zh	n787
+N	1zi	n784
+N	1zj	n790
+N	1zk	n786
+N	1zl	n791
+N	1zm	n785
+N	1zn	n741
+N	1zo	n687
+N	1zp	n773
+N	1zq	n688
+N	1zr	n764
+N	1zs	n695
+N	1zt	n779
+N	1zu	n740
+N	1zv	n766
+N	1zw	n780
+N	1zx	n691
+N	1zy	n772
+N	1zz	n771
+N	200	n756
+N	201	n769
+N	202	n778
+N	203	n689
+N	204	n738
+N	205	n777
+N	206	n693
+N	207	n747
+N	208	n776
+N	209	n686
+N	20a	n736
+N	20b	n775
+N	20c	n690
+N	20d	n737
+N	20e	n692
+N	20f	n739
+N	20g	n707
+N	20h	n751
+N	20i	n733
+N	20j	n694
+N	20k	n745
+N	20l	n754
+N	20m	n742
+N	20n	n752
+N	20o	n746
+N	20p	n701
+N	20q	n734
+N	20r	n753
+N	20s	n731
+N	20t	n735
+N	20u	n744
+N	20v	n743
+N	20w	n750
+N	20x	n715
+N	20y	n749
+N	20z	n712
+N	210	n748
+N	211	n699
+N	212	n714
+N	213	n703
+N	214	n709
+N	215	n698
+N	216	n711
+N	217	n705
+N	218	n721
+N	219	n727
+N	21a	n725
+N	21b	n719
+N	21c	n718
+N	21d	n732
+N	21e	n720
+N	21f	n717
+N	21g	n726
+N	21h	n722
+N	21i	n724
+N	21j	n728
+N	21k	n729
+N	21l	n723
+N	21m	n716
+N	21n	n713
+N	21o	n710
+N	21p	n708
+N	21q	n706
+N	21r	n704
+N	21s	n702
+N	21t	n700
+N	21u	n697
+N	21v	n818
+N	21w	n819
+N	21x	n821
+N	21y	n820
+N	21z	n823
+N	220	n822
+N	221	n817
+N	222	n816
+N	223	n969
+N	224	n981
+N	225	n948
+N	226	n980
+N	227	n974
+N	228	n982
+N	229	n971
+N	22a	n979
+N	22b	n976
+N	22c	n978
+N	22d	n966
+N	22e	n843
+N	22f	n967
+N	22g	n845
+N	22h	n965
+N	22i	n847
+N	22j	n964
+N	22k	n849
+N	22l	n977
+N	22m	n950
+N	22n	n956
+N	22o	n824
+N	22p	n973
+N	22q	n975
+N	22r	n947
+N	22s	n959
+N	22t	n970
+N	22u	n972
+N	22v	n968
+N	22w	n926
+N	22x	n951
+N	22y	n933
+N	22z	n957
+N	230	n866
+N	231	n954
+N	232	n874
+N	233	n962
+N	234	n944
+N	235	n961
+N	236	n876
+N	237	n963
+N	238	n943
+N	239	n953
+N	23a	n880
+N	23b	n955
+N	23c	n938
+N	23d	n952
+N	23e	n960
+N	23f	n922
+N	23g	n958
+N	23h	n811
+N	23i	n927
+N	23j	n935
+N	23k	n923
+N	23l	n815
+N	23m	n917
+N	23n	n813
+N	23o	n916
+N	23p	n812
+N	23q	n925
+N	23r	n941
+N	23s	n886
+N	23t	n934
+N	23u	n899
+N	23v	n814
+N	23w	n825
+N	23x	n942
+N	23y	n910
+N	23z	n940
+N	240	n921
+N	241	n946
+N	242	n945
+N	243	n936
+N	244	n909
+N	245	n924
+N	246	n841
+N	247	n918
+N	248	n937
+N	249	n912
+N	24a	n939
+N	24b	n915
+N	24c	n949
+N	24d	n835
+N	24e	n920
+N	24f	n908
+N	24g	n837
+N	24h	n913
+N	24i	n903
+N	24j	n905
+N	24k	n900
+N	24l	n833
+N	24m	n919
+N	24n	n829
+N	24o	n911
+N	24p	n906
+N	24q	n839
+N	24r	n914
+N	24s	n827
+N	24t	n831
+N	24u	n932
+N	24v	n855
+N	24w	n931
+N	24x	n864
+N	24y	n930
+N	24z	n858
+N	250	n929
+N	251	n861
+N	252	n928
+N	253	n852
+N	254	n868
+N	255	n888
+N	256	n907
+N	257	n904
+N	258	n878
+N	259	n854
+N	25a	n884
+N	25b	n860
+N	25c	n882
+N	25d	n857
+N	25e	n872
+N	25f	n851
+N	25g	n897
+N	25h	n898
+N	25i	n895
+N	25j	n893
+N	25k	n889
+N	25l	n894
+N	25m	n863
+N	25n	n870
+N	25o	n891
+N	25p	n890
+N	25q	n901
+N	25r	n902
+N	25s	n892
+N	25t	n896
+N	25u	n887
+N	25v	n885
+N	25w	n883
+N	25x	n881
+N	25y	n879
+N	25z	n877
+N	260	n875
+N	261	n873
+N	262	n871
+N	263	n869
+N	264	n867
+N	265	n865
+N	266	n862
+N	267	n859
+N	268	n856
+N	269	n853
+N	26a	n850
+N	26b	n848
+N	26c	n846
+N	26d	n844
+N	26e	n842
+N	26f	n840
+N	26g	n838
+N	26h	n836
+N	26i	n834
+N	26j	n832
+N	26k	n830
+N	26l	n828
+N	26m	n826
+N	26n	n991
+N	26o	n984
+N	26p	n1054
+N	26q	n992
+N	26r	n985
+N	26s	n983
+N	26t	n986
+N	26u	n989
+N	26v	n988
+N	26w	n990
+N	26x	n987
+N	26y	n1051
+N	26z	n1060
+N	270	n1052
+N	271	n1061
+N	272	n1036
+N	273	n1057
+N	274	n1046
+N	275	n1064
+N	276	n1045
+N	277	n1059
+N	278	n1038
+N	279	n1055
+N	27a	n1049
+N	27b	n1058
+N	27c	n1043
+N	27d	n1062
+N	27e	n1048
+N	27f	n1063
+N	27g	n1039
+N	27h	n1044
+N	27i	n1050
+N	27j	n1047
+N	27k	n1042
+N	27l	n1040
+N	27m	n1035
+N	27n	n1037
+N	27o	n1056
+N	27p	n1041
+N	27q	n1053
+N	27r	n1034
+N	27s	n994
+N	27t	n1027
+N	27u	n997
+N	27v	n1025
+N	27w	n1019
+N	27x	n1015
+N	27y	n1012
+N	27z	n1023
+N	280	n1006
+N	281	n1033
+N	282	n998
+N	283	n1003
+N	284	n1029
+N	285	n1017
+N	286	n1007
+N	287	n1000
+N	288	n1031
+N	289	n1004
+N	28a	n995
+N	28b	n1009
+N	28c	n1021
+N	28d	n1010
+N	28e	n1013
+N	28f	n1032
+N	28g	n1030
+N	28h	n1028
+N	28i	n1026
+N	28j	n1024
+N	28k	n1022
+N	28l	n1020
+N	28m	n1018
+N	28n	n1016
+N	28o	n1014
+N	28p	n1011
+N	28q	n1008
+N	28r	n1005
+N	28s	n1002
+N	28t	n1001
+N	28u	n999
+N	28v	n996
+N	28w	n993
+N	28x	n1194
+N	28y	n1245
+N	28z	n1235
+N	290	n1244
+N	291	n1233
+N	292	n1243
+N	293	n1073
+N	294	n1072
+N	295	n1232
+N	296	n1242
+N	297	n1240
+N	298	n1250
+N	299	n1212
+N	29a	n1251
+N	29b	n1237
+N	29c	n1249
+N	29d	n1238
+N	29e	n1248
+N	29f	n1230
+N	29g	n1246
+N	29h	n1231
+N	29i	n1247
+N	29j	n1172
+N	29k	n1227
+N	29l	n1234
+N	29m	n1214
+N	29n	n1197
+N	29o	n1068
+N	29p	n1210
+N	29q	n1239
+N	29r	n1236
+N	29s	n1228
+N	29t	n1229
+N	29u	n1241
+N	29v	n1195
+N	29w	n1065
+N	29x	n1196
+N	29y	n1066
+N	29z	n1198
+N	2a0	n1067
+N	2a1	n1226
+N	2a2	n1149
+N	2a3	n1216
+N	2a4	n1141
+N	2a5	n1221
+N	2a6	n1136
+N	2a7	n1223
+N	2a8	n1146
+N	2a9	n1217
+N	2aa	n1203
+N	2ab	n1220
+N	2ac	n1135
+N	2ad	n1222
+N	2ae	n1213
+N	2af	n1215
+N	2ag	n1209
+N	2ah	n1218
+N	2ai	n1148
+N	2aj	n1145
+N	2ak	n1201
+N	2al	n1219
+N	2am	n1125
+N	2an	n1224
+N	2ao	n1140
+N	2ap	n1185
+N	2aq	n1189
+N	2ar	n1168
+N	2as	n1225
+N	2at	n1191
+N	2au	n1192
+N	2av	n1131
+N	2aw	n1187
+N	2ax	n1143
+N	2ay	n1186
+N	2az	n1133
+N	2b0	n1188
+N	2b1	n1138
+N	2b2	n1211
+N	2b3	n1208
+N	2b4	n1200
+N	2b5	n1174
+N	2b6	n1204
+N	2b7	n1173
+N	2b8	n1202
+N	2b9	n1180
+N	2ba	n1205
+N	2bb	n1179
+N	2bc	n1207
+N	2bd	n1080
+N	2be	n1193
+N	2bf	n1199
+N	2bg	n1100
+N	2bh	n1181
+N	2bi	n1175
+N	2bj	n1206
+N	2bk	n1112
+N	2bl	n1177
+N	2bm	n1101
+N	2bn	n1182
+N	2bo	n1169
+N	2bp	n1162
+N	2bq	n1103
+N	2br	n1178
+N	2bs	n1170
+N	2bt	n1163
+N	2bu	n1096
+N	2bv	n1076
+N	2bw	n1092
+N	2bx	n1075
+N	2by	n1086
+N	2bz	n1079
+N	2c0	n1090
+N	2c1	n1074
+N	2c2	n1106
+N	2c3	n1183
+N	2c4	n1098
+N	2c5	n1077
+N	2c6	n1109
+N	2c7	n1184
+N	2c8	n1164
+N	2c9	n1161
+N	2ca	n1165
+N	2cb	n1160
+N	2cc	n1078
+N	2cd	n1115
+N	2ce	n1190
+N	2cf	n1123
+N	2cg	n1129
+N	2ch	n1151
+N	2ci	n1119
+N	2cj	n1121
+N	2ck	n1117
+N	2cl	n1176
+N	2cm	n1088
+N	2cn	n1094
+N	2co	n1071
+N	2cp	n1069
+N	2cq	n1070
+N	2cr	n1166
+N	2cs	n1127
+N	2ct	n1157
+N	2cu	n1084
+N	2cv	n1152
+N	2cw	n1153
+N	2cx	n1171
+N	2cy	n1167
+N	2cz	n1158
+N	2d0	n1082
+N	2d1	n1156
+N	2d2	n1159
+N	2d3	n1154
+N	2d4	n1155
+N	2d5	n1110
+N	2d6	n1107
+N	2d7	n1113
+N	2d8	n1104
+N	2d9	n1150
+N	2da	n1147
+N	2db	n1144
+N	2dc	n1142
+N	2dd	n1139
+N	2de	n1137
+N	2df	n1134
+N	2dg	n1132
+N	2dh	n1130
+N	2di	n1128
+N	2dj	n1126
+N	2dk	n1124
+N	2dl	n1122
+N	2dm	n1120
+N	2dn	n1118
+N	2do	n1116
+N	2dp	n1114
+N	2dq	n1111
+N	2dr	n1108
+N	2ds	n1105
+N	2dt	n1102
+N	2du	n1099
+N	2dv	n1097
+N	2dw	n1095
+N	2dx	n1093
+N	2dy	n1091
+N	2dz	n1089
+N	2e0	n1087
+N	2e1	n1085
+N	2e2	n1083
+N	2e3	n1081
+N	2e4	n1313
+N	2e5	n1318
+N	2e6	n1315
+N	2e7	n1261
+N	2e8	n1314
+N	2e9	n1319
+N	2ea	n1312
+N	2eb	n1317
+N	2ec	n1316
+N	2ed	n1263
+N	2ee	n1311
+N	2ef	n1257
+N	2eg	n1310
+N	2eh	n1309
+N	2ei	n1259
+N	2ej	n1308
+N	2ek	n1290
+N	2el	n1330
+N	2em	n1297
+N	2en	n1329
+N	2eo	n1302
+N	2ep	n1328
+N	2eq	n1253
+N	2er	n1326
+N	2es	n1255
+N	2et	n1322
+N	2eu	n1299
+N	2ev	n1324
+N	2ew	n1252
+N	2ex	n1327
+N	2ey	n1293
+N	2ez	n1320
+N	2f0	n1254
+N	2f1	n1323
+N	2f2	n1303
+N	2f3	n1321
+N	2f4	n1300
+N	2f5	n1325
+N	2f6	n1292
+N	2f7	n1294
+N	2f8	n1298
+N	2f9	n1285
+N	2fa	n1306
+N	2fb	n1270
+N	2fc	n1305
+N	2fd	n1301
+N	2fe	n1296
+N	2ff	n1272
+N	2fg	n1304
+N	2fh	n1268
+N	2fi	n1307
+N	2fj	n1291
+N	2fk	n1295
+N	2fl	n1277
+N	2fm	n1274
+N	2fn	n1265
+N	2fo	n1280
+N	2fp	n1283
+N	2fq	n1287
+N	2fr	n1288
+N	2fs	n1289
+N	2ft	n1286
+N	2fu	n1278
+N	2fv	n1266
+N	2fw	n1284
+N	2fx	n1281
+N	2fy	n1275
+N	2fz	n1282
+N	2g0	n1279
+N	2g1	n1276
+N	2g2	n1273
+N	2g3	n1271
+N	2g4	n1269
+N	2g5	n1267
+N	2g6	n1264
+N	2g7	n1262
+N	2g8	n1260
+N	2g9	n1258
+N	2ga	n1256
+N	2gb	n1391
+N	2gc	n1360
+N	2gd	n1344
+N	2ge	n1390
+N	2gf	n1389
+N	2gg	n1363
+N	2gh	n1349
+N	2gi	n1331
+N	2gj	n1388
+N	2gk	n1387
+N	2gl	n1362
+N	2gm	n1347
+N	2gn	n1343
+N	2go	n1386
+N	2gp	n1385
+N	2gq	n1355
+N	2gr	n1342
+N	2gs	n1335
+N	2gt	n1384
+N	2gu	n1383
+N	2gv	n1359
+N	2gw	n1333
+N	2gx	n1354
+N	2gy	n1382
+N	2gz	n1381
+N	2h0	n1358
+N	2h1	n1353
+N	2h2	n1348
+N	2h3	n1380
+N	2h4	n1379
+N	2h5	n1357
+N	2h6	n1337
+N	2h7	n1341
+N	2h8	n1378
+N	2h9	n1377
+N	2ha	n1356
+N	2hb	n1346
+N	2hc	n1352
+N	2hd	n1376
+N	2he	n1375
+N	2hf	n1361
+N	2hg	n1351
+N	2hh	n1334
+N	2hi	n1374
+N	2hj	n1373
+N	2hk	n1367
+N	2hl	n1350
+N	2hm	n1339
+N	2hn	n1372
+N	2ho	n1371
+N	2hp	n1366
+N	2hq	n1332
+N	2hr	n1338
+N	2hs	n1370
+N	2ht	n1369
+N	2hu	n1365
+N	2hv	n1340
+N	2hw	n1364
+N	2hx	n1336
+N	2hy	n1368
+N	2hz	n1345
+N	2i0	n1452
+N	2i1	n1421
+N	2i2	n1405
+N	2i3	n1451
+N	2i4	n1450
+N	2i5	n1424
+N	2i6	n1410
+N	2i7	n1392
+N	2i8	n1449
+N	2i9	n1448
+N	2ia	n1423
+N	2ib	n1408
+N	2ic	n1404
+N	2id	n1447
+N	2ie	n1446
+N	2if	n1416
+N	2ig	n1403
+N	2ih	n1396
+N	2ii	n1445
+N	2ij	n1444
+N	2ik	n1420
+N	2il	n1394
+N	2im	n1415
+N	2in	n1443
+N	2io	n1442
+N	2ip	n1419
+N	2iq	n1414
+N	2ir	n1409
+N	2is	n1441
+N	2it	n1440
+N	2iu	n1418
+N	2iv	n1398
+N	2iw	n1402
+N	2ix	n1439
+N	2iy	n1438
+N	2iz	n1417
+N	2j0	n1407
+N	2j1	n1413
+N	2j2	n1437
+N	2j3	n1436
+N	2j4	n1422
+N	2j5	n1412
+N	2j6	n1395
+N	2j7	n1435
+N	2j8	n1434
+N	2j9	n1428
+N	2ja	n1411
+N	2jb	n1400
+N	2jc	n1433
+N	2jd	n1432
+N	2je	n1427
+N	2jf	n1393
+N	2jg	n1399
+N	2jh	n1431
+N	2ji	n1430
+N	2jj	n1426
+N	2jk	n1401
+N	2jl	n1425
+N	2jm	n1397
+N	2jn	n1429
+N	2jo	n1406
+
+[gate_dictionary]
+G	0	4n	g0	NOT
+G	1	4o	g1	NOT
+G	2	4p	g2	XOR
+G	3	4q	g3	XOR
+G	4	4r	g4	XOR
+G	5	4s	g5	XOR
+G	6	4t	g6	XOR
+G	7	4u	g7	XOR
+G	8	4v	g8	XOR
+G	9	4w	g9	BUF
+G	a	4x	g10	BUF
+G	b	4y	g11	BUF
+G	c	4z	g12	BUF
+G	d	50	g13	BUF
+G	e	51	g14	BUF
+G	f	52	g15	BUF
+G	g	53	g16	OR
+G	h	56	g17	OR
+G	i	59	g18	OR
+G	j	5c	g19	OR
+G	k	5f	g20	OR
+G	l	5i	g21	OR
+G	m	5l	g22	OR
+G	n	5o	g23	OR
+G	o	5r	g24	OR
+G	p	5u	g25	OR
+G	q	5x	g26	OR
+G	r	60	g27	OR
+G	s	63	g28	OR
+G	t	66	g29	OR
+G	u	69	g30	OR
+G	v	6c	g31	OR
+G	w	6f	g32	OR
+G	x	6i	g33	OR
+G	y	58	g34	OR
+G	z	6n	g35	OR
+G	10	5b	g36	OR
+G	11	5e	g37	OR
+G	12	6u	g38	OR
+G	13	5h	g39	OR
+G	14	5k	g40	OR
+G	15	55	g41	OR
+G	16	68	g42	OR
+G	17	5t	g43	OR
+G	18	5w	g44	OR
+G	19	79	g45	OR
+G	1a	5z	g46	OR
+G	1b	7e	g47	OR
+G	1c	62	g48	OR
+G	1d	7j	g49	OR
+G	1e	7m	g50	OR
+G	1f	64	g51	OR
+G	1g	5q	g52	OR
+G	1h	7t	g53	OR
+G	1i	7w	g54	OR
+G	1j	5m	g55	OR
+G	1k	6d	g56	OR
+G	1l	6e	g57	OR
+G	1m	7v	g58	OR
+G	1n	6g	g59	OR
+G	1o	6h	g60	OR
+G	1p	6m	g61	OR
+G	1q	7f	g62	OR
+G	1r	6r	g63	OR
+G	1s	7g	g64	OR
+G	1t	6o	g65	OR
+G	1u	6a	g66	OR
+G	1v	6j	g67	OR
+G	1w	6t	g68	OR
+G	1x	6b	g69	OR
+G	1y	6k	g70	OR
+G	1z	6y	g71	OR
+G	20	70	g72	OR
+G	21	72	g73	OR
+G	22	6p	g74	OR
+G	23	6v	g75	OR
+G	24	5n	g76	OR
+G	25	6w	g77	OR
+G	26	76	g78	OR
+G	27	7k	g79	OR
+G	28	78	g80	OR
+G	29	7a	g81	OR
+G	2a	7d	g82	OR
+G	2b	7b	g83	OR
+G	2c	7i	g84	OR
+G	2d	7q	g85	OR
+G	2e	65	g86	OR
+G	2f	7l	g87	OR
+G	2g	7n	g88	OR
+G	2h	7s	g89	OR
+G	2i	9x	g90	OR
+G	2j	7o	g91	OR
+G	2k	7u	g92	OR
+G	2l	7x	g93	OR
+G	2m	7y	g94	OR
+G	2n	80	g95	OR
+G	2o	74	g96	OR
+G	2p	9n	g97	AND
+G	2q	89	g98	AND
+G	2r	8c	g99	AND
+G	2s	8g	g100	AND
+G	2t	8q	g101	AND
+G	2u	8o	g102	AND
+G	2v	8w	g103	AND
+G	2w	8x	g104	AND
+G	2x	8m	g105	AND
+G	2y	91	g106	AND
+G	2z	8z	g107	AND
+G	30	a9	g108	AND
+G	31	97	g109	AND
+G	32	99	g110	AND
+G	33	9d	g111	AND
+G	34	9g	g112	AND
+G	35	9h	g113	AND
+G	36	9c	g114	AND
+G	37	9l	g115	AND
+G	38	82	g116	AND
+G	39	9v	g117	AND
+G	3a	9z	g118	AND
+G	3b	8e	g119	AND
+G	3c	a7	g120	AND
+G	3d	a2	g121	AND
+G	3e	a5	g122	AND
+G	3f	85	g123	AND
+G	3g	bi	g124	AND
+G	3h	83	g125	AND
+G	3i	bl	g126	AND
+G	3j	88	g127	AND
+G	3k	bo	g128	AND
+G	3l	bq	g129	AND
+G	3m	bs	g130	AND
+G	3n	bu	g131	AND
+G	3o	bv	g132	AND
+G	3p	8a	g133	OR
+G	3q	84	g134	OR
+G	3r	86	g135	OR
+G	3s	9e	g136	AND
+G	3t	8t	g137	AND
+G	3u	96	g138	OR
+G	3v	6z	g139	OR
+G	3w	8r	g140	AND
+G	3x	8y	g141	AND
+G	3y	a8	g142	AND
+G	3z	71	g143	OR
+G	40	90	g144	AND
+G	41	8h	g145	AND
+G	42	a4	g146	AND
+G	43	73	g147	OR
+G	44	94	g148	AND
+G	45	aa	g149	AND
+G	46	9y	g150	OR
+G	47	75	g151	OR
+G	48	9u	g152	AND
+G	49	9a	g153	AND
+G	4a	77	g154	OR
+G	4b	8k	g155	AND
+G	4c	7c	g156	OR
+G	4d	9i	g157	AND
+G	4e	7h	g158	OR
+G	4f	9j	g159	AND
+G	4g	9w	g160	AND
+G	4h	9m	g161	AND
+G	4i	9r	g162	AND
+G	4j	9o	g163	AND
+G	4k	9q	g164	OR
+G	4l	7r	g165	OR
+G	4m	8u	g166	OR
+G	4n	9k	g167	OR
+G	4o	98	g168	OR
+G	4p	a0	g169	OR
+G	4q	92	g170	OR
+G	4r	8i	g171	OR
+G	4s	a6	g172	OR
+G	4t	8s	g173	OR
+G	4u	9s	g174	OR
+G	4v	cp	g175	AND
+G	4w	9f	g176	AND
+G	4x	c5	g177	AND
+G	4y	81	g178	AND
+G	4z	87	g179	AND
+G	50	8b	g180	AND
+G	51	8f	g181	AND
+G	52	8p	g182	AND
+G	53	8n	g183	AND
+G	54	8v	g184	AND
+G	55	8l	g185	AND
+G	56	c7	g186	AND
+G	57	8j	g187	AND
+G	58	cc	g188	AND
+G	59	93	g189	AND
+G	5a	ce	g190	AND
+G	5b	ch	g191	AND
+G	5c	ck	g192	AND
+G	5d	cm	g193	AND
+G	5e	dy	g194	AND
+G	5f	e1	g195	AND
+G	5g	bx	g196	OR
+G	5h	cs	g197	AND
+G	5i	cu	g198	AND
+G	5j	9t	g199	AND
+G	5k	8d	g200	AND
+G	5l	a3	g201	AND
+G	5m	a1	g202	AND
+G	5n	d8	g203	OR
+G	5o	bz	g204	OR
+G	5p	c1	g205	OR
+G	5q	d6	g206	OR
+G	5r	9b	g207	AND
+G	5s	d2	g208	OR
+G	5t	cw	g209	OR
+G	5u	da	g210	OR
+G	5v	d0	g211	OR
+G	5w	d4	g212	OR
+G	5x	cy	g213	OR
+G	5y	cf	g214	OR
+G	5z	dc	g215	OR
+G	60	f1	g216	AND
+G	61	f2	g217	AND
+G	62	f3	g218	OR
+G	63	f6	g219	OR
+G	64	ek	g220	AND
+G	65	eg	g221	AND
+G	66	ee	g222	AND
+G	67	ei	g223	AND
+G	68	e5	g224	AND
+G	69	ep	g225	AND
+G	6a	et	g226	AND
+G	6b	er	g227	AND
+G	6c	ex	g228	AND
+G	6d	f0	g229	AND
+G	6e	ev	g230	AND
+G	6f	en	g231	AND
+G	6g	ft	g232	OR
+G	6h	d7	g233	OR
+G	6i	fy	g234	OR
+G	6j	g1	g235	OR
+G	6k	g4	g236	OR
+G	6l	g7	g237	OR
+G	6m	c4	g238	AND
+G	6n	e3	g239	AND
+G	6o	e0	g240	AND
+G	6p	ge	g241	OR
+G	6q	gh	g242	OR
+G	6r	gk	g243	OR
+G	6s	gn	g244	OR
+G	6t	by	g245	OR
+G	6u	c0	g246	OR
+G	6v	57	g247	OR
+G	6w	gw	g248	OR
+G	6x	5a	g249	OR
+G	6y	5d	g250	OR
+G	6z	h3	g251	OR
+G	70	5g	g252	OR
+G	71	cv	g253	OR
+G	72	d9	g254	OR
+G	73	cz	g255	OR
+G	74	d5	g256	OR
+G	75	9p	g257	OR
+G	76	db	g258	OR
+G	77	d1	g259	OR
+G	78	hm	g260	OR
+G	79	hp	g261	AND
+G	7a	hq	g262	AND
+G	7b	hl	g263	AND
+G	7c	gc	g264	NOR
+G	7d	hr	g265	NOR
+G	7e	fx	g266	AND
+G	7f	gr	g267	AND
+G	7g	gt	g268	AND
+G	7h	gv	g269	AND
+G	7i	h0	g270	AND
+G	7j	e4	g271	AND
+G	7k	h2	g272	AND
+G	7l	h7	g273	AND
+G	7m	c6	g274	AND
+G	7n	h9	g275	AND
+G	7o	cb	g276	AND
+G	7p	cd	g277	AND
+G	7q	hb	g278	AND
+G	7r	cg	g279	AND
+G	7s	hd	g280	AND
+G	7t	cj	g281	AND
+G	7u	cl	g282	AND
+G	7v	co	g283	AND
+G	7w	hf	g284	AND
+G	7x	hh	g285	AND
+G	7y	ew	g286	AND
+G	7z	eu	g287	AND
+G	80	ct	g288	AND
+G	81	hj	g289	AND
+G	82	ey	g290	AND
+G	83	ho	g291	OR
+G	84	bw	g292	OR
+G	85	5j	g293	OR
+G	86	54	g294	OR
+G	87	67	g295	OR
+G	88	5s	g296	OR
+G	89	5v	g297	OR
+G	8a	5y	g298	OR
+G	8b	d3	g299	OR
+G	8c	61	g300	OR
+G	8d	cx	g301	OR
+G	8e	cr	g302	AND
+G	8f	5p	g303	OR
+G	8g	gm	g304	OR
+G	8h	jc	g305	AND
+G	8i	h5	g306	OR
+G	8j	gy	g307	OR
+G	8k	g0	g308	OR
+G	8l	g3	g309	OR
+G	8m	g6	g310	OR
+G	8n	g9	g311	OR
+G	8o	fv	g312	OR
+G	8p	f8	g313	OR
+G	8q	f5	g314	OR
+G	8r	gg	g315	OR
+G	8s	gj	g316	OR
+G	8t	gp	g317	OR
+G	8u	k0	g318	AND
+G	8v	hu	g319	NOT
+G	8w	gi	g320	AND
+G	8x	gf	g321	AND
+G	8y	ej	g322	AND
+G	8z	ed	g323	AND
+G	90	ef	g324	AND
+G	91	gu	g325	AND
+G	92	eh	g326	AND
+G	93	iq	g327	AND
+G	94	gz	g328	AND
+G	95	h1	g329	AND
+G	96	h6	g330	AND
+G	97	is	g331	AND
+G	98	iu	g332	AND
+G	99	eo	g333	AND
+G	9a	iw	g334	AND
+G	9b	iy	g335	AND
+G	9c	eq	g336	AND
+G	9d	j0	g337	AND
+G	9e	es	g338	AND
+G	9f	j2	g339	AND
+G	9g	j4	g340	AND
+G	9h	j6	g341	AND
+G	9i	j8	g342	AND
+G	9j	hg	g343	AND
+G	9k	jb	g344	AND
+G	9l	ez	g345	AND
+G	9m	em	g346	AND
+G	9n	ky	g347	AND
+G	9o	g2	g348	AND
+G	9p	go	g349	AND
+G	9q	l5	g350	AND
+G	9r	l7	g351	AND
+G	9s	la	g352	AND
+G	9t	ld	g353	AND
+G	9u	lf	g354	AND
+G	9v	im	g355	AND
+G	9w	j9	g356	AND
+G	9x	lk	g357	AND
+G	9y	lm	g358	AND
+G	9z	f4	g359	AND
+G	a0	g5	g360	AND
+G	a1	f7	g361	AND
+G	a2	lt	g362	AND
+G	a3	lw	g363	AND
+G	a4	fu	g364	AND
+G	a5	g8	g365	AND
+G	a6	m1	g366	AND
+G	a7	h4	g367	AND
+G	a8	fz	g368	AND
+G	a9	gx	g369	AND
+G	aa	gl	g370	AND
+G	ab	m7	g371	OR
+G	ac	ma	g372	OR
+G	ad	md	g373	OR
+G	ae	mg	g374	OR
+G	af	mj	g375	OR
+G	ag	mm	g376	OR
+G	ah	mp	g377	OR
+G	ai	ms	g378	OR
+G	aj	ji	g379	AND
+G	ak	mw	g380	OR
+G	al	jf	g381	AND
+G	am	jg	g382	AND
+G	an	jj	g383	AND
+G	ao	jl	g384	AND
+G	ap	jz	g385	AND
+G	aq	jn	g386	AND
+G	ar	jp	g387	AND
+G	as	jr	g388	AND
+G	at	jt	g389	AND
+G	au	jv	g390	AND
+G	av	jx	g391	AND
+G	aw	io	g392	AND
+G	ax	n6	g393	AND
+G	ay	n8	g394	AND
+G	az	na	g395	NOT
+G	b0	nc	g396	NOT
+G	b1	nd	g397	NOT
+G	b2	hc	g398	AND
+G	b3	jy	g399	AND
+G	b4	mh	g400	AND
+G	b5	ng	g401	AND
+G	b6	ni	g402	AND
+G	b7	mi	g403	AND
+G	b8	mo	g404	AND
+G	b9	mu	g405	AND
+G	ba	mf	g406	AND
+G	bb	nn	g407	AND
+G	bc	no	g408	AND
+G	bd	my	g409	AND
+G	be	nr	g410	AND
+G	bf	mr	g411	AND
+G	bg	ns	g412	AND
+G	bh	ml	g413	AND
+G	bi	nv	g414	AND
+G	bj	nw	g415	AND
+G	bk	ny	g416	AND
+G	bl	mc	g417	AND
+G	bm	o0	g418	AND
+G	bn	o2	g419	AND
+G	bo	o3	g420	AND
+G	bp	m9	g421	AND
+G	bq	o4	g422	AND
+G	br	jw	g423	AND
+G	bs	jo	g424	AND
+G	bt	hi	g425	AND
+G	bu	j1	g426	AND
+G	bv	mt	g427	AND
+G	bw	n9	g428	NOR
+G	bx	me	g429	AND
+G	by	mb	g430	AND
+G	bz	m8	g431	AND
+G	c0	oa	g432	AND
+G	c1	oc	g433	AND
+G	c2	nb	g434	OR
+G	c3	ir	g435	AND
+G	c4	mk	g436	AND
+G	c5	ha	g437	AND
+G	c6	mn	g438	AND
+G	c7	gq	g439	AND
+G	c8	6q	g440	AND
+G	c9	iv	g441	AND
+G	ca	6s	g442	AND
+G	cb	6x	g443	AND
+G	cc	jq	g444	AND
+G	cd	h8	g445	AND
+G	ce	jk	g446	AND
+G	cf	it	g447	AND
+G	cg	mx	g448	AND
+G	ch	lh	g449	NOR
+G	ci	j7	g450	AND
+G	cj	js	g451	AND
+G	ck	ix	g452	AND
+G	cl	gs	g453	AND
+G	cm	iz	g454	AND
+G	cn	hk	g455	AND
+G	co	he	g456	AND
+G	cp	j3	g457	AND
+G	cq	mq	g458	AND
+G	cr	j5	g459	AND
+G	cs	6l	g460	AND
+G	ct	fw	g461	AND
+G	cu	ip	g462	AND
+G	cv	7p	g463	AND
+G	cw	ja	g464	AND
+G	cx	ju	g465	AND
+G	cy	lj	g466	NOR
+G	cz	jm	g467	AND
+G	d0	n7	g468	NOR
+G	d1	hn	g469	AND
+G	d2	7z	g470	AND
+G	d3	jh	g471	AND
+G	d4	oq	g472	AND
+G	d5	gd	g473	NOT
+G	d6	dz	g474	NOT
+G	d7	lg	g475	NOT
+G	d8	e2	g476	NOT
+G	d9	or	g477	NOT
+G	da	od	g478	NOT
+G	db	li	g479	NOT
+G	dc	oe	g480	NOT
+G	dd	il	g481	NOT
+G	de	gb	g482	NOT
+G	df	ob	g483	NOT
+G	dg	os	g484	NOT
+G	dh	ot	g485	NOT
+G	di	ou	g486	NOT
+G	dj	o7	g487	NOT
+G	dk	ov	g488	NOT
+G	dl	le	g489	NOT
+G	dm	ow	g490	NOT
+G	dn	ll	g491	NOT
+G	do	oy	g492	NOT
+G	dp	nf	g493	NOT
+G	dq	kz	g494	NOT
+G	dr	p0	g495	NOT
+G	ds	ln	g496	NOT
+G	dt	p2	g497	NOT
+G	du	m2	g498	NOT
+G	dv	p4	g499	NOT
+G	dw	lx	g500	NOT
+G	dx	p6	g501	NOT
+G	dy	lb	g502	NOT
+G	dz	p8	g503	NOT
+G	e0	l8	g504	NOT
+G	e1	pa	g505	NOT
+G	e2	lu	g506	NOT
+G	e3	pc	g507	NOT
+G	e4	o9	g508	NOT
+G	e5	og	g509	NOT
+G	e6	pe	g510	NOT
+G	e7	je	g511	NOT
+G	e8	pf	g512	NOT
+G	e9	di	g513	NOT
+G	ea	l3	g514	NOT
+G	eb	pg	g515	NOT
+G	ec	el	g516	NOT
+G	ed	lq	g517	NOT
+G	ee	pi	g518	NOT
+G	ef	dv	g519	NOT
+G	eg	m5	g520	NOT
+G	eh	pk	g521	NOT
+G	ei	ds	g522	NOT
+G	ej	l1	g523	NOT
+G	ek	pm	g524	NOT
+G	el	dw	g525	NOT
+G	em	lo	g526	NOT
+G	en	po	g527	NOT
+G	eo	de	g528	NOT
+G	ep	k3	g529	NOT
+G	eq	pq	g530	NOT
+G	er	dp	g531	NOT
+G	es	lr	g532	NOT
+G	et	ps	g533	NOT
+G	eu	e7	g534	NOT
+G	ev	k1	g535	NOT
+G	ew	pu	g536	NOT
+G	ex	e8	g537	NOT
+G	ey	m3	g538	NOT
+G	ez	pw	g539	NOT
+G	f0	dg	g540	NOT
+G	f1	m6	g541	NOT
+G	f2	py	g542	NOT
+G	f3	eb	g543	NOT
+G	f4	m4	g544	NOT
+G	f5	q0	g545	NOT
+G	f6	ea	g546	NOT
+G	f7	lz	g547	NOT
+G	f8	q2	g548	NOT
+G	f9	dk	g549	NOT
+G	fa	ly	g550	NOT
+G	fb	q4	g551	NOT
+G	fc	q6	g552	BUF
+G	fd	q7	g553	BUF
+G	fe	q8	g554	BUF
+G	ff	q9	g555	BUF
+G	fg	qa	g556	BUF
+G	fh	qb	g557	BUF
+G	fi	qc	g558	BUF
+G	fj	qd	g559	BUF
+G	fk	qe	g560	BUF
+G	fl	qf	g561	BUF
+G	fm	qg	g562	BUF
+G	fn	qh	g563	BUF
+G	fo	qi	g564	BUF
+G	fp	qj	g565	BUF
+G	fq	qk	g566	BUF
+G	fr	ql	g567	BUF
+G	fs	qm	g568	BUF
+G	ft	qn	g569	BUF
+G	fu	qo	g570	BUF
+G	fv	qp	g571	BUF
+G	fw	qq	g572	BUF
+G	fx	qr	g573	BUF
+G	fy	qs	g574	BUF
+G	fz	qt	g575	BUF
+G	g0	qu	g576	NOT
+G	g1	qv	g577	NOT
+G	g2	qw	g578	NOT
+G	g3	nu	g579	NOT
+G	g4	qx	g580	NOT
+G	g5	ht	g581	NOT
+G	g6	ih	g582	NOT
+G	g7	qy	g583	NOT
+G	g8	kb	g584	NOT
+G	g9	ks	g585	NOT
+G	ga	qz	g586	NOT
+G	gb	df	g587	NOT
+G	gc	e9	g588	NOT
+G	gd	r0	g589	NOT
+G	ge	k6	g590	NOT
+G	gf	ku	g591	NOT
+G	gg	r1	g592	NOT
+G	gh	ac	g593	NOT
+G	gi	b1	g594	NOT
+G	gj	r2	g595	NOT
+G	gk	ae	g596	NOT
+G	gl	bc	g597	NOT
+G	gm	r3	g598	NOT
+G	gn	fa	g599	NOT
+G	go	fp	g600	NOT
+G	gp	r4	g601	NOT
+G	gq	bh	g602	NOT
+G	gr	ci	g603	NOT
+G	gs	r5	g604	NOT
+G	gt	dd	g605	NOT
+G	gu	dx	g606	NOT
+G	gv	r6	g607	NOT
+G	gw	mv	g608	NOT
+G	gx	n4	g609	NOT
+G	gy	r7	g610	NOT
+G	gz	i1	g611	NOT
+G	h0	id	g612	NOT
+G	h1	r8	g613	NOT
+G	h2	l6	g614	BUF
+G	h3	k4	g615	NOT
+G	h4	lc	g616	NOT
+G	h5	ra	g617	NOT
+G	h6	l4	g618	NOT
+G	h7	ls	g619	NOT
+G	h8	rb	g620	NOT
+G	h9	lp	g621	NOT
+G	ha	lv	g622	NOT
+G	hb	rc	g623	NOT
+G	hc	l9	g624	NOT
+G	hd	l0	g625	NOT
+G	he	rd	g626	NOT
+G	hf	in	g627	NOT
+G	hg	k2	g628	NOT
+G	hh	re	g629	NOT
+G	hi	m0	g630	NOT
+G	hj	l2	g631	NOT
+G	hk	rf	g632	NOT
+G	hl	nx	g633	NOT
+G	hm	nt	g634	NOT
+G	hn	rg	g635	NOT
+G	ho	nj	g636	NOT
+G	hp	nh	g637	NOT
+G	hq	rh	g638	NOT
+G	hr	o8	g639	NOT
+G	hs	ri	g640	NOT
+G	ht	bj	g641	NOT
+G	hu	bp	g642	NOT
+G	hv	rj	g643	NOT
+G	hw	bm	g644	NOT
+G	hx	cn	g645	NOT
+G	hy	rk	g646	NOT
+G	hz	as	g647	NOT
+G	i0	ay	g648	NOT
+G	i1	rl	g649	NOT
+G	i2	bn	g650	NOT
+G	i3	c8	g651	NOT
+G	i4	rm	g652	NOT
+G	i5	dn	g653	NOT
+G	i6	dr	g654	NOT
+G	i7	rn	g655	NOT
+G	i8	br	g656	NOT
+G	i9	bt	g657	NOT
+G	ia	ro	g658	NOT
+G	ib	ki	g659	NOT
+G	ic	km	g660	NOT
+G	id	rp	g661	NOT
+G	ie	n0	g662	NOT
+G	if	n2	g663	NOT
+G	ig	rq	g664	NOT
+G	ih	dj	g665	NOT
+G	ii	dq	g666	NOT
+G	ij	rr	g667	NOT
+G	ik	c9	g668	NOT
+G	il	c2	g669	NOT
+G	im	rs	g670	NOT
+G	in	ai	g671	NOT
+G	io	ao	g672	NOT
+G	ip	rt	g673	NOT
+G	iq	ka	g674	NOT
+G	ir	kf	g675	NOT
+G	is	ru	g676	NOT
+G	it	i5	g677	NOT
+G	iu	i7	g678	NOT
+G	iv	rv	g679	NOT
+G	iw	hy	g680	NOT
+G	ix	i4	g681	NOT
+G	iy	rw	g682	NOT
+G	iz	fe	g683	NOT
+G	j0	fi	g684	NOT
+G	j1	rx	g685	NOT
+G	j2	o1	g686	NOT
+G	j3	nm	g687	NOT
+G	j4	ry	g688	NOT
+G	j5	nl	g689	NOT
+G	j6	np	g690	NOT
+G	j7	rz	g691	NOT
+G	j8	dl	g692	NOT
+G	j9	s0	g693	NOT
+G	ja	kh	g694	NOT
+G	jb	s1	g695	NOT
+G	jc	kk	g696	NOT
+G	jd	s2	g697	NOT
+G	je	hw	g698	NOT
+G	jf	s3	g699	NOT
+G	jg	i0	g700	NOT
+G	jh	s4	g701	NOT
+G	ji	nz	g702	NOT
+G	jj	s5	g703	NOT
+G	jk	fk	g704	NOT
+G	jl	fs	g705	NOT
+G	jm	s6	g706	NOT
+G	jn	nk	g707	NOT
+G	jo	nq	g708	NOT
+G	jp	s7	g709	NOT
+G	jq	aq	g710	NOT
+G	jr	b7	g711	NOT
+G	js	s8	g712	NOT
+G	jt	i9	g713	NOT
+G	ju	ik	g714	NOT
+G	jv	s9	g715	NOT
+G	jw	kp	g716	NOT
+G	jx	kx	g717	NOT
+G	jy	sa	g718	NOT
+G	jz	ia	g719	NOT
+G	k0	if	g720	NOT
+G	k1	sb	g721	NOT
+G	k2	fg	g722	NOT
+G	k3	sc	g723	NOT
+G	k4	dt	g724	NOT
+G	k5	ec	g725	NOT
+G	k6	sd	g726	NOT
+G	k7	kn	g727	NOT
+G	k8	kw	g728	NOT
+G	k9	se	g729	NOT
+G	ka	n3	g730	NOT
+G	kb	n5	g731	NOT
+G	kc	sf	g732	NOT
+G	kd	dm	g733	NOT
+G	ke	sg	g734	NOT
+G	kf	du	g735	NOT
+G	kg	e6	g736	NOT
+G	kh	sh	g737	NOT
+G	ki	b3	g738	NOT
+G	kj	bf	g739	NOT
+G	kk	si	g740	NOT
+G	kl	ca	g741	NOT
+G	km	cq	g742	NOT
+G	kn	sj	g743	NOT
+G	ko	i2	g744	NOT
+G	kp	sk	g745	NOT
+G	kq	k8	g746	NOT
+G	kr	sl	g747	NOT
+G	ks	ak	g748	NOT
+G	kt	sm	g749	NOT
+G	ku	au	g750	NOT
+G	kv	sn	g751	NOT
+G	kw	am	g752	NOT
+G	kx	so	g753	NOT
+G	ky	bk	g754	NOT
+G	kz	sp	g755	NOT
+G	l0	do	g756	NOT
+G	l1	sq	g757	NOT
+G	l2	mz	g758	NOT
+G	l3	sr	g759	NOT
+G	l4	i6	g760	NOT
+G	l5	ss	g761	NOT
+G	l6	kd	g762	NOT
+G	l7	st	g763	NOT
+G	l8	ag	g764	NOT
+G	l9	su	g765	NOT
+G	la	c3	g766	NOT
+G	lb	sv	g767	NOT
+G	lc	n1	g768	NOT
+G	ld	sw	g769	NOT
+G	le	dh	g770	NOT
+G	lf	sx	g771	NOT
+G	lg	fc	g772	NOT
+G	lh	sy	g773	NOT
+G	li	95	g774	OR
+G	lj	sz	g775	XOR
+G	lk	t0	g776	XOR
+G	ll	t1	g777	XOR
+G	lm	t2	g778	XOR
+G	ln	t3	g779	XOR
+G	lo	t4	g780	XOR
+G	lp	t5	g781	XOR
+G	lq	t6	g782	BUF
+G	lr	t7	g783	BUF
+G	ls	t8	g784	BUF
+G	lt	t9	g785	BUF
+G	lu	ta	g786	BUF
+G	lv	tb	g787	BUF
+G	lw	tc	g788	BUF
+G	lx	td	g789	XOR
+G	ly	te	g790	XOR
+G	lz	tf	g791	XOR
+G	m0	tg	g792	XOR
+G	m1	th	g793	XOR
+G	m2	ti	g794	XOR
+G	m3	tj	g795	XOR
+G	m4	tk	g796	BUF
+G	m5	tl	g797	BUF
+G	m6	tm	g798	BUF
+G	m7	to	g799	BUF
+G	m8	tq	g800	BUF
+G	m9	ts	g801	BUF
+G	ma	tu	g802	BUF
+G	mb	tw	g803	BUF
+G	mc	ty	g804	BUF
+G	md	u0	g805	BUF
+G	me	u2	g806	BUF
+G	mf	u4	g807	BUF
+G	mg	u6	g808	BUF
+G	mh	u8	g809	BUF
+G	mi	ua	g810	BUF
+G	mj	uc	g811	BUF
+G	mk	ue	g812	BUF
+G	ml	ug	g813	BUF
+G	mm	ui	g814	BUF
+G	mn	uk	g815	BUF
+G	mo	um	g816	BUF
+G	mp	uo	g817	BUF
+G	mq	uq	g818	BUF
+G	mr	us	g819	BUF
+G	ms	uu	g820	BUF
+G	mt	uw	g821	BUF
+G	mu	uy	g822	BUF
+G	mv	v0	g823	BUF
+G	mw	v2	g824	OR
+G	mx	v5	g825	OR
+G	my	v8	g826	OR
+G	mz	vb	g827	OR
+G	n0	ve	g828	OR
+G	n1	vh	g829	OR
+G	n2	vk	g830	OR
+G	n3	vn	g831	OR
+G	n4	vq	g832	OR
+G	n5	vt	g833	OR
+G	n6	vw	g834	OR
+G	n7	vz	g835	OR
+G	n8	w2	g836	OR
+G	n9	v4	g837	AND
+G	na	vm	g838	AND
+G	nb	va	g839	AND
+G	nc	vd	g840	AND
+G	nd	v7	g841	AND
+G	ne	vj	g842	AND
+G	nf	vp	g843	AND
+G	ng	vg	g844	AND
+G	nh	w4	g845	AND
+G	ni	vy	g846	AND
+G	nj	vs	g847	AND
+G	nk	w1	g848	AND
+G	nl	vv	g849	AND
+G	nm	vo	g850	AND
+G	nn	v9	g851	AND
+G	no	v6	g852	AND
+G	np	vc	g853	AND
+G	nq	v3	g854	AND
+G	nr	vl	g855	AND
+G	ns	vi	g856	AND
+G	nt	vf	g857	AND
+G	nu	w3	g858	AND
+G	nv	vx	g859	AND
+G	nw	vr	g860	AND
+G	nx	vu	g861	AND
+G	ny	w0	g862	AND
+G	nz	wl	g863	NOT
+G	o0	wn	g864	NOT
+G	o1	wm	g865	NOT
+G	o2	wp	g866	NOT
+G	o3	wo	g867	NOT
+G	o4	wq	g868	NOT
+G	o5	wr	g869	BUF
+G	o6	ws	g870	BUF
+G	o7	wt	g871	BUF
+G	o8	wu	g872	BUF
+G	o9	wv	g873	BUF
+G	oa	ww	g874	BUF
+G	ob	wx	g875	BUF
+G	oc	wy	g876	BUF
+G	od	wz	g877	BUF
+G	oe	x0	g878	BUF
+G	of	x1	g879	BUF
+G	og	x2	g880	NOT
+G	oh	w5	g881	NOT
+G	oi	x3	g882	NOT
+G	oj	w6	g883	NOT
+G	ok	w7	g884	NOT
+G	ol	x4	g885	NOT
+G	om	wh	g886	NOT
+G	on	wi	g887	NOT
+G	oo	x5	g888	NOT
+G	op	wf	g889	NOT
+G	oq	we	g890	NOT
+G	or	x6	g891	NOT
+G	os	wg	g892	NOT
+G	ot	wd	g893	NOT
+G	ou	x7	g894	NOT
+G	ov	wj	g895	NOT
+G	ow	wk	g896	NOT
+G	ox	x8	g897	NOT
+G	oy	w9	g898	NOT
+G	oz	wb	g899	NOT
+G	p0	x9	g900	NOT
+G	p1	wc	g901	NOT
+G	p2	xa	g902	NOT
+G	p3	wa	g903	NOT
+G	p4	xb	g904	NOT
+G	p5	w8	g905	NOT
+G	p6	xc	g906	NOT
+G	p7	xd	g907	BUF
+G	p8	xf	g908	BUF
+G	p9	xh	g909	BUF
+G	pa	xj	g910	BUF
+G	pb	xl	g911	BUF
+G	pc	xn	g912	BUF
+G	pd	xp	g913	BUF
+G	pe	xr	g914	BUF
+G	pf	xt	g915	BUF
+G	pg	xv	g916	BUF
+G	ph	xx	g917	BUF
+G	pi	xz	g918	BUF
+G	pj	y1	g919	BUF
+G	pk	y2	g920	OR
+G	pl	y5	g921	OR
+G	pm	y8	g922	OR
+G	pn	yb	g923	OR
+G	po	ye	g924	OR
+G	pp	yh	g925	OR
+G	pq	yk	g926	OR
+G	pr	yn	g927	OR
+G	ps	yq	g928	OR
+G	pt	yt	g929	OR
+G	pu	yw	g930	OR
+G	pv	yz	g931	OR
+G	pw	z2	g932	OR
+G	px	ym	g933	OR
+G	py	ys	g934	OR
+G	pz	ya	g935	OR
+G	q0	yd	g936	OR
+G	q1	yj	g937	OR
+G	q2	y7	g938	OR
+G	q3	z1	g939	OR
+G	q4	z4	g940	OR
+G	q5	yp	g941	OR
+G	q6	yy	g942	OR
+G	q7	y4	g943	OR
+G	q8	yv	g944	OR
+G	q9	yg	g945	OR
+G	qa	zq	g946	NOR
+G	qb	z6	g947	NOR
+G	qc	zc	g948	NOR
+G	qd	za	g949	NOR
+G	qe	z8	g950	NOR
+G	qf	ze	g951	NOR
+G	qg	zs	g952	NOR
+G	qh	zm	g953	NOR
+G	qi	zk	g954	NOR
+G	qj	zg	g955	NOR
+G	qk	zo	g956	NOR
+G	ql	zi	g957	NOR
+G	qm	zu	g958	NOR
+G	qn	y9	g959	AND
+G	qo	yc	g960	AND
+G	qp	y6	g961	AND
+G	qq	yi	g962	AND
+G	qr	yf	g963	AND
+G	qs	y3	g964	AND
+G	qt	z3	g965	AND
+G	qu	yo	g966	AND
+G	qv	yx	g967	AND
+G	qw	yu	g968	AND
+G	qx	z0	g969	AND
+G	qy	yr	g970	AND
+G	qz	yl	g971	AND
+G	r0	zy	g972	OR
+G	r1	106	g973	OR
+G	r2	100	g974	OR
+G	r3	104	g975	OR
+G	r4	10k	g976	OR
+G	r5	10a	g977	OR
+G	r6	102	g978	OR
+G	r7	10c	g979	OR
+G	r8	10e	g980	OR
+G	r9	10g	g981	OR
+G	ra	zw	g982	OR
+G	rb	10i	g983	OR
+G	rc	108	g984	OR
+G	rd	109	g985	NOR
+G	re	101	g986	NOR
+G	rf	103	g987	NOR
+G	rg	zz	g988	NOR
+G	rh	107	g989	NOR
+G	ri	105	g990	NOR
+G	rj	10j	g991	NOR
+G	rk	zv	g992	NOR
+G	rl	10d	g993	NOR
+G	rm	zx	g994	NOR
+G	rn	10b	g995	NOR
+G	ro	10f	g996	NOR
+G	rp	10h	g997	NOR
+G	rq	11d	g998	NOR
+G	rr	z5	g999	AND
+G	rs	10t	g1000	NOR
+G	rt	z9	g1001	AND
+G	ru	zb	g1002	AND
+G	rv	10x	g1003	NOR
+G	rw	11p	g1004	AND
+G	rx	11b	g1005	NOR
+G	ry	zd	g1006	AND
+G	rz	zp	g1007	AND
+G	s0	10z	g1008	NOR
+G	s1	10v	g1009	NOR
+G	s2	zt	g1010	AND
+G	s3	11a	g1011	NOR
+G	s4	111	g1012	NOR
+G	s5	zf	g1013	AND
+G	s6	zj	g1014	AND
+G	s7	zl	g1015	AND
+G	s8	113	g1016	NOR
+G	s9	z7	g1017	AND
+G	sa	116	g1018	NOR
+G	sb	zn	g1019	AND
+G	sc	115	g1020	NOR
+G	sd	118	g1021	NOR
+G	se	117	g1022	NOR
+G	sf	zr	g1023	AND
+G	sg	zh	g1024	AND
+G	sh	11v	g1025	OR
+G	si	11q	g1026	NOT
+G	sj	11u	g1027	NOT
+G	sk	11x	g1028	NOT
+G	sl	11w	g1029	NOT
+G	sm	11y	g1030	NOT
+G	sn	11o	g1031	NOT
+G	so	11t	g1032	NOT
+G	sp	11s	g1033	NOT
+G	sq	11z	g1034	NOT
+G	sr	11m	g1035	NOT
+G	ss	11n	g1036	NOT
+G	st	120	g1037	NOT
+G	su	121	g1038	BUF
+G	sv	11i	g1039	NOT
+G	sw	11g	g1040	NOT
+G	sx	122	g1041	NOT
+G	sy	119	g1042	NOT
+G	sz	10u	g1043	NOT
+G	t0	123	g1044	NOT
+G	t1	10r	g1045	NOT
+G	t2	10l	g1046	NOT
+G	t3	124	g1047	NOT
+G	t4	11r	g1048	NOT
+G	t5	125	g1049	NOT
+G	t6	11k	g1050	NOT
+G	t7	11j	g1051	NOT
+G	t8	126	g1052	NOT
+G	t9	112	g1053	NOT
+G	ta	10y	g1054	NOT
+G	tb	127	g1055	NOT
+G	tc	10p	g1056	NOT
+G	td	10n	g1057	NOT
+G	te	128	g1058	NOT
+G	tf	11h	g1059	NOT
+G	tg	129	g1060	NOT
+G	th	11l	g1061	NOT
+G	ti	11e	g1062	NOT
+G	tj	12a	g1063	NOT
+G	tk	11f	g1064	NOT
+G	tl	12b	g1065	NOT
+G	tm	10m	g1066	NOT
+G	tn	12c	g1067	NOT
+G	to	114	g1068	NOT
+G	tp	11c	g1069	NOT
+G	tq	12d	g1070	NOT
+G	tr	110	g1071	NOT
+G	ts	12e	g1072	NOT
+G	tt	10o	g1073	NOT
+G	tu	12f	g1074	NOT
+G	tv	10q	g1075	NOT
+G	tw	10s	g1076	NOT
+G	tx	12g	g1077	NOT
+G	ty	10w	g1078	NOT
+G	tz	12h	g1079	NOT
+G	u0	12i	g1080	BUF
+G	u1	12k	g1081	BUF
+G	u2	12m	g1082	BUF
+G	u3	12o	g1083	BUF
+G	u4	12q	g1084	BUF
+G	u5	12s	g1085	BUF
+G	u6	12u	g1086	BUF
+G	u7	12w	g1087	BUF
+G	u8	12y	g1088	BUF
+G	u9	130	g1089	BUF
+G	ua	132	g1090	BUF
+G	ub	134	g1091	BUF
+G	uc	136	g1092	BUF
+G	ud	138	g1093	NOT
+G	ue	139	g1094	NOT
+G	uf	13a	g1095	AND
+G	ug	13c	g1096	AND
+G	uh	13e	g1097	AND
+G	ui	13f	g1098	AND
+G	uj	13h	g1099	AND
+G	uk	13j	g1100	AND
+G	ul	13l	g1101	AND
+G	um	13n	g1102	AND
+G	un	13o	g1103	AND
+G	uo	13p	g1104	AND
+G	up	13q	g1105	AND
+G	uq	13r	g1106	AND
+G	ur	13t	g1107	AND
+G	us	13k	g1108	AND
+G	ut	13u	g1109	AND
+G	uu	13s	g1110	AND
+G	uv	13y	g1111	AND
+G	uw	13z	g1112	BUF
+G	ux	140	g1113	BUF
+G	uy	13w	g1114	NOT
+G	uz	13v	g1115	NOT
+G	v0	141	g1116	NOT
+G	v1	142	g1117	NOT
+G	v2	143	g1118	NOT
+G	v3	13x	g1119	NOT
+G	v4	13b	g1120	AND
+G	v5	13d	g1121	AND
+G	v6	13g	g1122	AND
+G	v7	13i	g1123	AND
+G	v8	13m	g1124	AND
+G	v9	144	g1125	BUF
+G	va	146	g1126	BUF
+G	vb	148	g1127	BUF
+G	vc	14a	g1128	BUF
+G	vd	14c	g1129	BUF
+G	ve	14e	g1130	BUF
+G	vf	14g	g1131	BUF
+G	vg	14i	g1132	BUF
+G	vh	14k	g1133	BUF
+G	vi	14m	g1134	BUF
+G	vj	14o	g1135	BUF
+G	vk	14q	g1136	BUF
+G	vl	14s	g1137	BUF
+G	vm	14u	g1138	BUF
+G	vn	14w	g1139	BUF
+G	vo	14y	g1140	BUF
+G	vp	150	g1141	BUF
+G	vq	152	g1142	BUF
+G	vr	154	g1143	BUF
+G	vs	156	g1144	BUF
+G	vt	158	g1145	BUF
+G	vu	15a	g1146	BUF
+G	vv	15c	g1147	BUF
+G	vw	15e	g1148	BUF
+G	vx	15g	g1149	BUF
+G	vy	15i	g1150	BUF
+G	vz	15k	g1151	OR
+G	w0	15n	g1152	OR
+G	w1	15q	g1153	OR
+G	w2	15t	g1154	OR
+G	w3	15w	g1155	OR
+G	w4	15z	g1156	OR
+G	w5	162	g1157	OR
+G	w6	165	g1158	OR
+G	w7	168	g1159	OR
+G	w8	16b	g1160	OR
+G	w9	16e	g1161	OR
+G	wa	16h	g1162	OR
+G	wb	16k	g1163	OR
+G	wc	15m	g1164	AND
+G	wd	15s	g1165	AND
+G	we	15v	g1166	AND
+G	wf	15p	g1167	AND
+G	wg	161	g1168	AND
+G	wh	167	g1169	AND
+G	wi	15y	g1170	AND
+G	wj	16m	g1171	AND
+G	wk	16g	g1172	AND
+G	wl	16a	g1173	AND
+G	wm	16j	g1174	AND
+G	wn	16d	g1175	AND
+G	wo	166	g1176	AND
+G	wp	15r	g1177	AND
+G	wq	15o	g1178	AND
+G	wr	15u	g1179	AND
+G	ws	15l	g1180	AND
+G	wt	160	g1181	AND
+G	wu	15x	g1182	AND
+G	wv	16l	g1183	AND
+G	ww	16f	g1184	AND
+G	wx	169	g1185	AND
+G	wy	16c	g1186	AND
+G	wz	16i	g1187	AND
+G	x0	172	g1188	NOT
+G	x1	174	g1189	NOT
+G	x2	173	g1190	NOT
+G	x3	176	g1191	NOT
+G	x4	175	g1192	NOT
+G	x5	177	g1193	NOT
+G	x6	178	g1194	BUF
+G	x7	179	g1195	BUF
+G	x8	17a	g1196	BUF
+G	x9	17b	g1197	BUF
+G	xa	17c	g1198	BUF
+G	xb	17d	g1199	BUF
+G	xc	17e	g1200	BUF
+G	xd	17f	g1201	BUF
+G	xe	17g	g1202	BUF
+G	xf	17h	g1203	BUF
+G	xg	17i	g1204	BUF
+G	xh	17j	g1205	BUF
+G	xi	17k	g1206	NOT
+G	xj	16n	g1207	NOT
+G	xk	17l	g1208	NOT
+G	xl	17m	g1209	NOT
+G	xm	16o	g1210	NOT
+G	xn	17n	g1211	NOT
+G	xo	171	g1212	NOT
+G	xp	16y	g1213	NOT
+G	xq	17o	g1214	NOT
+G	xr	16w	g1215	NOT
+G	xs	16v	g1216	NOT
+G	xt	17p	g1217	NOT
+G	xu	16x	g1218	NOT
+G	xv	16u	g1219	NOT
+G	xw	17q	g1220	NOT
+G	xx	16z	g1221	NOT
+G	xy	170	g1222	NOT
+G	xz	17r	g1223	NOT
+G	y0	16q	g1224	NOT
+G	y1	16s	g1225	NOT
+G	y2	17s	g1226	NOT
+G	y3	16t	g1227	NOT
+G	y4	17t	g1228	NOT
+G	y5	16r	g1229	NOT
+G	y6	17u	g1230	NOT
+G	y7	16p	g1231	NOT
+G	y8	17v	g1232	NOT
+G	y9	17w	g1233	BUF
+G	ya	17x	g1234	NOT
+G	yb	17z	g1235	OR
+G	yc	181	g1236	NOR
+G	yd	180	g1237	AND
+G	ye	182	g1238	NOT
+G	yf	183	g1239	NOT
+G	yg	184	g1240	BUF
+G	yh	185	g1241	BUF
+G	yi	187	g1242	BUF
+G	yj	189	g1243	BUF
+G	yk	18b	g1244	BUF
+G	yl	18d	g1245	BUF
+G	ym	18f	g1246	BUF
+G	yn	18h	g1247	BUF
+G	yo	18j	g1248	BUF
+G	yp	18l	g1249	BUF
+G	yq	18n	g1250	BUF
+G	yr	18p	g1251	BUF
+G	ys	18r	g1252	BUF
+G	yt	18t	g1253	BUF
+G	yu	18v	g1254	BUF
+G	yv	18x	g1255	BUF
+G	yw	18z	g1256	BUF
+G	yx	191	g1257	BUF
+G	yy	193	g1258	BUF
+G	yz	195	g1259	BUF
+G	z0	197	g1260	BUF
+G	z1	199	g1261	BUF
+G	z2	19b	g1262	BUF
+G	z3	19d	g1263	BUF
+G	z4	19f	g1264	BUF
+G	z5	19h	g1265	BUF
+G	z6	19j	g1266	BUF
+G	z7	19l	g1267	OR
+G	z8	19o	g1268	OR
+G	z9	19r	g1269	OR
+G	za	19u	g1270	OR
+G	zb	19x	g1271	OR
+G	zc	1a0	g1272	OR
+G	zd	1a3	g1273	OR
+G	ze	1a6	g1274	OR
+G	zf	1a9	g1275	OR
+G	zg	1ac	g1276	OR
+G	zh	1af	g1277	OR
+G	zi	1ai	g1278	OR
+G	zj	1al	g1279	OR
+G	zk	19n	g1280	AND
+G	zl	1a5	g1281	AND
+G	zm	19t	g1282	AND
+G	zn	19w	g1283	AND
+G	zo	19q	g1284	AND
+G	zp	1a2	g1285	AND
+G	zq	1a8	g1286	AND
+G	zr	19z	g1287	AND
+G	zs	1an	g1288	AND
+G	zt	1ah	g1289	AND
+G	zu	1ab	g1290	AND
+G	zv	1ak	g1291	AND
+G	zw	1ae	g1292	AND
+G	zx	1a7	g1293	AND
+G	zy	19s	g1294	AND
+G	zz	19p	g1295	AND
+G	100	19v	g1296	AND
+G	101	19m	g1297	AND
+G	102	1a4	g1298	AND
+G	103	1a1	g1299	AND
+G	104	19y	g1300	AND
+G	105	1am	g1301	AND
+G	106	1ag	g1302	AND
+G	107	1aa	g1303	AND
+G	108	1ad	g1304	AND
+G	109	1aj	g1305	AND
+G	10a	1b4	g1306	NOT
+G	10b	1b6	g1307	NOT
+G	10c	1b5	g1308	NOT
+G	10d	1b8	g1309	NOT
+G	10e	1b7	g1310	NOT
+G	10f	1b9	g1311	NOT
+G	10g	1ba	g1312	BUF
+G	10h	1bb	g1313	BUF
+G	10i	1bc	g1314	BUF
+G	10j	1bd	g1315	BUF
+G	10k	1be	g1316	BUF
+G	10l	1bf	g1317	BUF
+G	10m	1bg	g1318	BUF
+G	10n	1bh	g1319	BUF
+G	10o	1bi	g1320	BUF
+G	10p	1bj	g1321	BUF
+G	10q	1bk	g1322	BUF
+G	10r	1bl	g1323	NOT
+G	10s	1ao	g1324	NOT
+G	10t	1bm	g1325	NOT
+G	10u	1ap	g1326	NOT
+G	10v	1aq	g1327	NOT
+G	10w	1bn	g1328	NOT
+G	10x	1b0	g1329	NOT
+G	10y	1b1	g1330	NOT
+G	10z	1bo	g1331	NOT
+G	110	1ay	g1332	NOT
+G	111	1ax	g1333	NOT
+G	112	1bp	g1334	NOT
+G	113	1az	g1335	NOT
+G	114	1aw	g1336	NOT
+G	115	1bq	g1337	NOT
+G	116	1b2	g1338	NOT
+G	117	1b3	g1339	NOT
+G	118	1br	g1340	NOT
+G	119	1as	g1341	NOT
+G	11a	1au	g1342	NOT
+G	11b	1bs	g1343	NOT
+G	11c	1av	g1344	NOT
+G	11d	1bt	g1345	NOT
+G	11e	1at	g1346	NOT
+G	11f	1bu	g1347	NOT
+G	11g	1ar	g1348	NOT
+G	11h	1bv	g1349	NOT
+G	11i	1bw	g1350	BUF
+G	11j	1by	g1351	BUF
+G	11k	1c0	g1352	BUF
+G	11l	1c2	g1353	BUF
+G	11m	1c4	g1354	BUF
+G	11n	1c6	g1355	BUF
+G	11o	1c8	g1356	BUF
+G	11p	1ca	g1357	BUF
+G	11q	1cc	g1358	BUF
+G	11r	1ce	g1359	BUF
+G	11s	1cg	g1360	BUF
+G	11t	1ci	g1361	BUF
+G	11u	1ck	g1362	BUF
+G	11v	1cm	g1363	BUF
+G	11w	1co	g1364	BUF
+G	11x	1cq	g1365	BUF
+G	11y	1cs	g1366	BUF
+G	11z	1cu	g1367	BUF
+G	120	1cw	g1368	BUF
+G	121	1cy	g1369	BUF
+G	122	1d0	g1370	BUF
+G	123	1d1	g1371	BUF
+G	124	1d2	g1372	BUF
+G	125	1d3	g1373	BUF
+G	126	1d5	g1374	BUF
+G	127	1d7	g1375	BUF
+G	128	1d9	g1376	OR
+G	129	1dc	g1377	OR
+G	12a	1df	g1378	OR
+G	12b	1di	g1379	OR
+G	12c	1dl	g1380	OR
+G	12d	1do	g1381	OR
+G	12e	1dr	g1382	OR
+G	12f	1du	g1383	OR
+G	12g	1dx	g1384	OR
+G	12h	1e0	g1385	OR
+G	12i	1e3	g1386	OR
+G	12j	1e6	g1387	OR
+G	12k	1e9	g1388	OR
+G	12l	1db	g1389	AND
+G	12m	1dt	g1390	AND
+G	12n	1dh	g1391	AND
+G	12o	1dk	g1392	AND
+G	12p	1de	g1393	AND
+G	12q	1dq	g1394	AND
+G	12r	1dw	g1395	AND
+G	12s	1dn	g1396	AND
+G	12t	1eb	g1397	AND
+G	12u	1e5	g1398	AND
+G	12v	1dz	g1399	AND
+G	12w	1e8	g1400	AND
+G	12x	1e2	g1401	AND
+G	12y	1dv	g1402	AND
+G	12z	1dg	g1403	AND
+G	130	1dd	g1404	AND
+G	131	1dj	g1405	AND
+G	132	1da	g1406	AND
+G	133	1ds	g1407	AND
+G	134	1dp	g1408	AND
+G	135	1dm	g1409	AND
+G	136	1ea	g1410	AND
+G	137	1e4	g1411	AND
+G	138	1dy	g1412	AND
+G	139	1e1	g1413	AND
+G	13a	1e7	g1414	AND
+G	13b	1es	g1415	NOT
+G	13c	1eu	g1416	NOT
+G	13d	1et	g1417	NOT
+G	13e	1ew	g1418	NOT
+G	13f	1ev	g1419	NOT
+G	13g	1ex	g1420	NOT
+G	13h	1ey	g1421	BUF
+G	13i	1ez	g1422	BUF
+G	13j	1f0	g1423	BUF
+G	13k	1f1	g1424	BUF
+G	13l	1f2	g1425	BUF
+G	13m	1f3	g1426	BUF
+G	13n	1f4	g1427	BUF
+G	13o	1f5	g1428	BUF
+G	13p	1f6	g1429	BUF
+G	13q	1f7	g1430	BUF
+G	13r	1f8	g1431	BUF
+G	13s	1f9	g1432	BUF
+G	13t	1fa	g1433	NOT
+G	13u	1ec	g1434	NOT
+G	13v	1fb	g1435	NOT
+G	13w	1ed	g1436	NOT
+G	13x	1ee	g1437	NOT
+G	13y	1fc	g1438	NOT
+G	13z	1eo	g1439	NOT
+G	140	1ep	g1440	NOT
+G	141	1fd	g1441	NOT
+G	142	1em	g1442	NOT
+G	143	1el	g1443	NOT
+G	144	1fe	g1444	NOT
+G	145	1en	g1445	NOT
+G	146	1ek	g1446	NOT
+G	147	1ff	g1447	NOT
+G	148	1eq	g1448	NOT
+G	149	1er	g1449	NOT
+G	14a	1fg	g1450	NOT
+G	14b	1eg	g1451	NOT
+G	14c	1ei	g1452	NOT
+G	14d	1fh	g1453	NOT
+G	14e	1ej	g1454	NOT
+G	14f	1fi	g1455	NOT
+G	14g	1eh	g1456	NOT
+G	14h	1fj	g1457	NOT
+G	14i	1ef	g1458	NOT
+G	14j	1fk	g1459	NOT
+G	14k	1fl	g1460	BUF
+G	14l	1fm	g1461	NOT
+G	14m	1fo	g1462	OR
+G	14n	1fq	g1463	NOR
+G	14o	1fp	g1464	AND
+G	14p	1fr	g1465	NOT
+G	14q	1fs	g1466	NOT
+G	14r	1ft	g1467	BUF
+G	14s	ie	g1468	XNOR
+G	14t	1fu	g1469	OR
+G	14u	1fx	g1470	OR
+G	14v	1fz	g1471	OR
+G	14w	1g1	g1472	OR
+G	14x	1g3	g1473	OR
+G	14y	1g5	g1474	OR
+G	14z	1g7	g1475	OR
+G	150	ic	g1476	AND
+G	151	1g9	g1477	OR
+G	152	1ga	g1478	OR
+G	153	1gc	g1479	NOT
+G	154	1ge	g1480	OR
+G	155	ig	g1481	XNOR
+G	156	1gg	g1482	AND
+G	157	1gh	g1483	OR
+G	158	hs	g1484	XNOR
+G	159	1gl	g1485	AND
+G	15a	jd	g1486	XOR
+G	15b	1gm	g1487	OR
+G	15c	1gs	g1488	NOR
+G	15d	hx	g1489	AND
+G	15e	1gn	g1490	XNOR
+G	15f	1gq	g1491	XNOR
+G	15g	1gi	g1492	XNOR
+G	15h	1gr	g1493	AND
+G	15i	1gu	g1494	OR
+G	15j	1gt	g1495	NOR
+G	15k	1gf	g1496	AND
+G	15l	1gk	g1497	AND
+G	15m	1gj	g1498	OR
+G	15n	1go	g1499	OR
+G	15o	1gp	g1500	OR
+G	15p	1h3	g1501	NOT
+G	15q	1gz	g1502	NOT
+G	15r	1gw	g1503	NOT
+G	15s	1h4	g1504	NOT
+G	15t	1gx	g1505	NOT
+G	15u	1h0	g1506	NOT
+G	15v	1h6	g1507	NOT
+G	15w	1gv	g1508	NOT
+G	15x	1h1	g1509	NOT
+G	15y	1h8	g1510	NOT
+G	15z	1g8	g1511	NOT
+G	160	1gd	g1512	NOT
+G	161	1gb	g1513	NOT
+G	162	1g2	g1514	NOT
+G	163	1g4	g1515	NOT
+G	164	1fy	g1516	NOT
+G	165	1fw	g1517	NOT
+G	166	1g0	g1518	NOT
+G	167	1g6	g1519	NOT
+G	168	1gy	g1520	NOT
+G	169	1h2	g1521	NOT
+G	16a	i8	g1522	XOR
+G	16b	ij	g1523	XOR
+G	16c	hv	g1524	XOR
+G	16d	hz	g1525	XOR
+G	16e	ii	g1526	XOR
+G	16f	ib	g1527	XOR
+G	16g	i3	g1528	XOR
+G	16h	oo	g1529	XNOR
+G	16i	1hj	g1530	OR
+G	16j	1hl	g1531	OR
+G	16k	1hn	g1532	OR
+G	16l	1hp	g1533	OR
+G	16m	1hr	g1534	OR
+G	16n	oj	g1535	AND
+G	16o	1ht	g1536	OR
+G	16p	1hu	g1537	OR
+G	16q	1hw	g1538	NOT
+G	16r	1hy	g1539	OR
+G	16s	ol	g1540	XNOR
+G	16t	1i0	g1541	AND
+G	16u	1i1	g1542	OR
+G	16v	ne	g1543	XNOR
+G	16w	1i5	g1544	AND
+G	16x	1i6	g1545	OR
+G	16y	o6	g1546	XNOR
+G	16z	1ia	g1547	AND
+G	170	1ib	g1548	OR
+G	171	on	g1549	XNOR
+G	172	1if	g1550	AND
+G	173	op	g1551	XOR
+G	174	1ig	g1552	OR
+G	175	1im	g1553	NOR
+G	176	oh	g1554	AND
+G	177	1i2	g1555	XNOR
+G	178	1i7	g1556	XNOR
+G	179	1ic	g1557	XNOR
+G	17a	1ih	g1558	XNOR
+G	17b	1ik	g1559	XNOR
+G	17c	1hz	g1560	AND
+G	17d	1id	g1561	OR
+G	17e	1i4	g1562	AND
+G	17f	1io	g1563	OR
+G	17g	1i9	g1564	AND
+G	17h	1in	g1565	NOR
+G	17i	1il	g1566	AND
+G	17j	1i8	g1567	OR
+G	17k	1ie	g1568	AND
+G	17l	1i3	g1569	OR
+G	17m	1ii	g1570	OR
+G	17n	1ij	g1571	OR
+G	17o	1j0	g1572	NOT
+G	17p	1iy	g1573	NOT
+G	17q	1it	g1574	NOT
+G	17r	1j2	g1575	NOT
+G	17s	1ir	g1576	NOT
+G	17t	1iv	g1577	NOT
+G	17u	1j3	g1578	NOT
+G	17v	1is	g1579	NOT
+G	17w	1iz	g1580	NOT
+G	17x	1j4	g1581	NOT
+G	17y	1ip	g1582	NOT
+G	17z	1iu	g1583	NOT
+G	180	1j5	g1584	NOT
+G	181	1iq	g1585	NOT
+G	182	1iw	g1586	NOT
+G	183	1j6	g1587	NOT
+G	184	1hs	g1588	NOT
+G	185	1hq	g1589	NOT
+G	186	1ho	g1590	NOT
+G	187	1hk	g1591	NOT
+G	188	1hm	g1592	NOT
+G	189	1hx	g1593	NOT
+G	18a	1hv	g1594	NOT
+G	18b	1ix	g1595	NOT
+G	18c	1j1	g1596	NOT
+G	18d	om	g1597	XOR
+G	18e	o5	g1598	XOR
+G	18f	of	g1599	XOR
+G	18g	oi	g1600	XOR
+G	18h	ok	g1601	XOR
+G	18i	k5	g1602	XNOR
+G	18j	1j7	g1603	OR
+G	18k	1ja	g1604	OR
+G	18l	1jc	g1605	OR
+G	18m	1je	g1606	OR
+G	18n	1jg	g1607	OR
+G	18o	ke	g1608	AND
+G	18p	1ji	g1609	OR
+G	18q	1jj	g1610	OR
+G	18r	1jl	g1611	NOT
+G	18s	1jn	g1612	OR
+G	18t	ko	g1613	XNOR
+G	18u	1jp	g1614	AND
+G	18v	1jq	g1615	OR
+G	18w	kq	g1616	XNOR
+G	18x	1ju	g1617	AND
+G	18y	1jv	g1618	OR
+G	18z	kr	g1619	XNOR
+G	190	1jz	g1620	AND
+G	191	1k0	g1621	OR
+G	192	kt	g1622	XNOR
+G	193	1k4	g1623	AND
+G	194	kv	g1624	XOR
+G	195	1k5	g1625	OR
+G	196	1kb	g1626	NOR
+G	197	k9	g1627	AND
+G	198	1jr	g1628	XNOR
+G	199	1jw	g1629	XNOR
+G	19a	1k1	g1630	XNOR
+G	19b	1k6	g1631	XNOR
+G	19c	1k9	g1632	XNOR
+G	19d	1jo	g1633	AND
+G	19e	1k2	g1634	OR
+G	19f	1jt	g1635	AND
+G	19g	1kd	g1636	OR
+G	19h	1jy	g1637	AND
+G	19i	1kc	g1638	NOR
+G	19j	1ka	g1639	AND
+G	19k	1jx	g1640	OR
+G	19l	1k3	g1641	AND
+G	19m	1js	g1642	OR
+G	19n	1k7	g1643	OR
+G	19o	1k8	g1644	OR
+G	19p	1kp	g1645	NOT
+G	19q	1kn	g1646	NOT
+G	19r	1ki	g1647	NOT
+G	19s	1kr	g1648	NOT
+G	19t	1kg	g1649	NOT
+G	19u	1kk	g1650	NOT
+G	19v	1kt	g1651	NOT
+G	19w	1kh	g1652	NOT
+G	19x	1ko	g1653	NOT
+G	19y	1kv	g1654	NOT
+G	19z	1ke	g1655	NOT
+G	1a0	1kj	g1656	NOT
+G	1a1	1kx	g1657	NOT
+G	1a2	1kf	g1658	NOT
+G	1a3	1kl	g1659	NOT
+G	1a4	1kz	g1660	NOT
+G	1a5	1jh	g1661	NOT
+G	1a6	1jf	g1662	NOT
+G	1a7	1jd	g1663	NOT
+G	1a8	1j9	g1664	NOT
+G	1a9	1jb	g1665	NOT
+G	1aa	1jm	g1666	NOT
+G	1ab	1jk	g1667	NOT
+G	1ac	1km	g1668	NOT
+G	1ad	1kq	g1669	NOT
+G	1ae	k7	g1670	XOR
+G	1af	kl	g1671	XOR
+G	1ag	kj	g1672	XOR
+G	1ah	kg	g1673	XOR
+G	1ai	kc	g1674	XOR
+G	1aj	f9	g1675	XNOR
+G	1ak	1l8	g1676	OR
+G	1al	1la	g1677	OR
+G	1am	1lc	g1678	OR
+G	1an	1le	g1679	OR
+G	1ao	1lg	g1680	OR
+G	1ap	1li	g1681	OR
+G	1aq	1lk	g1682	OR
+G	1ar	1lm	g1683	OR
+G	1as	fn	g1684	AND
+G	1at	1lp	g1685	OR
+G	1au	1lo	g1686	OR
+G	1av	1lt	g1687	NOT
+G	1aw	1lr	g1688	OR
+G	1ax	fr	g1689	XNOR
+G	1ay	1lv	g1690	AND
+G	1az	ga	g1691	XOR
+G	1b0	1lw	g1692	OR
+G	1b1	1m2	g1693	NOR
+G	1b2	fb	g1694	AND
+G	1b3	1m0	g1695	XNOR
+G	1b4	1lx	g1696	XNOR
+G	1b5	1lu	g1697	AND
+G	1b6	1m4	g1698	OR
+G	1b7	1m3	g1699	NOR
+G	1b8	1lz	g1700	OR
+G	1b9	1ly	g1701	OR
+G	1ba	1m1	g1702	AND
+G	1bb	1mb	g1703	NOT
+G	1bc	1m9	g1704	NOT
+G	1bd	1m5	g1705	NOT
+G	1be	1mc	g1706	NOT
+G	1bf	1m6	g1707	NOT
+G	1bg	1m7	g1708	NOT
+G	1bh	1md	g1709	NOT
+G	1bi	1lq	g1710	NOT
+G	1bj	1ls	g1711	NOT
+G	1bk	1ll	g1712	NOT
+G	1bl	1ln	g1713	NOT
+G	1bm	1lf	g1714	NOT
+G	1bn	1lh	g1715	NOT
+G	1bo	1l9	g1716	NOT
+G	1bp	1lb	g1717	NOT
+G	1bq	1ld	g1718	NOT
+G	1br	1lj	g1719	NOT
+G	1bs	1m8	g1720	NOT
+G	1bt	1ma	g1721	NOT
+G	1bu	fj	g1722	XOR
+G	1bv	fl	g1723	XOR
+G	1bw	fo	g1724	XOR
+G	1bx	fd	g1725	XOR
+G	1by	fq	g1726	XOR
+G	1bz	ff	g1727	XOR
+G	1c0	fm	g1728	XOR
+G	1c1	fh	g1729	XOR
+G	1c2	1me	g1730	XNOR
+G	1c3	1mg	g1731	AND
+G	1c4	1mi	g1732	AND
+G	1c5	1mj	g1733	OR
+G	1c6	1mh	g1734	NOT
+G	1c7	1mf	g1735	OR
+G	1c8	1mn	g1736	AND
+G	1c9	1mk	g1737	NOT
+G	1ca	1mm	g1738	OR
+G	1cb	1mo	g1739	OR
+G	1cc	1mq	g1740	NOT
+G	1cd	1mr	g1741	OR
+G	1ce	1mu	g1742	XNOR
+G	1cf	1mt	g1743	AND
+G	1cg	1mv	g1744	OR
+G	1ch	1n0	g1745	XNOR
+G	1ci	1mz	g1746	AND
+G	1cj	1n1	g1747	OR
+G	1ck	1n6	g1748	XNOR
+G	1cl	1n5	g1749	AND
+G	1cm	1n7	g1750	OR
+G	1cn	1nc	g1751	XNOR
+G	1co	1nb	g1752	AND
+G	1cp	1ng	g1753	XOR
+G	1cq	1nd	g1754	OR
+G	1cr	1nk	g1755	NOR
+G	1cs	1nm	g1756	AND
+G	1ct	1ne	g1757	XNOR
+G	1cu	1ni	g1758	XNOR
+G	1cv	1mw	g1759	XNOR
+G	1cw	1n2	g1760	XNOR
+G	1cx	1n8	g1761	XNOR
+G	1cy	1n9	g1762	OR
+G	1cz	1mx	g1763	OR
+G	1d0	1my	g1764	AND
+G	1d1	1nl	g1765	NOR
+G	1d2	1n3	g1766	OR
+G	1d3	1n4	g1767	AND
+G	1d4	1nn	g1768	OR
+G	1d5	1ms	g1769	AND
+G	1d6	1nj	g1770	AND
+G	1d7	1na	g1771	AND
+G	1d8	1nf	g1772	OR
+G	1d9	1nh	g1773	OR
+G	1da	1np	g1774	NOT
+G	1db	1no	g1775	NOT
+G	1dc	1ml	g1776	NOT
+G	1dd	1mp	g1777	NOT
+G	1de	r9	g1778	BUF
+G	1df	p9	g1779	BUF
+G	1dg	oz	g1780	BUF
+G	1dh	p7	g1781	BUF
+G	1di	ox	g1782	BUF
+G	1dj	p1	g1783	BUF
+G	1dk	p5	g1784	BUF
+G	1dl	pb	g1785	BUF
+G	1dm	p3	g1786	BUF
+G	1dn	pd	g1787	BUF
+G	1do	af	g1788	XNOR
+G	1dp	1nq	g1789	OR
+G	1dq	ah	g1790	XNOR
+G	1dr	1nt	g1791	AND
+G	1ds	1nu	g1792	OR
+G	1dt	aj	g1793	XNOR
+G	1du	1ny	g1794	AND
+G	1dv	1nz	g1795	OR
+G	1dw	an	g1796	XNOR
+G	1dx	1o3	g1797	AND
+G	1dy	1o4	g1798	OR
+G	1dz	ap	g1799	XNOR
+G	1e0	1o8	g1800	AND
+G	1e1	1o9	g1801	OR
+G	1e2	av	g1802	XNOR
+G	1e3	1od	g1803	AND
+G	1e4	1oe	g1804	OR
+G	1e5	aw	g1805	XNOR
+G	1e6	1oi	g1806	AND
+G	1e7	1oj	g1807	OR
+G	1e8	az	g1808	XNOR
+G	1e9	1on	g1809	AND
+G	1ea	1oo	g1810	OR
+G	1eb	b0	g1811	XNOR
+G	1ec	1os	g1812	AND
+G	1ed	1ot	g1813	OR
+G	1ee	b4	g1814	XNOR
+G	1ef	1ox	g1815	AND
+G	1eg	1oy	g1816	OR
+G	1eh	b6	g1817	XNOR
+G	1ei	1p2	g1818	AND
+G	1ej	ab	g1819	XOR
+G	1ek	1p3	g1820	OR
+G	1el	b9	g1821	AND
+G	1em	1p9	g1822	NOR
+G	1en	1nv	g1823	XNOR
+G	1eo	1o0	g1824	XNOR
+G	1ep	1o5	g1825	XNOR
+G	1eq	1nr	g1826	XNOR
+G	1er	1ou	g1827	XNOR
+G	1es	1oz	g1828	XNOR
+G	1et	1p7	g1829	XNOR
+G	1eu	1oa	g1830	XNOR
+G	1ev	1of	g1831	XNOR
+G	1ew	1ok	g1832	XNOR
+G	1ex	1op	g1833	XNOR
+G	1ey	1p4	g1834	XNOR
+G	1ez	1p5	g1835	OR
+G	1f0	1p0	g1836	OR
+G	1f1	1ob	g1837	OR
+G	1f2	1o6	g1838	OR
+G	1f3	1oc	g1839	AND
+G	1f4	1p8	g1840	AND
+G	1f5	1o2	g1841	AND
+G	1f6	1o1	g1842	OR
+G	1f7	1oh	g1843	AND
+G	1f8	1ns	g1844	AND
+G	1f9	1pb	g1845	NOR
+G	1fa	1og	g1846	OR
+G	1fb	1oq	g1847	OR
+G	1fc	1ow	g1848	AND
+G	1fd	1pa	g1849	OR
+G	1fe	1om	g1850	AND
+G	1ff	1ov	g1851	OR
+G	1fg	1p1	g1852	AND
+G	1fh	1nw	g1853	OR
+G	1fi	1o7	g1854	AND
+G	1fj	1or	g1855	AND
+G	1fk	1nx	g1856	AND
+G	1fl	1ol	g1857	OR
+G	1fm	1p6	g1858	OR
+G	1fn	1pz	g1859	NOT
+G	1fo	1q1	g1860	NOT
+G	1fp	1q3	g1861	NOT
+G	1fq	1q2	g1862	NOT
+G	1fr	1pn	g1863	NOT
+G	1fs	1po	g1864	NOT
+G	1ft	1q4	g1865	NOT
+G	1fu	1ph	g1866	NOT
+G	1fv	1pp	g1867	NOT
+G	1fw	1q5	g1868	NOT
+G	1fx	1pt	g1869	NOT
+G	1fy	1pi	g1870	NOT
+G	1fz	1q6	g1871	NOT
+G	1g0	1pj	g1872	NOT
+G	1g1	1pq	g1873	NOT
+G	1g2	1q7	g1874	NOT
+G	1g3	1pg	g1875	NOT
+G	1g4	1pw	g1876	NOT
+G	1g5	1q8	g1877	NOT
+G	1g6	1pm	g1878	NOT
+G	1g7	1pu	g1879	NOT
+G	1g8	1q9	g1880	NOT
+G	1g9	1pl	g1881	NOT
+G	1ga	1ps	g1882	NOT
+G	1gb	1qa	g1883	NOT
+G	1gc	1pk	g1884	NOT
+G	1gd	1pr	g1885	NOT
+G	1ge	1qb	g1886	NOT
+G	1gf	1pv	g1887	NOT
+G	1gg	1q0	g1888	NOT
+G	1gh	1pf	g1889	NOT
+G	1gi	1qc	g1890	NOT
+G	1gj	1pe	g1891	NOT
+G	1gk	1qd	g1892	NOT
+G	1gl	1pc	g1893	NOT
+G	1gm	1py	g1894	NOT
+G	1gn	1qe	g1895	NOT
+G	1go	1pd	g1896	NOT
+G	1gp	1px	g1897	NOT
+G	1gq	1qf	g1898	NOT
+G	1gr	1qg	g1899	XNOR
+G	1gs	1qh	g1900	OR
+G	1gt	1ql	g1901	XNOR
+G	1gu	1qk	g1902	AND
+G	1gv	1qm	g1903	OR
+G	1gw	1qr	g1904	XNOR
+G	1gx	1qq	g1905	AND
+G	1gy	1qs	g1906	OR
+G	1gz	1qx	g1907	XNOR
+G	1h0	1qw	g1908	AND
+G	1h1	1qy	g1909	OR
+G	1h2	1r3	g1910	XNOR
+G	1h3	1r2	g1911	AND
+G	1h4	1r4	g1912	OR
+G	1h5	1r9	g1913	XNOR
+G	1h6	1r8	g1914	AND
+G	1h7	1ra	g1915	OR
+G	1h8	1rf	g1916	XNOR
+G	1h9	1re	g1917	AND
+G	1ha	1rg	g1918	OR
+G	1hb	1rl	g1919	XNOR
+G	1hc	1rk	g1920	AND
+G	1hd	1rm	g1921	OR
+G	1he	1rr	g1922	XNOR
+G	1hf	1rq	g1923	AND
+G	1hg	1rs	g1924	OR
+G	1hh	1rx	g1925	XNOR
+G	1hi	1rw	g1926	AND
+G	1hj	1ry	g1927	OR
+G	1hk	1s3	g1928	XNOR
+G	1hl	1s2	g1929	AND
+G	1hm	1s4	g1930	OR
+G	1hn	1s9	g1931	XNOR
+G	1ho	1s8	g1932	AND
+G	1hp	1sd	g1933	XNOR
+G	1hq	1sa	g1934	OR
+G	1hr	1sg	g1935	AND
+G	1hs	1qn	g1936	XNOR
+G	1ht	1qt	g1937	XNOR
+G	1hu	1qz	g1938	XNOR
+G	1hv	1r5	g1939	XNOR
+G	1hw	1rb	g1940	XNOR
+G	1hx	1qi	g1941	XNOR
+G	1hy	1rz	g1942	XNOR
+G	1hz	1sb	g1943	XNOR
+G	1i0	1se	g1944	XNOR
+G	1i1	1rh	g1945	XNOR
+G	1i2	1rn	g1946	XNOR
+G	1i3	1rt	g1947	XNOR
+G	1i4	1s5	g1948	XNOR
+G	1i5	1sh	g1949	OR
+G	1i6	1rp	g1950	AND
+G	1i7	1rc	g1951	OR
+G	1i8	1r0	g1952	OR
+G	1i9	1qu	g1953	OR
+G	1ia	1qp	g1954	AND
+G	1ib	1qv	g1955	AND
+G	1ic	1ro	g1956	OR
+G	1id	1sc	g1957	OR
+G	1ie	1rd	g1958	AND
+G	1if	1r7	g1959	AND
+G	1ig	1s1	g1960	AND
+G	1ih	1r1	g1961	AND
+G	1ii	1rv	g1962	AND
+G	1ij	1r6	g1963	OR
+G	1ik	1s7	g1964	AND
+G	1il	1s0	g1965	OR
+G	1im	1ru	g1966	OR
+G	1in	1s6	g1967	OR
+G	1io	1rj	g1968	AND
+G	1ip	1qo	g1969	OR
+G	1iq	1sf	g1970	AND
+G	1ir	1qj	g1971	AND
+G	1is	1ri	g1972	OR
+G	1it	1j8	g1973	BUF
+G	1iu	1l4	g1974	BUF
+G	1iv	1ks	g1975	BUF
+G	1iw	1kw	g1976	BUF
+G	1ix	1ku	g1977	BUF
+G	1iy	1l0	g1978	BUF
+G	1iz	1l3	g1979	BUF
+G	1j0	1l6	g1980	BUF
+G	1j1	1l1	g1981	BUF
+G	1j2	1l2	g1982	BUF
+G	1j3	1ky	g1983	BUF
+G	1j4	1l5	g1984	BUF
+G	1j5	1l7	g1985	BUF
+G	1j6	1si	g1986	XNOR
+G	1j7	1sj	g1987	OR
+G	1j8	1sn	g1988	XNOR
+G	1j9	1sm	g1989	AND
+G	1ja	1so	g1990	OR
+G	1jb	1st	g1991	XNOR
+G	1jc	1ss	g1992	AND
+G	1jd	1su	g1993	OR
+G	1je	1sz	g1994	XNOR
+G	1jf	1sy	g1995	AND
+G	1jg	1t0	g1996	OR
+G	1jh	1t5	g1997	XNOR
+G	1ji	1t4	g1998	AND
+G	1jj	1t6	g1999	OR
+G	1jk	1tb	g2000	XNOR
+G	1jl	1ta	g2001	AND
+G	1jm	1tc	g2002	OR
+G	1jn	1th	g2003	XNOR
+G	1jo	1tg	g2004	AND
+G	1jp	1ti	g2005	OR
+G	1jq	1tn	g2006	XNOR
+G	1jr	1tm	g2007	AND
+G	1js	1to	g2008	OR
+G	1jt	1tt	g2009	XNOR
+G	1ju	1ts	g2010	AND
+G	1jv	1tu	g2011	OR
+G	1jw	1tz	g2012	XNOR
+G	1jx	1ty	g2013	AND
+G	1jy	1u0	g2014	OR
+G	1jz	1u5	g2015	XNOR
+G	1k0	1u4	g2016	AND
+G	1k1	1u6	g2017	OR
+G	1k2	1ub	g2018	XNOR
+G	1k3	1ua	g2019	AND
+G	1k4	1uf	g2020	XNOR
+G	1k5	1uc	g2021	OR
+G	1k6	1ui	g2022	AND
+G	1k7	1sp	g2023	XNOR
+G	1k8	1sv	g2024	XNOR
+G	1k9	1t1	g2025	XNOR
+G	1ka	1t7	g2026	XNOR
+G	1kb	1td	g2027	XNOR
+G	1kc	1sk	g2028	XNOR
+G	1kd	1u1	g2029	XNOR
+G	1ke	1ud	g2030	XNOR
+G	1kf	1ug	g2031	XNOR
+G	1kg	1tj	g2032	XNOR
+G	1kh	1tp	g2033	XNOR
+G	1ki	1tv	g2034	XNOR
+G	1kj	1u7	g2035	XNOR
+G	1kk	1uj	g2036	OR
+G	1kl	1tr	g2037	AND
+G	1km	1te	g2038	OR
+G	1kn	1t2	g2039	OR
+G	1ko	1sw	g2040	OR
+G	1kp	1sr	g2041	AND
+G	1kq	1sx	g2042	AND
+G	1kr	1tq	g2043	OR
+G	1ks	1ue	g2044	OR
+G	1kt	1tf	g2045	AND
+G	1ku	1t9	g2046	AND
+G	1kv	1u3	g2047	AND
+G	1kw	1t3	g2048	AND
+G	1kx	1tx	g2049	AND
+G	1ky	1t8	g2050	OR
+G	1kz	1u9	g2051	AND
+G	1l0	1u2	g2052	OR
+G	1l1	1tw	g2053	OR
+G	1l2	1u8	g2054	OR
+G	1l3	1tl	g2055	AND
+G	1l4	1sq	g2056	OR
+G	1l5	1uh	g2057	AND
+G	1l6	1sl	g2058	AND
+G	1l7	1tk	g2059	OR
+G	1l8	1fv	g2060	BUF
+G	1l9	1hf	g2061	BUF
+G	1la	1h5	g2062	BUF
+G	1lb	1h9	g2063	BUF
+G	1lc	1h7	g2064	BUF
+G	1ld	1hb	g2065	BUF
+G	1le	1hg	g2066	BUF
+G	1lf	1hh	g2067	BUF
+G	1lg	1hd	g2068	BUF
+G	1lh	1hc	g2069	BUF
+G	1li	1ha	g2070	BUF
+G	1lj	1he	g2071	BUF
+G	1lk	1hi	g2072	BUF
+G	1ll	px	g2073	XNOR
+G	1lm	1ul	g2074	NOR
+G	1ln	pl	g2075	XNOR
+G	1lo	1un	g2076	NOR
+G	1lp	1uo	g2077	AND
+G	1lq	q1	g2078	XNOR
+G	1lr	1us	g2079	OR
+G	1ls	1ut	g2080	AND
+G	1lt	pn	g2081	XNOR
+G	1lu	1ux	g2082	OR
+G	1lv	1uy	g2083	AND
+G	1lw	1v2	g2084	OR
+G	1lx	1v4	g2085	AND
+G	1ly	1v6	g2086	OR
+G	1lz	1v8	g2087	AND
+G	1m0	1va	g2088	OR
+G	1m1	1vc	g2089	AND
+G	1m2	pt	g2090	XNOR
+G	1m3	1ve	g2091	OR
+G	1m4	1vi	g2092	NOT
+G	1m5	1vf	g2093	OR
+G	1m6	pp	g2094	XNOR
+G	1m7	1vk	g2095	AND
+G	1m8	1vl	g2096	OR
+G	1m9	pr	g2097	XNOR
+G	1ma	1vp	g2098	NOR
+G	1mb	1vq	g2099	AND
+G	1mc	pv	g2100	XNOR
+G	1md	1vu	g2101	OR
+G	1me	pz	g2102	XNOR
+G	1mf	1vy	g2103	NOT
+G	1mg	1vv	g2104	OR
+G	1mh	1w2	g2105	NOR
+G	1mi	1w0	g2106	XNOR
+G	1mj	1vw	g2107	XNOR
+G	1mk	ph	g2108	XOR
+G	1ml	1vt	g2109	OR
+G	1mm	1vx	g2110	NOR
+G	1mn	1w1	g2111	NOR
+G	1mo	1w3	g2112	AND
+G	1mp	1vr	g2113	XNOR
+G	1mq	1vo	g2114	NOR
+G	1mr	1vs	g2115	AND
+G	1ms	1vz	g2116	AND
+G	1mt	1wa	g2117	NOT
+G	1mu	1w7	g2118	XNOR
+G	1mv	1w8	g2119	XNOR
+G	1mw	1wb	g2120	NOT
+G	1mx	1w5	g2121	XNOR
+G	1my	1wk	g2122	XNOR
+G	1mz	1wn	g2123	XNOR
+G	1n0	1vm	g2124	XNOR
+G	1n1	1vg	g2125	XNOR
+G	1n2	1w9	g2126	NOT
+G	1n3	1we	g2127	NOT
+G	1n4	1vn	g2128	OR
+G	1n5	1vb	g2129	AND
+G	1n6	1v7	g2130	AND
+G	1n7	1v9	g2131	OR
+G	1n8	1w6	g2132	OR
+G	1n9	1wd	g2133	OR
+G	1na	1vd	g2134	OR
+G	1nb	1wg	g2135	OR
+G	1nc	1vh	g2136	AND
+G	1nd	1vj	g2137	NOR
+G	1ne	1v5	g2138	OR
+G	1nf	1x1	g2139	XNOR
+G	1ng	1wz	g2140	AND
+G	1nh	1v1	g2141	OR
+G	1ni	1v3	g2142	AND
+G	1nj	1wx	g2143	AND
+G	1nk	1uu	g2144	XNOR
+G	1nl	1uz	g2145	XNOR
+G	1nm	1uk	g2146	XNOR
+G	1nn	1wm	g2147	XNOR
+G	1no	1wv	g2148	NOT
+G	1np	1wj	g2149	XNOR
+G	1nq	1up	g2150	XNOR
+G	1nr	1wh	g2151	XNOR
+G	1ns	1wi	g2152	XNOR
+G	1nt	1wt	g2153	XNOR
+G	1nu	1wp	g2154	XNOR
+G	1nv	1wr	g2155	XNOR
+G	1nw	1wc	g2156	XNOR
+G	1nx	1wy	g2157	AND
+G	1ny	1uq	g2158	NOR
+G	1nz	1um	g2159	NOR
+G	1o0	1uw	g2160	OR
+G	1o1	1v0	g2161	NOR
+G	1o2	1uv	g2162	NOR
+G	1o3	1ur	g2163	OR
+G	1o4	1wf	g2164	OR
+G	1o5	1x2	g2165	AND
+G	1o6	1wu	g2166	NOT
+G	1o7	1x4	g2167	OR
+G	1o8	1ww	g2168	AND
+G	1o9	1x3	g2169	OR
+G	1oa	1x0	g2170	NOR
+G	1ob	1w4	g2171	OR
+G	1oc	1wo	g2172	OR
+G	1od	1ws	g2173	OR
+G	1oe	1wl	g2174	OR
+G	1of	1wq	g2175	OR
+G	1og	1xi	g2176	NOT
+G	1oh	1xk	g2177	NOT
+G	1oi	1xc	g2178	NOT
+G	1oj	1xe	g2179	NOT
+G	1ok	1x9	g2180	NOT
+G	1ol	1xa	g2181	NOT
+G	1om	1x7	g2182	NOT
+G	1on	1xb	g2183	NOT
+G	1oo	1xg	g2184	NOT
+G	1op	1xj	g2185	NOT
+G	1oq	1xl	g2186	NOT
+G	1or	1xh	g2187	NOT
+G	1os	1xd	g2188	NOT
+G	1ot	1xf	g2189	NOT
+G	1ou	1x5	g2190	NOT
+G	1ov	1x8	g2191	NOT
+G	1ow	1x6	g2192	NOT
+G	1ox	pj	g2193	XOR
+G	1oy	q3	g2194	XOR
+G	1oz	q5	g2195	XOR
+G	1p0	133	g2196	XNOR
+G	1p1	12v	g2197	XNOR
+G	1p2	12p	g2198	XNOR
+G	1p3	135	g2199	XNOR
+G	1p4	12r	g2200	XNOR
+G	1p5	xg	g2201	OR
+G	1p6	xw	g2202	OR
+G	1p7	137	g2203	OR
+G	1p8	xy	g2204	OR
+G	1p9	xu	g2205	OR
+G	1pa	12z	g2206	XOR
+G	1pb	1xw	g2207	AND
+G	1pc	1xu	g2208	AND
+G	1pd	1xy	g2209	AND
+G	1pe	1y0	g2210	AND
+G	1pf	xs	g2211	XOR
+G	1pg	12l	g2212	XOR
+G	1ph	12x	g2213	XOR
+G	1pi	1xs	g2214	AND
+G	1pj	12j	g2215	XOR
+G	1pk	131	g2216	XOR
+G	1pl	12t	g2217	XOR
+G	1pm	12n	g2218	XOR
+G	1pn	1xm	g2219	XNOR
+G	1po	1xn	g2220	XNOR
+G	1pp	1xo	g2221	XNOR
+G	1pq	1xp	g2222	XNOR
+G	1pr	1xq	g2223	XNOR
+G	1ps	1xt	g2224	AND
+G	1pt	1y3	g2225	OR
+G	1pu	1y2	g2226	OR
+G	1pv	1y5	g2227	OR
+G	1pw	1xv	g2228	AND
+G	1px	xi	g2229	AND
+G	1py	xm	g2230	AND
+G	1pz	xe	g2231	AND
+G	1q0	1xr	g2232	AND
+G	1q1	1y4	g2233	OR
+G	1q2	1xx	g2234	AND
+G	1q3	1y7	g2235	OR
+G	1q4	1xz	g2236	AND
+G	1q5	xk	g2237	AND
+G	1q6	xq	g2238	AND
+G	1q7	xo	g2239	AND
+G	1q8	y0	g2240	AND
+G	1q9	1ya	g2241	NOT
+G	1qa	1y8	g2242	NOT
+G	1qb	1yb	g2243	NOT
+G	1qc	1y6	g2244	NOT
+G	1qd	1y9	g2245	NOT
+G	1qe	1yc	g2246	NOT
+G	1qf	1y1	g2247	NOT
+G	1qg	1yd	g2248	NOT
+G	1qh	bb	g2249	XNOR
+G	1qi	1ye	g2250	OR
+G	1qj	1yg	g2251	AND
+G	1qk	be	g2252	XNOR
+G	1ql	1yi	g2253	OR
+G	1qm	1yj	g2254	AND
+G	1qn	1yn	g2255	OR
+G	1qo	1yp	g2256	AND
+G	1qp	1yr	g2257	OR
+G	1qq	1yt	g2258	AND
+G	1qr	1yv	g2259	OR
+G	1qs	1yx	g2260	AND
+G	1qt	1yz	g2261	OR
+G	1qu	1z1	g2262	AND
+G	1qv	al	g2263	XNOR
+G	1qw	1z3	g2264	OR
+G	1qx	1z7	g2265	NOT
+G	1qy	1z4	g2266	OR
+G	1qz	ax	g2267	XOR
+G	1r0	1z9	g2268	AND
+G	1r1	1za	g2269	OR
+G	1r2	b2	g2270	XNOR
+G	1r3	1ze	g2271	AND
+G	1r4	ba	g2272	XOR
+G	1r5	1zf	g2273	OR
+G	1r6	1zl	g2274	AND
+G	1r7	1zj	g2275	XNOR
+G	1r8	1zg	g2276	XNOR
+G	1r9	bd	g2277	XOR
+G	1ra	1zd	g2278	AND
+G	1rb	1zh	g2279	OR
+G	1rc	1zk	g2280	NOR
+G	1rd	1zm	g2281	OR
+G	1re	1zi	g2282	OR
+G	1rf	1zb	g2283	XNOR
+G	1rg	1z8	g2284	NOR
+G	1rh	1zc	g2285	OR
+G	1ri	1zw	g2286	AND
+G	1rj	1zt	g2287	NOT
+G	1rk	202	g2288	XNOR
+G	1rl	205	g2289	XNOR
+G	1rm	208	g2290	XNOR
+G	1rn	20b	g2291	XNOR
+G	1ro	1z5	g2292	XNOR
+G	1rp	1zz	g2293	NOT
+G	1rq	1yy	g2294	OR
+G	1rr	201	g2295	OR
+G	1rs	1ys	g2296	AND
+G	1rt	1yw	g2297	AND
+G	1ru	1zv	g2298	NOR
+G	1rv	1yu	g2299	OR
+G	1rw	1zp	g2300	OR
+G	1rx	1zy	g2301	OR
+G	1ry	1z0	g2302	AND
+G	1rz	1z2	g2303	OR
+G	1s0	1yo	g2304	AND
+G	1s1	1ym	g2305	OR
+G	1s2	1z6	g2306	AND
+G	1s3	1yq	g2307	OR
+G	1s4	1yk	g2308	XNOR
+G	1s5	1zr	g2309	OR
+G	1s6	200	g2310	NOT
+G	1s7	1yh	g2311	OR
+G	1s8	20l	g2312	AND
+G	1s9	20r	g2313	AND
+G	1sa	20n	g2314	AND
+G	1sb	20h	g2315	NOT
+G	1sc	20w	g2316	XNOR
+G	1sd	20y	g2317	XNOR
+G	1se	210	g2318	XNOR
+G	1sf	20k	g2319	AND
+G	1sg	20u	g2320	OR
+G	1sh	20v	g2321	OR
+G	1si	20m	g2322	AND
+G	1sj	207	g2323	OR
+G	1sk	20o	g2324	OR
+G	1sl	1zu	g2325	NOT
+G	1sm	20t	g2326	OR
+G	1sn	20q	g2327	AND
+G	1so	1zn	g2328	OR
+G	1sp	20f	g2329	OR
+G	1sq	204	g2330	OR
+G	1sr	20d	g2331	OR
+G	1ss	20a	g2332	OR
+G	1st	20i	g2333	NOT
+G	1su	21d	g2334	NOT
+G	1sv	20s	g2335	NOT
+G	1sw	21a	g2336	NOT
+G	1sx	20x	g2337	NOT
+G	1sy	212	g2338	NOT
+G	1sz	21n	g2339	NOT
+G	1t0	20z	g2340	NOT
+G	1t1	216	g2341	NOT
+G	1t2	21o	g2342	NOT
+G	1t3	214	g2343	NOT
+G	1t4	21p	g2344	NOT
+G	1t5	20g	g2345	NOT
+G	1t6	21q	g2346	NOT
+G	1t7	21c	g2347	NOT
+G	1t8	21k	g2348	NOT
+G	1t9	21i	g2349	NOT
+G	1ta	21e	g2350	NOT
+G	1tb	21g	g2351	NOT
+G	1tc	218	g2352	NOT
+G	1td	217	g2353	NOT
+G	1te	21r	g2354	NOT
+G	1tf	213	g2355	NOT
+G	1tg	21s	g2356	NOT
+G	1th	21j	g2357	NOT
+G	1ti	21f	g2358	NOT
+G	1tj	20p	g2359	NOT
+G	1tk	21t	g2360	NOT
+G	1tl	211	g2361	NOT
+G	1tm	215	g2362	NOT
+G	1tn	21u	g2363	NOT
+G	1to	1yf	g2364	NOT
+G	1tp	219	g2365	NOT
+G	1tq	21l	g2366	NOT
+G	1tr	21b	g2367	NOT
+G	1ts	21h	g2368	NOT
+G	1tt	21m	g2369	BUF
+G	1tu	ar	g2370	XOR
+G	1tv	b5	g2371	XOR
+G	1tw	bg	g2372	XOR
+G	1tx	ad	g2373	XOR
+G	1ty	1yl	g2374	AND
+G	1tz	b8	g2375	XOR
+G	1u0	1zs	g2376	XOR
+G	1u1	20j	g2377	XOR
+G	1u2	206	g2378	XNOR
+G	1u3	20e	g2379	XNOR
+G	1u4	1zx	g2380	XNOR
+G	1u5	20c	g2381	XNOR
+G	1u6	203	g2382	XNOR
+G	1u7	1zq	g2383	XOR
+G	1u8	1zo	g2384	XOR
+G	1u9	at	g2385	XOR
+G	1ua	209	g2386	XOR
+G	1ub	ub	g2387	XNOR
+G	1uc	uf	g2388	XNOR
+G	1ud	uj	g2389	XNOR
+G	1ue	un	g2390	XNOR
+G	1uf	151	g2391	OR
+G	1ug	15h	g2392	OR
+G	1uh	155	g2393	OR
+G	1ui	159	g2394	OR
+G	1uj	15d	g2395	OR
+G	1uk	tr	g2396	XNOR
+G	1ul	tv	g2397	XNOR
+G	1um	tz	g2398	XNOR
+G	1un	u3	g2399	XNOR
+G	1uo	up	g2400	XNOR
+G	1up	u7	g2401	XOR
+G	1uq	228	g2402	AND
+G	1ur	224	g2403	AND
+G	1us	226	g2404	NOR
+G	1ut	14x	g2405	OR
+G	1uu	22a	g2406	AND
+G	1uv	22c	g2407	AND
+G	1uw	tn	g2408	XNOR
+G	1ux	14l	g2409	OR
+G	1uy	22b	g2410	AND
+G	1uz	22q	g2411	OR
+G	1v0	14t	g2412	OR
+G	1v1	227	g2413	AND
+G	1v2	22p	g2414	OR
+G	1v3	14h	g2415	OR
+G	1v4	22u	g2416	OR
+G	1v5	14p	g2417	OR
+G	1v6	229	g2418	AND
+G	1v7	22t	g2419	AND
+G	1v8	22l	g2420	AND
+G	1v9	223	g2421	AND
+G	1va	22v	g2422	OR
+G	1vb	ut	g2423	XOR
+G	1vc	22f	g2424	XNOR
+G	1vd	22d	g2425	XNOR
+G	1ve	22h	g2426	XNOR
+G	1vf	22j	g2427	XNOR
+G	1vg	235	g2428	NOR
+G	1vh	23e	g2429	OR
+G	1vi	22s	g2430	NOR
+G	1vj	23g	g2431	OR
+G	1vk	22z	g2432	NOR
+G	1vl	237	g2433	OR
+G	1vm	233	g2434	OR
+G	1vn	239	g2435	NOR
+G	1vo	23d	g2436	NOR
+G	1vp	22x	g2437	XNOR
+G	1vq	22m	g2438	XNOR
+G	1vr	22n	g2439	OR
+G	1vs	23b	g2440	OR
+G	1vt	231	g2441	OR
+G	1vu	24c	g2442	AND
+G	1vv	225	g2443	NOR
+G	1vw	22r	g2444	AND
+G	1vx	241	g2445	AND
+G	1vy	242	g2446	AND
+G	1vz	234	g2447	NOR
+G	1w0	238	g2448	NOR
+G	1w1	23x	g2449	AND
+G	1w2	23r	g2450	AND
+G	1w3	23z	g2451	AND
+G	1w4	24a	g2452	AND
+G	1w5	23c	g2453	NOR
+G	1w6	248	g2454	AND
+G	1w7	243	g2455	AND
+G	1w8	23t	g2456	NOT
+G	1w9	22y	g2457	NOR
+G	1wa	uv	g2458	XOR
+G	1wb	24u	g2459	XNOR
+G	1wc	24w	g2460	XNOR
+G	1wd	24y	g2461	XNOR
+G	1we	250	g2462	XNOR
+G	1wf	252	g2463	XNOR
+G	1wg	23i	g2464	XNOR
+G	1wh	22w	g2465	XNOR
+G	1wi	23j	g2466	XNOR
+G	1wj	23f	g2467	OR
+G	1wk	240	g2468	AND
+G	1wl	24e	g2469	OR
+G	1wm	24m	g2470	OR
+G	1wn	247	g2471	AND
+G	1wo	14f	g2472	AND
+G	1wp	23q	g2473	OR
+G	1wq	245	g2474	OR
+G	1wr	23k	g2475	OR
+G	1ws	24b	g2476	AND
+G	1wt	24r	g2477	OR
+G	1wu	24h	g2478	OR
+G	1wv	249	g2479	AND
+G	1ww	24o	g2480	OR
+G	1wx	23y	g2481	AND
+G	1wy	244	g2482	OR
+G	1wz	23m	g2483	OR
+G	1x0	23o	g2484	OR
+G	1x1	24f	g2485	NOT
+G	1x2	256	g2486	NOT
+G	1x3	24p	g2487	NOT
+G	1x4	24j	g2488	NOT
+G	1x5	257	g2489	NOT
+G	1x6	24i	g2490	NOT
+G	1x7	25r	g2491	NOT
+G	1x8	25q	g2492	NOT
+G	1x9	24k	g2493	NOT
+G	1xa	23u	g2494	NOT
+G	1xb	255	g2495	NOT
+G	1xc	25u	g2496	NOT
+G	1xd	23s	g2497	NOT
+G	1xe	25v	g2498	NOT
+G	1xf	25a	g2499	NOT
+G	1xg	25w	g2500	NOT
+G	1xh	25c	g2501	NOT
+G	1xi	25x	g2502	NOT
+G	1xj	23a	g2503	NOT
+G	1xk	25y	g2504	NOT
+G	1xl	258	g2505	NOT
+G	1xm	25z	g2506	NOT
+G	1xn	236	g2507	NOT
+G	1xo	260	g2508	NOT
+G	1xp	232	g2509	NOT
+G	1xq	261	g2510	NOT
+G	1xr	25e	g2511	NOT
+G	1xs	262	g2512	NOT
+G	1xt	25n	g2513	NOT
+G	1xu	263	g2514	NOT
+G	1xv	254	g2515	NOT
+G	1xw	264	g2516	NOT
+G	1xx	230	g2517	NOT
+G	1xy	265	g2518	NOT
+G	1xz	24x	g2519	NOT
+G	1y0	25m	g2520	NOT
+G	1y1	266	g2521	NOT
+G	1y2	251	g2522	NOT
+G	1y3	25b	g2523	NOT
+G	1y4	267	g2524	NOT
+G	1y5	24z	g2525	NOT
+G	1y6	25d	g2526	NOT
+G	1y7	268	g2527	NOT
+G	1y8	24v	g2528	NOT
+G	1y9	259	g2529	NOT
+G	1ya	269	g2530	NOT
+G	1yb	253	g2531	NOT
+G	1yc	25f	g2532	NOT
+G	1yd	26a	g2533	NOT
+G	1ye	22k	g2534	NOT
+G	1yf	26b	g2535	NOT
+G	1yg	22i	g2536	NOT
+G	1yh	26c	g2537	NOT
+G	1yi	22g	g2538	NOT
+G	1yj	26d	g2539	NOT
+G	1yk	22e	g2540	NOT
+G	1yl	26e	g2541	NOT
+G	1ym	246	g2542	NOT
+G	1yn	26f	g2543	NOT
+G	1yo	25p	g2544	NOT
+G	1yp	24q	g2545	NOT
+G	1yq	26g	g2546	NOT
+G	1yr	24g	g2547	NOT
+G	1ys	26h	g2548	NOT
+G	1yt	24d	g2549	NOT
+G	1yu	26i	g2550	NOT
+G	1yv	24l	g2551	NOT
+G	1yw	26j	g2552	NOT
+G	1yx	25o	g2553	NOT
+G	1yy	25h	g2554	NOT
+G	1yz	25l	g2555	NOT
+G	1z0	24t	g2556	NOT
+G	1z1	26k	g2557	NOT
+G	1z2	24n	g2558	NOT
+G	1z3	26l	g2559	NOT
+G	1z4	25t	g2560	NOT
+G	1z5	25j	g2561	NOT
+G	1z6	25s	g2562	NOT
+G	1z7	25g	g2563	NOT
+G	1z8	25k	g2564	NOT
+G	1z9	25i	g2565	NOT
+G	1za	24s	g2566	NOT
+G	1zb	26m	g2567	NOT
+G	1zc	14b	g2568	BUF
+G	1zd	23w	g2569	AND
+G	1ze	22o	g2570	XOR
+G	1zf	149	g2571	XOR
+G	1zg	21z	g2572	XOR
+G	1zh	220	g2573	XOR
+G	1zi	21x	g2574	XOR
+G	1zj	21y	g2575	XOR
+G	1zk	21w	g2576	XOR
+G	1zl	21v	g2577	XOR
+G	1zm	221	g2578	XOR
+G	1zn	222	g2579	XOR
+G	1zo	23l	g2580	XNOR
+G	1zp	23v	g2581	XNOR
+G	1zq	23n	g2582	XNOR
+G	1zr	23p	g2583	XNOR
+G	1zs	23h	g2584	XNOR
+G	1zt	198	g2585	XNOR
+G	1zu	18c	g2586	XNOR
+G	1zv	188	g2587	XNOR
+G	1zw	19c	g2588	XNOR
+G	1zx	18g	g2589	XNOR
+G	1zy	18k	g2590	XNOR
+G	1zz	18o	g2591	XNOR
+G	200	18s	g2592	XNOR
+G	201	18w	g2593	XNOR
+G	202	190	g2594	XNOR
+G	203	194	g2595	XNOR
+G	204	1c1	g2596	OR
+G	205	1ch	g2597	OR
+G	206	1c9	g2598	OR
+G	207	1cl	g2599	OR
+G	208	1bx	g2600	OR
+G	209	1cd	g2601	OR
+G	20a	1cn	g2602	OR
+G	20b	1c5	g2603	OR
+G	20c	1cv	g2604	OR
+G	20d	275	g2605	AND
+G	20e	27f	g2606	AND
+G	20f	27d	g2607	AND
+G	20g	271	g2608	AND
+G	20h	26z	g2609	AND
+G	20i	277	g2610	AND
+G	20j	27b	g2611	AND
+G	20k	273	g2612	AND
+G	20l	27o	g2613	AND
+G	20m	279	g2614	AND
+G	20n	19g	g2615	XOR
+G	20o	26p	g2616	XNOR
+G	20p	27q	g2617	OR
+G	20q	270	g2618	AND
+G	20r	26y	g2619	AND
+G	20s	27i	g2620	OR
+G	20t	27a	g2621	AND
+G	20u	27e	g2622	AND
+G	20v	27j	g2623	OR
+G	20w	274	g2624	AND
+G	20x	276	g2625	AND
+G	20y	1cx	g2626	AND
+G	20z	27h	g2627	OR
+G	210	27c	g2628	AND
+G	211	27k	g2629	OR
+G	212	27p	g2630	OR
+G	213	27l	g2631	OR
+G	214	27g	g2632	OR
+G	215	278	g2633	AND
+G	216	27n	g2634	OR
+G	217	272	g2635	AND
+G	218	27m	g2636	OR
+G	219	281	g2637	NOT
+G	21a	28f	g2638	NOT
+G	21b	288	g2639	NOT
+G	21c	28g	g2640	NOT
+G	21d	284	g2641	NOT
+G	21e	28h	g2642	NOT
+G	21f	27t	g2643	NOT
+G	21g	28i	g2644	NOT
+G	21h	27v	g2645	NOT
+G	21i	28j	g2646	NOT
+G	21j	27z	g2647	NOT
+G	21k	28k	g2648	NOT
+G	21l	28c	g2649	NOT
+G	21m	28l	g2650	NOT
+G	21n	27w	g2651	NOT
+G	21o	28m	g2652	NOT
+G	21p	285	g2653	NOT
+G	21q	28n	g2654	NOT
+G	21r	27x	g2655	NOT
+G	21s	28o	g2656	NOT
+G	21t	28e	g2657	NOT
+G	21u	27y	g2658	NOT
+G	21v	28p	g2659	NOT
+G	21w	28d	g2660	NOT
+G	21x	28b	g2661	NOT
+G	21y	28q	g2662	NOT
+G	21z	286	g2663	NOT
+G	220	280	g2664	NOT
+G	221	28r	g2665	NOT
+G	222	289	g2666	NOT
+G	223	283	g2667	NOT
+G	224	28s	g2668	NOT
+G	225	28t	g2669	NOT
+G	226	287	g2670	NOT
+G	227	28u	g2671	NOT
+G	228	282	g2672	NOT
+G	229	27u	g2673	NOT
+G	22a	28v	g2674	NOT
+G	22b	28a	g2675	NOT
+G	22c	27s	g2676	NOT
+G	22d	28w	g2677	NOT
+G	22e	19k	g2678	BUF
+G	22f	27r	g2679	BUF
+G	22g	26q	g2680	XOR
+G	22h	26n	g2681	XOR
+G	22i	26w	g2682	XOR
+G	22j	26u	g2683	XOR
+G	22k	26v	g2684	XOR
+G	22l	26x	g2685	XOR
+G	22m	26t	g2686	XOR
+G	22n	26r	g2687	XOR
+G	22o	26o	g2688	XOR
+G	22p	26s	g2689	XOR
+G	22q	u9	g2690	XNOR
+G	22r	ud	g2691	XNOR
+G	22s	uh	g2692	XNOR
+G	22t	ux	g2693	XNOR
+G	22u	ul	g2694	XOR
+G	22v	157	g2695	OR
+G	22w	15j	g2696	OR
+G	22x	15b	g2697	OR
+G	22y	14z	g2698	OR
+G	22z	153	g2699	OR
+G	230	15f	g2700	OR
+G	231	tp	g2701	XNOR
+G	232	ur	g2702	XNOR
+G	233	tt	g2703	XNOR
+G	234	29a	g2704	NOR
+G	235	298	g2705	NOR
+G	236	29c	g2706	NOR
+G	237	29e	g2707	AND
+G	238	29i	g2708	AND
+G	239	29g	g2709	NOR
+G	23a	u1	g2710	XNOR
+G	23b	u5	g2711	XNOR
+G	23c	tx	g2712	XNOR
+G	23d	28y	g2713	XNOR
+G	23e	290	g2714	XNOR
+G	23f	292	g2715	XNOR
+G	23g	296	g2716	XNOR
+G	23h	29u	g2717	AND
+G	23i	14j	g2718	OR
+G	23j	297	g2719	NOR
+G	23k	14r	g2720	OR
+G	23l	14v	g2721	OR
+G	23m	29q	g2722	AND
+G	23n	29d	g2723	NOR
+G	23o	29b	g2724	NOR
+G	23p	29r	g2725	AND
+G	23q	14n	g2726	OR
+G	23r	29h	g2727	AND
+G	23s	29f	g2728	NOR
+G	23t	29t	g2729	OR
+G	23u	uz	g2730	XNOR
+G	23v	29s	g2731	OR
+G	23w	29k	g2732	XNOR
+G	23x	28z	g2733	XNOR
+G	23y	29l	g2734	XNOR
+G	23z	291	g2735	XNOR
+G	240	295	g2736	XNOR
+G	241	2a1	g2737	NOT
+G	242	2ad	g2738	NOT
+G	243	2ab	g2739	AND
+G	244	2al	g2740	AND
+G	245	2ah	g2741	AND
+G	246	2as	g2742	OR
+G	247	2an	g2743	OR
+G	248	2a7	g2744	AND
+G	249	2a5	g2745	OR
+G	24a	2a9	g2746	NOT
+G	24b	14d	g2747	OR
+G	24c	2af	g2748	AND
+G	24d	29m	g2749	XNOR
+G	24e	2a3	g2750	OR
+G	24f	2ae	g2751	NOR
+G	24g	299	g2752	NOR
+G	24h	2b2	g2753	OR
+G	24i	29p	g2754	AND
+G	24j	2ag	g2755	NOR
+G	24k	2b3	g2756	OR
+G	24l	2bc	g2757	NOR
+G	24m	2bj	g2758	NOR
+G	24n	2ba	g2759	OR
+G	24o	2b6	g2760	NOR
+G	24p	2aa	g2761	NOR
+G	24q	2b8	g2762	NOR
+G	24r	2ak	g2763	NOR
+G	24s	2b4	g2764	OR
+G	24t	2bf	g2765	OR
+G	24u	2be	g2766	NOR
+G	24v	2au	g2767	XNOR
+G	24w	2at	g2768	XNOR
+G	24x	2ce	g2769	XNOR
+G	24y	2aq	g2770	XNOR
+G	24z	2b0	g2771	XNOR
+G	250	2aw	g2772	XNOR
+G	251	2ay	g2773	XNOR
+G	252	29z	g2774	OR
+G	253	29n	g2775	XNOR
+G	254	29x	g2776	OR
+G	255	29v	g2777	OR
+G	256	28x	g2778	OR
+G	257	2bn	g2779	NOT
+G	258	2b9	g2780	OR
+G	259	2bb	g2781	AND
+G	25a	2ap	g2782	OR
+G	25b	2c7	g2783	AND
+G	25c	2c3	g2784	AND
+G	25d	2bh	g2785	OR
+G	25e	2cl	g2786	NOR
+G	25f	2bi	g2787	AND
+G	25g	2b5	g2788	AND
+G	25h	2b7	g2789	AND
+G	25i	29j	g2790	NOR
+G	25j	2br	g2791	AND
+G	25k	2bl	g2792	AND
+G	25l	17y	g2793	NOT
+G	25m	2cx	g2794	NOT
+G	25n	2bs	g2795	NOT
+G	25o	2bo	g2796	NOT
+G	25p	2ar	g2797	NOT
+G	25q	2cy	g2798	NOT
+G	25r	2cr	g2799	NOT
+G	25s	2ca	g2800	NOT
+G	25t	2c8	g2801	NOT
+G	25u	2ch	g2802	NOT
+G	25v	2d9	g2803	NOT
+G	25w	2a2	g2804	NOT
+G	25x	2ai	g2805	NOT
+G	25y	2da	g2806	NOT
+G	25z	2a8	g2807	NOT
+G	260	2aj	g2808	NOT
+G	261	2db	g2809	NOT
+G	262	2ax	g2810	NOT
+G	263	2dc	g2811	NOT
+G	264	2a4	g2812	NOT
+G	265	2ao	g2813	NOT
+G	266	2dd	g2814	NOT
+G	267	2b1	g2815	NOT
+G	268	2de	g2816	NOT
+G	269	2a6	g2817	NOT
+G	26a	2ac	g2818	NOT
+G	26b	2df	g2819	NOT
+G	26c	2az	g2820	NOT
+G	26d	2dg	g2821	NOT
+G	26e	2av	g2822	NOT
+G	26f	2dh	g2823	NOT
+G	26g	2cg	g2824	NOT
+G	26h	2di	g2825	NOT
+G	26i	2cs	g2826	NOT
+G	26j	2dj	g2827	NOT
+G	26k	2am	g2828	NOT
+G	26l	2dk	g2829	NOT
+G	26m	2cf	g2830	NOT
+G	26n	2dl	g2831	NOT
+G	26o	2cj	g2832	NOT
+G	26p	2dm	g2833	NOT
+G	26q	2ci	g2834	NOT
+G	26r	2dn	g2835	NOT
+G	26s	2ck	g2836	NOT
+G	26t	2do	g2837	NOT
+G	26u	2cd	g2838	NOT
+G	26v	2dp	g2839	NOT
+G	26w	2d7	g2840	NOT
+G	26x	2bk	g2841	NOT
+G	26y	2dq	g2842	NOT
+G	26z	2d5	g2843	NOT
+G	270	2c6	g2844	NOT
+G	271	2dr	g2845	NOT
+G	272	2d6	g2846	NOT
+G	273	2c2	g2847	NOT
+G	274	2ds	g2848	NOT
+G	275	2d8	g2849	NOT
+G	276	2bq	g2850	NOT
+G	277	2dt	g2851	NOT
+G	278	2bm	g2852	NOT
+G	279	2bg	g2853	NOT
+G	27a	2du	g2854	NOT
+G	27b	2bp	g2855	NOT
+G	27c	2bt	g2856	NOT
+G	27d	2c9	g2857	NOT
+G	27e	2cb	g2858	NOT
+G	27f	2c4	g2859	NOT
+G	27g	2dv	g2860	NOT
+G	27h	2bu	g2861	NOT
+G	27i	2dw	g2862	NOT
+G	27j	2cn	g2863	NOT
+G	27k	2dx	g2864	NOT
+G	27l	2bw	g2865	NOT
+G	27m	2dy	g2866	NOT
+G	27n	2c0	g2867	NOT
+G	27o	2dz	g2868	NOT
+G	27p	2cm	g2869	NOT
+G	27q	2e0	g2870	NOT
+G	27r	2by	g2871	NOT
+G	27s	2e1	g2872	NOT
+G	27t	2d4	g2873	NOT
+G	27u	2d2	g2874	NOT
+G	27v	2cz	g2875	NOT
+G	27w	2cu	g2876	NOT
+G	27x	2e2	g2877	NOT
+G	27y	2cw	g2878	NOT
+G	27z	2d3	g2879	NOT
+G	280	2d1	g2880	NOT
+G	281	2cv	g2881	NOT
+G	282	2d0	g2882	NOT
+G	283	2e3	g2883	NOT
+G	284	2ct	g2884	NOT
+G	285	147	g2885	BUF
+G	286	2bd	g2886	AND
+G	287	2bz	g2887	AND
+G	288	2cc	g2888	AND
+G	289	2c5	g2889	AND
+G	28a	2bv	g2890	AND
+G	28b	2bx	g2891	AND
+G	28c	2c1	g2892	AND
+G	28d	293	g2893	XOR
+G	28e	294	g2894	XOR
+G	28f	2co	g2895	NOR
+G	28g	2cq	g2896	NOR
+G	28h	145	g2897	XNOR
+G	28i	2cp	g2898	NOR
+G	28j	v1	g2899	XOR
+G	28k	29o	g2900	XOR
+G	28l	2a0	g2901	XOR
+G	28m	29y	g2902	XOR
+G	28n	29w	g2903	XOR
+G	28o	18a	g2904	XOR
+G	28p	18e	g2905	XOR
+G	28q	196	g2906	XOR
+G	28r	186	g2907	XOR
+G	28s	19e	g2908	XOR
+G	28t	19i	g2909	XOR
+G	28u	18i	g2910	XOR
+G	28v	18m	g2911	XOR
+G	28w	18q	g2912	XOR
+G	28x	18u	g2913	XOR
+G	28y	18y	g2914	XOR
+G	28z	192	g2915	XOR
+G	290	1c3	g2916	OR
+G	291	1bz	g2917	OR
+G	292	1cz	g2918	OR
+G	293	1cj	g2919	OR
+G	294	1cb	g2920	OR
+G	295	1d6	g2921	OR
+G	296	1c7	g2922	OR
+G	297	1cf	g2923	OR
+G	298	1cp	g2924	OR
+G	299	1ct	g2925	OR
+G	29a	1d8	g2926	OR
+G	29b	2el	g2927	NOR
+G	29c	2en	g2928	NOR
+G	29d	2ep	g2929	NOR
+G	29e	2ex	g2930	AND
+G	29f	2er	g2931	AND
+G	29g	2f5	g2932	NOR
+G	29h	2ev	g2933	NOR
+G	29i	2f1	g2934	AND
+G	29j	2et	g2935	AND
+G	29k	2f3	g2936	NOR
+G	29l	2ez	g2937	NOR
+G	29m	2e9	g2938	XNOR
+G	29n	2e5	g2939	XNOR
+G	29o	2eb	g2940	XNOR
+G	29p	2ec	g2941	XNOR
+G	29q	2e6	g2942	XNOR
+G	29r	2e8	g2943	XNOR
+G	29s	2e4	g2944	XNOR
+G	29t	2ea	g2945	XNOR
+G	29u	2ee	g2946	XNOR
+G	29v	2eg	g2947	XNOR
+G	29w	2eh	g2948	XNOR
+G	29x	2ej	g2949	XNOR
+G	29y	2fi	g2950	OR
+G	29z	2fa	g2951	OR
+G	2a0	2fc	g2952	OR
+G	2a1	2fg	g2953	OR
+G	2a2	2f2	g2954	AND
+G	2a3	2eo	g2955	AND
+G	2a4	2fd	g2956	NOR
+G	2a5	2f4	g2957	AND
+G	2a6	2eu	g2958	AND
+G	2a7	2f8	g2959	NOR
+G	2a8	2em	g2960	AND
+G	2a9	2fe	g2961	NOR
+G	2aa	2fk	g2962	NOR
+G	2ab	2f7	g2963	NOR
+G	2ac	2ey	g2964	AND
+G	2ad	2f6	g2965	NOR
+G	2ae	2fj	g2966	NOR
+G	2af	2ek	g2967	AND
+G	2ag	19a	g2968	NOT
+G	2ah	2fs	g2969	NOT
+G	2ai	2fr	g2970	NOT
+G	2aj	1fn	g2971	NOT
+G	2ak	2fq	g2972	NOT
+G	2al	2ft	g2973	NOT
+G	2am	2fw	g2974	NOT
+G	2an	2fp	g2975	NOT
+G	2ao	2fz	g2976	NOT
+G	2ap	2fx	g2977	NOT
+G	2aq	2fo	g2978	NOT
+G	2ar	2g0	g2979	NOT
+G	2as	2fu	g2980	NOT
+G	2at	2fl	g2981	NOT
+G	2au	2g1	g2982	NOT
+G	2av	2fy	g2983	NOT
+G	2aw	2fm	g2984	NOT
+G	2ax	2g2	g2985	NOT
+G	2ay	2ff	g2986	NOT
+G	2az	2g3	g2987	NOT
+G	2b0	2fb	g2988	NOT
+G	2b1	2g4	g2989	NOT
+G	2b2	2fh	g2990	NOT
+G	2b3	2g5	g2991	NOT
+G	2b4	2fv	g2992	NOT
+G	2b5	2fn	g2993	NOT
+G	2b6	2g6	g2994	NOT
+G	2b7	2ed	g2995	NOT
+G	2b8	2g7	g2996	NOT
+G	2b9	2e7	g2997	NOT
+G	2ba	2g8	g2998	NOT
+G	2bb	2ei	g2999	NOT
+G	2bc	2g9	g3000	NOT
+G	2bd	2ef	g3001	NOT
+G	2be	2ga	g3002	NOT
+G	2bf	1d4	g3003	BUF
+G	2bg	2f9	g3004	BUF
+G	2bh	2es	g3005	AND
+G	2bi	2f0	g3006	AND
+G	2bj	2eq	g3007	AND
+G	2bk	2ew	g3008	AND
+G	2bl	3x	g3009	XNOR
+G	2bm	2gb	g3010	OR
+G	2bn	3y	g3011	XNOR
+G	2bo	2ge	g3012	AND
+G	2bp	2gf	g3013	OR
+G	2bq	3z	g3014	XNOR
+G	2br	2gj	g3015	AND
+G	2bs	2gk	g3016	OR
+G	2bt	40	g3017	XNOR
+G	2bu	2go	g3018	AND
+G	2bv	2gp	g3019	OR
+G	2bw	41	g3020	XNOR
+G	2bx	2gt	g3021	AND
+G	2by	2gu	g3022	OR
+G	2bz	42	g3023	XNOR
+G	2c0	2gy	g3024	AND
+G	2c1	2gz	g3025	OR
+G	2c2	43	g3026	XNOR
+G	2c3	2h3	g3027	AND
+G	2c4	2h4	g3028	OR
+G	2c5	44	g3029	XNOR
+G	2c6	2h8	g3030	AND
+G	2c7	2h9	g3031	OR
+G	2c8	45	g3032	XNOR
+G	2c9	2hd	g3033	AND
+G	2ca	2he	g3034	OR
+G	2cb	46	g3035	XNOR
+G	2cc	2hi	g3036	AND
+G	2cd	2hj	g3037	OR
+G	2ce	47	g3038	XNOR
+G	2cf	2hn	g3039	AND
+G	2cg	2ho	g3040	OR
+G	2ch	48	g3041	XNOR
+G	2ci	2hs	g3042	AND
+G	2cj	49	g3043	XNOR
+G	2ck	2ht	g3044	OR
+G	2cl	2hy	g3045	AND
+G	2cm	2hk	g3046	XNOR
+G	2cn	2hp	g3047	XNOR
+G	2co	2hu	g3048	XNOR
+G	2cp	2hw	g3049	XNOR
+G	2cq	2gg	g3050	XNOR
+G	2cr	2gl	g3051	XNOR
+G	2cs	2hf	g3052	XNOR
+G	2ct	2gc	g3053	XNOR
+G	2cu	2gv	g3054	XNOR
+G	2cv	2h0	g3055	XNOR
+G	2cw	2h5	g3056	XNOR
+G	2cx	2ha	g3057	XNOR
+G	2cy	2gq	g3058	XNOR
+G	2cz	2gx	g3059	AND
+G	2d0	2h1	g3060	OR
+G	2d1	2hc	g3061	AND
+G	2d2	2hg	g3062	OR
+G	2d3	2hl	g3063	OR
+G	2d4	2gh	g3064	OR
+G	2d5	2h2	g3065	AND
+G	2d6	2gm	g3066	OR
+G	2d7	2hb	g3067	OR
+G	2d8	2hz	g3068	OR
+G	2d9	2gd	g3069	AND
+G	2da	2gn	g3070	AND
+G	2db	2gr	g3071	OR
+G	2dc	2h7	g3072	AND
+G	2dd	2hv	g3073	OR
+G	2de	2hm	g3074	AND
+G	2df	2hr	g3075	AND
+G	2dg	2h6	g3076	OR
+G	2dh	2hx	g3077	AND
+G	2di	2gs	g3078	AND
+G	2dj	2hh	g3079	AND
+G	2dk	2gw	g3080	OR
+G	2dl	2hq	g3081	OR
+G	2dm	2gi	g3082	AND
+G	2dn	4a	g3083	XNOR
+G	2do	2i0	g3084	OR
+G	2dp	4b	g3085	XNOR
+G	2dq	2i3	g3086	AND
+G	2dr	2i4	g3087	OR
+G	2ds	4c	g3088	XNOR
+G	2dt	2i8	g3089	AND
+G	2du	2i9	g3090	OR
+G	2dv	4d	g3091	XNOR
+G	2dw	2id	g3092	AND
+G	2dx	2ie	g3093	OR
+G	2dy	4e	g3094	XNOR
+G	2dz	2ii	g3095	AND
+G	2e0	2ij	g3096	OR
+G	2e1	4f	g3097	XNOR
+G	2e2	2in	g3098	AND
+G	2e3	2io	g3099	OR
+G	2e4	4g	g3100	XNOR
+G	2e5	2is	g3101	AND
+G	2e6	2it	g3102	OR
+G	2e7	4h	g3103	XNOR
+G	2e8	2ix	g3104	AND
+G	2e9	2iy	g3105	OR
+G	2ea	4i	g3106	XNOR
+G	2eb	2j2	g3107	AND
+G	2ec	2j3	g3108	OR
+G	2ed	4j	g3109	XNOR
+G	2ee	2j7	g3110	AND
+G	2ef	2j8	g3111	OR
+G	2eg	4k	g3112	XNOR
+G	2eh	2jc	g3113	AND
+G	2ei	2jd	g3114	OR
+G	2ej	4l	g3115	XNOR
+G	2ek	2jh	g3116	AND
+G	2el	4m	g3117	XNOR
+G	2em	2ji	g3118	OR
+G	2en	2jn	g3119	AND
+G	2eo	2j9	g3120	XNOR
+G	2ep	2je	g3121	XNOR
+G	2eq	2jj	g3122	XNOR
+G	2er	2jl	g3123	XNOR
+G	2es	2i5	g3124	XNOR
+G	2et	2ia	g3125	XNOR
+G	2eu	2j4	g3126	XNOR
+G	2ev	2i1	g3127	XNOR
+G	2ew	2ik	g3128	XNOR
+G	2ex	2ip	g3129	XNOR
+G	2ey	2iu	g3130	XNOR
+G	2ez	2iz	g3131	XNOR
+G	2f0	2if	g3132	XNOR
+G	2f1	2im	g3133	AND
+G	2f2	2iq	g3134	OR
+G	2f3	2j1	g3135	AND
+G	2f4	2j5	g3136	OR
+G	2f5	2ja	g3137	OR
+G	2f6	2i6	g3138	OR
+G	2f7	2ir	g3139	AND
+G	2f8	2ib	g3140	OR
+G	2f9	2j0	g3141	OR
+G	2fa	2jo	g3142	OR
+G	2fb	2i2	g3143	AND
+G	2fc	2ic	g3144	AND
+G	2fd	2ig	g3145	OR
+G	2fe	2iw	g3146	AND
+G	2ff	2jk	g3147	OR
+G	2fg	2jb	g3148	AND
+G	2fh	2jg	g3149	AND
+G	2fi	2iv	g3150	OR
+G	2fj	2jm	g3151	AND
+G	2fk	2ih	g3152	AND
+G	2fl	2j6	g3153	AND
+G	2fm	2il	g3154	OR
+G	2fn	2jf	g3155	OR
+G	2fo	2i7	g3156	AND
+G	2fp	163	g3157	BUF
+G	2fq	164	g3158	BUF
+G	2fr	1cr	g3159	BUF
+
+[paths]
+
+[summary]
+Written paths: 0
+Complete: yes
+Timed out: no

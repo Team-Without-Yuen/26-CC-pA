@@ -107,8 +107,10 @@ output_file
 - `timeout`、`partial`、`unsupported` 不可被描述為已證明不存在。
 - 明確使用 `--max-results N` 後若 `truncated:true`，只能回答前 N 筆，不可宣稱完整列舉。
 
-`nand_pair` 的 match 讀取 `net_a`、`net_b`、`proof_method: SAT_UNSAT_MITER` 與
-`solver_status: UNSAT`。`equivalent_pairs` 另讀 `equivalence_class_count`、
+`nand_pair` 的 match 讀取 `net_a`、`net_b`、`proof_method` 與
+`solver_status: UNSAT`。FindAny 的 proof method 可為 `AIG_LITERAL_EQUALITY` 或
+`AIG_INCREMENTAL_SAT`，FindAll 目前可為 `SAT_UNSAT_MITER`；三者都是已證明的 match，
+LLM 不得因 method 不同改變結論。`equivalent_pairs` 另讀 `equivalence_class_count`、
 `equivalent_pair_count`、scope 與 gate-type filter。
 
 對 `--all` 的自然語言回答應提供總數與 `output_file` 路徑，不要把 artifact 全文重新貼入回答。
@@ -157,4 +159,4 @@ rollback。修改後若 prompt 再要求證明，可使用相應的 equivalence 
 - DFF 不可作為 equivalent-pair candidate，DFF.Q 只作為 function boundary。
 - time limit、solver unknown 或 unsupported logic 仍可能使 FindAll 不完整。
 - equivalent output function 不等於 observability redundancy；本工具不刪除任意 redundant gate。
-- Boolean/AIG 共用 index 與更一般化 functional decomposition 屬後期重構，本階段沿用 named-netlist simulation + SAT。
+- AIG/pattern engine 只是高階 API 內部 backend；named netlist 仍是唯一正式設計狀態，LLM 不選擇 backend。

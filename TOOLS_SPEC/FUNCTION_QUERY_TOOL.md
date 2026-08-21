@@ -82,6 +82,8 @@ Boolean expression 的 leaf 必須依輸出分類判讀：
 
 - `real primary input count`：真正 top-level PI。
 - `DFF.Q boundary count`：目前 state 的 sequential boundary，不是真正 PI。
+- `DFF.Q current-state variable mappings`：`state_qN = <DFF>.Q (net <net>)`，用來把
+  artifact 方程式中的狀態變數映射回 named netlist；`state_qN` 只代表當前週期狀態。
 - `undriven boundary count`：floating/undriven leaf，也不是真正 PI。
 - `primary-input-only combinational expression available: no`：不能在不跨 DFF cycle、也不
   假設 floating value 的前提下，寫成只含 top-level PI 的組合式。
@@ -158,7 +160,8 @@ Read: 若 DFF.Q boundary count > 0 且 primary-input-only combinational expressi
 
 - `support_pi` 是 structural support，不等於 exact functional dependence；yes/no dependence 使用 `depends_on`。
 - `boolean_expression` artifact 使用具名中間 nets 表示 DAG；每個 boundary 與 equation
-  都有定義，語意完整，但不是將所有中間 nets 重複代入成單一指數級字串。
+  都有定義。`NAMED_DAG_EQUATIONS_V2` 會將 DFF.Q leaf 寫成 `state_qN`，並在
+  `Current-state variables` 區段列出 DFF instance、Q pin 與原 net；它不是跨週期展開。
 - `simplified_expression` 只在 prompt 明確要求 manageable、depth-limited 或指定深度時使用；
   不可為了縮短答案而自行取代完整 `boolean_expression`。
 - `conditional_equivalence` 的 condition 必須是存在的 scalar net，value 只能為 0 或 1。

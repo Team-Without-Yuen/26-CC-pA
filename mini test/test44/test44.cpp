@@ -15,7 +15,9 @@
 
 #include "include/SATEngine/Primitives.h"
 #include "include/core/BitParallelSimulation.h"
+#include "include/core/FunctionalPatternEngine.h"
 #include "include/core/Netlist.h"
+#include "include/core/RequestTimeBudget.h"
 #include "include/io/VerilogReader.h"
 
 namespace {
@@ -375,8 +377,9 @@ BatchResult phaseBNand(Netlist& netlist,
                        double limitSeconds) {
     BatchResult result;
     const auto startedAt = Clock::now();
+    const request_time_budget::RequestDeadline deadline(limitSeconds);
     auto remaining = [&]() {
-        return limitSeconds - elapsedSeconds(startedAt);
+        return deadline.remainingSeconds();
     };
     const int targetId = netlist.getNetId(targetName);
     if (!netlist.isValidNetId(targetId)) return result;
@@ -415,12 +418,7 @@ BatchResult phaseBNand(Netlist& netlist,
 
     eqeng::Primitives primitives(netlist, {}, phaseBConfig());
     primitives.enable_phase_b(true);
-    const eqeng::SigRef target = primitives.resolve(targetName);
-    std::vector<eqeng::SigRef> signals;
-    signals.reserve(eligible.size());
-    for (int netId : eligible) {
-        signals.push_back(primitives.resolve(netlist.getNet(netId).name));
-    }
+    FunctionalPatternEngine engine;
 
     bool stop = false;
     for (size_t i = 0; i < eligible.size() && !stop; ++i) {
@@ -440,20 +438,27 @@ BatchResult phaseBNand(Netlist& netlist,
                 continue;
             }
 
-            const eqeng::SigRef nand = !primitives.make_and(signals[i], signals[j]);
+            FunctionalPatternProofRequest request;
+            request.kind = FunctionalPatternKind::Nand;
+            request.targetNetId = targetId;
+            request.operandNetIds = {eligible[i], eligible[j]};
             ++result.satChecks;
-            const eqeng::EquivResult proof = primitives.equiv_checked(
-                nand, target, std::max(0.001, remaining()));
-            if (proof == eqeng::EquivResult::Unknown) {
+            const FunctionalPatternEvaluation proof =
+                engine.proveSpecifiedOperands(
+                    netlist, primitives, request, deadline);
+            if (proof.status == FunctionalPatternProofStatus::Unknown ||
+                proof.status == FunctionalPatternProofStatus::Unsupported) {
                 ++result.unknownCount;
-                if (primitives.last_proof_timed_out()) {
+                if (proof.timedOut) {
                     result.timedOut = true;
                     stop = true;
                     break;
                 }
                 continue;
             }
-            if (proof == eqeng::EquivResult::NotEqual) continue;
+            if (proof.status == FunctionalPatternProofStatus::ProvenNonMatch) {
+                continue;
+            }
             result.pairs.insert(canonicalPair(
                 netlist.getNet(eligible[i]).name,
                 netlist.getNet(eligible[j]).name));
@@ -487,8 +492,8 @@ std::vector<BenchmarkCase> cases() {
     std::vector<BenchmarkCase> result = {
         {"test29", "equivalent_all", "NewTestCase/test29/test29.v", "", true, true, 55.0},
         {"test30", "equivalent_all", "NewTestCase/test30/test30.v", "", true, true, 55.0},
-        {"test35", "nand_any", "NewTestCase/test35/test35.v", "n25", false, false, 55.0},
-        {"test35", "nand_all", "NewTestCase/test35/test35.v", "n25", false, true, 290.0},
+        {"test70", "nand_any", "NewTestCase/test70/test70.v", "n25", false, false, 55.0},
+        {"test70", "nand_all", "NewTestCase/test70/test70.v", "n25", false, true, 290.0},
         {"synthetic", "equivalent_all", "", "", true, true, 10.0},
         {"synthetic", "nand_all", "", "target_nand", false, true, 10.0}
     };
@@ -556,10 +561,10 @@ int main(int argc, char** argv) {
         std::cerr << "Cannot open benchmark outputs\n";
         return 2;
     }
-    output << "design\tmode\texpectation_met\tset_match\tcomplete_match\tlegacy_complete"
-              "\tphase_b_complete\tlegacy_pairs\tphase_b_pairs"
-              "\tlegacy_sat_checks\tphase_b_sat_checks\tlegacy_unknown"
-              "\tphase_b_unknown\tlegacy_seconds\tphase_b_seconds\tspeedup\n";
+    output << "design\tmode\texpectation_met\tset_match\tcomplete_match\treference_complete"
+              "\tengine_complete\treference_pairs\tengine_pairs"
+              "\treference_sat_checks\tengine_sat_checks\treference_unknown"
+              "\tengine_unknown\treference_seconds\tengine_seconds\tspeedup\n";
 
     int passed = 0;
     int total = 0;

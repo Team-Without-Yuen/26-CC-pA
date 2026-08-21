@@ -156,18 +156,15 @@ facade 的固定 fallback contract。
 
 ### 4.4 完整 Path Artifact 格式
 
-非 count-only 的 `EnumerateAll` 使用 `COMPACT_PATH_V3` 文字格式。API 的 query/report 欄位不變，
-但檔案不再對每條 path 重複輸出完整 net/gate 名稱：
+非 count-only 的 `EnumerateAll` 使用 `LITERAL_PATH_V1` 文字格式。API 的 query/report 欄位不變，
+artifact 以 streaming 逐條輸出完整具名路徑：
 
 1. header 記錄 exact `Total paths`、格式版本與 expected count。
-2. `net_dictionary`、`gate_dictionary` 各輸出一次 ID/name/output-net 對照。
-3. dictionary 與 path records 的 ID 統一使用 unsigned base36。
-4. 完整 token sequence 定義為 `S=[start_net_id, gate_id_1, ..., gate_id_N]`。
-5. 第一條 path 使用完整 `S`；後續每條 path 記錄相對前一條 `S` 的共同 prefix、共同 suffix 與中間差異 IDs。prefix/suffix count 包含 token 0 的 start net。
-6. footer 記錄 `Written paths`、`Complete` 與 `Timed out`。
+2. 每筆 record 使用 `Path <index>: <net> -> <gate>(<type>) -> <net> ...`。
+3. net、gate instance 與 gate type 均直接使用 current named netlist 名稱，不需要 dictionary 或 decoder。
+4. footer 記錄 `Written paths`、`Complete` 與 `Timed out`。
 
-每一筆 record 仍對應一條明確 path。解碼後的第一個 ID 是 start net，其餘為 gate IDs；完整 net
-sequence 由 start net 加上每個 gate 的 output net 無損重建。只有
+每一筆 record 對應一條可直接閱讀的 start-to-end path。只有
 `Written paths == Expected paths` 且 `Complete: yes` 才能將 artifact 視為完整。
 
 只有 `ok=true` 且 `completeEnumeration=true` 時，`pathCount` 才可視為完整計數。目前
@@ -257,4 +254,4 @@ Reachable cone 不是 start-to-end path；全域 critical depth 也不應用所�
 
 - `combinationalOnly=false` 不支援。
 - 超過 64-bit 的 path count 等待官方回覆。
-- compact path artifact 以 footer 記錄 expected/written/complete/stop reason；呼叫端仍須同時核對 report envelope。
+- literal path artifact 以 footer 記錄 expected/written/complete/stop reason；呼叫端仍須同時核對 report envelope。

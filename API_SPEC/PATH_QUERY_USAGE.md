@@ -106,10 +106,14 @@ runner policy 使用；它們不是 LLM-facing command grammar。公開 CLI 會�
 `direct_pi_po` 的結果超過自動門檻時，也會改寫完整 list artifact；terminal 只保留總數、
 artifact 完整性、格式與 `output_file`。小型結果仍直接完整列出。
 
-完整檔案採 `COMPACT_PATH_V3`：名稱只在 dictionary 出現一次，dictionary 與 path records 的 ID
-統一使用 base36。完整 sequence 是 `S=[start_net_id, gate_id_1, ..., gate_id_N]`；prefix/suffix
-count 對整個 `S` 計數，包含 token 0 的 start net。讀檔時依 artifact header 內附的 reconstruction
-公式與範例還原，不要把 record 內的 ID 直接當成 net/gate 名稱。正式判讀必須同時確認：
+完整檔案採 `LITERAL_PATH_V1`。每一條 path 都直接使用 current named netlist 的 net name、
+gate instance name 與 gate type：
+
+```text
+Path 0: a -> g0(BUF) -> n0 -> g2(AND) -> n2 -> g7(BUF) -> y
+```
+
+artifact 不需要 dictionary、base36 或額外 decoder。正式判讀必須同時確認：
 
 ```text
 Total paths == Expected paths == Written paths
@@ -325,4 +329,4 @@ endpoints。
 - `combinationalOnly=false` 不支援。
 - combinational graph contract 為 DAG。
 - 64-bit count overflow 等待官方規格回覆。
-- compact path artifact footer 與 report envelope 都必須標示 complete，才能視為完整答案。
+- literal path artifact footer 與 report envelope 都必須標示 complete，才能視為完整答案。

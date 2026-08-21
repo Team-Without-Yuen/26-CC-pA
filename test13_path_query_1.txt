@@ -1,0 +1,679 @@
+Total paths: 0
+Format: COMPACT_PATH_V3
+All IDs and path indices are unsigned base36 integers.
+Dictionary rows:
+  N <net_id> <net_name>
+  G <gate_id> <output_net_id> <gate_name> <gate_type>
+A decoded path token sequence is S = [start_net_id, gate_id_1, ..., gate_id_N].
+Token 0 is always the start net; tokens 1..N are always gates.
+First record: Path 0: F <every token in S>
+Delta record: P <path_index> <prefix_token_count> <suffix_token_count> <middle_tokens>...
+IMPORTANT: prefix/suffix counts apply to the entire S, including token 0 (start net).
+Decode delta: current S = previous S first <prefix> tokens + middle tokens + previous S last <suffix> tokens.
+Example: previous S=[0,0,2,6,7] and 'P 1 2 2 3' decodes to S=[0,0,3,6,7].
+Expand names: look up S[0] in net_dictionary; for each gate S[i], look up the gate and then its output_net_id.
+Expected paths: 0
+
+[net_dictionary]
+N	0	n2
+N	1	n3
+N	2	n4
+N	3	n0[25]
+N	4	n0[24]
+N	5	n0[23]
+N	6	n0[22]
+N	7	n0[21]
+N	8	n0[20]
+N	9	n0[19]
+N	a	n0[18]
+N	b	n0[17]
+N	c	n0[16]
+N	d	n0[15]
+N	e	n0[14]
+N	f	n0[13]
+N	g	n0[12]
+N	h	n0[11]
+N	i	n0[10]
+N	j	n0[9]
+N	k	n0[8]
+N	l	n0[7]
+N	m	n0[6]
+N	n	n0[5]
+N	o	n0[4]
+N	p	n0[3]
+N	q	n0[2]
+N	r	n0[1]
+N	s	n0[0]
+N	t	n1[25]
+N	u	n1[24]
+N	v	n1[23]
+N	w	n1[22]
+N	x	n1[21]
+N	y	n1[20]
+N	z	n1[19]
+N	10	n1[18]
+N	11	n1[17]
+N	12	n1[16]
+N	13	n1[15]
+N	14	n1[14]
+N	15	n1[13]
+N	16	n1[12]
+N	17	n1[11]
+N	18	n1[10]
+N	19	n1[9]
+N	1a	n1[8]
+N	1b	n1[7]
+N	1c	n1[6]
+N	1d	n1[5]
+N	1e	n1[4]
+N	1f	n1[3]
+N	1g	n1[2]
+N	1h	n1[1]
+N	1i	n1[0]
+N	1j	n5[25]
+N	1k	n5[24]
+N	1l	n5[23]
+N	1m	n5[22]
+N	1n	n5[21]
+N	1o	n5[20]
+N	1p	n5[19]
+N	1q	n5[18]
+N	1r	n5[17]
+N	1s	n5[16]
+N	1t	n5[15]
+N	1u	n5[14]
+N	1v	n5[13]
+N	1w	n5[12]
+N	1x	n5[11]
+N	1y	n5[10]
+N	1z	n5[9]
+N	20	n5[8]
+N	21	n5[7]
+N	22	n5[6]
+N	23	n5[5]
+N	24	n5[4]
+N	25	n5[3]
+N	26	n5[2]
+N	27	n5[1]
+N	28	n5[0]
+N	29	n6[25]
+N	2a	n6[24]
+N	2b	n6[23]
+N	2c	n6[22]
+N	2d	n6[21]
+N	2e	n6[20]
+N	2f	n6[19]
+N	2g	n6[18]
+N	2h	n6[17]
+N	2i	n6[16]
+N	2j	n6[15]
+N	2k	n6[14]
+N	2l	n6[13]
+N	2m	n6[12]
+N	2n	n6[11]
+N	2o	n6[10]
+N	2p	n6[9]
+N	2q	n6[8]
+N	2r	n6[7]
+N	2s	n6[6]
+N	2t	n6[5]
+N	2u	n6[4]
+N	2v	n6[3]
+N	2w	n6[2]
+N	2x	n6[1]
+N	2y	n6[0]
+N	2z	n253
+N	30	n203
+N	31	n227
+N	32	n226
+N	33	n225
+N	34	n224
+N	35	n223
+N	36	n222
+N	37	n221
+N	38	n220
+N	39	n219
+N	3a	n218
+N	3b	n217
+N	3c	n216
+N	3d	n215
+N	3e	n214
+N	3f	n213
+N	3g	n212
+N	3h	n211
+N	3i	n210
+N	3j	n209
+N	3k	n208
+N	3l	n207
+N	3m	n228
+N	3n	n206
+N	3o	n205
+N	3p	n204
+N	3q	n229
+N	3r	n239
+N	3s	n240
+N	3t	n247
+N	3u	n241
+N	3v	n244
+N	3w	n230
+N	3x	n242
+N	3y	n248
+N	3z	n252
+N	40	n231
+N	41	n232
+N	42	n243
+N	43	n233
+N	44	n234
+N	45	n237
+N	46	n249
+N	47	n235
+N	48	n236
+N	49	n245
+N	4a	n238
+N	4b	n251
+N	4c	n246
+N	4d	n250
+N	4e	n70
+N	4f	n131
+N	4g	n21
+N	4h	n130
+N	4i	n129
+N	4j	n77
+N	4k	n54
+N	4l	n34
+N	4m	n128
+N	4n	n127
+N	4o	n76
+N	4p	n43
+N	4q	n47
+N	4r	n126
+N	4s	n125
+N	4t	n75
+N	4u	n24
+N	4v	n22
+N	4w	n124
+N	4x	n123
+N	4y	n74
+N	4z	n18
+N	50	n28
+N	51	n122
+N	52	n121
+N	53	n59
+N	54	n33
+N	55	n29
+N	56	n120
+N	57	n119
+N	58	n71
+N	59	n38
+N	5a	n32
+N	5b	n118
+N	5c	n117
+N	5d	n69
+N	5e	n37
+N	5f	n49
+N	5g	n116
+N	5h	n115
+N	5i	n68
+N	5j	n15
+N	5k	n11
+N	5l	n114
+N	5m	n113
+N	5n	n67
+N	5o	n50
+N	5p	n13
+N	5q	n112
+N	5r	n111
+N	5s	n66
+N	5t	n52
+N	5u	n36
+N	5v	n110
+N	5w	n109
+N	5x	n65
+N	5y	n35
+N	5z	n57
+N	60	n108
+N	61	n107
+N	62	n64
+N	63	n40
+N	64	n39
+N	65	n106
+N	66	n105
+N	67	n63
+N	68	n31
+N	69	n48
+N	6a	n104
+N	6b	n103
+N	6c	n62
+N	6d	n44
+N	6e	n30
+N	6f	n102
+N	6g	n101
+N	6h	n61
+N	6i	n26
+N	6j	n45
+N	6k	n100
+N	6l	n99
+N	6m	n60
+N	6n	n16
+N	6o	n10
+N	6p	n98
+N	6q	n97
+N	6r	n72
+N	6s	n53
+N	6t	n12
+N	6u	n96
+N	6v	n95
+N	6w	n73
+N	6x	n56
+N	6y	n23
+N	6z	n94
+N	70	n93
+N	71	n78
+N	72	n9
+N	73	n19
+N	74	n92
+N	75	n91
+N	76	n82
+N	77	n17
+N	78	n20
+N	79	n90
+N	7a	n89
+N	7b	n81
+N	7c	n27
+N	7d	n55
+N	7e	n88
+N	7f	n87
+N	7g	n80
+N	7h	n46
+N	7i	n51
+N	7j	n86
+N	7k	n85
+N	7l	n79
+N	7m	n42
+N	7n	n58
+N	7o	n83
+N	7p	n14
+N	7q	n84
+N	7r	n25
+N	7s	n41
+N	7t	n8
+N	7u	n7
+N	7v	n202
+N	7w	n201
+N	7x	n150
+N	7y	n200
+N	7z	n135
+N	80	n199
+N	81	n197
+N	82	n198
+N	83	n143
+N	84	n196
+N	85	n195
+N	86	n191
+N	87	n192
+N	88	n194
+N	89	n137
+N	8a	n190
+N	8b	n138
+N	8c	n193
+N	8d	n153
+N	8e	n189
+N	8f	n132
+N	8g	n156
+N	8h	n188
+N	8i	n168
+N	8j	n187
+N	8k	n140
+N	8l	n186
+N	8m	n183
+N	8n	n185
+N	8o	n184
+N	8p	n133
+N	8q	n178
+N	8r	n180
+N	8s	n182
+N	8t	n141
+N	8u	n179
+N	8v	n136
+N	8w	n181
+N	8x	n157
+N	8y	n177
+N	8z	n134
+N	90	n159
+N	91	n176
+N	92	n166
+N	93	n175
+N	94	n139
+N	95	n174
+N	96	n171
+N	97	n173
+N	98	n172
+N	99	n147
+N	9a	n170
+N	9b	n142
+N	9c	n154
+N	9d	n169
+N	9e	n167
+N	9f	n164
+N	9g	n163
+N	9h	n165
+N	9i	n162
+N	9j	n144
+N	9k	n158
+N	9l	n146
+N	9m	n155
+N	9n	n161
+N	9o	n160
+N	9p	n152
+N	9q	n151
+N	9r	n148
+N	9s	n145
+N	9t	n149
+
+[gate_dictionary]
+G	0	2z	g0	AND
+G	1	31	g1	OR
+G	2	32	g2	OR
+G	3	33	g3	OR
+G	4	34	g4	OR
+G	5	35	g5	OR
+G	6	36	g6	OR
+G	7	37	g7	OR
+G	8	38	g8	OR
+G	9	39	g9	OR
+G	a	3a	g10	OR
+G	b	3b	g11	OR
+G	c	3c	g12	OR
+G	d	3d	g13	OR
+G	e	3e	g14	OR
+G	f	3f	g15	OR
+G	g	3g	g16	OR
+G	h	3h	g17	OR
+G	i	3i	g18	OR
+G	j	3j	g19	OR
+G	k	3k	g20	OR
+G	l	3l	g21	OR
+G	m	3m	g22	OR
+G	n	3n	g23	OR
+G	o	3o	g24	OR
+G	p	3p	g25	OR
+G	q	30	g26	NOT
+G	r	3q	g27	BUF
+G	s	3r	g28	BUF
+G	t	3s	g29	BUF
+G	u	3t	g30	BUF
+G	v	3u	g31	BUF
+G	w	3v	g32	BUF
+G	x	3w	g33	BUF
+G	y	3x	g34	BUF
+G	z	3y	g35	BUF
+G	10	3z	g36	BUF
+G	11	40	g37	BUF
+G	12	41	g38	BUF
+G	13	42	g39	BUF
+G	14	43	g40	BUF
+G	15	44	g41	BUF
+G	16	45	g42	BUF
+G	17	46	g43	BUF
+G	18	47	g44	BUF
+G	19	48	g45	BUF
+G	1a	49	g46	BUF
+G	1b	4a	g47	BUF
+G	1c	4b	g48	BUF
+G	1d	4c	g49	BUF
+G	1e	4d	g50	BUF
+G	1f	29	g51	XNOR
+G	1g	4f	g52	OR
+G	1h	2a	g53	XNOR
+G	1i	4h	g54	AND
+G	1j	4i	g55	OR
+G	1k	2b	g56	XNOR
+G	1l	4m	g57	AND
+G	1m	4n	g58	OR
+G	1n	2c	g59	XNOR
+G	1o	4r	g60	AND
+G	1p	4s	g61	OR
+G	1q	2d	g62	XNOR
+G	1r	4w	g63	AND
+G	1s	4x	g64	OR
+G	1t	2e	g65	XNOR
+G	1u	51	g66	AND
+G	1v	52	g67	OR
+G	1w	2f	g68	XNOR
+G	1x	56	g69	AND
+G	1y	57	g70	OR
+G	1z	2g	g71	XNOR
+G	20	5b	g72	AND
+G	21	5c	g73	OR
+G	22	2h	g74	XNOR
+G	23	5g	g75	AND
+G	24	5h	g76	OR
+G	25	2i	g77	XNOR
+G	26	5l	g78	AND
+G	27	5m	g79	OR
+G	28	2j	g80	XNOR
+G	29	5q	g81	AND
+G	2a	5r	g82	OR
+G	2b	2k	g83	XNOR
+G	2c	5v	g84	AND
+G	2d	5w	g85	OR
+G	2e	2l	g86	XNOR
+G	2f	60	g87	AND
+G	2g	61	g88	OR
+G	2h	2m	g89	XNOR
+G	2i	65	g90	AND
+G	2j	66	g91	OR
+G	2k	2n	g92	XNOR
+G	2l	6a	g93	AND
+G	2m	6b	g94	OR
+G	2n	2o	g95	XNOR
+G	2o	6f	g96	AND
+G	2p	6g	g97	OR
+G	2q	2p	g98	XNOR
+G	2r	6k	g99	AND
+G	2s	6l	g100	OR
+G	2t	2q	g101	XNOR
+G	2u	6p	g102	AND
+G	2v	6q	g103	OR
+G	2w	2r	g104	XNOR
+G	2x	6u	g105	AND
+G	2y	6v	g106	OR
+G	2z	2s	g107	XNOR
+G	30	6z	g108	AND
+G	31	70	g109	OR
+G	32	2t	g110	XNOR
+G	33	74	g111	AND
+G	34	75	g112	OR
+G	35	2u	g113	XNOR
+G	36	79	g114	AND
+G	37	7a	g115	OR
+G	38	2v	g116	XNOR
+G	39	7e	g117	AND
+G	3a	7f	g118	OR
+G	3b	2w	g119	XNOR
+G	3c	7j	g120	AND
+G	3d	2x	g121	XOR
+G	3e	7k	g122	OR
+G	3f	7q	g123	NOR
+G	3g	2y	g124	AND
+G	3h	7o	g125	XNOR
+G	3i	76	g126	XNOR
+G	3j	7b	g127	XNOR
+G	3k	7g	g128	XNOR
+G	3l	7l	g129	XNOR
+G	3m	71	g130	XNOR
+G	3n	4j	g131	XNOR
+G	3o	4o	g132	XNOR
+G	3p	4t	g133	XNOR
+G	3q	4y	g134	XNOR
+G	3r	6w	g135	XNOR
+G	3s	6r	g136	XNOR
+G	3t	58	g137	XNOR
+G	3u	4e	g138	XNOR
+G	3v	5d	g139	XNOR
+G	3w	5i	g140	XNOR
+G	3x	5n	g141	XNOR
+G	3y	5s	g142	XNOR
+G	3z	5x	g143	XNOR
+G	40	62	g144	XNOR
+G	41	67	g145	XNOR
+G	42	6c	g146	XNOR
+G	43	6h	g147	XNOR
+G	44	6m	g148	XNOR
+G	45	53	g149	XNOR
+G	46	5z	g150	AND
+G	47	6x	g151	OR
+G	48	7d	g152	AND
+G	49	4k	g153	OR
+G	4a	6s	g154	OR
+G	4b	5t	g155	OR
+G	4c	7i	g156	AND
+G	4d	5o	g157	OR
+G	4e	5f	g158	AND
+G	4f	69	g159	AND
+G	4g	4q	g160	AND
+G	4h	7h	g161	OR
+G	4i	6j	g162	AND
+G	4j	6d	g163	OR
+G	4k	4p	g164	OR
+G	4l	7m	g165	OR
+G	4m	7s	g166	OR
+G	4n	63	g167	OR
+G	4o	64	g168	AND
+G	4p	59	g169	OR
+G	4q	5e	g170	OR
+G	4r	5u	g171	AND
+G	4s	5y	g172	OR
+G	4t	4l	g173	AND
+G	4u	7n	g174	OR
+G	4v	54	g175	OR
+G	4w	5a	g176	AND
+G	4x	68	g177	OR
+G	4y	6e	g178	AND
+G	4z	55	g179	AND
+G	50	50	g180	AND
+G	51	7c	g181	OR
+G	52	6i	g182	OR
+G	53	7r	g183	NOR
+G	54	4u	g184	OR
+G	55	6y	g185	AND
+G	56	4v	g186	AND
+G	57	4g	g187	AND
+G	58	78	g188	AND
+G	59	73	g189	AND
+G	5a	4z	g190	OR
+G	5b	77	g191	OR
+G	5c	6n	g192	OR
+G	5d	5j	g193	OR
+G	5e	7p	g194	AND
+G	5f	5p	g195	AND
+G	5g	6t	g196	AND
+G	5h	5k	g197	AND
+G	5i	6o	g198	AND
+G	5j	72	g199	OR
+G	5k	7t	g200	NOT
+G	5l	7u	g201	NOT
+G	5m	1j	g202	XNOR
+G	5n	1k	g203	XNOR
+G	5o	7v	g204	OR
+G	5p	1l	g205	XNOR
+G	5q	7w	g206	OR
+G	5r	1m	g207	AND
+G	5s	1p	g208	XNOR
+G	5t	1n	g209	XNOR
+G	5u	7y	g210	OR
+G	5v	80	g211	OR
+G	5w	1o	g212	XOR
+G	5x	1q	g213	XOR
+G	5y	1r	g214	XNOR
+G	5z	82	g215	OR
+G	60	81	g216	OR
+G	61	84	g217	NOT
+G	62	85	g218	AND
+G	63	1s	g219	XNOR
+G	64	88	g220	OR
+G	65	8c	g221	NOT
+G	66	87	g222	AND
+G	67	8a	g223	NOT
+G	68	86	g224	AND
+G	69	1t	g225	XNOR
+G	6a	8h	g226	NOT
+G	6b	8e	g227	OR
+G	6c	1u	g228	XNOR
+G	6d	1v	g229	XNOR
+G	6e	1x	g230	XNOR
+G	6f	8j	g231	OR
+G	6g	8l	g232	OR
+G	6h	1w	g233	XOR
+G	6i	1y	g234	XOR
+G	6j	1z	g235	XNOR
+G	6k	8n	g236	OR
+G	6l	8o	g237	OR
+G	6m	8m	g238	OR
+G	6n	20	g239	XNOR
+G	6o	8s	g240	OR
+G	6p	8w	g241	NOT
+G	6q	8r	g242	AND
+G	6r	8u	g243	NOT
+G	6s	8q	g244	AND
+G	6t	21	g245	XNOR
+G	6u	91	g246	NOT
+G	6v	8y	g247	OR
+G	6w	22	g248	XNOR
+G	6x	23	g249	XNOR
+G	6y	93	g250	OR
+G	6z	95	g251	OR
+G	70	24	g252	XNOR
+G	71	97	g253	OR
+G	72	98	g254	NOT
+G	73	96	g255	AND
+G	74	9a	g256	NOT
+G	75	9d	g257	AND
+G	76	8i	g258	NOR
+G	77	9e	g259	AND
+G	78	92	g260	NOR
+G	79	27	g261	XNOR
+G	7a	9h	g262	OR
+G	7b	9f	g263	OR
+G	7c	9g	g264	AND
+G	7d	28	g265	AND
+G	7e	9n	g266	NOT
+G	7f	9i	g267	OR
+G	7g	9o	g268	OR
+G	7h	90	g269	NOT
+G	7i	9k	g270	OR
+G	7j	8x	g271	OR
+G	7k	8g	g272	NOT
+G	7l	9m	g273	OR
+G	7m	9c	g274	AND
+G	7n	8d	g275	AND
+G	7o	9p	g276	NOT
+G	7p	9q	g277	NOT
+G	7q	7x	g278	NOT
+G	7r	9t	g279	NOT
+G	7s	9r	g280	NOT
+G	7t	99	g281	NOT
+G	7u	9l	g282	NOT
+G	7v	9s	g283	NOT
+G	7w	9j	g284	NOT
+G	7x	83	g285	NOT
+G	7y	9b	g286	NOT
+G	7z	8t	g287	NOT
+G	80	8k	g288	NOT
+G	81	94	g289	NOT
+G	82	8b	g290	NOT
+G	83	89	g291	NOT
+G	84	8v	g292	NOT
+G	85	7z	g293	NOT
+G	86	8z	g294	NOT
+G	87	8p	g295	NOT
+G	88	8f	g296	NOT
+G	89	25	g297	XOR
+G	8a	26	g298	XOR
+
+[paths]
+
+[summary]
+Written paths: 0
+Complete: yes
+Timed out: no

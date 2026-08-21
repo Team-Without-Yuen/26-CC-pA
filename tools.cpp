@@ -890,6 +890,15 @@ ListArtifactContent makeFunctionListArtifactContent(
     addListSection(content, "Real primary inputs", report.supportRealPrimaryInputs);
     addListSection(content, "DFF.Q pseudo primary inputs",
                    report.supportDffPseudoInputs);
+    std::vector<std::string> stateBoundaryMappings;
+    stateBoundaryMappings.reserve(report.supportDffStateBoundaries.size());
+    for (const auto& boundary : report.supportDffStateBoundaries) {
+        stateBoundaryMappings.push_back(
+            boundary.stateVariableName + " = " + boundary.dffName + "." +
+            boundary.pinName + " (net " + boundary.netName + ")");
+    }
+    addListSection(content, "DFF.Q current-state variable mappings",
+                   stateBoundaryMappings);
     addListSection(content, "Undriven leaves", report.supportUndrivenLeaves);
     addListSection(content, "Mismatched target bits",
                    report.mismatchedTargetBitNames);
@@ -1663,6 +1672,16 @@ void printFunctionReport(const Netlist::FunctionReport& report,
     }
     if (!suppressLargeLists && !report.supportDffPseudoInputs.empty()) {
         printStringList("  - DFF.Q pseudo primary inputs", report.supportDffPseudoInputs);
+    }
+    if (!suppressLargeLists && !report.supportDffStateBoundaries.empty()) {
+        std::vector<std::string> mappings;
+        mappings.reserve(report.supportDffStateBoundaries.size());
+        for (const auto& boundary : report.supportDffStateBoundaries) {
+            mappings.push_back(
+                boundary.stateVariableName + " = " + boundary.dffName + "." +
+                boundary.pinName + " (net " + boundary.netName + ")");
+        }
+        printStringList("  - DFF.Q current-state variable mappings", mappings);
     }
     if (!suppressLargeLists && !report.supportUndrivenLeaves.empty()) {
         printStringList("  - undriven leaves (no driver, not a primary input)", report.supportUndrivenLeaves);
@@ -4281,8 +4300,9 @@ void printHelp() {
         << "                   [--functional-time-limit seconds]\n"
         << "  all-DFF detail writes all records to a unique file and returns a summary\n"
         << "  use offset/limit only when a prompt explicitly requests a record window\n"
-        << "  --verify-sat is accepted only for a specific DFF target\n"
-        << "  functional search options require the opt-in --functional-fallback flag\n"
+        << "  functional classification is always enabled for canonical and restructured logic\n"
+        << "  --verify-sat/--functional-fallback are retained for compatibility;\n"
+        << "  explicit functional tuning options still require --functional-fallback\n"
         << "\nDepth optimization\n"
         << "  opt_query critical_path_depth\n"
         << "  opt_apply critical_path_depth [--scope <scope> [scope_name]]\n"

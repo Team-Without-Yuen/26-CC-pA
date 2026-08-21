@@ -1,5 +1,7 @@
 #include "include/core/Netlist.h"
 #include "include/core/BitParallelSimulation.h"
+#include "include/core/FunctionalPatternEngine.h"
+#include "include/core/RequestTimeBudget.h"
 #include "include/SATEngine/Primitives.h"
 #include "include/SATEngine/SatTime.h"
 #include <algorithm>
@@ -1360,6 +1362,7 @@ Netlist::FunctionReport Netlist::runFunctionQuery(const FunctionQuery& query) co
         report.supportPrimaryInputs = support.all;
         report.supportRealPrimaryInputs = support.realPrimaryInputs;
         report.supportDffPseudoInputs = support.dffPseudoInputs;
+        report.supportDffStateBoundaries = support.dffStateBoundaries;
         report.supportUndrivenLeaves = support.undrivenLeaves;
 
         if (query.writeExpressionToFile) {
@@ -1431,6 +1434,7 @@ Netlist::FunctionReport Netlist::runFunctionQuery(const FunctionQuery& query) co
         report.supportPrimaryInputs = support.all;
         report.supportRealPrimaryInputs = support.realPrimaryInputs;
         report.supportDffPseudoInputs = support.dffPseudoInputs;
+        report.supportDffStateBoundaries = support.dffStateBoundaries;
         report.supportUndrivenLeaves = support.undrivenLeaves;
         report.message = "Depth-limited Boolean expression generated";
         report.status = "SIMPLIFIED_BOOLEAN_EXPRESSION";
@@ -1457,6 +1461,7 @@ Netlist::FunctionReport Netlist::runFunctionQuery(const FunctionQuery& query) co
         report.supportPrimaryInputs = support.all;
         report.supportRealPrimaryInputs = support.realPrimaryInputs;
         report.supportDffPseudoInputs = support.dffPseudoInputs;
+        report.supportDffStateBoundaries = support.dffStateBoundaries;
         report.supportUndrivenLeaves = support.undrivenLeaves;
         report.message = "Primary input support collected";
         report.status = "PRIMARY_INPUT_SUPPORT";
@@ -2279,6 +2284,8 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
     report.targetNetName = query.targetNetName;
     report.simulationPatternCount = query.simulationPatternCount;
     const auto startedAt = std::chrono::steady_clock::now();
+    const request_time_budget::RequestDeadline requestDeadline(
+        query.timeLimitSeconds);
     std::ofstream matchOutput;
     auto elapsedSeconds = [&]() {
         return std::chrono::duration<double>(
@@ -2385,6 +2392,8 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
     report.candidateSignalCount = candidateNetIds.size();
     report.simulationEligibleSignalCount = eligibleNetIds.size();
 
+    FunctionalPatternEngine functionalPatternEngine;
+    eqeng::Primitives* functionalPatternPrimitives = nullptr;
     bool stopped = false;
     for (size_t i = 0; i < eligibleNetIds.size() && !stopped; ++i) {
         const size_t firstJ = query.allowSameSignalPair ? i : i + 1;
@@ -2407,23 +2416,68 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
                 continue;
             }
 
-            const double remaining = query.timeLimitSeconds - elapsedSeconds();
-            const DetailedSatResult proof = solveNandPairEquivalenceDetailed(
-                *this, report.targetNetId, netIdA, netIdB, remaining);
             ++report.satChecks;
-            if (!proof.conclusive()) {
-                ++report.satUnknownCount;
-                report.timedOut = report.timedOut || proof.timedOut;
-                report.unsupported = report.unsupported || proof.unsupported;
-                if (proof.timedOut) {
-                    stopped = true;
-                    break;
+            bool provenEquivalent = false;
+            std::string proofMethod;
+            std::string solverStatus;
+            if (query.mode == FunctionSearchMode::FindAny) {
+                if (functionalPatternPrimitives == nullptr) {
+                    functionalPatternPrimitives = &booleanPrimitives();
                 }
-                continue;
+                FunctionalPatternProofRequest proofRequest;
+                proofRequest.kind = FunctionalPatternKind::Nand;
+                proofRequest.targetNetId = report.targetNetId;
+                proofRequest.operandNetIds = {netIdA, netIdB};
+                const FunctionalPatternEvaluation proof =
+                    functionalPatternEngine.proveSpecifiedOperands(
+                        *this,
+                        *functionalPatternPrimitives,
+                        proofRequest,
+                        requestDeadline);
+                if (proof.status == FunctionalPatternProofStatus::Unknown ||
+                    proof.status == FunctionalPatternProofStatus::Unsupported) {
+                    ++report.satUnknownCount;
+                    report.timedOut = report.timedOut || proof.timedOut;
+                    report.unsupported = report.unsupported ||
+                        proof.status == FunctionalPatternProofStatus::Unsupported;
+                    if (proof.timedOut) {
+                        stopped = true;
+                        break;
+                    }
+                    continue;
+                }
+                if (proof.status == FunctionalPatternProofStatus::ProvenNonMatch) {
+                    continue;
+                }
+                provenEquivalent = true;
+                proofMethod = proof.solverRan
+                    ? "AIG_INCREMENTAL_SAT"
+                    : "AIG_LITERAL_EQUALITY";
+                solverStatus = proof.solverStatus;
+            } else {
+                const double remaining =
+                    query.timeLimitSeconds - elapsedSeconds();
+                const DetailedSatResult proof = solveNandPairEquivalenceDetailed(
+                    *this, report.targetNetId, netIdA, netIdB, remaining);
+                if (!proof.conclusive()) {
+                    ++report.satUnknownCount;
+                    report.timedOut = report.timedOut || proof.timedOut;
+                    report.unsupported = report.unsupported || proof.unsupported;
+                    if (proof.timedOut) {
+                        stopped = true;
+                        break;
+                    }
+                    continue;
+                }
+                if (!proof.unsat) {
+                    continue;
+                }
+                provenEquivalent = true;
+                proofMethod = "SAT_UNSAT_MITER";
+                solverStatus = proof.solverStatus;
             }
-            if (!proof.unsat) {
-                continue;
-            }
+
+            if (!provenEquivalent) continue;
 
             if (query.mode == FunctionSearchMode::FindAll &&
                 query.maxResults > 0 &&
@@ -2439,8 +2493,8 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
             match.netNameA = getNet(netIdA).name;
             match.netNameB = getNet(netIdB).name;
             match.provenEquivalent = true;
-            match.proofMethod = "SAT_UNSAT_MITER";
-            match.solverStatus = proof.solverStatus;
+            match.proofMethod = proofMethod;
+            match.solverStatus = solverStatus;
             ++report.matchCount;
             if (matchOutput.is_open() &&
                 !writeFunctionSearchMatchRecord(
@@ -2461,7 +2515,7 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
                 report.ok = true;
                 report.complete = true;
                 report.status = "MATCH_FOUND";
-                report.message = "Found a SAT-proven internal signal pair.";
+                report.message = "Found a formally proven internal signal pair.";
                 return finish();
             }
         }

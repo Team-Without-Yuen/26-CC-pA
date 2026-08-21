@@ -575,6 +575,12 @@ Netlist::PrimaryInputSupport Netlist::getPrimaryInputSupportBreakdown(const std:
         // DFF.Q 視為 pseudo PI
         if (g.type == GateType::DFF) {
             support.dffPseudoInputs.push_back(net.name);
+            DffStateBoundaryRecord boundary;
+            boundary.netName = net.name;
+            boundary.dffName = g.instName;
+            boundary.netId = net.id;
+            boundary.dffGateId = g.id;
+            support.dffStateBoundaries.push_back(boundary);
             continue;
         }
 
@@ -592,6 +598,25 @@ Netlist::PrimaryInputSupport Netlist::getPrimaryInputSupportBreakdown(const std:
     sortUnique(support.realPrimaryInputs);
     sortUnique(support.dffPseudoInputs);
     sortUnique(support.undrivenLeaves);
+    std::sort(support.dffStateBoundaries.begin(),
+              support.dffStateBoundaries.end(),
+              [](const DffStateBoundaryRecord& lhs,
+                 const DffStateBoundaryRecord& rhs) {
+                  if (lhs.netName != rhs.netName) return lhs.netName < rhs.netName;
+                  return lhs.dffName < rhs.dffName;
+              });
+    support.dffStateBoundaries.erase(
+        std::unique(support.dffStateBoundaries.begin(),
+                    support.dffStateBoundaries.end(),
+                    [](const DffStateBoundaryRecord& lhs,
+                       const DffStateBoundaryRecord& rhs) {
+                        return lhs.netId == rhs.netId;
+                    }),
+        support.dffStateBoundaries.end());
+    for (size_t index = 0; index < support.dffStateBoundaries.size(); ++index) {
+        support.dffStateBoundaries[index].stateVariableName =
+            "state_q" + std::to_string(index);
+    }
 
     support.all.reserve(support.realPrimaryInputs.size() +
                          support.dffPseudoInputs.size() +
@@ -619,7 +644,7 @@ Netlist::BooleanEquationArtifactResult Netlist::writeBooleanEquationArtifact(
     const std::string& outputFilePath,
     double timeLimitSeconds) const {
     BooleanEquationArtifactResult result;
-    result.format = "NAMED_DAG_EQUATIONS_V1";
+    result.format = "NAMED_DAG_EQUATIONS_V2";
     result.outputFilePath = outputFilePath;
 
     const int rootNetId = getNetId(netName);
@@ -732,6 +757,18 @@ Netlist::BooleanEquationArtifactResult Netlist::writeBooleanEquationArtifact(
         std::unique(boundaryNetIds.begin(), boundaryNetIds.end()),
         boundaryNetIds.end());
 
+    std::unordered_map<int, std::string> stateVariableByNetId;
+    size_t stateVariableIndex = 0;
+    for (int boundaryNetId : boundaryNetIds) {
+        const Net& boundaryNet = nets[boundaryNetId];
+        const int driverId = boundaryNet.driverGateId;
+        if (driverId >= 0 && driverId < static_cast<int>(gates.size()) &&
+            !isGateRemoved(driverId) && gates[driverId].type == GateType::DFF) {
+            stateVariableByNetId.emplace(
+                boundaryNetId, "state_q" + std::to_string(stateVariableIndex++));
+        }
+    }
+
     output << "Boundaries:\n";
     for (int boundaryNetId : boundaryNetIds) {
         if (result.timedOut) break;
@@ -751,8 +788,25 @@ Netlist::BooleanEquationArtifactResult Netlist::writeBooleanEquationArtifact(
                    gates[net.driverGateId].type == GateType::DFF) {
             kind = "DFF_Q";
         }
-        output << "  " << net.name << " : " << kind << "\n";
+        output << "  " << net.name << " : " << kind;
+        const auto stateVariable = stateVariableByNetId.find(boundaryNetId);
+        if (stateVariable != stateVariableByNetId.end()) {
+            const Gate& dff = gates[net.driverGateId];
+            output << " (state_variable=" << stateVariable->second
+                   << ", source=" << dff.instName << ".Q)";
+        }
+        output << "\n";
         ++result.boundaryCount;
+    }
+
+    output << "\nCurrent-state variables:\n";
+    for (int boundaryNetId : boundaryNetIds) {
+        const auto stateVariable = stateVariableByNetId.find(boundaryNetId);
+        if (stateVariable == stateVariableByNetId.end()) continue;
+        const Net& net = nets[boundaryNetId];
+        const Gate& dff = gates[net.driverGateId];
+        output << "  " << stateVariable->second << " = " << dff.instName
+               << ".Q (net " << net.name << ")\n";
     }
 
     output << "\nEquations:\n";
@@ -781,7 +835,10 @@ Netlist::BooleanEquationArtifactResult Netlist::writeBooleanEquationArtifact(
                     output << "?";
                     invalidStructure = true;
                 } else {
-                    output << nets[inputNetId].name;
+                    const auto stateVariable = stateVariableByNetId.find(inputNetId);
+                    output << (stateVariable != stateVariableByNetId.end()
+                        ? stateVariable->second
+                        : nets[inputNetId].name);
                 }
             }
             output << ")\n";
@@ -795,7 +852,12 @@ Netlist::BooleanEquationArtifactResult Netlist::writeBooleanEquationArtifact(
     const bool logicallyComplete = !result.timedOut && !invalidStructure &&
         !unsupportedGate && !cycleDetected && !bodyIoFailed &&
         result.equationCount == equationNetIds.size();
-    output << "\nRoot: " << netName << "\n"
+    const auto rootStateVariable = stateVariableByNetId.find(rootNetId);
+    output << "\nRoot: " << netName;
+    if (rootStateVariable != stateVariableByNetId.end()) {
+        output << " (current-state variable " << rootStateVariable->second << ")";
+    }
+    output << "\n"
            << "Equation count: " << result.equationCount << "\n"
            << "Boundary count: " << result.boundaryCount << "\n"
            << "Complete: " << (logicallyComplete ? "yes" : "no") << "\n";

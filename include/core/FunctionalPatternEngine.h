@@ -8,8 +8,32 @@
 class Netlist;
 struct BitParallelSimulationResult;
 
+namespace eqeng {
+class Primitives;
+}
+
+namespace request_time_budget {
+class RequestDeadline;
+}
+
 enum class FunctionalPatternKind {
+    Buffer,
+    Inverter,
+    And,
+    Nand,
+    Or,
+    Nor,
+    Xor,
+    Xnor,
+    Mux,
     MuxHold
+};
+
+enum class FunctionalPatternProofStatus {
+    ProvenMatch,
+    ProvenNonMatch,
+    Unknown,
+    Unsupported
 };
 
 enum class FunctionalPatternRole {
@@ -47,6 +71,24 @@ struct FunctionalPatternProofResult {
     bool unknown = false;
     bool unsupported = false;
     std::string solverStatus;
+    std::string description;
+};
+
+struct FunctionalPatternProofRequest {
+    FunctionalPatternKind kind = FunctionalPatternKind::Buffer;
+    int targetNetId = -1;
+    std::vector<int> operandNetIds;
+    std::vector<bool> operandInverted;
+};
+
+struct FunctionalPatternEvaluation {
+    FunctionalPatternKind kind = FunctionalPatternKind::Buffer;
+    FunctionalPatternProofStatus status = FunctionalPatternProofStatus::Unknown;
+    bool complete = false;
+    bool solverRan = false;
+    bool timedOut = false;
+    std::string solverStatus;
+    std::string message;
 };
 
 struct FunctionalPatternContext {
@@ -56,6 +98,8 @@ struct FunctionalPatternContext {
     const BitParallelSimulationResult* simulation = nullptr;
     std::vector<int> coneGateIds;
     std::vector<int> coneNetIds;
+    std::vector<int> preferredControlNetIds;
+    std::vector<int> preferredDataNetIds;
 };
 
 struct FunctionalPatternSearchOptions {
@@ -112,19 +156,29 @@ public:
     virtual FunctionalPatternKind kind() const = 0;
     virtual FunctionalPatternSearchResult search(
         const Netlist& netlist,
+        eqeng::Primitives& primitives,
         const FunctionalPatternContext& context,
-        const FunctionalPatternSearchOptions& options) const = 0;
+        const FunctionalPatternSearchOptions& options,
+        const request_time_budget::RequestDeadline& deadline) const = 0;
 };
 
 class FunctionalPatternEngine {
 public:
     FunctionalPatternEngine();
 
+    FunctionalPatternEvaluation proveSpecifiedOperands(
+        const Netlist& netlist,
+        eqeng::Primitives& primitives,
+        const FunctionalPatternProofRequest& request,
+        const request_time_budget::RequestDeadline& deadline) const;
+
     FunctionalPatternSearchResult search(
         FunctionalPatternKind kind,
         const Netlist& netlist,
+        eqeng::Primitives& primitives,
         const FunctionalPatternContext& context,
-        const FunctionalPatternSearchOptions& options) const;
+        const FunctionalPatternSearchOptions& options,
+        const request_time_budget::RequestDeadline& deadline) const;
 
 private:
     std::vector<std::unique_ptr<FunctionalPatternMatcher>> matchers;
