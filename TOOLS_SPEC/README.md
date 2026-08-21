@@ -225,6 +225,12 @@ Does there exist any pair ... NAND(a,b)==n25?
 List all pairs ... NAND(a,b)==n25.
 -> func_search nand_pair n25 --all
 
+Find signals a and b such that OR(a,b)==n15.
+-> func_search pattern OR n15
+
+Find a signal whose inversion equals n5.
+-> func_search pattern NOT n5
+
 Does a path from A to B exist that does not traverse X?
 -> path_query exists net:A net:B -avoid net:X
 
@@ -462,12 +468,18 @@ Boolean artifact 使用 `NAMED_DAG_EQUATIONS_V2`。若 fanin 含 DFF.Q，方程�
 
 ```text
 Find two existing signals whose NAND is functionally equivalent to n20.
+Find two existing signals whose OR is functionally equivalent to n15.
+Find a signal whose inversion is equivalent to n5.
 Does any signal pair in the design satisfy the requested Boolean relation?
 List all functionally equivalent gate pairs in the design.
 Find equivalent AND gates in the fanin cone of n10.
 ```
 
-目前公開支援 `NAND(a,b) == target` signal-pair search，以及 whole design / cone scope 內的 arbitrary equivalent combinational gate-pair search。後者可依 gate type 過濾並回傳 SAT-proven equivalence classes，但不代表 gate 已可直接刪除；任意 observability-aware redundancy candidate 或其他尚未列於 Usage 的 Boolean search，不可假設已支援。
+目前公開支援 BUF/NOT/AND/NAND/OR/NOR/XOR/XNOR operand search，以及 whole design / cone
+scope 內的 arbitrary equivalent combinational gate-pair search。使用
+`func_search pattern <type> <target>`；舊 NAND prompt 仍可用 `nand_pair`。`equivalent_pairs` 可依
+gate type 過濾並回傳 SAT-proven equivalence classes，但不代表 gate 已可直接刪除；MUX decomposition、
+任意 observability-aware redundancy candidate 或其他尚未列於 Usage 的 Boolean search，不可假設已支援。
 
 詳細用法：[`FUNCTION_SEARCH_TOOL.md`](FUNCTION_SEARCH_TOOL.md)
 

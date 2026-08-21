@@ -1102,6 +1102,7 @@ envelope、depth optimization report 與 cached report。公開 command 只呼�
 | depth/critical/deepest/output threshold | `depth_query` |
 | named-net equivalence/constant/dependence/symmetry/equation | `func_query` |
 | unknown NAND-equivalent internal candidate pair search | `func_search nand_pair` |
+| unknown BUF/NOT/AND/NAND/OR/NOR/XOR/XNOR operands | `func_search pattern <type> <target>` |
 | arbitrary functionally equivalent gate pair/group search | `func_search equivalent_pairs` |
 | cut/articulation/mandatory/separator | `path_query` |
 | DFF enable/hold semantics | `sequential_query` |

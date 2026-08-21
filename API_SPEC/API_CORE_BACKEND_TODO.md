@@ -67,10 +67,9 @@ test70 FindAny 的 legacy/engine 約 7.16/2.21 秒，結果一致且 Unknown=0�
 FindAll 的 legacy/engine 約 59.29/121.49 秒，兩者均完整找到 512 組。
 因此 production 依 mode 固定選擇 backend，不得只因 AIG 已存在就全面切換。
 
-## P2：Function Search pattern type 擴充
+## 已完成：Function Search pattern type 擴充
 
-目前 public operand search 只開放 `NAND(a,b)==target`。後續保留現有
-`nand_pair` 相容入口，再新增統一 pattern search，覆蓋：
+已保留 `nand_pair` 相容入口，並新增 `FunctionalPatternOperands` / `func_search pattern`：
 
 ```text
 BUF/NOT：單 operand search。
@@ -78,11 +77,9 @@ AND/NAND/OR/NOR/XOR/XNOR：雙 operand search。
 MUX：不做 O(n^3) 直接窮舉，需獨立 functional decomposition/candidate reduction。
 ```
 
-底層已有通用 `FunctionalPatternEngine` pattern builder/proof，但 public candidate
-generation、simulation prefilter、report 與 CLI 尚未擴充。NAND benchmark 可作為
-mode-aware backend 設計的基準，不能直接代表其他 gate type 的效能；正式接入前
-至少要對每個 arity/type family 做 correctness differential，並對代表性大電路比較
-FindAny/FindAll 的 surviving candidate 數與 runtime。
+candidate generation、simulation prefilter、scope、report、artifact 與 CLI 已完成；
+`mini test/test23` 26/26、`test24` 15/15。NAND FindAll 仍使用已驗證較快的 legacy backend，
+其他 pattern 使用共用 proof engine。MUX 維持獨立 decomposition 後續項目。
 
 ## P2：Sequential enable/hold report 與 role mapping
 

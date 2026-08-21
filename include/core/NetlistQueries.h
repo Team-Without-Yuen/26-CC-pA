@@ -371,6 +371,7 @@ struct FunctionReport {
 
 enum class FunctionSearchQueryType {
     NandEquivalentInputPairs, // 搜尋 NAND(a, b) 與 targetNetName 功能等價的 internal signal pair
+    FunctionalPatternOperands, // 搜尋指定 BUF/NOT/AND/NAND/OR/NOR/XOR/XNOR operands
     EquivalentGatePairs       // 搜尋 output function 相同的 active combinational gate pairs
 };
 
@@ -395,6 +396,8 @@ struct FunctionSearchQuery {
     FunctionSearchScope scope = FunctionSearchScope::WholeDesign;
     std::string scopeName;
     GateType gateTypeFilter = GateType::UNKNOWN;
+    // FunctionalPatternOperands 必填；NandEquivalentInputPairs 會忽略此欄並固定使用 NAND。
+    GateType patternGateType = GateType::UNKNOWN;
 
     // 第一版只搜尋 active、scalar、非 PI/PO/constant、且有 driver 的 internal signals。
     bool internalSignalsOnly = true;
@@ -418,6 +421,10 @@ struct FunctionSearchMatch {
     std::string gateNameB;
     std::string netNameA;
     std::string netNameB;
+    // 通用 pattern search 的 ordered operand list。既有 A/B 欄位保留相容；
+    // unary pattern 只填 A 與 vectors[0]。
+    std::vector<int> operandNetIds;
+    std::vector<std::string> operandNetNames;
     bool provenEquivalent = false;
     std::string proofMethod;  // 目前為 "SAT_UNSAT_MITER"
     std::string solverStatus; // 等價 proof 成功時為 "UNSAT"
@@ -449,6 +456,9 @@ struct FunctionSearchReport {
     FunctionSearchScope scope = FunctionSearchScope::WholeDesign;
     std::string scopeName;
     GateType gateTypeFilter = GateType::UNKNOWN;
+    GateType patternGateType = GateType::UNKNOWN;
+    std::string patternTypeName;
+    size_t operandArity = 0;
 
     size_t candidateSignalCount = 0;
     size_t candidateGateCount = 0;

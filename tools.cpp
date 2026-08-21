@@ -1755,9 +1755,15 @@ void printFunctionReport(const Netlist::FunctionReport& report,
 void printFunctionSearchReport(const Netlist& netlist,
                                const Netlist::FunctionSearchReport& report) {
     auto queryTypeName = [](Netlist::FunctionSearchQueryType type) {
-        return type == Netlist::FunctionSearchQueryType::EquivalentGatePairs
-            ? "EQUIVALENT_GATE_PAIRS"
-            : "NAND_EQUIVALENT_INPUT_PAIRS";
+        switch (type) {
+        case Netlist::FunctionSearchQueryType::NandEquivalentInputPairs:
+            return "NAND_EQUIVALENT_INPUT_PAIRS";
+        case Netlist::FunctionSearchQueryType::FunctionalPatternOperands:
+            return "FUNCTIONAL_PATTERN_OPERANDS";
+        case Netlist::FunctionSearchQueryType::EquivalentGatePairs:
+            return "EQUIVALENT_GATE_PAIRS";
+        }
+        return "UNKNOWN";
     };
     auto scopeName = [](Netlist::FunctionSearchScope scope) {
         switch (scope) {
@@ -1781,6 +1787,10 @@ void printFunctionSearchReport(const Netlist& netlist,
                       ? "ANY"
                       : netlist.gateTypeToString(report.gateTypeFilter))
               << "\n";
+    std::cout << "  pattern_type: "
+              << (report.patternTypeName.empty() ? "NONE" : report.patternTypeName)
+              << "\n";
+    std::cout << "  operand_arity: " << report.operandArity << "\n";
     std::cout << "  found: " << (report.found ? "true" : "false") << "\n";
     std::cout << "  complete: " << (report.complete ? "true" : "false") << "\n";
     std::cout << "  all_candidates_examined: "
@@ -1834,6 +1844,13 @@ void printFunctionSearchReport(const Netlist& netlist,
         std::cout << "      net_a_id: " << match.netIdA << "\n";
         std::cout << "      net_b: " << match.netNameB << "\n";
         std::cout << "      net_b_id: " << match.netIdB << "\n";
+        std::cout << "      operand_count: " << match.operandNetIds.size() << "\n";
+        for (size_t operand = 0; operand < match.operandNetIds.size(); ++operand) {
+            std::cout << "      operand_" << (operand + 1) << ": "
+                      << match.operandNetNames[operand] << "\n";
+            std::cout << "      operand_" << (operand + 1) << "_id: "
+                      << match.operandNetIds[operand] << "\n";
+        }
         std::cout << "      proven_equivalent: "
                   << (match.provenEquivalent ? "true" : "false") << "\n";
         std::cout << "      proof_method: " << match.proofMethod << "\n";
@@ -3440,9 +3457,11 @@ bool buildFunctionSearchQuery(const Netlist& netlist,
     const std::string loweredMode = toLower(mode);
     const bool nandSearch =
         loweredMode == "nand_pair" || loweredMode == "nand_equivalent_pairs";
+    const bool patternSearch =
+        loweredMode == "pattern" || loweredMode == "pattern_operands";
     const bool equivalentPairSearch =
         loweredMode == "equivalent_pairs" || loweredMode == "equivalent_gate_pairs";
-    if (!nandSearch && !equivalentPairSearch) {
+    if (!nandSearch && !patternSearch && !equivalentPairSearch) {
         error = "Unknown func_search mode: " + mode;
         return false;
     }
@@ -3451,6 +3470,19 @@ bool buildFunctionSearchQuery(const Netlist& netlist,
         query.type = Netlist::FunctionSearchQueryType::NandEquivalentInputPairs;
         if (!(iss >> query.targetNetName)) {
             error = "nand_pair requires a scalar target net.";
+            return false;
+        }
+    } else if (patternSearch) {
+        std::string patternTypeToken;
+        if (!(iss >> patternTypeToken >> query.targetNetName)) {
+            error = "pattern requires a gate type and scalar target net.";
+            return false;
+        }
+        query.type = Netlist::FunctionSearchQueryType::FunctionalPatternOperands;
+        query.patternGateType = netlist.stringToGateType(patternTypeToken);
+        if (query.patternGateType == GateType::UNKNOWN ||
+            query.patternGateType == GateType::DFF) {
+            error = "pattern gate type must be BUF, NOT, AND, NAND, OR, NOR, XOR, or XNOR.";
             return false;
         }
     } else {
@@ -3490,18 +3522,54 @@ bool buildFunctionSearchQuery(const Netlist& netlist,
         } else if (lowered == "--find-any" || lowered == "-find_any") {
             query.mode = Netlist::FunctionSearchMode::FindAny;
         } else if (lowered == "--allow-same" || lowered == "-allow_same") {
-            if (!nandSearch) {
+            if (equivalentPairSearch) {
                 error = "--allow-same is only valid for nand_pair.";
+                return false;
+            }
+            if (patternSearch &&
+                (query.patternGateType == GateType::BUF ||
+                 query.patternGateType == GateType::NOT)) {
+                error = "--allow-same is not meaningful for unary BUF/NOT patterns.";
                 return false;
             }
             query.allowSameSignalPair = true;
         } else if (lowered == "--include-boundary-signals" ||
                    lowered == "-include_boundary_signals") {
-            if (!nandSearch) {
+            if (equivalentPairSearch) {
                 error = "--include-boundary-signals is only valid for nand_pair.";
                 return false;
             }
             query.internalSignalsOnly = false;
+        } else if (lowered == "--scope" || lowered == "-scope") {
+            if (!nandSearch && !patternSearch) {
+                error = "--scope is only valid for operand-pattern search.";
+                return false;
+            }
+            std::string scopeToken;
+            if (!(iss >> scopeToken)) {
+                error = "--scope requires whole, net_fanin, net_fanout, gate_fanin, or gate_fanout.";
+                return false;
+            }
+            const std::string loweredScope = toLower(scopeToken);
+            if (loweredScope == "whole" || loweredScope == "whole_design") {
+                query.scope = Netlist::FunctionSearchScope::WholeDesign;
+            } else if (loweredScope == "net_fanin") {
+                query.scope = Netlist::FunctionSearchScope::NetFanin;
+            } else if (loweredScope == "net_fanout") {
+                query.scope = Netlist::FunctionSearchScope::NetFanout;
+            } else if (loweredScope == "gate_fanin") {
+                query.scope = Netlist::FunctionSearchScope::GateFanin;
+            } else if (loweredScope == "gate_fanout") {
+                query.scope = Netlist::FunctionSearchScope::GateFanout;
+            } else {
+                error = "Unknown operand-pattern scope: " + scopeToken;
+                return false;
+            }
+            if (query.scope != Netlist::FunctionSearchScope::WholeDesign &&
+                !(iss >> query.scopeName)) {
+                error = "The selected operand-pattern scope requires a net or gate name.";
+                return false;
+            }
         } else if (lowered == "--gate-type" || lowered == "-gate_type") {
             if (!equivalentPairSearch) {
                 error = "--gate-type is only valid for equivalent_pairs.";
@@ -4274,6 +4342,11 @@ void printHelp() {
         << "        boolean_expression <net>\n"
         << "        simplified_expression <net> <max_depth> | support_pi <net>\n"
         << "\nFunction search\n"
+        << "  func_search pattern <BUF|NOT|AND|NAND|OR|NOR|XOR|XNOR> <target_net>\n"
+        << "              [--all] [--scope <scope> [scope_name]]\n"
+        << "              [--max-results n] [--patterns 1..4096]\n"
+        << "              [--time-limit seconds] [--allow-same]\n"
+        << "              [--include-boundary-signals]\n"
         << "  func_search nand_pair <target_net> [--all] [--max-results n]\n"
         << "              [--patterns 1..4096] [--time-limit seconds]\n"
         << "              [--allow-same] [--include-boundary-signals]\n"
@@ -5056,7 +5129,8 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
                 session,
                 command,
                 "",
-                "Usage: func_search nand_pair <target_net> [options] | "
+                "Usage: func_search pattern <gate_type> <target_net> [options] | "
+                "func_search nand_pair <target_net> [options] | "
                 "func_search equivalent_pairs <scope> [scope_name] [options]");
             return true;
         }

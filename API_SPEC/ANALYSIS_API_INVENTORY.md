@@ -30,13 +30,16 @@
 | `PathQuery` | endpoint path、DFF.Q-to-DFF.D path、mandatory nodes、separator 與 PI-to-PO cut | 全設計 timing endpoint 掃描、Boolean function |
 | `DepthQuery / DepthAnalysis` | timing arrival depth、PO/DFF.D depth、global critical path、depth threshold | arbitrary through/avoid path、Boolean function |
 | `FunctionQuery` | 已指定 net/bus 的 Boolean 性質：equivalence、constant、dependence、symmetry、expression | 未知候選搜尋、cross-design equivalence、修改 |
-| `FunctionSearchQuery` | 未知 internal signal 候選搜尋；目前支援 SAT-proven `NAND(a,b)==target` | 修改 netlist、任意 functional duplicate/redundancy removal |
+| `FunctionSearchQuery` | 未知 internal signal 候選搜尋；支援 SAT-proven BUF/NOT/AND/NAND/OR/NOR/XOR/XNOR operands 與 equivalent-gate classes | 修改 netlist、MUX decomposition、observability redundancy removal |
 | `SequentialPatternQuery` | 從 DFF D-input logic 推導 canonical 或 SAT-proven functional enable/hold 等 register-control pattern | 一般 DFF 列表、clock/reset 直接連線、修改 |
 | `WholeDesignEquivalence` | current 與 original/previous snapshot 的 PO+DFF.D 等價證明 | 同一 design 中兩條 internal nets 的比較 |
 | `EditApply` | 執行使用者指定且已有安全規則/certificate 的 transformation | cost-driven 最佳化搜尋、未知功能候選搜尋 |
 | `OptimizationCandidate / OptApply` | 建立候選並依 depth cost function transactional apply；驗證 basis、target 與 whole-design equivalence | 一般 read-only query、固定指定 mapping 的語意 |
 
-`FunctionSearchQuery` 負責「候選未知、需要從大量 signals/gates 中搜尋」的 Boolean discovery；它不修改 netlist。第一版 `NandEquivalentInputPairs` 已完成，其他 functional pair/redundancy mode 仍不得用 `FunctionQuery` 或 structural merge 假裝覆蓋。
+`FunctionSearchQuery` 負責「候選未知、需要從大量 signals/gates 中搜尋」的 Boolean discovery；
+它不修改 netlist。`FunctionalPatternOperands` 已覆蓋八種基本一元/二元 function，
+`NandEquivalentInputPairs` 保留相容；MUX decomposition 與 observability redundancy 仍不得用
+`FunctionQuery` 或 structural merge 假裝覆蓋。
 
 `StructureQuery` 是 tools/LLM-facing facade，內部依 mode dispatch 到 `BasicQuery` 或 `DirectConnectivityQuery`。`PathQuery` 對外統一 endpoint connectivity；register path endpoint 展開及 Graph dominator 演算法仍保留為內部元件。
 
@@ -110,7 +113,7 @@ Internal query engines / adapters
     |
 Search / planning layer
     |
-    +-- FunctionSearchQuery (read-only discovery; NAND pair mode completed)
+    +-- FunctionSearchQuery (read-only discovery; basic unary/binary pattern modes completed)
     +-- OptimizationCandidate
     |
 Mutation / optimization layer
@@ -839,7 +842,7 @@ SequentialPatternQuery 會重用 DFF pin lookup、Cone 與 Function SAT，但輸
 | count / list / type / is PI / is DFF / structural issue | public `StructureQuery` -> internal `BasicQuery` |
 | directly connected / driver / load / input nets / output net / immediate fanin/fanout | public `StructureQuery` -> internal `DirectConnectivityQuery` |
 | same-design named nets equivalent / constant / dependence / symmetry / expression | `FunctionQuery` |
-| unknown pair/candidate search / exists any pair | `FunctionSearchQuery`；目前公開 NAND pair mode |
+| unknown operand/candidate search / exists any pair | `FunctionSearchQuery`；公開支援 BUF/NOT/AND/NAND/OR/NOR/XOR/XNOR pattern |
 | DFF enable / hold / feedback MUX / register control pattern | `SequentialPatternQuery` |
 | reachable / transitive fanin / transitive fanout / cone / can affect | `ConeQuery` |
 | path from A to B / through / avoid / every path / shortest path / longest path between endpoints | `PathQuery` |
