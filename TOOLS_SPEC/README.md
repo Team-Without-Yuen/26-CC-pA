@@ -278,6 +278,7 @@ minimize / optimize / find best cost             -> Optimization flow
 負責目前 netlist 的基本結構與單層直接連線：
 
 - gate、net、PI、PO、DFF 的 active 數量與名稱列表。
+- active nets 的 PI、PO、PI+PO、structural constant 與 internal 批次分類。
 - gate type 的數量與 gate 列表。
 - 依 gate type 批次列出每顆 gate 的 input/output pin-net 明細。
 - 單一 gate、net、port 的基本資訊。
@@ -292,6 +293,7 @@ How many primary inputs and primary outputs does this design have?
 List all NOR gates.
 List all NAND gates with their input and output signals.
 How many floating signals were found?
+How many internal nets are present? List all structural constant nets.
 What gate drives n10?
 List all flip-flops driven by clock n0.
 Which primary input has the highest direct fanout?
@@ -301,8 +303,8 @@ Which primary input has the highest direct fanout?
 
 大型 object/load/issue 名單會自動完整寫入 list artifact；LLM 讀取 count、
 `list artifact complete` 與 `output_file`，不需也不能指定輸出門檻或檔名。
-自動切換同時考慮 record 數與預估 serialized characters，避免少量但超長的 detail records
-超過 response token；這兩個門檻不改變查詢結果數量。
+自動切換以單一 prompt 的 4096-token 上限為基準，使用保守 token estimate 並保留 envelope
+空間；估算達到或超過上限即寫 artifact。門檻只決定呈現位置，不改變查詢結果數量。
 
 一或多種 gate type 的 names-only list 使用 `gates_by_type --gate-types <type...>`；排除型別使用
 `--exclude-gate-types <type...>`。未指定 include 代表全部，include 後再套 exclude，且 exclude
@@ -313,6 +315,10 @@ signals 時加 `--with-pins`。不要先列 names 再逐顆呼叫
 constant-input gate 的 names-only list 使用 `const_input_gates [type|all] [0|1|any]`；prompt 還要求
 constant 位於哪個 pin、其他 input 或 output signal 時，加上 `--with-pins`。不要先取得 gate names
 再逐顆查詢。
+
+net classification 使用無參數的 `net_classes`，一次取得所有分類 counts 與完整 names/artifact。
+其中 constant 只表示 named netlist 的 structural constant；題目問 Boolean function 是否恆為
+0/1 時仍使用 `FunctionQuery`。
 
 net driver/load 預設回 gate-level names；prompt 明確要求 exact pin、gate type 或 pin role 時使用
 `net_driver <net> --with-pins` / `net_loads <net> --with-pins`。其中 `count` 是去重 gate 數，
@@ -332,7 +338,8 @@ net driver/load 預設回 gate-level names；prompt 明確要求 exact pin、gat
 - 統計 cone 內 gate 數量或各 gate type 數量。
 - 以一種或多種 gate type 篩選 cone，並取得 filter 後 gates 或完整 pin/net details。
 - 比較或尋找 shared fanin gates。
-- 查詢 largest output cone 等 cone 層級摘要。
+- 查詢 largest output cone，以及保留 ties 的 highest/lowest/Nth/top/bottom output cone ranking。
+- 依 gate/net count 的 exact、comparison 或 inclusive range 篩選所有 output cones。
 
 典型 prompt：
 
@@ -343,6 +350,8 @@ How many NOR gates are in the cone of n15?
 List all NAND, NOR, and NOT gates in n8's fanin cone with their connections.
 Which gates are shared by the fanin cones of n10 and n12?
 Which output has the largest fanin cone?
+Which outputs tie for the second-largest fanin cone?
+How many outputs have more than 100 gates in their fanin cones?
 ```
 
 責任邊界：`ConeQuery` 回答「範圍中有哪些物件」，不負責證明某一條 A-to-B path，也不計算全域 critical depth。指定 endpoints 的路徑使用 `PathQuery`；logic depth 使用 `DepthQuery`。
@@ -352,6 +361,10 @@ breakdown、完整性與 `output_file`；小型 cone 維持直接列出全部名
 
 prompt 指定 gate type 時使用 `--gate-types <type...>`；支援 `AND OR NOT NAND NOR XOR
 XNOR BUF DFF`，多個 type 是聯集。prompt 要求 pin/net connection 時再加 `--with-pins`。
+單一 legacy 最大值使用 `largest_output`；若題目要求 ties、smallest、Nth 或 top/bottom，使用
+`output_rank`，並從完整 `Ranked output cones` 判讀，不可只取代表性的 `source`。
+若題目要求 outputs 的 cone count threshold/range，使用 `output_filter`，讀
+`matched output count` 與完整 `Matched output cones`；大型結果由工具自動寫 artifact。
 
 詳細用法：[`CONE_QUERY_TOOL.md`](CONE_QUERY_TOOL.md)
 
@@ -521,7 +534,7 @@ Identify DFFs implemented with a feedback MUX pattern.
 - 指定 fanin cone depth 最佳化。
 - whole design 或 local scope 的 allowed/banned gate-type constraints。
 - target depth、time budget、no-improvement policy。
-- candidate constraint validation、whole-design SAT 與 transactional commit/rollback。
+- candidate constraint validation、qualified rewrite certificate 與 transactional commit/rollback。
 
 典型 prompt：
 
@@ -532,7 +545,7 @@ Optimize the cone of n15 for depth using only AND, OR, and NOT gates.
 Reduce maximum depth to at most 5 without changing functionality.
 ```
 
-責任邊界：只量測 current depth 使用 `DepthQuery`；沒有 cost objective、只指定 basis conversion 時使用 `EditApply`。`opt_apply critical_path_depth` 在 transaction 內強制驗證等價：graph identity 使用 `StructuralIdentity`，其餘候選執行 whole-design SAT。
+責任邊界：只量測 current depth 使用 `DepthQuery`；沒有 cost objective、只指定 basis conversion 時使用 `EditApply`。`opt_apply critical_path_depth` 的 graph identity 使用 `StructuralIdentity`，changed candidate 使用 `CertifiedRewrite`；本 command 不執行 whole-design SAT。prompt 明確要求獨立 SAT proof 時，再呼叫 `equiv_query previous_edit` 或 `equiv_query original`。
 
 詳細用法：[`OPTIMIZATION_TOOL.md`](OPTIMIZATION_TOOL.md)
 
@@ -606,11 +619,13 @@ Make sure nothing changes functionally.
 | 題目要求 | API 組合 |
 |---|---|
 | 統計某個 cone 內各 gate type | `ConeQuery`，不是全設計 `StructureQuery` |
+| output cone 最大/最小/ties/第 N/top-bottom | `ConeQuery::OutputConeRanking`；logic depth 排名仍是 `DepthQuery` |
+| output cone gate/net count exact、comparison、range | `ConeQuery::OutputConeFilter` |
 | 找 critical path 並列出其節點 | `DepthQuery` 取得 global critical result；需要額外 endpoint/path constraint 時再用 `PathQuery` |
 | 修改後回報移除數量 | `EditApply` → `EditReport` |
 | 修改後確認功能不變 | `EditApply` → `WholeDesignEquivalence` |
 | 修改、回報成果並確認功能不變 | `EditApply` → `EditReport` → `WholeDesignEquivalence` |
-| 最佳化 depth 並回報成果 | `Optimization` → `EditReport`；changed candidate 內建 whole-design SAT attempt，proof/inconclusive 依 `OPTIMIZATION_TOOL.md` 判讀 |
+| 最佳化 depth 並回報成果 | `Optimization` → `EditReport`；changed candidate 使用 `CertifiedRewrite`，需要獨立 SAT proof 時再接 `WholeDesignEquivalence` |
 | 找出未知候選，再對候選做詳細功能分析 | `FunctionSearchQuery` → `FunctionQuery` |
 | 列出某 clock 的 DFF，再分析這些 DFF 的 enable/hold | `StructureQuery` → `SequentialPatternQuery` |
 

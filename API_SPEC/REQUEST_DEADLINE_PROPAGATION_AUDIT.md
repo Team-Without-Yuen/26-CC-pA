@@ -14,7 +14,7 @@
 | Whole-design Equivalence | global miter 使用剩餘總預算；diagnosis 公平分配 | 正確 |
 | Sequential Functional Analysis | query-wide deadline；per-DFF 自動公平分配 | 正確 |
 | Path Enumerate | 單一 enumeration start time | 正確 |
-| OptApply | facade 建立單一 `RequestDeadline`，傳入 optimizer、mapper 與 final SAT | 正確 |
+| OptApply | facade 建立單一 `RequestDeadline`，傳入 scope/lower-bound、optimizer、mapper 與 validation；本 pass 不執行 final SAT | 正確 |
 | DepthOptimizer Stage 2 | 120 秒 strategy cap 使用 `min(120, request remaining)` | 正確；單次 mockturtle primitive 不可搶占 |
 | ConvertToBasis / ReplaceGateType | EditApply 的同一個 deadline 傳入 `TechMapper` | 正確；timeout 整筆 rollback |
 | TechMapper exact synthesis 60/40/5 秒 | 使用 `min(strategy cap, request remaining)` | 正確 |
@@ -35,7 +35,7 @@
 
 - `Netlist::runEditApply()`：functional merge 使用剩餘時間；technology mapping 共用 deadline。
 - `TechMapper`：worklist、rule scan 與 exact-synthesis SAT 均檢查同一 deadline。
-- `Netlist::runOptApply()`：scope/lower-bound、`DepthOptimizer`、`TechMapper` 與 whole-design SAT 共用 deadline。
+- `Netlist::runOptApply()`：scope/lower-bound、`DepthOptimizer`、`TechMapper` 與 validation 共用 deadline；whole-design SAT 僅由獨立 equivalence flow 管理。
 - `DepthOptimizer`：超時回 `OptimizationStatus::TIMEOUT` 並恢復進入 core 前的 snapshot。
 - `TechMapStatus::TIMEOUT`：不再把 timeout 混為 rule-not-found、not-equivalent 或 simulation failure。
 

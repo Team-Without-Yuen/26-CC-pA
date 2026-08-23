@@ -37,6 +37,30 @@ $read = "read $circuit"
 $summary = Invoke-Tools @($read, 'structure_query summary')
 Assert-Contains $summary 'status: ok' 'summary succeeds'
 Assert-Contains $summary '  gates: 17' 'fixture has 17 active gates'
+Assert-Contains $summary '  primary inputs: 6' 'summary preserves PI port count'
+Assert-Contains $summary '  primary input bits: 7' 'summary reports aggregate PI bit count'
+Assert-Contains $summary '  primary outputs: 3' 'summary preserves PO port count'
+Assert-Contains $summary '  primary output bits: 4' 'summary reports aggregate PO bit count'
+
+# ---------------------------------------------------------------------------
+# Net classification：一次掃描回傳獨立 PI/PO/constant flags 與 exclusive internal
+# fixture：PI bits=7、PO bits=4、constants=2、internal=13、PI+PO overlap=0
+# ---------------------------------------------------------------------------
+
+$netClasses = Invoke-Tools @($read, 'structure_query net_classes')
+Assert-Contains $netClasses 'status: ok' 'net_classes succeeds'
+Assert-Contains $netClasses 'complete: true' 'net_classes is complete'
+Assert-Contains $netClasses '  active nets: 26' 'net_classes counts every active net once'
+Assert-Contains $netClasses '  primary-input nets: 7' 'net_classes counts PI bit nets'
+Assert-Contains $netClasses '  primary-output nets: 4' 'net_classes counts PO bit nets'
+Assert-Contains $netClasses '  primary-input/output nets: 0' 'net_classes reports a valid empty overlap'
+Assert-Contains $netClasses '  constant nets: 2' 'net_classes counts parser constants'
+Assert-Contains $netClasses '  internal nets: 13' 'net_classes counts the exclusive internal remainder'
+Assert-Contains $netClasses "Constant nets (2):" 'net_classes prints a self-described constant section'
+Assert-Contains $netClasses "  1'b0" 'net_classes lists constant zero'
+Assert-Contains $netClasses "  1'b1" 'net_classes lists constant one'
+Assert-Contains $netClasses 'Internal nets (13):' 'net_classes prints the complete internal section'
+Assert-Contains $netClasses '  n_dead' 'net_classes includes an active dangling internal net'
 
 # ---------------------------------------------------------------------------
 # 單一型別 vs 多型別聯集
@@ -216,7 +240,7 @@ Assert-Contains $countPins 'count_by_type does not support --with-pins' 'inappli
 # ---------------------------------------------------------------------------
 
 foreach ($mode in @('summary', 'list_gates', 'list_nets', 'list_pi', 'list_po',
-                     'list_dffs', 'list_comb', 'list_comb_gates',
+                     'net_classes', 'list_dffs', 'list_comb', 'list_comb_gates',
                      'structural_issues')) {
     $result = Invoke-Tools @($read, "structure_query $mode stray")
     Assert-Contains $result 'status: error' "$mode rejects trailing argument"
@@ -227,6 +251,25 @@ foreach ($mode in @('summary', 'list_gates', 'list_nets', 'list_pi', 'list_po',
 
 $validGateInfo = Invoke-Tools @($read, 'structure_query gate_info g_and0')
 Assert-Contains $validGateInfo 'status: ok' 'gate_info exact arity remains valid'
+Assert-Contains $validGateInfo 'gate details included: yes' 'gate_info reports structured detail metadata'
+Assert-Contains $validGateInfo 'Gate connection details (1):' 'gate_info prints one structured record'
+Assert-Contains $validGateInfo 'gate=g_and0 type=AND inputs=[' 'gate_info structured record includes type and inputs'
+Assert-Contains $validGateInfo 'IN1=a(PI)' 'gate_info marks primary-input connections'
+Assert-NotContains $validGateInfo 'Inputs:' 'gate_info suppresses duplicate legacy pin text'
+
+$constantGateInfo = Invoke-Tools @($read, 'structure_query gate_info g_nand1')
+Assert-Contains $constantGateInfo "IN2=1'b1" 'gate_info preserves constant-input metadata'
+
+$outputGateInfo = Invoke-Tools @($read, 'structure_query gate_info g_buf0')
+Assert-Contains $outputGateInfo 'output=OUT=y0(PO)' 'gate_info marks primary-output connections'
+
+$dffGateInfo = Invoke-Tools @($read, 'structure_query gate_info g_dff0')
+Assert-Contains $dffGateInfo 'gate=g_dff0 type=DFF inputs=[' 'gate_info identifies the DFF record'
+Assert-Contains $dffGateInfo 'RN=rst_n(PI)' 'gate_info preserves the DFF reset pin'
+Assert-Contains $dffGateInfo "SN=1'b1" 'gate_info preserves the DFF set constant'
+Assert-Contains $dffGateInfo 'CK=clk(PI)' 'gate_info preserves the DFF clock pin'
+Assert-Contains $dffGateInfo 'D=y0(PO)' 'gate_info preserves the DFF data pin'
+Assert-Contains $dffGateInfo 'output=Q=q[0](PO)' 'gate_info preserves the DFF output pin'
 $validNetInfo = Invoke-Tools @($read, 'structure_query net_info n1')
 Assert-Contains $validNetInfo 'status: ok' 'net_info exact arity remains valid'
 $validPortInfo = Invoke-Tools @($read, 'structure_query port_info a')
@@ -283,5 +326,83 @@ $afterEditAll = Invoke-Tools @(
 )
 Assert-NotContains $afterEditAll 'g_dead' 'unfiltered list excludes the removed gate'
 Assert-NotContains $afterEditAll 'UNKNOWN' 'tombstone type never surfaces in an unfiltered list'
+
+$afterEditNetClasses = Invoke-Tools @(
+    $read,
+    'edit_apply remove_dangling_logic',
+    'structure_query net_classes'
+)
+Assert-Contains $afterEditNetClasses '  active nets: 25' 'removed net tombstone is excluded from active count'
+Assert-Contains $afterEditNetClasses '  internal nets: 12' 'removed internal net is excluded from class count'
+Assert-NotContains $afterEditNetClasses '  n_dead' 'removed net name never surfaces in class lists'
+
+# ---------------------------------------------------------------------------
+# structural_issues pin-level report：只列 named netlist 中實際存在的空 pin slot
+# ---------------------------------------------------------------------------
+
+$connectedIssues = Invoke-Tools @($read, 'structure_query structural_issues')
+Assert-Contains $connectedIssues '  unconnected gates: 0' 'connected fixture reports a valid zero gate count'
+Assert-Contains $connectedIssues '  unconnected input pins: 0' 'connected fixture reports a valid zero input-pin count'
+Assert-Contains $connectedIssues '  unconnected output pins: 0' 'connected fixture reports a valid zero output-pin count'
+
+$pinCircuit = Join-Path $PSScriptRoot 'unconnected_pins.v'
+$pinIssues = Invoke-Tools @(
+    "read $pinCircuit",
+    'structure_query structural_issues'
+)
+Assert-Contains $pinIssues 'status: ok' 'unconnected pin query succeeds'
+Assert-Contains $pinIssues 'complete: true' 'unconnected pin query is complete'
+Assert-Contains $pinIssues '  unconnected gates: 3' 'three gates contain explicit unconnected slots'
+Assert-Contains $pinIssues '  unconnected input pins: 2' 'input-hole and explicit RN hole are counted'
+Assert-Contains $pinIssues '  unconnected output pins: 1' 'output hole is counted'
+Assert-Contains $pinIssues 'Unconnected pin details (3):' 'pin-level details are returned'
+Assert-Contains $pinIssues 'gate=g_missing_input type=AND direction=input pin=IN2 pin_index=1 net_id=-1 net=<unconnected> reason=UNCONNECTED' 'positional input hole is self-described'
+Assert-Contains $pinIssues 'gate=g_missing_output type=OR direction=output pin=OUT pin_index=0 net_id=-1 net=<unconnected> reason=UNCONNECTED' 'positional output hole is self-described'
+Assert-Contains $pinIssues 'gate=ff_open_rn type=DFF direction=input pin=RN pin_index=2 net_id=-1 net=<unconnected> reason=UNCONNECTED' 'explicit empty DFF control keeps its named pin'
+Assert-NotContains $pinIssues 'gate=g_ok type=BUF direction=' 'fully connected gate is absent from pin issues'
+
+# 大型 pin issue 必須依 4096-token policy 自動改寫完整 artifact。
+$largeCircuit = Join-Path $PSScriptRoot 'generated_unconnected_large.v'
+$largeLines = [System.Collections.Generic.List[string]]::new()
+$largeLines.Add('module generated_unconnected_large(input a, output y);')
+for ($i = 0; $i -lt 150; ++$i) {
+    $largeLines.Add("wire n$i;")
+    $largeLines.Add("and g_hole_$i(n$i, a, );")
+}
+$largeLines.Add('buf g_output(y, a);')
+$largeLines.Add('endmodule')
+[System.IO.File]::WriteAllLines($largeCircuit, $largeLines)
+
+try {
+    $largeIssues = Invoke-Tools @(
+        "read $largeCircuit",
+        'structure_query structural_issues'
+    )
+    Assert-Contains $largeIssues '  unconnected gates: 150' 'large query preserves exact gate count'
+    Assert-Contains $largeIssues '  unconnected input pins: 150' 'large query preserves exact pin count'
+    Assert-Contains $largeIssues 'list artifact complete: yes' 'large pin report uses a complete artifact'
+    Assert-Contains $largeIssues 'response token limit: 4096' 'large pin report uses the official token limit'
+    Assert-Contains $largeIssues 'artifact triggered by token estimate: yes' 'large pin report records the trigger'
+    Assert-NotContains $largeIssues 'Unconnected pin details (150):' 'large pin records are suppressed from terminal'
+
+    $artifactMatch = [regex]::Match($largeIssues, '(?m)^  output_file: (.+)$')
+    if (-not $artifactMatch.Success) {
+        throw "[large pin artifact path] Missing output_file`n--- output ---`n$largeIssues"
+    }
+    $artifactPath = Join-Path $root $artifactMatch.Groups[1].Value.Trim()
+    if (-not (Test-Path -LiteralPath $artifactPath)) {
+        throw "[large pin artifact file] File does not exist: $artifactPath"
+    }
+    $artifactText = Get-Content -LiteralPath $artifactPath -Raw
+    Assert-Contains $artifactText 'Unconnected pin details (150):' 'artifact contains every pin record'
+    Assert-Contains $artifactText 'gate=g_hole_0 type=AND direction=input pin=IN2' 'artifact contains the first pin record'
+    Assert-Contains $artifactText 'gate=g_hole_149 type=AND direction=input pin=IN2' 'artifact contains the last pin record'
+    Assert-Contains $artifactText 'Complete: yes' 'artifact footer declares completeness'
+    Remove-Item -LiteralPath $artifactPath -Force
+} finally {
+    if (Test-Path -LiteralPath $largeCircuit) {
+        Remove-Item -LiteralPath $largeCircuit -Force
+    }
+}
 
 Write-Host '[PASS] test50 structure_query gate-type filter regression complete'

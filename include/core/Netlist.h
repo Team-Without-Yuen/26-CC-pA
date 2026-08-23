@@ -333,9 +333,19 @@ public:
 
     // 依照 Problem A QA 的 fanout load 定義掃描全設計或所有 primary inputs。
     // maxFanoutLimit >= 0 時會填 violatingReports；primaryInputsOnly=true 時只檢查 PI nets。
+    // 所有 active scope candidates 都參與 extrema；includeZeroFanout 只控制 netReports 明細。
     GlobalFanoutReport getGlobalFanoutReport(int maxFanoutLimit = -1,
                                              bool primaryInputsOnly = false,
-                                             bool includeZeroFanout = false) const;
+                                             bool includeZeroFanout = false,
+                                             FanoutPredicate fanoutPredicate = FanoutPredicate::None,
+                                             size_t fanoutValue = 0,
+                                             size_t fanoutUpperValue = 0) const;
+
+    // 依 QA pin-level fanout 對指定 scope 做 distinct-value ranking；完整保留 ties。
+    FanoutRankingReport getFanoutRankingReport(
+        FanoutScope scope,
+        FanoutRankMode mode,
+        size_t rankOrCount = 1) const;
 
     // 判斷全設計是否符合指定 fanout limit；使用 Problem A QA fanout load 定義。
     bool satisfiesFanoutLimit(int maxFanoutLimit) const;
@@ -358,11 +368,11 @@ public:
     // 取得直接驅動指定 gate inputs 的上一層 gate 數量。
     size_t getGateFaninGateCount(const std::string& gateInstName) const;
 
-    // 判斷指定 gate 的任一 input 或 output 是否直接連到指定 net。
+    // 判斷指定 gate 是否直接連到指定 scalar net 或 bus 的任一 active bit。
     bool isGateDirectlyConnectedToNet(const std::string& gateInstName,
                                       const std::string& netName) const;
 
-    // 判斷指定 net 是否直接連到指定 gate；語意與 isGateDirectlyConnectedToNet 相同但參數順序相反。
+    // 判斷指定 scalar net / bus 是否直接連到指定 gate；與上式語意相同但參數順序相反。
     bool isNetDirectlyConnectedToGate(const std::string& netName,
                                       const std::string& gateInstName) const;
 
@@ -1486,6 +1496,10 @@ public:
     using BasicQueryType = ::BasicQueryType;
     using BasicQuery = ::BasicQuery;
     using BasicReport = ::BasicReport;
+    using NetClassificationSummary = ::NetClassificationSummary;
+    using PinDirection = ::PinDirection;
+    using UnconnectedPinReason = ::UnconnectedPinReason;
+    using UnconnectedPinSummary = ::UnconnectedPinSummary;
 
     // 執行統一 BasicQuery；內部只呼叫 Basic helper，不做跨層 traversal。
     BasicReport runBasicQuery(const BasicQuery& query) const;
@@ -1506,8 +1520,13 @@ public:
     using ConnectivityPinDirection = ::ConnectivityPinDirection;
     using ConnectivityPinRole = ::ConnectivityPinRole;
     using ConnectivityPinRecord = ::ConnectivityPinRecord;
+    using FanoutPredicate = ::FanoutPredicate;
+    using FanoutScope = ::FanoutScope;
+    using FanoutRankMode = ::FanoutRankMode;
     using FanoutLoadReport = ::FanoutLoadReport;
     using GlobalFanoutReport = ::GlobalFanoutReport;
+    using FanoutRankEntry = ::FanoutRankEntry;
+    using FanoutRankingReport = ::FanoutRankingReport;
 
     // 執行統一 DirectConnectivityQuery；內部只呼叫 direct connectivity helper。
     DirectConnectivityReport runDirectConnectivityQuery(
@@ -1590,6 +1609,13 @@ public:
 
     // 型別定義已拆到 NetlistQueries.h；using alias 保留 Netlist::ConeQuery 既有寫法。
     using ConeQueryType = ::ConeQueryType;
+    using ConeRankMetric = ::ConeRankMetric;
+    using ConeRankMode = ::ConeRankMode;
+    using ConeRankEntry = ::ConeRankEntry;
+    using ConeRankingReport = ::ConeRankingReport;
+    using ConeMetricPredicate = ::ConeMetricPredicate;
+    using ConeFilterEntry = ::ConeFilterEntry;
+    using ConeFilterReport = ::ConeFilterReport;
     using ConeQuery = ::ConeQuery;
     using ConeReport = ::ConeReport;
 

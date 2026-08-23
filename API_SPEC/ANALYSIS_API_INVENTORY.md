@@ -26,7 +26,7 @@
 | 高階 API | 負責問題 | 不負責問題 |
 |---|---|---|
 | `StructureQuery`（公開 tool facade） | gate/net/port 基本資訊、統計、structural issue，以及一層 driver/load/fanout/pin connectivity | transitive cone、多層路徑、Boolean function、修改 |
-| `ConeQuery` | transitive fanin/fanout 的 net/gate 集合與集合摘要 | 指定 A-to-B path、全域 critical path、功能證明 |
+| `ConeQuery` | transitive fanin/fanout 的 net/gate 集合、output cone ranking 與 metric threshold/range | 指定 A-to-B path、全域 critical path、功能證明 |
 | `PathQuery` | endpoint path、DFF.Q-to-DFF.D path、mandatory nodes、separator 與 PI-to-PO cut | 全設計 timing endpoint 掃描、Boolean function |
 | `DepthQuery / DepthAnalysis` | timing arrival depth、PO/DFF.D depth、global critical path、depth threshold | arbitrary through/avoid path、Boolean function |
 | `FunctionQuery` | 已指定 net/bus 的 Boolean 性質：equivalence、constant、dependence、symmetry、expression | 未知候選搜尋、cross-design equivalence、修改 |
@@ -34,7 +34,7 @@
 | `SequentialPatternQuery` | 從 DFF D-input logic 推導 canonical 或 SAT-proven functional enable/hold 等 register-control pattern | 一般 DFF 列表、clock/reset 直接連線、修改 |
 | `WholeDesignEquivalence` | current 與 original/previous snapshot 的 PO+DFF.D 等價證明 | 同一 design 中兩條 internal nets 的比較 |
 | `EditApply` | 執行使用者指定且已有安全規則/certificate 的 transformation | cost-driven 最佳化搜尋、未知功能候選搜尋 |
-| `OptimizationCandidate / OptApply` | 建立候選並依 depth cost function transactional apply；驗證 basis、target 與 whole-design equivalence | 一般 read-only query、固定指定 mapping 的語意 |
+| `OptimizationCandidate / OptApply` | 建立候選並依 depth cost function transactional apply；驗證 structure、basis、target，changed candidate 使用 `CertifiedRewrite` | 一般 read-only query、固定指定 mapping、獨立 whole-design SAT proof |
 
 `FunctionSearchQuery` 負責「候選未知、需要從大量 signals/gates 中搜尋」的 Boolean discovery；
 它不修改 netlist。`FunctionalPatternOperands` 已覆蓋八種基本一元/二元 function，
@@ -146,22 +146,27 @@ BasicReport runBasicQuery(const BasicQuery& query) const;
 How many gates are in the design?
 List all DFFs.
 Count all NAND gates.
+Report PI/PO port counts and total PI/PO bit counts.
 Is gate g1 a DFF?
 Is net n1 a primary input?
+What is port data's declaration range and bit order?
 Find gates with constant input.
 Find floating nets.
+List every unconnected input and output pin.
+Count or list internal/PI/PO/structural-constant nets.
 ```
 
 應使用 `BasicQuery` 的情況：
 
 | 問題類型 | Query type |
 |---|---|
-| 設計規模 | `Summary` |
+| 設計規模與 PI/PO port/bit counts | `Summary` |
 | 列 gate/net/PI/PO/DFF | `ListGates`, `ListNets`, `ListPrimaryInputs`, `ListPrimaryOutputs`, `ListDffs` |
-| 查單一物件資訊 | `GateInfo`, `NetInfo`, `PortInfo` |
+| 批次 net 結構分類 | `NetClassification` |
+| 查單一物件資訊；PortInfo 也回 declaration bounds/bit order | `GateInfo`, `NetInfo`, `PortInfo` |
 | gate type 統計或 type-filtered pin/net snapshot | `CountByGateType`, `GatesByType`；details 由 `includeConnectionDetails` opt-in |
 | 直接接 constant input 的 gates | `GatesWithConstantInput`；可用 `includeConnectionDetails` 取得 constant 所在 pin、其他 inputs 與 output |
-| 結構問題 | `StructuralIssues` |
+| 結構問題與 exact unconnected pins | `StructuralIssues` |
 
 邊界：
 
@@ -336,7 +341,7 @@ API_SPEC/SEQUENTIAL_PATTERN_USAGE.md
 
 ```text
 回答 transitive fanin/fanout cone 中有哪些 nets/gates；可依一或多個 gate type 篩選 gate
-結果，並選擇回傳 structured pin/net details。
+結果、回傳 structured pin/net details，或依 cone gate/net count 排名所有 PO bits。
 ```
 
 高階入口：
@@ -353,6 +358,7 @@ Find all gates in the fanin cone of y.
 List gates that can affect output y.
 Count gates reachable from g0.
 Find the fanout cone of gate g1.
+How many outputs have more than N gates in their fanin cones?
 ```
 
 應使用 `ConeQuery` 的情況：
@@ -363,10 +369,19 @@ Find the fanout cone of gate g1.
 | net transitive fanout | `NetTransitiveFanout` |
 | gate output transitive fanin | `GateTransitiveFanin` |
 | gate output transitive fanout | `GateTransitiveFanout` |
+| 單一 legacy 最大 output cone | `LargestOutputCone` |
+| 最大/最小/Nth/top/bottom output cones（保留 ties） | `OutputConeRanking` |
 
 所有 mode 都可選 `gateTypeFilters`（多個 type 採 OR semantics）與
 `includeGateDetails`。filter 不改變完整 cone/net scope；`scopeGateCount` 保存篩選前數量，
 `gateCount/gateNames/gateConnections/gateTypeCounts` 對應篩選後結果。
+
+`OutputConeRanking` 支援完整 gate count、filter 後 gate count 與 net count；採 distinct-value
+rank 並完整保留 ties。logic depth extrema 不屬於 ConeQuery，仍由 DepthQuery 處理。
+
+`OutputConeFilter` 使用相同三種 metric，直接支援 eq/ne/gt/ge/lt/le 與 inclusive between；
+回傳完整 matched output summaries，沒有 match 是成功的 valid-zero。它是 summary-only batch
+query，不建立代表性 cone，也不能作為 edit/optimization rewrite scope。
 
 邊界：
 
@@ -844,7 +859,7 @@ SequentialPatternQuery 會重用 DFF pin lookup、Cone 與 Function SAT，但輸
 | same-design named nets equivalent / constant / dependence / symmetry / expression | `FunctionQuery` |
 | unknown operand/candidate search / exists any pair | `FunctionSearchQuery`；公開支援 BUF/NOT/AND/NAND/OR/NOR/XOR/XNOR pattern |
 | DFF enable / hold / feedback MUX / register control pattern | `SequentialPatternQuery` |
-| reachable / transitive fanin / transitive fanout / cone / can affect | `ConeQuery` |
+| reachable / transitive fanin / transitive fanout / cone / can affect / cone-size ranking | `ConeQuery` |
 | path from A to B / through / avoid / every path / shortest path / longest path between endpoints | `PathQuery` |
 | register-to-register path | `PathQuery` with `DffQ` / `DffD` endpoints |
 | depth / level / critical path / endpoints exceeding depth / PO depth / DFF.D depth | `DepthQuery / DepthAnalysis` |

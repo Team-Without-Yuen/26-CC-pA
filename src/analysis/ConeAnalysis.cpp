@@ -77,6 +77,76 @@ std::vector<std::string> coneNetPathToNames(
     return pathNames;
 }
 
+bool isValidConeRankMetric(ConeRankMetric metric) {
+    switch (metric) {
+    case ConeRankMetric::ScopeGateCount:
+    case ConeRankMetric::FilteredGateCount:
+    case ConeRankMetric::NetCount:
+        return true;
+    }
+    return false;
+}
+
+bool isValidConeRankMode(ConeRankMode mode) {
+    switch (mode) {
+    case ConeRankMode::Highest:
+    case ConeRankMode::Lowest:
+    case ConeRankMode::NthHighest:
+    case ConeRankMode::NthLowest:
+    case ConeRankMode::Top:
+    case ConeRankMode::Bottom:
+        return true;
+    }
+    return false;
+}
+
+bool isDescendingConeRank(ConeRankMode mode) {
+    return mode == ConeRankMode::Highest ||
+           mode == ConeRankMode::NthHighest ||
+           mode == ConeRankMode::Top;
+}
+
+bool isValidConeMetricPredicate(ConeMetricPredicate predicate) {
+    switch (predicate) {
+    case ConeMetricPredicate::Equal:
+    case ConeMetricPredicate::NotEqual:
+    case ConeMetricPredicate::GreaterThan:
+    case ConeMetricPredicate::GreaterOrEqual:
+    case ConeMetricPredicate::LessThan:
+    case ConeMetricPredicate::LessOrEqual:
+    case ConeMetricPredicate::BetweenInclusive:
+        return true;
+    }
+    return false;
+}
+
+bool matchesConeMetricPredicate(size_t metricValue,
+                                ConeMetricPredicate predicate,
+                                size_t value,
+                                size_t upperValue) {
+    switch (predicate) {
+    case ConeMetricPredicate::Equal: return metricValue == value;
+    case ConeMetricPredicate::NotEqual: return metricValue != value;
+    case ConeMetricPredicate::GreaterThan: return metricValue > value;
+    case ConeMetricPredicate::GreaterOrEqual: return metricValue >= value;
+    case ConeMetricPredicate::LessThan: return metricValue < value;
+    case ConeMetricPredicate::LessOrEqual: return metricValue <= value;
+    case ConeMetricPredicate::BetweenInclusive:
+        return metricValue >= value && metricValue <= upperValue;
+    }
+    return false;
+}
+
+size_t coneMetricValue(const ConeFilterEntry& entry,
+                       ConeRankMetric metric) {
+    switch (metric) {
+    case ConeRankMetric::ScopeGateCount: return entry.scopeGateCount;
+    case ConeRankMetric::FilteredGateCount: return entry.filteredGateCount;
+    case ConeRankMetric::NetCount: return entry.netCount;
+    }
+    return 0;
+}
+
 } // namespace
 
 //  支援 Bus 的 Transitive Fanin Cone (多源 BFS)
@@ -373,6 +443,42 @@ Netlist::ConeReport Netlist::runConeQuery(const ConeQuery& query) const {
         }
     };
 
+    const auto collectOutputConeEntries = [&](ConeRankMetric metric) {
+        const std::vector<int> outputNetIds = getPrimaryOutputNetIds();
+        std::vector<ConeFilterEntry> entries;
+        entries.reserve(outputNetIds.size());
+
+        for (int outputNetId : outputNetIds) {
+            if (!isActiveConeNet(*this, outputNetId)) {
+                continue;
+            }
+
+            const ConeResult cone =
+                getTransitiveFaninCone(nets[outputNetId].name);
+            const std::vector<int> scopeGateIds = getConeGateIds(cone);
+
+            ConeFilterEntry entry;
+            entry.outputNetId = outputNetId;
+            entry.outputNetName = nets[outputNetId].name;
+            entry.scopeGateCount = scopeGateIds.size();
+            entry.netCount = getConeNetCount(cone);
+            if (gateTypeFilterSet.empty()) {
+                entry.filteredGateCount = entry.scopeGateCount;
+            } else {
+                entry.filteredGateCount = static_cast<size_t>(std::count_if(
+                    scopeGateIds.begin(), scopeGateIds.end(),
+                    [&](int gateId) {
+                        return isActiveConeGate(*this, gateId) &&
+                               gateTypeFilterSet.count(gates[gateId].type) != 0;
+                    }));
+            }
+            entry.metricValue = coneMetricValue(entry, metric);
+            entries.push_back(std::move(entry));
+        }
+
+        return entries;
+    };
+
     switch (query.type) {
     case ConeQueryType::NetTransitiveFanin: {
         if (query.netName.empty()) {
@@ -490,6 +596,173 @@ Netlist::ConeReport Netlist::runConeQuery(const ConeQuery& query) const {
         report.cone = bestCone;
         report.message = "Largest primary output fanin cone";
         break;
+    }
+
+    case ConeQueryType::OutputConeRanking: {
+        ConeRankingReport& ranking = report.rankingReport;
+        ranking.metric = query.rankMetric;
+        ranking.mode = query.rankMode;
+        ranking.requestedRankOrCount = query.rankValue;
+
+        if (!isValidConeRankMetric(query.rankMetric)) {
+            report.message = "Unsupported output cone ranking metric";
+            return report;
+        }
+        if (!isValidConeRankMode(query.rankMode)) {
+            report.message = "Unsupported output cone ranking mode";
+            return report;
+        }
+        if (query.rankValue == 0) {
+            report.message = "Output cone rank/count must be greater than zero";
+            return report;
+        }
+        if ((query.rankMode == ConeRankMode::Highest ||
+             query.rankMode == ConeRankMode::Lowest) &&
+            query.rankValue != 1) {
+            report.message =
+                "Highest/lowest output cone ranking uses rank value 1";
+            return report;
+        }
+
+        const std::vector<ConeFilterEntry> summaries =
+            collectOutputConeEntries(query.rankMetric);
+        std::vector<ConeRankEntry> candidates;
+        candidates.reserve(summaries.size());
+        for (const ConeFilterEntry& summary : summaries) {
+            ConeRankEntry entry;
+            entry.outputNetId = summary.outputNetId;
+            entry.outputNetName = summary.outputNetName;
+            entry.scopeGateCount = summary.scopeGateCount;
+            entry.filteredGateCount = summary.filteredGateCount;
+            entry.netCount = summary.netCount;
+            entry.metricValue = summary.metricValue;
+            candidates.push_back(std::move(entry));
+        }
+
+        ranking.checkedOutputCount = candidates.size();
+        report.checkedOutputCount = ranking.checkedOutputCount;
+        const bool descending = isDescendingConeRank(query.rankMode);
+        std::sort(candidates.begin(), candidates.end(),
+                  [descending](const ConeRankEntry& lhs,
+                               const ConeRankEntry& rhs) {
+            if (lhs.metricValue != rhs.metricValue) {
+                return descending ? lhs.metricValue > rhs.metricValue
+                                  : lhs.metricValue < rhs.metricValue;
+            }
+            if (lhs.outputNetName != rhs.outputNetName) {
+                return lhs.outputNetName < rhs.outputNetName;
+            }
+            return lhs.outputNetId < rhs.outputNetId;
+        });
+
+        size_t currentRank = 0;
+        size_t previousMetricValue = 0;
+        bool havePrevious = false;
+        for (ConeRankEntry& entry : candidates) {
+            if (!havePrevious || entry.metricValue != previousMetricValue) {
+                ++currentRank;
+                previousMetricValue = entry.metricValue;
+                havePrevious = true;
+            }
+            entry.rank = currentRank;
+        }
+        ranking.distinctMetricLevelCount = currentRank;
+
+        const bool multiLevel = query.rankMode == ConeRankMode::Top ||
+                                query.rankMode == ConeRankMode::Bottom;
+        const size_t selectedLevelLimit = multiLevel ? query.rankValue : 1;
+        const size_t selectedRank =
+            (query.rankMode == ConeRankMode::NthHighest ||
+             query.rankMode == ConeRankMode::NthLowest)
+                ? query.rankValue : 1;
+        for (const ConeRankEntry& entry : candidates) {
+            const bool selected = multiLevel
+                ? entry.rank <= selectedLevelLimit
+                : entry.rank == selectedRank;
+            if (selected) {
+                ranking.rankedOutputs.push_back(entry);
+            }
+        }
+
+        ranking.selectedMetricLevelCount = multiLevel
+            ? std::min(query.rankValue, ranking.distinctMetricLevelCount)
+            : (selectedRank <= ranking.distinctMetricLevelCount ? 1 : 0);
+        ranking.resultOutputCount = ranking.rankedOutputs.size();
+        ranking.requestedRankExists =
+            query.rankValue <= ranking.distinctMetricLevelCount;
+        ranking.ok = true;
+        ranking.message = "Primary output cone ranking report";
+
+        report.ok = true;
+        report.exists = true;
+        report.message = ranking.message;
+        if (ranking.rankedOutputs.empty()) {
+            return report;
+        }
+
+        const ConeRankEntry& primary = ranking.rankedOutputs.front();
+        report.sourceName = primary.outputNetName;
+        report.sourceId = primary.outputNetId;
+        report.cone = getTransitiveFaninCone(primary.outputNetName);
+        break;
+    }
+
+    case ConeQueryType::OutputConeFilter: {
+        ConeFilterReport& filter = report.filterReport;
+        filter.metric = query.rankMetric;
+        filter.predicate = query.metricPredicate;
+        filter.value = query.metricValue;
+        filter.upperValue = query.metricUpperValue;
+
+        if (!isValidConeRankMetric(query.rankMetric)) {
+            report.message = "Unsupported output cone filter metric";
+            return report;
+        }
+        if (!isValidConeMetricPredicate(query.metricPredicate)) {
+            report.message = "Unsupported output cone metric predicate";
+            return report;
+        }
+        if (query.metricPredicate == ConeMetricPredicate::BetweenInclusive &&
+            query.metricValue > query.metricUpperValue) {
+            report.message =
+                "Output cone filter lower bound exceeds upper bound";
+            return report;
+        }
+        if (query.includeGateDetails || query.includeLocalPaths) {
+            report.message =
+                "OutputConeFilter is summary-only and does not support gate details or local paths";
+            return report;
+        }
+
+        std::vector<ConeFilterEntry> candidates =
+            collectOutputConeEntries(query.rankMetric);
+        filter.checkedOutputCount = candidates.size();
+        report.checkedOutputCount = filter.checkedOutputCount;
+
+        for (ConeFilterEntry& entry : candidates) {
+            if (matchesConeMetricPredicate(entry.metricValue,
+                                           query.metricPredicate,
+                                           query.metricValue,
+                                           query.metricUpperValue)) {
+                filter.matchedOutputs.push_back(std::move(entry));
+            }
+        }
+        std::sort(filter.matchedOutputs.begin(), filter.matchedOutputs.end(),
+                  [](const ConeFilterEntry& lhs,
+                     const ConeFilterEntry& rhs) {
+            if (lhs.outputNetName != rhs.outputNetName) {
+                return lhs.outputNetName < rhs.outputNetName;
+            }
+            return lhs.outputNetId < rhs.outputNetId;
+        });
+
+        filter.matchedOutputCount = filter.matchedOutputs.size();
+        filter.ok = true;
+        filter.message = "Primary output cone metric filter report";
+        report.ok = true;
+        report.exists = true;
+        report.message = filter.message;
+        return report;
     }
 
     case ConeQueryType::SharedFaninGates: {

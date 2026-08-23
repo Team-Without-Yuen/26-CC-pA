@@ -27,6 +27,7 @@ enum class BasicQueryType {
     Summary,                 // 回傳 design 規模與 gate type 統計
     ListGates,               // 列出所有 gate names
     ListNets,                // 列出所有 net names
+    NetClassification,       // 批次統計/列出 PI、PO、constant、internal nets
     ListPrimaryInputs,       // 列出所有 primary input port names
     ListPrimaryOutputs,      // 列出所有 primary output port names
     ListDffs,                // 列出所有 DFF instance names
@@ -82,6 +83,53 @@ struct GateConnectionSummary {
     PinConnectionSummary output;
 };
 
+enum class PinDirection {
+    Input,
+    Output
+};
+
+enum class UnconnectedPinReason {
+    Unconnected,
+    InvalidNetId,
+    RemovedNet
+};
+
+// Compact structural record. Names are resolved from the current named
+// netlist when a caller renders the report, avoiding repeated strings in
+// reports for designs with millions of pins.
+struct UnconnectedPinSummary {
+    int gateId = -1;
+    int pinIndex = -1;
+    int netId = -1;
+    PinDirection direction = PinDirection::Input;
+    UnconnectedPinReason reason = UnconnectedPinReason::Unconnected;
+};
+
+// Active named-netlist classification. PI/PO/constant are independent flags;
+// internal is the exclusive remainder after all three flags are false.
+struct NetClassificationSummary {
+    bool valid = false;
+
+    size_t activeNetCount = 0;
+    size_t primaryInputNetCount = 0;
+    size_t primaryOutputNetCount = 0;
+    size_t primaryInputOutputNetCount = 0;
+    size_t constantNetCount = 0;
+    size_t internalNetCount = 0;
+
+    std::vector<int> primaryInputNetIds;
+    std::vector<int> primaryOutputNetIds;
+    std::vector<int> primaryInputOutputNetIds;
+    std::vector<int> constantNetIds;
+    std::vector<int> internalNetIds;
+
+    std::vector<std::string> primaryInputNetNames;
+    std::vector<std::string> primaryOutputNetNames;
+    std::vector<std::string> primaryInputOutputNetNames;
+    std::vector<std::string> constantNetNames;
+    std::vector<std::string> internalNetNames;
+};
+
 struct BasicReport {
     bool ok = false;                        // 查詢是否成功；名稱不存在或 type 不合法時為 false
     std::string message;                    // 給 debug / LLM response 使用的簡短訊息
@@ -91,11 +139,15 @@ struct BasicReport {
     bool hasLogicalWireCount = false;       // true 表示 logicalWireCount 為有效結果
     bool hasPrimaryInputCount = false;      // true 表示 primaryInputCount 為有效結果
     bool hasPrimaryOutputCount = false;     // true 表示 primaryOutputCount 為有效結果
+    bool hasPrimaryInputBitCount = false;   // true 表示 primaryInputBitCount 為有效結果
+    bool hasPrimaryOutputBitCount = false;  // true 表示 primaryOutputBitCount 為有效結果
     size_t gateCount = 0;                   // design 或篩選後 gate 數量
     size_t netCount = 0;                    // design 或篩選後 net 數量
     size_t logicalWireCount = 0;            // Verilog declaration 層級的 wire 數量
     size_t primaryInputCount = 0;           // primary input port 數量
     size_t primaryOutputCount = 0;          // primary output port 數量
+    size_t primaryInputBitCount = 0;        // primary input declaration bit 總數
+    size_t primaryOutputBitCount = 0;       // primary output declaration bit 總數
 
     size_t scopeGateCount = 0;              // 套用 gate-type include/exclude 前的候選 gate 數
     bool gateTypeFilterApplied = false;     // 是否套用 include filter
@@ -125,6 +177,7 @@ struct BasicReport {
     std::vector<std::string> portNames;     // 查詢得到的 port names
     std::vector<PortSummary> ports;         // batch PI/PO name、width、range、direction
     std::vector<GateConnectionSummary> gateConnections; // optional batch pin/net details
+    NetClassificationSummary netClassification; // optional batch structural net classes
 
     std::map<GateType, int> gateTypeCounts; // 各 gate type 統計
 
@@ -132,6 +185,10 @@ struct BasicReport {
     std::vector<std::string> noLoadNets;        // structural issue：無 load 的 nets
     std::vector<std::string> floatingNets;      // structural issue：undriven/no-load union
     std::vector<std::string> unconnectedGates;  // structural issue：有未連接 pin 的 gates
+    bool hasUnconnectedPinCounts = false;       // true 表示下列 pin-level counts 有效（可為 0）
+    size_t unconnectedInputPinCount = 0;
+    size_t unconnectedOutputPinCount = 0;
+    std::vector<UnconnectedPinSummary> unconnectedPins;
     std::vector<std::string> floatingPrimaryInputNets;    // PI bit nets with no active load
     std::vector<std::string> unconnectedPrimaryOutputNets; // PO bit nets with no active driver
 };
@@ -145,20 +202,57 @@ enum class DirectConnectivityQueryType {
     NetLoadGates,       // 查某個 net / bus 直接 load 到哪些 gates
     FanoutLoadReport,   // 依 Problem A QA fanout load 定義回報 pin-level loads
     GlobalFanoutReport, // 掃描全設計或所有 PI 的 fanout loads / max / violations
+    FanoutRankingReport,// 依 scope 與 distinct fanout levels 排名 nets
     GateInputs,         // 查某個 gate 的直接 input nets
     GateOutput,         // 查某個 gate 的 output net
     GateFanin,          // 查直接驅動某 gate inputs 的上一層 gates
     GateFanout,         // 查某 gate output 直接 fanout 到哪些 gates
-    DirectlyConnected   // 判斷指定 gate 與指定 net 是否直接相連
+    DirectlyConnected   // 判斷指定 gate 與 scalar net / bus 的 active bits 是否直接相連
+};
+
+enum class FanoutPredicate {
+    None,
+    Equal,
+    NotEqual,
+    GreaterThan,
+    GreaterOrEqual,
+    LessThan,
+    LessOrEqual,
+    BetweenInclusive
+};
+
+enum class FanoutScope {
+    All,
+    PrimaryInputs,
+    PrimaryOutputs,
+    Internal,
+    GateOutputs,
+    CombinationalOutputs,
+    DffOutputs
+};
+
+enum class FanoutRankMode {
+    Highest,
+    Lowest,
+    NthHighest,
+    NthLowest,
+    Top,
+    Bottom
 };
 
 struct DirectConnectivityQuery {
     DirectConnectivityQueryType type = DirectConnectivityQueryType::NetDriverGates;
     std::string gateName;     // GateInputs/GateOutput/GateFanin/GateFanout/DirectlyConnected 使用
-    std::string netName;      // NetDriverGates/NetLoadGates/FanoutLoadReport/DirectlyConnected 使用
+    std::string netName;      // 上述 net query 使用；DirectlyConnected 可接受 bus base
     int fanoutLimit = -1;     // GlobalFanoutReport 使用；-1 表示只回報 max，不檢查 violation
     bool primaryInputsOnly = false; // GlobalFanoutReport 使用；true 時只掃 PI nets
-    bool includeZeroFanout = false; // GlobalFanoutReport 使用；true 時保留 0 fanout nets
+    bool includeZeroFanout = false; // GlobalFanoutReport 使用；只控制 netReports 是否保留 0 fanout nets
+    FanoutPredicate fanoutPredicate = FanoutPredicate::None; // generalized filter；不取代 fanoutLimit
+    size_t fanoutValue = 0;       // eq/ne/gt/ge/lt/le 的值；between 的 lower bound
+    size_t fanoutUpperValue = 0;  // BetweenInclusive 的 upper bound
+    FanoutScope fanoutScope = FanoutScope::All; // FanoutRankingReport 的 candidate scope
+    FanoutRankMode fanoutRankMode = FanoutRankMode::Highest;
+    size_t fanoutRankValue = 1;   // nth rank 或 top/bottom distinct-level count；必須 >= 1
     bool includeIds = true;   // 是否填 gateIds/netIds
     bool includeNames = true; // 是否填 gateNames/netNames
     bool includePinDetails = false; // NetDriverGates/NetLoadGates：附逐 pin connection records
@@ -223,15 +317,45 @@ struct GlobalFanoutReport {
 
     int fanoutLimit = -1;                    // 檢查限制；-1 表示未指定
     bool primaryInputsOnly = false;          // 是否只掃 primary input nets
-    bool includeZeroFanout = false;          // 是否包含 0 fanout nets
+    bool includeZeroFanout = false;          // netReports 是否保留 0 fanout nets；extrema 永遠納入
     bool satisfiesLimit = true;              // fanoutLimit >= 0 時，是否沒有 violation
+    bool fanoutFilterApplied = false;         // fanoutPredicate != None
+    FanoutPredicate fanoutPredicate = FanoutPredicate::None;
+    size_t fanoutValue = 0;                   // single value 或 inclusive lower bound
+    size_t fanoutUpperValue = 0;              // inclusive upper bound；非 between 時忽略
 
-    size_t checkedNetCount = 0;              // 實際納入統計的 net 數
+    size_t checkedNetCount = 0;              // 實際參與 extrema/limit 計算的 active candidate 數
     size_t maxFanout = 0;                    // 最大 QA fanout load count
+    size_t matchedNetCount = 0;              // matchedReports.size()；不改 DirectConnectivityReport.count
 
-    std::vector<FanoutLoadReport> netReports;       // 所有納入統計的 net reports
+    std::vector<FanoutLoadReport> netReports;       // detail reports；可依 includeZeroFanout 省略零值
     std::vector<FanoutLoadReport> maxFanoutReports; // fanout 等於 maxFanout 的 nets
     std::vector<FanoutLoadReport> violatingReports; // fanoutLimit >= 0 且超標的 nets
+    std::vector<FanoutLoadReport> matchedReports;   // generalized predicate 的完整 matches
+};
+
+struct FanoutRankEntry {
+    int netId = -1;
+    std::string netName;
+    size_t fanout = 0;
+    size_t rank = 0; // 由 mode 決定方向的 distinct fanout rank，從 1 開始
+};
+
+struct FanoutRankingReport {
+    bool ok = false;
+    std::string message;
+
+    FanoutScope scope = FanoutScope::All;
+    FanoutRankMode mode = FanoutRankMode::Highest;
+    size_t requestedRankOrCount = 1;
+
+    size_t checkedNetCount = 0;
+    size_t distinctFanoutLevelCount = 0;
+    size_t selectedFanoutLevelCount = 0;
+    size_t resultNetCount = 0;
+    bool requestedRankExists = false;
+
+    std::vector<FanoutRankEntry> rankedReports;
 };
 
 struct DirectConnectivityReport {
@@ -244,7 +368,7 @@ struct DirectConnectivityReport {
     std::string netName;                // 查詢指定或解析出的 net name
     int gateId = -1;                    // 單一 gate ID 結果；沒有唯一 gate 時為 -1
     int netId = -1;                     // 單一 net ID 結果；沒有唯一 net 時為 -1
-    size_t count = 0;                   // 結果數量
+    size_t count = 0;                   // 結果數量；DirectlyConnected 為實際相連 active bit 數
     bool pinDetailsIncluded = false;     // true 表示本次 query 要求逐 pin details（可為空）
     size_t pinConnectionCount = 0;       // pinConnections 的完整筆數；與去重 gate count 分開
 
@@ -256,6 +380,7 @@ struct DirectConnectivityReport {
 
     FanoutLoadReport fanoutLoadReport;  // FanoutLoadReport query 的完整分類結果
     GlobalFanoutReport globalFanoutReport; // GlobalFanoutReport query 的完整彙整結果
+    FanoutRankingReport fanoutRankingReport; // FanoutRankingReport 的 distinct-level ranking
 };
 
 // =========================================================================
@@ -676,7 +801,84 @@ enum class ConeQueryType {
     GateTransitiveFanin,  // 從指定 gate output net 往 fanin 方向追溯
     GateTransitiveFanout, // 從指定 gate output net 往 fanout 方向展開
     LargestOutputCone,    // 掃描所有 primary outputs，找 fanin cone gateCount 最大者
-    SharedFaninGates      // 取得兩個 net fanin cones 的 shared gate intersection
+    SharedFaninGates,     // 取得兩個 net fanin cones 的 shared gate intersection
+    OutputConeRanking,    // 依 cone metric 排名所有 primary output bits，完整保留 ties
+    OutputConeFilter      // 依 cone metric predicate 篩選所有 primary output bits
+};
+
+enum class ConeRankMetric {
+    ScopeGateCount,       // 完整 fanin cone 的 combinational gate 數量
+    FilteredGateCount,    // gateTypeFilters 套用後的 gate 數量
+    NetCount              // 完整 fanin cone 的有效 net 數量
+};
+
+enum class ConeRankMode {
+    Highest,
+    Lowest,
+    NthHighest,
+    NthLowest,
+    Top,                  // 前 K 個 distinct metric levels
+    Bottom                // 後 K 個 distinct metric levels
+};
+
+enum class ConeMetricPredicate {
+    Equal,
+    NotEqual,
+    GreaterThan,
+    GreaterOrEqual,
+    LessThan,
+    LessOrEqual,
+    BetweenInclusive
+};
+
+struct ConeRankEntry {
+    int outputNetId = -1;
+    std::string outputNetName;
+    size_t scopeGateCount = 0;
+    size_t filteredGateCount = 0;
+    size_t netCount = 0;
+    size_t metricValue = 0;
+    size_t rank = 0;      // 由 mode 決定方向的 distinct-value rank，從 1 開始
+};
+
+struct ConeRankingReport {
+    bool ok = false;
+    std::string message;
+
+    ConeRankMetric metric = ConeRankMetric::ScopeGateCount;
+    ConeRankMode mode = ConeRankMode::Highest;
+    size_t requestedRankOrCount = 1;
+
+    size_t checkedOutputCount = 0;
+    size_t distinctMetricLevelCount = 0;
+    size_t selectedMetricLevelCount = 0;
+    size_t resultOutputCount = 0;
+    bool requestedRankExists = false;
+
+    std::vector<ConeRankEntry> rankedOutputs;
+};
+
+struct ConeFilterEntry {
+    int outputNetId = -1;
+    std::string outputNetName;
+    size_t scopeGateCount = 0;
+    size_t filteredGateCount = 0;
+    size_t netCount = 0;
+    size_t metricValue = 0;
+};
+
+struct ConeFilterReport {
+    bool ok = false;
+    std::string message;
+
+    ConeRankMetric metric = ConeRankMetric::ScopeGateCount;
+    ConeMetricPredicate predicate = ConeMetricPredicate::Equal;
+    size_t value = 0;
+    size_t upperValue = 0;
+
+    size_t checkedOutputCount = 0;
+    size_t matchedOutputCount = 0;
+    std::vector<ConeFilterEntry> matchedOutputs;
 };
 
 struct ConeQuery {
@@ -685,6 +887,12 @@ struct ConeQuery {
     std::string secondNetName; // SharedFaninGates 使用的第二個 net
     std::string gateName;      // GateTransitiveFanin / GateTransitiveFanout 使用
     std::vector<GateType> gateTypeFilters; // 空集合表示全部；多個 type 採 OR semantics
+    ConeRankMetric rankMetric = ConeRankMetric::ScopeGateCount; // OutputConeRanking metric
+    ConeRankMode rankMode = ConeRankMode::Highest; // OutputConeRanking mode
+    size_t rankValue = 1;      // nth rank 或 top/bottom distinct-level count；必須 >= 1
+    ConeMetricPredicate metricPredicate = ConeMetricPredicate::Equal; // OutputConeFilter predicate
+    size_t metricValue = 0;    // filter single value 或 inclusive lower bound
+    size_t metricUpperValue = 0; // BetweenInclusive upper bound；其他 predicate 忽略
     bool includeIds = true;    // 是否填 netIds/gateIds/rootNetIds
     bool includeNames = true;  // 是否填 netNames/gateNames/rootNetNames
     bool includeGateDetails = false; // 是否填篩選後 gates 的 structured pin/net records
@@ -718,6 +926,8 @@ struct ConeReport {
     std::vector<std::string> gateNames;    // filter 後 gate names
     std::vector<GateConnectionSummary> gateConnections; // filter 後 structured pin/net details
     std::map<GateType, int> gateTypeCounts; // filter 後各 gate type 數量
+    ConeRankingReport rankingReport;       // OutputConeRanking 的 distinct-level ranking
+    ConeFilterReport filterReport;         // OutputConeFilter 的完整 matched output summaries
 
     int longestDepth = -1;                 // cone 內 longest net path depth
     int shortestDepth = -1;                // cone 內 shortest net path depth

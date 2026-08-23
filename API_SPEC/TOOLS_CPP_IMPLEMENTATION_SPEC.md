@@ -1,8 +1,22 @@
-# tools.cpp Detailed Implementation Specification
+# tools.cpp Historical Implementation Record
 
-本文件是後續重寫與補齊 `tools.cpp` 的實作依據。內容以目前原始碼、`API_SPEC` 文件、`NewTestCase/test01` 到 `test40` prompt，以及已完成的 mini tests 為準。
+> Status: Reference (historical implementation record)
+>
+> 本文件記錄早期以 `NewTestCase/test01` 到 `test40` 規劃與逐批串接 `tools.cpp` 的過程。
+> 它不是現行 command contract、工作清單或 LLM 說明書，也不得用來覆蓋目前原始碼。
 
-本文件的目的不是重新發明分析或修改演算法，而是確保已經存在的高階 API 都能被 LLM 穩定呼叫、結果不被誤讀，並把仍缺少高階 API 的題型在進入 `tools.cpp` 前先辨識出來。
+現行可信來源依序為：
+
+1. `tools.cpp`、public header 與實際 regression。
+2. [`TOOLS_SPEC/README.md`](../TOOLS_SPEC/README.md) 與各 command 文件。
+3. 對應的現行 `_API.md` / `_USAGE.md`。
+
+本文件中的「目前」、「建議新增」、「下一步」、「待完成」與 batch 狀態均只代表當時
+snapshot。若需規劃新修改，先到 `PROJECT_SPEC/DOCUMENTATION_MAP.md` 與現行 tracking
+文件核對，不可直接照本文件實作。
+
+本文件原始目的，是避免在 `tools.cpp` 重寫分析/修改演算法，並逐批將既有高階 API
+穩定串接給 LLM。以下內容保留作為設計演進與測試背景。
 
 ---
 
@@ -38,7 +52,7 @@ future specialized query / optimization APIs
 
 ---
 
-## 2. 目前實作盤點
+## 2. 當時實作盤點（Historical Snapshot）
 
 目前 `tools.cpp` 已有以下 command family：
 
@@ -452,6 +466,8 @@ written = true
 | `global_fanout` | optional `fanout_limit` | max fanout / violations | global constraint |
 | `pi_fanout` | optional `fanout_limit` | highest fanout PI | test36/test38 |
 | `fanout_violations` | non-negative `fanout_limit` | nets exceeding the limit | fanout constraint |
+| `fanout_filter` | `all|pi`, predicate, value, optional upper | matched count + complete matching nets | exact/comparison/range prompt |
+| `fanout_rank` | scope, rank mode, optional positive K | distinct-level rank metadata + complete ties | second/top/bottom/scoped extrema |
 | `gate_inputs` | `gate_name` | input nets | pin connections |
 | `gate_output` | `gate_name` | output net | gate output |
 | `gate_fanin` | `gate_name` | immediate predecessor gates | one-level fanin |
@@ -467,6 +483,14 @@ Direct Connectivity CLI parser 規格：
 4. fanout limit 僅接受 0..INT_MAX 的 strict integer；文字、小數、負數與 overflow 必須拒絕。
 5. recognized-mode argument error 必須保留具體診斷並回 complete:false，不可落入 unknown-mode fallback。
 6. structure_query 與 legacy conn_query 共用同一個 builder，避免兩套 grammar 漂移。
+7. fanout_filter 的 predicate 只能是 eq/ne/gt/ge/lt/le/between；between 必須有 inclusive upper，且 lower <= upper。
+8. fanout_filter value 使用 size_t strict decimal parser，不套 INT_MAX 上限；非法值與 trailing token fail closed。
+9. predicate filter 不改既有 checked count、maximum 或 violations；獨立輸出 matched net count/list。
+10. 依 4096-token estimate 判定大型 matched list，完整資料寫 self-contained artifact，terminal 只保留 count/path。
+11. fanout_rank scope 僅接受 all/pi/po/internal/gate_output/comb_output/dff_output。
+12. highest/lowest 不接受 K；nth_highest/nth_lowest/top/bottom 必須有 size_t positive K。
+13. ranking 以 distinct fanout values 編 rank，完整保留 boundary ties；同 rank 依 name/ID 穩定排序。
+14. rank 不存在或 scope 為空仍回成功完整結果，使用 requested rank exists 區分；大型 ranked list 自動 artifact。
 ```
 
 `fanout_load` 必須完整輸出：
@@ -533,8 +557,10 @@ gate_details_included / gate_connections（有要求時）
 CLI 保留 `gates` 作為 filter 後相容欄位，另明確輸出 `scope gates` 與 `filtered gates`。
 大型 names/details 使用 `QUERY_LIST_ARTIFACT_V1`；artifact 必須包含 filter metadata、
 完整 gate details 與 `Complete: yes` footer。
-通用 writer 以 record count 與 estimated serialized characters 的雙門檻決定是否寫檔，
-並在 response/header 記錄 trigger。門檻只屬於 printer policy，不得截斷 API report。
+通用 writer 以單一 response 的 4096-token 上限與保守 estimate 決定是否寫檔，
+並在 response/header 記錄 estimate、limit 與 trigger。門檻只屬於 printer policy，不得截斷 API report。
+估算由 256-token envelope reserve、`ceil(serializedCharacters / 3)`，以及每筆 list entry
+額外 2 tokens 組成；所有加法採 saturating arithmetic，估算達到或超過 4096 時寫入 artifact。
 
 ### 10.2 Batch 5 已補 ConeReport 並 expose
 
@@ -827,7 +853,7 @@ support_primary_inputs
 
 ### 14.5 FunctionReport 大型輸出
 
-`support_pi` 與 `symmetry` 使用通用 `QUERY_LIST_ARTIFACT_V1` 雙門檻。artifact 內容必須包含
+`support_pi` 與 `symmetry` 使用通用 4096-token estimate `QUERY_LIST_ARTIFACT_V1`。artifact 內容必須包含
 support union/三分類、mismatched target bits、counterexample assignments、swap 前後 target
 values，以及足以獨立判讀的 target/status/count fields。成功寫檔後 terminal 抑制上述大型
 lists，但保留 proof fields、主要 bool、counts、artifact completeness 與 `output_file`。
@@ -1070,17 +1096,21 @@ local simplification fixpoint
 critical path depth
 ```
 
-CriticalPathDepth 已完成：
+CriticalPathDepth 現行責任摘要：
 
 ```text
 scope / DFF.Q-to-D-pin resolution
 global/scoped depth objective
 allowed/banned basis validation
 targetDepth / no-improvement handling
-whole-design SAT
+qualified pipeline `CertifiedRewrite` certificate
 transactional commit / rollback
 NetlistEditReport.depthOptimization
 ```
+
+本 optimization command 不執行 whole-design SAT；明確要求獨立 SAT proof 時使用
+`equiv_query previous_edit` 或 `equiv_query original`。現行完整契約以
+`TOOLS_SPEC/OPTIMIZATION_TOOL.md` 與 `API_SPEC/OPT_APPLY_API.md` 為準。
 
 `tools.cpp` 已實作 `opt_query/opt_apply critical_path_depth` 的 parser、help、
 envelope、depth optimization report 與 cached report。公開 command 只呼叫
@@ -1258,7 +1288,7 @@ functional fallback incomplete 時 envelope 必須為 `partial` 或 `timeout`；
 scope-aware depth candidate
 optimization apply
 basis constraint validation
-whole-design equivalence
+qualified pipeline `CertifiedRewrite` certificate
 accept/no-improvement/rollback
 NetlistEditReport.depthChange
 NetlistEditReport.depthOptimization

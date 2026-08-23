@@ -11,7 +11,7 @@ API_SPEC/CONE_QUERY_API.md
 
 ## 1. 基本概念
 
-`ConeQuery` 用來回答「從某個 net 或 gate 出發，跨多層往 fanin / fanout 方向能到哪些 nets/gates」，也能掃描所有 output 找出 fanin cone 最大者。
+`ConeQuery` 用來回答「從某個 net 或 gate 出發，跨多層往 fanin / fanout 方向能到哪些 nets/gates」，也能掃描所有 outputs 做 fanin cone ranking 或 threshold/range selection。
 
 基本形式：
 
@@ -51,6 +51,8 @@ DFF 是 sequential boundary，ConeQuery 不穿越 DFF。
 | `GateTransitiveFanout` | 從 gate output 往前找 fanout cone | `gateName` | `netNames`, `gateNames`, `netCount`, `gateCount` |
 | `LargestOutputCone` | 找 fanin cone gateCount 最大的 primary output | 無 | `sourceName`, `gateCount`, `gateNames`, `checkedOutputCount` |
 | `SharedFaninGates` | 找兩個 net fanin cones 的共有 gates | `netName`, `secondNetName` | `gateNames`, `gateCount`, `gateTypeCounts` |
+| `OutputConeRanking` | 依 cone count 排 output 名次並保留 ties | `rankMetric`, `rankMode`, `rankValue` | `rankingReport.rankedOutputs` |
+| `OutputConeFilter` | 依 cone count predicate 篩選 outputs | `rankMetric`, `metricPredicate`, `metricValue`, `metricUpperValue` | `filterReport.matchedOutputs`, `matchedOutputCount` |
 
 ---
 
@@ -63,6 +65,12 @@ DFF 是 sequential boundary，ConeQuery 不穿越 DFF。
 | `secondNetName` | `std::string` | `""` | `SharedFaninGates` 的第二個 net |
 | `gateName` | `std::string` | `""` | gate 類 query 使用 |
 | `gateTypeFilters` | `std::vector<GateType>` | `{}` | 空集合為全部；多個 type 採 OR semantics |
+| `rankMetric` | `ConeRankMetric` | `ScopeGateCount` | ranking/filter 使用完整 gate、filter gate 或 net count |
+| `rankMode` | `ConeRankMode` | `Highest` | highest/lowest/nth/top/bottom |
+| `rankValue` | `size_t` | `1` | nth rank 或 top/bottom distinct-level count |
+| `metricPredicate` | `ConeMetricPredicate` | `Equal` | output filter 的 eq/ne/gt/ge/lt/le/between |
+| `metricValue` | `size_t` | `0` | output filter 的單值或 inclusive lower bound |
+| `metricUpperValue` | `size_t` | `0` | `BetweenInclusive` 的 inclusive upper bound |
 | `includeIds` | `bool` | `true` | 是否填 `rootNetIds`, `netIds`, `gateIds` |
 | `includeNames` | `bool` | `true` | 是否填 `rootNetNames`, `netNames`, `gateNames` |
 | `includeGateDetails` | `bool` | `false` | 是否填 filter 後 gates 的 structured pin/net records |
@@ -97,6 +105,8 @@ DFF 是 sequential boundary，ConeQuery 不穿越 DFF。
 | `netNames` | cone 內 net names |
 | `gateNames` | filter 後 gate names |
 | `gateConnections` | filter 後 gates 的 `GateConnectionSummary` records |
+| `rankingReport` | output cone distinct-level ranking 摘要與完整 selected entries |
+| `filterReport` | output cone threshold/range 摘要與完整 matched entries |
 | `longestDepth` | cone 內 local longest path depth |
 | `shortestDepth` | cone 內 local shortest path depth |
 | `longestPathNetNames` | cone 內 local longest path 的 net names |
@@ -272,7 +282,7 @@ Netlist::ConeReport report = netlist.runConeQuery(query);
 
 ---
 
-## 10. LargestOutputCone
+## 10. LargestOutputCone 與 OutputConeRanking
 
 用途：
 
@@ -305,7 +315,69 @@ LargestOutputCone 是用 fanin cone 的 combinational gateCount 判斷大小。
 如果題目問 deepest fanin logic cone，應使用 DepthQuery::DeepestOutputCone。
 ```
 
-### 10.1 SharedFaninGates
+### 10.1 OutputConeRanking
+
+題目要求所有最大 ties、最小、第 N 大/小或 top/bottom levels 時，使用 ranking：
+
+```cpp
+Netlist::ConeQuery query;
+query.type = Netlist::ConeQueryType::OutputConeRanking;
+query.rankMetric = Netlist::ConeRankMetric::ScopeGateCount;
+query.rankMode = Netlist::ConeRankMode::NthHighest;
+query.rankValue = 2;
+
+const Netlist::ConeReport report = netlist.runConeQuery(query);
+for (const Netlist::ConeRankEntry& entry :
+     report.rankingReport.rankedOutputs) {
+    // entry.rank, outputNetName, metricValue,
+    // scopeGateCount, filteredGateCount, netCount
+}
+```
+
+規則：
+
+```text
+rank 是 distinct-value rank；同分 outputs 全部回傳。
+Top/Bottom K 是 K 個 metric levels，不是硬截成 K 筆。
+FilteredGateCount 會使用 gateTypeFilters；其他 metric 的 output 排名不受 filter 影響。
+排名穩定順序為 metric level、output name、net ID。
+sourceName 與一般 cone payload 是 selected entries 的第一筆；完整答案讀 rankedOutputs。
+不存在的 Nth level 是成功的空結果，requestedRankExists=false。
+```
+
+### 10.2 OutputConeFilter
+
+題目要求 output cone count 的 exact/comparison/range 時，使用 batch filter，不要先取全部 outputs
+再由呼叫端逐一建立 cone：
+
+```cpp
+Netlist::ConeQuery query;
+query.type = Netlist::ConeQueryType::OutputConeFilter;
+query.rankMetric = Netlist::ConeRankMetric::FilteredGateCount;
+query.metricPredicate = Netlist::ConeMetricPredicate::GreaterOrEqual;
+query.metricValue = 5;
+query.gateTypeFilters = {GateType::NAND, GateType::NOR};
+
+const Netlist::ConeReport report = netlist.runConeQuery(query);
+const size_t count = report.filterReport.matchedOutputCount;
+for (const Netlist::ConeFilterEntry& entry :
+     report.filterReport.matchedOutputs) {
+    // outputNetName、metricValue、scopeGateCount、filteredGateCount、netCount
+}
+```
+
+規則：
+
+```text
+Equal/NotEqual/GreaterThan/GreaterOrEqual/LessThan/LessOrEqual 使用 metricValue。
+BetweenInclusive 使用 inclusive metricValue/metricUpperValue，且 lower <= upper。
+matchedOutputs 是全部 matches，依 output name、net ID 穩定排序，不設定筆數上限。
+沒有 active PO 或沒有 match 都是成功的 valid-zero。
+OutputConeFilter 是 summary-only；includeGateDetails/includeLocalPaths 會回 invalid argument。
+batch report 不提供代表性 source/cone，答案必須讀 filterReport。
+```
+
+### 10.3 SharedFaninGates
 
 用途：直接取得兩個 fanin cones 的 gate intersection，不需要呼叫端自行比對兩份 gate list。
 
@@ -334,6 +406,11 @@ Netlist::ConeReport report = netlist.runConeQuery(query);
 | Find the fanout cone of gate g1. | `GateTransitiveFanout` | `gateName = "g1"` | `gateNames`, `netNames` |
 | What is the longest path inside the fanin cone of y? | `NetTransitiveFanin` | `netName = "y"`, `includeLocalPaths = true` | `longestDepth`, `longestPathNetNames` |
 | Which output has the largest fanin cone? | `LargestOutputCone` | 無 | `sourceName`, `gateCount` |
+| Which outputs tie for the largest fanin cone? | `OutputConeRanking` | `ScopeGateCount`, `Highest` | `rankingReport.rankedOutputs` |
+| Which outputs have the second-largest cone? | `OutputConeRanking` | `ScopeGateCount`, `NthHighest`, `rankValue=2` | `rankingReport.rankedOutputs` |
+| List the bottom two cone-size levels by net count. | `OutputConeRanking` | `NetCount`, `Bottom`, `rankValue=2` | `rankingReport.rankedOutputs` |
+| How many outputs have more than 100 gates in their fanin cones? | `OutputConeFilter` | `ScopeGateCount`, `GreaterThan`, `metricValue=100` | `filterReport.matchedOutputCount` |
+| List outputs with 5 to 10 NOR gates in their fanin cones. | `OutputConeFilter` | `FilteredGateCount`, `BetweenInclusive`, 5/10, filter NOR | `filterReport.matchedOutputs` |
 | Report all gates shared between the fanin cones of n16 and n17. | `SharedFaninGates` | `netName = "n16"`, `secondNetName = "n17"` | `gateNames`, `gateCount` |
 | Report the number of each gate type in the cone of n8. | `NetTransitiveFanin` | `netName = "n8"` | `gateTypeCounts` |
 | List all NAND and NOR gates in n10's fanin cone. | `NetTransitiveFanin` | `gateTypeFilters = {NAND, NOR}` | `gateNames`, `gateCount` |
@@ -364,6 +441,8 @@ Netlist::ConeReport report = netlist.runConeQuery(query);
 | `GateTransitiveFanin` | `getGateTransitiveFaninCone()` |
 | `GateTransitiveFanout` | `getGateTransitiveFanoutCone()` |
 | `LargestOutputCone` | `getPrimaryOutputNetIds()` + `getTransitiveFaninCone()` + `getConeGateCount()` |
+| `OutputConeRanking` | 每個 active PO bit 的 fanin cone summary + distinct-level stable ranking |
+| `OutputConeFilter` | 每個 active PO bit 的 fanin cone summary + metric predicate matching |
 | result net names/count | `getConeNetNames()`, `getConeNetCount()` |
 | result gate names/count | `getConeGateNames()`, `getConeGateCount()` |
 | local longest/shortest path | `findLongestPathInCone()`, `findShortestPathInCone()` |
@@ -376,8 +455,11 @@ Netlist::ConeReport report = netlist.runConeQuery(query);
 實作檔案：src/analysis/ConeAnalysis.cpp
 型別檔案：include/core/NetlistQueries.h
 tester：mini test/tester.cpp, mini test/test6/test6.cpp
-目前 test6：Summary: 24 passed, 0 failed.
+目前 test6：Summary: 49 passed, 0 failed.
 覆蓋 active/tombstone、partial/all-removed bus、stale driver、none/one/many/duplicate/UNKNOWN
 gate-type filters、valid zero、structured details、SharedFanin filter、reconvergent/multi-root/cycle
 與 100000-level iterative longest path；另以 NewTestCase/test70 驗證大型 cone consistency。
+test49 驗證 output ranking/filter grammar、三種 metric、六種 rank mode、七種 filter predicate、
+strict error、299-output 完整 artifact，並以 NewTestCase/test76 鎖定 legacy 單一 winner、
+ranking ties 與 threshold matches 的差異。
 ```

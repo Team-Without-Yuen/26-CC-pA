@@ -239,7 +239,8 @@ bool isNetDirectlyConnectedToGate(const std::string& netName,
 語意：
 
 ```text
-若 net 是 gate 的任一 input 或 output，回傳 true。
+若 scalar net 是 gate 的任一 input 或 output，回傳 true。
+若 `netName` 是 bus base name，會展開所有 active bits；任一 bit 與 gate 直接相連即回傳 true。
 兩個 API 語意相同，只是參數順序不同。
 removed gate/net 會回 false；高階 DirectlyConnected report 則回 ok=false、exists=false。
 ```
@@ -262,12 +263,13 @@ DirectConnectivityReport runDirectConnectivityQuery(
 | `NetDriverGates` | 查某個 net / bus 的直接 driver gates |
 | `NetLoadGates` | 查某個 net / bus 直接 load 到哪些 gates |
 | `FanoutLoadReport` | 依 Problem A QA fanout load 定義回報 pin-level loads |
-| `GlobalFanoutReport` | 掃描全設計或所有 PI 的 fanout loads / max / violations |
+| `GlobalFanoutReport` | 掃描全設計或所有 PI 的 fanout loads / max / violations / predicate matches |
+| `FanoutRankingReport` | 依 all/PI/PO/internal/gate-output scope 做 distinct fanout ranking，完整保留 ties |
 | `GateInputs` | 查某個 gate 的直接 input nets |
 | `GateOutput` | 查某個 gate 的 output net |
 | `GateFanin` | 查直接驅動某 gate inputs 的上一層 gates |
 | `GateFanout` | 查某 gate output 直接 fanout 到哪些 gates |
-| `DirectlyConnected` | 判斷指定 gate 與指定 net 是否直接相連 |
+| `DirectlyConnected` | 判斷指定 gate 與 scalar net / bus 的 active bits 是否直接相連 |
 
 核心資料結構：
 
@@ -276,6 +278,15 @@ struct DirectConnectivityQuery {
     DirectConnectivityQueryType type;
     std::string gateName;
     std::string netName;
+    int fanoutLimit = -1;
+    bool primaryInputsOnly = false;
+    bool includeZeroFanout = false;
+    FanoutPredicate fanoutPredicate = FanoutPredicate::None;
+    size_t fanoutValue = 0;
+    size_t fanoutUpperValue = 0;
+    FanoutScope fanoutScope = FanoutScope::All;
+    FanoutRankMode fanoutRankMode = FanoutRankMode::Highest;
+    size_t fanoutRankValue = 1;
     bool includeIds = true;
     bool includeNames = true;
     bool includePinDetails = false;
@@ -322,11 +333,33 @@ struct DirectConnectivityReport {
 | List DFF clock/reset loads driven by n1. | `FanoutLoadReport` |
 | Which primary input has the highest fanout? | `GlobalFanoutReport` with `primaryInputsOnly = true` |
 | Does every signal satisfy max fanout 16? | `GlobalFanoutReport` with `fanoutLimit = 16` |
+| How many PI nets have fanout exactly 4? | `GlobalFanoutReport` with `primaryInputsOnly = true`, `fanoutPredicate = Equal`, `fanoutValue = 4` |
+| List nets whose fanout is between 4 and 8. | `GlobalFanoutReport` with `fanoutPredicate = BetweenInclusive`, bounds 4 and 8 |
+| Which nets have the second-highest fanout? | `FanoutRankingReport` with `NthHighest`, rank 2 |
+| List the top 5 PI fanout levels, retaining ties. | `FanoutRankingReport` with PI scope, `Top`, value 5 |
+| Which DFF output nets have the lowest fanout? | `FanoutRankingReport` with DFF-output scope, `Lowest` |
 | Report every gate connected to the output of g0. | `GateFanout` |
 | What are the input nets of g1? | `GateInputs` |
 | What is the output net of g1? | `GateOutput` |
 | Which gates feed g1? | `GateFanin` |
 | Is gate g1 directly connected to net n2? | `DirectlyConnected` |
+| Is gate g1 connected to any bit of bus data? | `DirectlyConnected`；`count/netNames` 回實際相連 bits |
+
+`GlobalFanoutReport` 的 extrema candidate 是 scope 內全部 active nets。`includeZeroFanout=false`
+只會從完整 `netReports` 明細省略零值，不會在 maximum 比較前排除它們；因此 all-zero scope
+仍會回 `maxFanout=0` 以及完整 `maxFanoutReports` ties。`checkedNetCount` 是實際參與
+extrema/limit 計算的 candidate 數，不等於省略零值後的 `netReports.size()`。
+
+`fanoutPredicate` 支援 `Equal/NotEqual/GreaterThan/GreaterOrEqual/LessThan/LessOrEqual/
+BetweenInclusive`。篩選不改變上述 extrema、limit 或 `DirectConnectivityReport.count` 契約；
+命中數與完整清單分別讀 `matchedNetCount`、`matchedReports`。`BetweenInclusive` 的上下界均包含。
+
+`FanoutRankingReport` 的 rank 依 distinct fanout value 計算，第一名從 1 開始。同一 fanout 的
+nets 屬同一 rank，依 net name/net ID 穩定排序且完整保留。`Top/Bottom K` 的 K 是 fanout
+levels，不是強制切成 K 條 nets。scope 支援 `All/PrimaryInputs/PrimaryOutputs/Internal/
+GateOutputs/CombinationalOutputs/DffOutputs`；gate-output scopes 僅接受 active 且 driver edge
+雙向一致的 nets。rank 不存在或 scope 為空是成功的空結果，由 `requestedRankExists=false`
+表示；removed tombstone 不參與。
 
 ---
 
@@ -349,13 +382,15 @@ Gate input/output helper
 Gate immediate fanin/fanout helper
 Direct connection check
 DirectConnectivityQuery / DirectConnectivityReport 高階 API
+Fanout ranking scope / distinct-rank report
 ```
 
 測試狀態：
 
 ```text
 mini test/tester.cpp 已覆蓋 runDirectConnectivityQuery() 的 NetDriverGates / NetLoadGates / FanoutLoadReport / GlobalFanoutReport / GateInputs / GateFanout / DirectlyConnected。
-目前 regression 結果：Summary: 57 passed, 0 failed.
+mini test/test55 另覆蓋 DirectlyConnected、fanout predicate/ranking、全部 ranking scopes、ties、
+rank 不存在、空 scope，以及所有公開 connectivity mode 的 strict parser；新增 ranking 部分待手動驗證。
 ```
 
 逐 pin driver/load detail 已由 `ConnectivityPinRecord` 完成。其他非 fanout-limit transformation /

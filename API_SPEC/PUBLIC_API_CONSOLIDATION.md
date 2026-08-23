@@ -18,7 +18,8 @@ Edit、whole-design equivalence、report 與 optimization 維持各自 command f
 
 Optimization 的 C++ public facade 為 `runOptQuery()` / `runOptApply()`；
 `CriticalPathDepth` 已完成 transactional apply、basis/depth validation 與
-whole-design SAT。`tools.cpp` 已公開 `opt_query/opt_apply critical_path_depth`，
+qualified pipeline `CertifiedRewrite` certificate；本 pass 不執行 whole-design SAT。
+`tools.cpp` 已公開 `opt_query/opt_apply critical_path_depth`，
 並只呼叫高階 facade，不直接暴露內部 `DepthOptimizer`。LLM-facing 契約見
 `TOOLS_SPEC/OPTIMIZATION_TOOL.md`。
 

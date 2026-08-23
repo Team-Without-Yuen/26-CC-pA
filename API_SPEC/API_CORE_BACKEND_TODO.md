@@ -17,18 +17,13 @@ pattern engine 與底層 regression。已完成事項必須寫入對應 API/Usag
 已知結果：test22、test26 與 NewTestCase/test40 bounded smoke 可完成；NewTestCase/test33
 曾在 120 秒外層 timeout。此問題屬 optimizer core，不由 tools parser 修正。
 
-## P1：OptApply equivalence report 三態化
+## P2：OptApply legacy equivalence summary fields
 
-目前 changed candidate 必定嘗試 whole-design SAT，但 UNKNOWN/inconclusive 且沒有找到
-mismatch 時，可能依 mockturtle function-preserving 假設接受。既有欄位
-`functionallyEquivalent`、`wholeDesignEquivalent` 與 `EquivalenceMethod::WholeDesignSat`
-無法單獨區分 SAT-proven 與 trusted-but-unproven；暫時只能由 warning
-`This has not been proven by SAT` 判讀。
-
-後續應新增明確 proof status（例如 `ProvenEquivalent / ProvenMismatch /
-InconclusiveAccepted`），並讓 tools envelope 的 `complete` 與 `status` 不再混用 transaction
-完成、candidate commit 與 proof completeness。文件已先依現行行為校正，不得再把
-UNKNOWN 描述成已證明等價。
+`CriticalPathDepth` 的現行 changed-candidate contract 是 `CertifiedRewrite`，不在 pass 內
+執行 whole-design SAT。`DepthOptimizationSummary` 仍保留
+`wholeDesignEquivalenceChecked/Equivalent/TimedOut` 與 compared endpoint counts 作為
+相容欄位；此 pass 正常維持 false/0。後續若清理 report schema，應明確 deprecate 或改成
+通用 certificate summary，但不得讓欄位名稱暗示 OptApply 已執行 SAT。
 
 ## P1：Function Analysis expression regression
 

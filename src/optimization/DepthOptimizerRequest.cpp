@@ -20,6 +20,10 @@ std::optional<TargetScope> toTargetScope(ConeQueryType type) {
         case ConeQueryType::LargestOutputCone:    return TargetScope::NET_FANIN;
         // 兩個 cone 的交集不是可重寫的範圍，沒有單一 root 可重查
         case ConeQueryType::SharedFaninGates:     return std::nullopt;
+        // ranking 可能同時選出多個 outputs，不是單一可重寫 scope
+        case ConeQueryType::OutputConeRanking:    return std::nullopt;
+        // predicate filter 也是 batch query，不是單一可重寫 scope
+        case ConeQueryType::OutputConeFilter:     return std::nullopt;
     }
     return std::nullopt;
 }

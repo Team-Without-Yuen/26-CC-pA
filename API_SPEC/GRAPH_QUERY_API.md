@@ -1,14 +1,19 @@
-# Graph Query API 整理
+# Graph Query Internal/Legacy API
 
-> 狀態：legacy/internal adapter。cut 與 articulation 的公開 owner 已改為 `PathQuery::IsSeparator` 與 `PathQuery::FindMandatoryNodes`。本文件保留 dominator 演算法、舊 C++ 型別與相容性說明；LLM/tools 不應再直接選擇 `GraphQuery`。
+> Status: Reference (internal/legacy adapter)
+>
+> Public owner: `PathQuery::IsSeparator`、`PathQuery::FindMandatoryNodes`
 
-本文件說明 directed combinational graph 的 cut / articulation 高階 API。它回答 graph connectivity 問題，不判斷 Boolean functional dependence，也不執行 netlist 修改。
+本文件只說明 directed combinational graph 的 cut/articulation backend、舊 C++ 型別與
+相容入口。它回答 graph connectivity 問題，不判斷 Boolean functional dependence，也不
+執行 netlist 修改。LLM、`tools.cpp` 新功能與其他 public caller 不應直接選擇
+`GraphQuery`。
 
-公開替代用法與 legacy 相容方式請看：
+公開契約與用法請看：
 
-```text
-API_SPEC/GRAPH_QUERY_USAGE.md
-```
+- [`PATH_QUERY_API.md`](PATH_QUERY_API.md)
+- [`PATH_QUERY_USAGE.md`](PATH_QUERY_USAGE.md)
+- [`TOOLS_SPEC/PATH_QUERY_TOOL.md`](../TOOLS_SPEC/PATH_QUERY_TOOL.md)
 
 ---
 
@@ -94,13 +99,16 @@ struct GraphReport {
 
 此流程不列舉所有 paths。對固定 PI 數量，時間接近 graph size 的線性倍數，適合大型 testcase。
 
-## 5. Entry Point
+## 5. Internal/Compatibility Entry Point
 
 ```cpp
 Netlist::GraphReport report = netlist.runGraphQuery(query);
 ```
 
-`runGraphQuery()` 由 `runPathQuery()` 內部呼叫，或供舊程式相容使用。LLM/tools 公開入口應呼叫 `runPathQuery()`，不要直接操作 adjacency、topological order 或 dominator state。
+`runGraphQuery()` 由 `runPathQuery()` 內部呼叫，或供舊程式相容使用。`tools.cpp` 目前仍
+保留隱藏的 `graph_query` compatibility parser，但 help/schema 不把它列為 LLM-facing
+command。公開入口應呼叫 `runPathQuery()`，不要直接操作 adjacency、topological order
+或 dominator state。
 
 ## 6. Current Limits
 

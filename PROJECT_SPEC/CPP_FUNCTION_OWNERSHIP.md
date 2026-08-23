@@ -42,8 +42,8 @@
 | `src/transformation/EditFlow.cpp` | Public Edit Transaction Dispatcher | public/internal command validation、operation dispatch、report normalization、rollback policy |
 | `src/transformation/TechMapper.cpp` | Technology Mapping | basis conversion、gate-type replacement、strict-scope mapping、inverter absorption、mapping delta 與 local equivalence certificate |
 | `src/optimization/NetlistOptimization.cpp` | Cleanup / Simplification / Validation | dead logic、buffer cleanup、double inverter、constant propagation、same-input simplification、dangling logic、structural hashing、validation / rollback helpers |
-| `src/optimization/DepthOptimizer.cpp` | Critical Path Optimization Core | AIG/XAG depth restructuring、Problem A depth candidate selection、basis enforcement、cone constraint orchestration；只產生 unchecked candidate |
-| `src/optimization/OptimizationFlow.cpp` | High-Level Optimization Transaction | `runOptQuery()` / `runOptApply()` facade；CriticalPathDepth working-copy、scope/basis/depth validation、whole-design SAT、commit/rollback 與統一 `NetlistEditReport` |
+| `src/optimization/DepthOptimizer.cpp` | Critical Path Optimization Core | AIG/XAG depth restructuring、Problem A depth candidate selection、basis enforcement、cone constraint orchestration；public flow 使用預設 `verifyEquivalence=false` |
+| `src/optimization/OptimizationFlow.cpp` | High-Level Optimization Transaction | `runOptQuery()` / `runOptApply()` facade；CriticalPathDepth working-copy、scope/basis/depth validation、qualified pipeline `CertifiedRewrite`、commit/rollback 與統一 `NetlistEditReport`；不執行 whole-design SAT |
 | `src/io/VerilogReader.cpp` | Restricted Verilog parser frontend | 讀 flattened gate-level Verilog，呼叫 construction API 建圖 |
 | `src/io/VerilogWriter.cpp` | Restricted Verilog writer | 將目前 netlist graph 輸出回 restricted Verilog |
 

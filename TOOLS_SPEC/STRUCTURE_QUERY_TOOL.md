@@ -5,7 +5,7 @@
 `structure_query` 負責 current active netlist 的基本數量、物件列表、物件資訊、structural issue 與一層直接 connectivity。它不處理 transitive cone、endpoint path、logic depth 或 Boolean property。
 
 完整性規則：list mode 預設取得全部 active objects，不自行限制筆數；只問 count 時只回摘要。
-當所有 list sections 的 record 數或預估 serialized characters 超過工具內部顯示門檻時，CLI 會自動將完整資料寫入唯一 artifact，
+CLI 以單一 prompt 的 4096-token 上限為基準，保守估算完整 response；估算超過門檻時會自動將完整資料寫入唯一 artifact，
 terminal 只回 count、artifact completeness 與 `output_file`。這個門檻只決定輸出位置，不會
 截斷結果，也不由 LLM 設定。時間限制依題目指定。詳見 [`LLM_NOTES.md`](LLM_NOTES.md)。
 
@@ -13,7 +13,7 @@ terminal 只回 count、artifact completeness 與 `output_file`。這個門檻�
 
 下列 prompt 優先使用本 tool：
 
-- `how many`、`list`、`gate type`、`PI/PO/DFF count`。
+- `how many`、`list`、`gate type`、`PI/PO/DFF count`，以及 internal/constant net 分類。
 - `floating`、`undriven`、`no load`、`unconnected`。
 - `driver`、`load`、`input pin`、`output net`、`direct fanin/fanout`。
 - `fanout load`、`fanout limit`、`DFFs driven by clock/reset net`。
@@ -30,20 +30,21 @@ structure_query <mode> [args]
 
 | Mode | 參數 | 用途 | 主要 data |
 |---|---|---|---|
-| `summary` | 無 | 全設計 active summary | `gates`, `nets`, `logical wires`, `primary inputs`, `primary outputs`, `Gate type counts` |
+| `summary` | 無 | 全設計 active summary | `gates`, `nets`, `logical wires`、PI/PO port counts、PI/PO bit counts、`Gate type counts` |
 | `list_gates` | 無 | 列 active gates | `Gate names` |
 | `list_nets` | 無 | 列 active nets | `Net names` |
-| `list_pi` | 無 | 列 PI ports 與 width/range | `Port names`, `Port summaries` |
-| `list_po` | 無 | 列 PO ports 與 width/range | `Port names`, `Port summaries` |
+| `net_classes` | 無 | 一次分類所有 active nets | active、PI、PO、PI+PO、constant、internal counts；各分類完整 names/artifact |
+| `list_pi` | 無 | 列 PI ports、width/range 與 aggregate bits | PI port/bit counts、`Port names`, `Port summaries` |
+| `list_po` | 無 | 列 PO ports、width/range 與 aggregate bits | PO port/bit counts、`Port names`, `Port summaries` |
 | `list_dffs` | 無 | 列 active DFF instances | `Gate names` |
 | `list_comb` | 無 | 列 active combinational gates | `Gate names` |
-| `gate_info` | `<gate>` | gate type、ID 與基本資訊 | `object`, `id`, `type` |
+| `gate_info` | `<gate>` | gate type、ID 與 ordered input/output pin-net snapshot | `object`, `id`, `type`, `Gate connection details` |
 | `net_info` | `<net>` | net 類型、ID 與基本資訊 | `object`, `id`, `type` |
-| `port_info` | `<port>` | port direction、width/bus flag 與 bit nets | `object`, `width`, `is_bus`, `is_primary_input`, `is_primary_output`, `Net names`；不輸出無意義的負 ID |
+| `port_info` | `<port>` | port direction、width、declaration bounds 與 ordered bit nets | object fields、`Net names`、唯一一筆 `Port summaries`；不輸出無意義的負 ID |
 | `count_by_type` | `[type] [--gate-types <type...>] [--exclude-gate-types <type...>]` | 統計 include-minus-exclude type；省略 filters 時列全部 | `gates`, `Gate type counts`, filter metadata |
 | `gates_by_type` | `[type] [--gate-types <type...>] [--exclude-gate-types <type...>] [--with-pins]` | 列 include-minus-exclude gates；旗標要求 pin/net 明細 | names-only：`Gate names`；detail：`Gate connection details` artifact |
 | `const_input_gates` | `[type\|all] [0\|1\|any] [--gate-types <type...>] [--exclude-gate-types <type...>] [--const <0\|1\|any>] [--with-pins]` | 先找直接接 constant 的 gates，再套 type filters | names-only：`Gate names`；detail：`Gate connection details` artifact |
-| `structural_issues` | 無 | 結構問題摘要 | 一般 issue lists，以及 `Floating primary-input nets`、`Unconnected primary-output nets` 精確分類 |
+| `structural_issues` | 無 | 結構問題摘要與 exact unconnected pins | 一般 issue lists、unconnected gate/input/output counts、`Unconnected pin details`，以及 PI/PO 精確分類 |
 
 gate 數量皆指 current active objects，不應使用底層 raw storage count 回答修改後的 gate 數量。
 
@@ -51,7 +52,7 @@ Gate-type filter 規則：`--gate-types` 內多個 type 採 OR；未指定 inclu
 `--exclude-gate-types` 從 include 結果扣除且優先。舊 positional 單型別語法仍可使用，但不可和
 `--gate-types` 同時使用。支援 `AND OR NOT NAND NOR XOR XNOR BUF DFF`，重複與大小寫會正規化。
 
-固定 arity 規則：`summary`、所有 `list_*` 與 `structural_issues` 不接受任何參數；
+固定 arity 規則：`summary`、`net_classes`、所有 `list_*` 與 `structural_issues` 不接受任何參數；
 `gate_info`、`net_info`、`port_info` 必須且只能提供一個對應名稱。缺值或 trailing token 都回
 `status:error, complete:false`，不得被忽略，也不得誤報為 unknown mode。
 
@@ -65,11 +66,13 @@ Gate-type filter 規則：`--gate-types` 內多個 type 採 OR；未指定 inclu
 | `global_fanout` | `[limit]` | 全設計最大 fanout；有 limit 時也檢查 violations | `max fanout`, `Max-fanout nets`, `Violating nets` |
 | `pi_fanout` | `[limit]` | 只掃 PI nets 的最大 fanout | 同上 |
 | `fanout_violations` | `<limit>` | 列超過 fanout limit 的 nets | `satisfies limit`, `Violating nets` |
+| `fanout_filter` | `<all|pi> <eq|ne|gt|ge|lt|le|between> <value> [upper]` | 依 QA pin-level fanout 篩選 nets | `matched net count`, `Matched nets` |
+| `fanout_rank` | `<scope> <highest|lowest|nth_highest|nth_lowest|top|bottom> [k]` | scoped distinct-level fanout ranking | rank metadata, `Ranked nets` |
 | `gate_inputs` | `<gate>` | gate 直接 input nets | `Net names` |
 | `gate_output` | `<gate>` | gate output net | `Net names` |
 | `gate_fanin` | `<gate>` | 直接驅動 inputs 的上一層 gates | `Gate names` |
 | `gate_fanout` | `<gate>` | gate output 的直接 load gates | `Gate names` |
-| `is_connected` | `<gate> <net>` | gate 與 net 是否直接相連 | `connected` |
+| `is_connected` | `<gate> <net-or-bus>` | gate 與 scalar net / bus active bits 是否直接相連 | `connected`, `count`, `Net names` |
 
 Connectivity parser 採 fail-closed：上述必要名稱不可省略，也不可附加未定義的 trailing token。
 `net_driver` / `net_loads` 只接受單一可選旗標 `--with-pins`；其他 option、重複旗標均為錯誤。
@@ -77,7 +80,26 @@ Connectivity parser 採 fail-closed：上述必要名稱不可省略，也不可
 `0..INT_MAX` 的十進位整數。recognized mode 的參數錯誤會回
 `status:error, complete:false`，不會誤報成 unknown mode，也不會沿用預設 limit 執行查詢。
 
+`fanout_filter` 的 `all` 掃全部 active nets，`pi` 只掃 PI bit nets。`between lower upper` 為
+inclusive range；其他 predicate 不可多給 upper。值採非負十進位整數且不設人工筆數上限。
+`count`/`checked nets` 仍是完整 scope candidate 數，題目所問的篩選數量必須讀
+`matched net count`。大型 `Matched nets` 會自動寫入完整 artifact，回答時保留 count 與 `output_file`。
+
+`fanout_rank` scope 可用 `all/pi/po/internal/gate_output/comb_output/dff_output`。`highest/lowest`
+不帶 K；其餘 mode 必須提供正整數 K。名次以不同 fanout 數值分層，同值 nets 完整保留；
+`top/bottom K` 的 K 是 levels，因此結果 net 數可能大於 K。`requested rank exists:no` 表示
+第 K level 不存在，但 query 仍成功且完整。scope 為空也是成功零結果。大型 `Ranked nets`
+自動寫入 artifact，回答讀 `result net count` 並提供 `output_file`。
+
 `fanout_load` 的 `totalLoadCount` 包含 combinational input pins、DFF D/clock/reset/other input pins及 PO connections。同一 gate 多個 input pins 接同一 net 時會按 pin 計數。
+
+`global_fanout` / `pi_fanout` 的 maximum 會比較 scope 內所有 active candidates，包括 fanout=0
+的 nets。若所有 PI 都未被使用，`max fanout` 為 0，`Max-fanout nets` 仍會列出全部並列 PI，
+不得把空負載誤解為 object 不存在。`checked nets` 是實際參與 extrema/limit 計算的 candidate 數。
+
+`is_connected` 的 scalar query 維持 `count=0/1`。若第二個名稱是 bus base，工具會展開所有
+active bits；`connected` 表示是否至少一個 bit 相連，`count` 與 `Net names` 則列出實際相連的
+bit 數量與名稱。bus 存在但沒有相連 bit 是成功的零結果，不可解讀為 object 不存在。
 
 ## 6. 輸出判讀
 
@@ -87,23 +109,32 @@ parser error 或不完整結果不能當成 count 0 或 empty list。
 count query 或 list/filter query 即使沒有 matching object，也會明確輸出有效的零值，例如
 `gates: 0`。成功但不適用於該 mode 的 count 欄位不會輸出；LLM 不得自行把缺少欄位解讀為零。
 
+`primary inputs` / `primary outputs` 是 Verilog port counts；`primary input bits` /
+`primary output bits` 是 declaration widths 的總和。兩者不得互換。
+
 | 題目 | 應讀欄位 |
 |---|---|
 | current active gate 總數與 type breakdown | `summary` 的 `gates` 與 `Gate type counts` |
 | 指定或排除 type 後的 active gate 數量 | `count_by_type` 的 `gates` / `filtered gates` |
 | PI/PO port 數量 | `summary` 的 `primary inputs` / `primary outputs` |
-| PI/PO bit 或 signal 數量 | `list_pi` / `list_po` 的 `Port summaries` width 加總 |
+| PI/PO bit 或 signal 數量 | `summary` 或 `list_pi` / `list_po` 的 `primary input bits` / `primary output bits` |
+| internal、PI、PO、PI+PO、structural constant net 數量/名稱 | `net_classes` 的分類 counts 與對應 list/artifact sections |
+| 單一 port 的 `[left:right]` 與 bit ordering | `port_info <port>` 的 `Port summaries` msb/lsb 與 `Net names` 順序 |
+| 單一 gate 的 type、pins、nets、constant/PI/PO flags | `gate_info <gate>` 的一筆 `Gate connection details` |
 | driver/load gate 數量 | `net_driver` / `net_loads` 的 count 與 `Gate names` |
 | 某 net 的 exact driver/load pins | `net_driver <net> --with-pins` / `net_loads <net> --with-pins` 的 `Pin connection details` |
 | pin-level fanout load | `fanout_load` / `fanout_report` 的 total load 與分類 |
 | 一或多種 type 的 gates 及其 input/output signals | `gates_by_type --gate-types <type...> --with-pins` 的 `Gate connection details` |
 | constant-input gates 及 constant 所在 pin、其他 inputs、output | `const_input_gates [type\|all] [0\|1\|any] --with-pins` 的 `Gate connection details` |
 | floating/unconnected 結構問題 | `structural_issues` 的精確分類 lists |
+| exact unconnected input/output pins | `structural_issues` 的三個 counts 與 `Unconnected pin details` / artifact |
 
 修改後的 gate count 必須使用 active fields；tombstone storage 中的 removed gate/net 不得計入。
 `const_input_gates` 只證明 input pin 直接連到 constant，不代表 output Boolean function 為常數。
+同樣地，`net_classes` 的 `constant nets` 只代表 parser/named-netlist 明確標記的 constants；
+若題目問任意 signal 是否在所有輸入下恆為 0/1，必須使用 `func_query constant/truth_status`。
 
-大型 list query 另讀：
+預估超過 4096 tokens 的大型 list query 另讀：
 
 ```text
 list artifact format: QUERY_LIST_ARTIFACT_V1
@@ -147,12 +178,49 @@ net=n8 direction=driver gate=g7 type=NOR pin=OUT role=output
 這兩個 mode 只列 gate pins，不含 primary-output connection；QA fanout load count 仍使用
 `fanout_load` / `fanout_report`。
 
+`port_info` 的 `msb/lsb` 是歷史欄位名稱，輸出保存 Verilog declaration left/right bounds，
+不依數值大小重排。因此 `[31:0]` 為 `31/0`，`[0:31]` 為 `0/31`；`Net names` 也依該方向排列。
+
+`structural_issues` 即使沒有問題也會明確輸出三個 0 counts。pin record 格式為：
+
+```text
+gate_id=7 gate=ff0 type=DFF direction=input pin=RN pin_index=2 net_id=-1 net=<unconnected> reason=UNCONNECTED
+```
+
+reason 可能為 `UNCONNECTED`、`INVALID_NET_ID`、`REMOVED_NET`。未出現在 instance 的 optional
+DFF pin 不會被合成；明確空接的 named pin 會列出。大型 pin details 逐筆寫入 self-contained
+artifact，檔內直接包含 gate/type/pin/net，不需額外 ID 對照表。
+
 ## 7. Prompt Examples
+
+```text
+Prompt: What type of gate is g0? Report its gate type and pin connections.
+Command: structure_query gate_info g0
+Read: type 與唯一一筆 Gate connection details
+```
 
 ```text
 Prompt: How many primary inputs and primary outputs does this design have?
 Command: structure_query summary
 Read: primary inputs, primary outputs
+```
+
+```text
+Prompt: Report both PI/PO port counts and the total number of PI/PO bits.
+Command: structure_query summary
+Read: primary inputs, primary input bits, primary outputs, primary output bits
+```
+
+```text
+Prompt: How many internal nets are in the current design? List all constant nets.
+Command: structure_query net_classes
+Read: internal nets、constant nets；大型清單讀 list artifact complete 與 output_file
+```
+
+```text
+Prompt: Is port data declared [31:0] or [0:31]? List its bits in declaration order.
+Command: structure_query port_info data
+Read: 唯一一筆 Port summaries 的 msb/lsb，以及 Net names 順序
 ```
 
 ```text
@@ -186,6 +254,24 @@ Read: max fanout, Max-fanout nets
 ```
 
 ```text
+Prompt: How many primary-input signals have fanout between 4 and 8, inclusive?
+Command: structure_query fanout_filter pi between 4 8
+Read: matched net count；若產生 artifact，完整 Matched nets 由 output_file 讀取
+```
+
+```text
+Prompt: Which internal signals have the second-highest fanout?
+Command: structure_query fanout_rank internal nth_highest 2
+Read: requested rank exists, result net count, Ranked nets；ties 必須全部回答
+```
+
+```text
+Prompt: List the top three primary-input fanout levels.
+Command: structure_query fanout_rank pi top 3
+Read: selected fanout levels, result net count, Ranked nets/output_file
+```
+
+```text
 Prompt: List all NAND gates with their input and output signals.
 Command: structure_query gates_by_type NAND --with-pins
 Read: gate count, list artifact complete, output_file；完整 records 在 artifact
@@ -210,6 +296,10 @@ Read: filtered gates, Gate type counts
 - `gates_by_type --with-pins` 是全設計依 type include/exclude 篩選，不會自動限制在某個 cone；有 cone scope 的
   prompt 仍需使用 `cone_query`，不能假裝這個旗標支援 scope。
 - `summary` 的 PI/PO 數量是 port count；bus width 請讀 `list_pi`/`list_po` 的 `Port summaries`。
+- `net_classes` 的 PI/PO counts 是 unique active bit-net counts，不是 Verilog port counts；
+  PI 與 PO 集合可能重疊，`primary-input/output nets` 另回交集，所有分類不可直接相加。
+  artifact 的 `list entry count` 是各 section entries 的總和；若存在 PI+PO overlap，會因同一
+  net 同時出現在 PI、PO 與交集 sections 而大於 `active nets`，答案應讀明確分類 count。
 - prompt 說 input/output bits 或 signals 時，必須加總 `Port summaries` 的 width，不能直接使用
   port count。
 - 大型 gate/net/load/structural-issue 名單會自動寫 artifact；正式回答提供總數與

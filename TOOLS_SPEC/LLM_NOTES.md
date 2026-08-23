@@ -34,13 +34,12 @@ LLM 不應把 `unknown`、`maybe`、`cannot determine` 或只描述工具失敗�
 觸發原因、使用的完整或部分結果，以及得到候選答案的假設，但不得把這些內部資訊加入
 題目要求的正式輸出。
 
-best-effort 不能改寫工具事實：不得把 partial 標成 complete，也不得宣稱未完成的 SAT
-已證明等價。對 transformation/optimization，未通過 structure、constraint 與
-functional-equivalence validation 的候選不得輸出；應保留 original 或最後一個已驗證版本。
-目前 `opt_apply` 有一個明確例外：changed candidate 的 whole-design SAT 若為
-UNKNOWN/inconclusive 且未找到 mismatch，可能依 mockturtle function-preserving 假設被接受。
-這種結果不是 SAT-proven；判讀與 follow-up 規則以
-[`OPTIMIZATION_TOOL.md`](OPTIMIZATION_TOOL.md) 為準。
+best-effort 不能改寫工具事實：不得把 partial 標成 complete，也不得宣稱未執行或未完成的
+SAT 已證明等價。對 transformation/optimization，未通過 structure、constraint 與該
+operation certificate contract 的候選不得輸出；應保留 original 或最後一個已接受版本。
+`opt_apply critical_path_depth` 的 changed candidate 使用 `CertifiedRewrite`，本 command
+不執行 whole-design SAT；需要獨立 proof 時使用 `equiv_query previous_edit/original`。
+詳細判讀以 [`OPTIMIZATION_TOOL.md`](OPTIMIZATION_TOOL.md) 為準。
 
 ## 2.1 Routing And Answer Checklist
 
@@ -118,7 +117,7 @@ depth_query 取得 before depth
 → opt_apply 並重送所有 scope/basis/target constraints
 → report_query last_edit
 → 檢查 candidate_accepted、before/after depth、constraints、equivalence method 與 warnings
-→ 若出現 `This has not been proven by SAT`，不得稱為已證明等價；題目要求 proof 時再呼叫 equiv_query previous_edit
+→ `CertifiedRewrite` 不得稱為 SAT proof；題目要求獨立 proof 時再呼叫 equiv_query previous_edit
 → depth_query 與 structure_query 驗證 final design
 → write
 ```
@@ -204,7 +203,7 @@ Boolean equation artifact 不設 gate/depth/字元上限。只有 envelope `comp
 `expression artifact complete: yes` 且檔案 footer 為 `Complete: yes` 時才可宣稱完整；
 自然語言 response 不重貼大型 equations，只提供簡答與 `output_file` 路徑。
 
-通用自動 list artifact 同時依 record 數與預估 serialized characters 決定 terminal 或檔案
+通用自動 list artifact 以 4096-token response 上限與保守 token estimate 決定 terminal 或檔案
 呈現，且不限制結果數量。看到 `list artifact complete:yes` 時，完整名單位於 `output_file`，自然語言答案提供
 總數與路徑。若沒有 artifact metadata，代表結果規模小，完整清單已直接出現在 data。
 
@@ -220,7 +219,7 @@ Boolean equation artifact 不設 gate/depth/字元上限。只有 envelope `comp
 ## 7. Edit, Optimization And Constraints
 
 - edit/optimization 結果必須同時檢查 `status`、`complete`、`report_success`、`report_changed`、`rolled_back` 與題目要求的 validation 欄位。
-- 題目要求功能不變時，只有 equivalence report 完整且 `functionally_equivalent:true`，或 tool 明確回報內建 whole-design equivalence 成功時，才能宣稱功能保持。
+- 題目要求功能不變時，必須依 operation 的 certificate contract 判讀；`CertifiedRewrite` 可回報 qualified function-preserving rewrite，但只有完整 `equiv_query` 的 `WholeDesignSat` 才能描述成 SAT-proven。
 - `status:no_change` 可以是合法 verified no-op 或 already-optimal 結果；必須如實回報 original retained，不可假裝已完成新的 rewrite。
 - session 不會自動保留自然語言中的 previous constraint。後續 prompt 若要求 preserve/maintain constraint，LLM 必須從前題 call 找回限制，並在新的 edit/opt command 重新傳入；final write 前再驗證。
 - `report_query last_edit` 只回答最近一次 edit/optimization。最近一次若失敗、rollback 或 timeout，不能沿用較早操作的 delta 回答目前問題。
