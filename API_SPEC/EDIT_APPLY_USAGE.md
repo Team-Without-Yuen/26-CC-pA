@@ -286,6 +286,8 @@ Netlist::NetlistEditReport report = netlist.runEditApply(request);
 
 `InsertBuffersForSpecificNet` 的 `beforeMaxFanout` / `afterMaxFanout` 只統計指定 net（bus 時含各 bit）與本次建立的 buffer tree，不受其他未指定 high-fanout net 影響。全設計 fanout constraint 必須改用 `InsertBuffersForFanout`。
 
+`InsertBuffersForFanout` 的 `fanoutChange` 只統計實際可由此 pass 處理的 active non-constant nets。`1'b0` / `1'b1` literal 沒有 gate driver，也不建立額外 buffer tree，因此不參與 `beforeMaxFanout`、`afterMaxFanout`、`meetsConstraint` 或 violation list；一般 connectivity query 仍可獨立回報 constant literal 的實際 load 數。
+
 ---
 
 ## 8. InsertBuffersOnEachLoad
@@ -750,6 +752,10 @@ runEditApply unsupported command
 ```text
 Summary: 142 passed, 0 failed.
 ```
+
+題目明確要求把每顆二輸入 XOR 轉為標準 4-NAND circuit 時，仍使用
+`ReplaceGateType`、`targetGateType=XOR`、`allowedTypes={NAND}`。內建
+`XOR_to_NAND_DAG` 會為每顆 XOR 產生四顆 NAND；不需要另外使用低階 rewiring。
 
 `mini test/test2` 另有 39 個 Edit Apply assertions，包含 tied-input pin-level fanout
 insertion；專用 regression 確認兩個實際 sink pins 只建立兩顆 BUF，且 mutation 後

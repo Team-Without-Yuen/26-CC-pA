@@ -161,7 +161,11 @@ timeBudgetSeconds / elapsedSeconds
 | true | true | false | 候選由 qualified pipeline 提交，method 為 `CertifiedRewrite`；未執行 whole-design SAT |
 | true | false | false/true | 無可量測改善，original 被保留 |
 | false | false | false | request/scope 在 mutation 前即無效 |
-| false | true/false | true | 候選未達 target、違規、timeout 或不等價，未提交 |
+| false | false | true | 候選未達 target、違規、timeout 或不等價，未提交；候選差異只保留在診斷欄位 |
+
+`changed` 只描述 current design 是否提交變更。被丟棄的候選即使在
+`beforeStats/afterStats/diff`、`costChange` 或 `candidateGenerated` 中仍有差異，
+也必須回傳 `changed=false`；此時以 `rolledBack=true` 表示候選曾產生但未提交。
 
 ## 5. 高階入口與執行流程
 

@@ -31,6 +31,13 @@ $commands = @(
     "depth_query net and_y"
     "opt_apply critical_path_depth --scope net_fanin and_y --objective cone --allowed NAND NOT --time-limit 30"
     "report_query last_edit"
+    "read mini test/test32/area_target_circuit.v"
+    "opt_apply gate_count_minimization --scope whole --target-cost 0 --time-limit 30"
+    "structure_query summary"
+    "report_query last_edit"
+    "read mini test/test32/area_target_circuit.v"
+    "opt_apply gate_count_minimization --scope whole --target-cost 1 --time-limit 30"
+    "structure_query summary"
     "quit"
 ) -join "`n"
 
@@ -53,8 +60,8 @@ function Check-Result {
     }
 }
 
-Check-Result ($responses.Count -eq 28) "every optimization CLI command returns one envelope"
-if ($responses.Count -ge 28) {
+Check-Result ($responses.Count -eq 35) "every optimization CLI command returns one envelope"
+if ($responses.Count -ge 35) {
     $help = $responses[1]
     $query = $responses[2]
     $beforeDepth = $responses[3]
@@ -81,6 +88,13 @@ if ($responses.Count -ge 28) {
     $andDepth = $responses[24]
     $andOptimal = $responses[25]
     $cachedOptimal = $responses[26]
+    $areaRejectRead = $responses[27]
+    $areaRejected = $responses[28]
+    $areaAfterReject = $responses[29]
+    $cachedAreaRejected = $responses[30]
+    $areaAcceptRead = $responses[31]
+    $areaAccepted = $responses[32]
+    $areaAfterAccept = $responses[33]
 
     Check-Result `
         ($help -match "opt_query critical_path_depth" -and
@@ -178,6 +192,7 @@ if ($responses.Count -ge 28) {
         ($rejected -match "status: error" -and
          $rejected -match "design_revision: 0" -and
          $rejected -match "report_success: false" -and
+         $rejected -match "report_changed: false" -and
          $rejected -match "rolled_back: true" -and
          $rejected -match "target_value: 0" -and
          $rejected -match "meets_target: false" -and
@@ -190,6 +205,7 @@ if ($responses.Count -ge 28) {
 
     Check-Result `
         ($cachedRejected -match "report_success: false" -and
+         $cachedRejected -match "report_changed: false" -and
          $cachedRejected -match "rolled_back: true" -and
          $cachedRejected -match "target_value: 0") `
         "failed optimization report is also cached for follow-up questions"
@@ -263,6 +279,66 @@ if ($responses.Count -ge 28) {
          $cachedOptimal -match "core_status: NO_IMPROVEMENT" -and
          $cachedOptimal -match "candidate_generated: false") `
         "proven-optimal no-change report is cached for follow-up questions"
+
+    Check-Result `
+        ($areaRejectRead -match "status: ok" -and
+         $areaRejectRead -match "gate_count: 3" -and
+         $areaRejectRead -match "design_revision: 0") `
+        "area target regression starts from the three-gate design"
+
+    Check-Result `
+        ($areaRejected -match "status: error" -and
+         $areaRejected -match "report_success: false" -and
+         $areaRejected -match "report_changed: false" -and
+         $areaRejected -match "rolled_back: true" -and
+         $areaRejected -match "candidate_generated: true" -and
+         $areaRejected -match "candidate_accepted: false" -and
+         $areaRejected -match "before_value: 3" -and
+         $areaRejected -match "after_value: 1" -and
+         $areaRejected -match "target_value: 0" -and
+         $areaRejected -match "meets_target: false" -and
+         $areaRejected -match "design_revision: 0") `
+        "rejected area candidate retains diagnostics but reports no committed change"
+
+    Check-Result `
+        ($areaAfterReject -match "status: ok" -and
+         $areaAfterReject -match "gates: 3" -and
+         $areaAfterReject -match "design_revision: 0") `
+        "rejected area candidate leaves the current design unchanged"
+
+    Check-Result `
+        ($cachedAreaRejected -match "report_success: false" -and
+         $cachedAreaRejected -match "report_changed: false" -and
+         $cachedAreaRejected -match "rolled_back: true" -and
+         $cachedAreaRejected -match "candidate_generated: true" -and
+         $cachedAreaRejected -match "candidate_accepted: false") `
+        "cached rejected area report preserves committed-state semantics"
+
+    Check-Result `
+        ($areaAcceptRead -match "status: ok" -and
+         $areaAcceptRead -match "gate_count: 3" -and
+         $areaAcceptRead -match "design_revision: 0") `
+        "accepted area target regression reloads the baseline"
+
+    Check-Result `
+        ($areaAccepted -match "status: ok" -and
+         $areaAccepted -match "report_success: true" -and
+         $areaAccepted -match "report_changed: true" -and
+         $areaAccepted -match "rolled_back: false" -and
+         $areaAccepted -match "candidate_generated: true" -and
+         $areaAccepted -match "candidate_accepted: true" -and
+         $areaAccepted -match "before_value: 3" -and
+         $areaAccepted -match "after_value: 1" -and
+         $areaAccepted -match "target_value: 1" -and
+         $areaAccepted -match "meets_target: true" -and
+         $areaAccepted -match "design_revision: 1") `
+        "accepted area candidate still reports and commits its change"
+
+    Check-Result `
+        ($areaAfterAccept -match "status: ok" -and
+         $areaAfterAccept -match "gates: 1" -and
+         $areaAfterAccept -match "design_revision: 1") `
+        "accepted area candidate updates the current design"
 }
 
 Write-Output "Summary: $passed passed, $failed failed."

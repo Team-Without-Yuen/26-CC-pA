@@ -360,6 +360,11 @@ ReplaceGateType
   -> 若 scope 內沒有 targetGateType，回 success/no change
 ```
 
+當 target 是二輸入 `XOR` 且 RHS 只允許 `NAND` 時，standard-library rule
+`XOR_to_NAND_DAG` 是正式的四 NAND replacement：先建立共享的 `NAND(A,B)`，再建立兩個
+branch NAND 與一個 root NAND。這不是由 aggregate gate count 推測出的偶然結果；
+`mini test/test66` 逐組驗證 gate 數與共享節點拓撲。
+
 report：
 
 ```text
@@ -427,6 +432,7 @@ report 化與 validation 過程中已修正：
 21. structural merge 保留不同具名 PO 的各自 driver；PO 與 internal duplicate 衝突時選 PO driver 為 canonical，避免破壞 output net 名稱。
 22. `validateStructure()` 以 expected/actual pin-level adjacency 一次比對，完整檢查 multiplicity，不再對每個 input pin 重掃 high-fanout load list。
 23. internal `redirectAllLoads()` 復用 pin-level `replaceAllLoadsOfNet()`；legacy `allowDuplicateLoads` 參數保留相容性，但不得再把多個實際 pins 壓成單一 load ID，report changed gate 清單則依 gate 去重。
+24. `InsertBuffersForFanout` 的 `fanoutChange` 與 mutation 使用相同的 active non-constant net universe；constant literal 仍可由 connectivity query 回報 load 數，但不會被列為全域 buffer edit 的 constraint violation。
 ```
 
 ---

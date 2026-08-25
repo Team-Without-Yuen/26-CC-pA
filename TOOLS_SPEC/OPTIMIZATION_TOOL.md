@@ -303,6 +303,10 @@ scoped_fanin_cone_gate_count      指定 cone 的組合閘數
 | `ERROR_CONSTRAINT_UNSATISFIED` | 無法在要求的 basis 下產出合規電路 |
 | `ERROR_NOT_EQUIVALENT` | 等價檢查反證，候選已回滾 |
 
+若候選被拒絕，top-level `report_changed` 必須為 `false`，即使 cost、graph diff
+與 `candidate_generated:true` 仍描述該候選；`rolled_back:true` 表示候選未提交，
+current design 與 `design_revision` 均維持不變。
+
 `whole_design_equivalence_checked`、`whole_design_equivalent`、`compared_output_count`、`compared_dff_d_count` 是舊版欄位，本 pass 不再填值，一律為 `false` / `0`。等價結論改讀 `validation.equivalence_method`。
 
 ### 等價結果分三類

@@ -61,6 +61,46 @@ int getQaFanoutLoadCount(const std::vector<Gate>& gates,
     return total;
 }
 
+// EditApply can only redistribute loads of ordinary active nets. Constant
+// literals remain valid fanout-query targets, but they are not gate-driven
+// signals and insertBuffersForFanout() intentionally does not build buffer
+// trees for them. Keep this report universe identical to the mutation
+// universe without changing the public connectivity-query contract.
+GlobalFanoutReport getBufferableFanoutReport(const Netlist& netlist,
+                                             int maxFanoutLimit) {
+    GlobalFanoutReport report;
+    report.ok = true;
+    report.message = "Bufferable global fanout report";
+    report.fanoutLimit = maxFanoutLimit;
+
+    for (size_t netIndex = 0; netIndex < netlist.getNetCount(); ++netIndex) {
+        const int netId = static_cast<int>(netIndex);
+        const Net& net = netlist.getNet(netId);
+        if (net.isRemoved || net.isConst) continue;
+
+        FanoutLoadReport netReport = netlist.getFanoutLoadReport(netId);
+        if (!netReport.ok) continue;
+
+        ++report.checkedNetCount;
+        if (report.maxFanoutReports.empty() ||
+            netReport.totalLoadCount > report.maxFanout) {
+            report.maxFanout = netReport.totalLoadCount;
+            report.maxFanoutReports.clear();
+            report.maxFanoutReports.push_back(netReport);
+        } else if (netReport.totalLoadCount == report.maxFanout) {
+            report.maxFanoutReports.push_back(netReport);
+        }
+
+        if (maxFanoutLimit >= 0 &&
+            netReport.totalLoadCount > static_cast<size_t>(maxFanoutLimit)) {
+            report.violatingReports.push_back(netReport);
+        }
+    }
+
+    report.satisfiesLimit = report.violatingReports.empty();
+    return report;
+}
+
 void rebuildNetLoadGateIds(Netlist& netlist) {
     for (size_t netIndex = 0; netIndex < netlist.getNetCount(); ++netIndex) {
         netlist.getNetMutable(static_cast<int>(netIndex)).loadGateIds.clear();
@@ -747,11 +787,13 @@ BufferInsertionReport Netlist::insertBuffersForFanout(int maxFanout) {
 
 NetlistEditReport Netlist::insertBuffersForFanoutWithReport(int maxFanout) {
     Netlist before = cloneForRollback();
-    GlobalFanoutReport beforeFanout = getGlobalFanoutReport(maxFanout);
+    GlobalFanoutReport beforeFanout =
+        getBufferableFanoutReport(*this, maxFanout);
 
     BufferInsertionReport insertion = insertBuffersForFanout(maxFanout);
 
-    GlobalFanoutReport afterFanout = getGlobalFanoutReport(maxFanout);
+    GlobalFanoutReport afterFanout =
+        getBufferableFanoutReport(*this, maxFanout);
     NetlistEditReport report = buildEditReport(
         before,
         *this,
