@@ -38,7 +38,7 @@ Technology mapping:
    `opt_apply critical_path_depth` 覆蓋。固定 basis conversion 仍由
    `edit_apply convert_basis` 負責。
 
-2. 任意 functional-equivalent pair 已可由 `func_search equivalent_pairs` 搜尋，並由 `edit_apply merge_functionally_equivalent_gates` 完成 cycle-safe merge、詳細 report 與 whole-design SAT rollback。
+2. 任意 functional-equivalent pair 已可由 `func_search equivalent_pairs` 搜尋，並由 `edit_apply merge_functionally_equivalent_gates` 完成 SAT-class proof、cycle-safe merge、結構驗證、詳細 report 與失敗 rollback；正式流程不執行 final whole-design SAT。
    structural duplicate 仍可使用成本較低的 `merge_structurally_equivalent_gates`；observability-aware redundancy removal 是不同問題，尚未完整。
 ```
 
@@ -132,7 +132,7 @@ How many NOT gates are currently in the design?
 | Prompt 類型 | 出現 testcase | 對應 command | 目前狀態 |
 |---|---|---|---|
 | `Try to merge any pairs of gates ... structural duplicates.` | test33 | `MergeStructurallyEquivalentGates` | API + tools CLI covered |
-| `Find and merge all gate pairs ... functionally equivalent.` | test29, test30 | `MergeFunctionallyEquivalentGates` | API + tools CLI covered；class-only SAT search、cycle-safe merge、whole-design SAT、rollback、detailed report |
+| `Find and merge all gate pairs ... functionally equivalent.` | test29, test30 | `MergeFunctionallyEquivalentGates` | API + tools CLI covered；class-only SAT search、cycle-safe merge、CertifiedRewrite、failure rollback、detailed report；無 final whole-design SAT |
 | `Are there any redundant gates ... Remove them if found.` | test38 | `MergeStructurallyEquivalentGates` | API + tools CLI covered；official circuit 實測為 14 個 structural duplicates，whole-design SAT 通過 |
 
 目前建議：
@@ -264,7 +264,7 @@ Covered by OptApply::CriticalPathDepth:
 2. whole/local allowed/banned basis
 3. DFF.Q fanin boundary no-op
 4. targetDepth / no-improvement original retention
-5. structure + basis + whole-design SAT validation
+5. structure + basis validation + CertifiedRewrite（無 final whole-design SAT）
 6. NetlistEditReport.depthChange / depthOptimization
 ```
 

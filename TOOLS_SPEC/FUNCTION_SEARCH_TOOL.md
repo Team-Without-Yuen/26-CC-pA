@@ -248,8 +248,7 @@ Read: complete、complementary_class_count、complementary_pair_count、output_f
 edit_apply merge_functionally_equivalent_gates <scope> [scope_name]
 ```
 
-該 edit command 內部使用緊湊 equivalence classes，並執行 mandatory whole-design SAT 與失敗
-rollback。修改後若 prompt 再要求證明，可使用相應的 equivalence query。
+該 edit command 內部使用緊湊 equivalence classes、cycle-safe rewrite 與結構驗證，候選 gate 的 SAT 結果作為 `CertifiedRewrite`；不執行 final whole-design SAT。搜尋不完整、apply timeout、cycle safety 或結構驗證失敗時會 rollback。修改後若 prompt 明確要求獨立 baseline comparison，可使用相應的 equivalence query。
 
 ## 8. 限制
 

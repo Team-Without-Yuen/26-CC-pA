@@ -629,7 +629,7 @@ How many gates were removed in the previous step?
 What changed after the last transformation?
 ```
 
-責任邊界：`EditApply` 執行指定操作，不負責搜尋最佳 cost/depth。一般 edit 若題目要求 whole-design 功能不變，修改後還要使用 `WholeDesignEquivalence`；`merge_functionally_equivalent_gates` 已在 transaction 內強制執行 whole-design SAT。任何情況都不能只看到 edit changed 就宣稱等價。
+責任邊界：`EditApply` 執行指定操作，不負責搜尋最佳 cost/depth。public edit 依 structural/local/certified rewrite 契約提交，不在 transaction 內執行 final whole-design SAT；`merge_functionally_equivalent_gates` 保留候選 gate 間的 SAT 等價搜尋，但不再執行修改後的 whole-design CEC。只有 prompt 明確要求獨立 baseline comparison 時才使用 `equiv_query`。
 
 test38 的 redundant-gate step 已確認 routing 到 `merge_structurally_equivalent_gates`，不是 general observability search。未知 hidden prompt 若明確需要 observability-only redundancy，仍不可由 structural merge 的結果外推。
 

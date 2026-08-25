@@ -93,7 +93,7 @@ enum class EquivalenceCheckMethod {
 
 目前 `validateEditResult()` 檢查 structure 與 Problem A constraints，但本身不做 whole-design equivalence。Problem A constraint 採 baseline-aware 語意：`problemAConstraintsValid` 表示 after design 絕對合法，`problemAConstraintsRegressed` 表示 edit 是否新增 baseline 原本沒有的違規；只有新增違規才使 edit validation 失敗。已知自身 rewrite rule 的 wrapper 會另呼叫 `certifyEquivalence()` 補上 certificate。
 
-`functionalMerge` 會保留 scope/filter、search status/completeness、candidate/class/pair/SAT 統計、whole-design verification 狀態，以及每筆 representative/removed gate/net record。這使 follow-up 能直接回答實際合併數量與保留/移除對象，不必重新分析 after design。
+`functionalMerge` 會保留 scope/filter、search status/completeness、apply timeout、candidate/class/pair/SAT 統計，以及每筆 representative/removed gate/net record。legacy whole-design verification 欄位維持 false。這使 follow-up 能直接回答實際合併數量與保留/移除對象，不必重新分析 after design。
 
 ---
 
@@ -247,9 +247,9 @@ LocalRewriteRule:
   constant propagation、same-input simplification、local/safe cleanup fixpoint、
   technology mapping / basis conversion
 
-WholeDesignSat:
+CertifiedRewrite:
   MergeFunctionallyEquivalentGates；先以 FunctionSearch 建立 SAT 等價類，
-  cycle-safe rewiring 後再比較全部 PO 與 DFF.D endpoints
+  再執行 cycle-safe rewiring 與結構驗證，不執行 final whole-design SAT
 ```
 
 成功的 public `runEditApply()` 不應回傳 `NotChecked`。若使用者要求 equivalence，但該 command 沒有 certificate，report 應給 warning 或失敗，不應宣稱等價。
@@ -259,7 +259,7 @@ dispatch 對應：
 ```text
 Rename*                    -> rename*WithReport()
 Cleanup / Simplification   -> cleanup / simplification WithReport wrappers, including SafeCleanupFixpoint
-Functional duplicate merge -> FunctionSearch class-only SAT -> cycle-safe merge -> whole-design SAT
+Functional duplicate merge -> FunctionSearch class-only SAT -> cycle-safe merge -> structure validation -> CertifiedRewrite
 Buffer insertion           -> insertBuffer*WithReport()
 Technology mapping         -> TechMapper::*WithReport()
 Internal primitive         -> validation 階段直接擋下
@@ -434,7 +434,7 @@ report 化與 validation 過程中已修正：
 ## 9. 目前限制
 
 ```text
-1. 大部分 public edit wrapper 使用 structural/local certificate；`MergeFunctionallyEquivalentGates` 已內建 mandatory whole-design SAT，其他 edit 仍可視 prompt 再呼叫 `equiv_query original/previous_edit`。
+1. public edit wrapper 使用 structural/local/certified rewrite certificate；`MergeFunctionallyEquivalentGates` 保留候選 gate 的 SAT proof，但不執行 final whole-design SAT。只有 prompt 明確要求獨立 baseline comparison 時才呼叫 `equiv_query original/previous_edit`。
 2. Technology mapping 已作為 `edit_apply` 子功能公開；其 edit report 使用 rule-based local certificate，需要時再另外執行 whole-design `equiv_query`。
 3. depthChange 已接 global critical depth comparison，但尚未支援 opt request targetDepth / endpoint-specific depth comparison。
 4. 大型 optimization pass 尚未導入 EditTrace。
@@ -463,7 +463,7 @@ runEditApply insert_buffers_for_specific_net
 runEditApply blocks unchecked low-level primitive
 runEditApply validateEquivalence has certificate for public edit
 runEditApply functional equivalent merge / class-only search / cycle-safe representative
-runEditApply functional merge whole-design SAT / no-change / scoped merge / timeout-before-mutation
+runEditApply functional merge CertifiedRewrite / no-change / scoped merge / timeout-before-or-during-mutation
 runEditApply missing required rename argument
 runEditApply missing fanout net
 runEditApply invalid fanout limit
@@ -502,4 +502,4 @@ low-level primitive、legacy structural alias 與代表性 invalid request 另�
 `rollbackOnFailure=false` 僅保留 request 相容性，public wrapper 在 validation failure
 時仍固定 rollback，不提供保留無效設計的對外模式。
 
-另外 `mini test/test26` 的 functional search/merge C++ API regression 為 28 passed、0 failed，並覆蓋直接 timeout 與 whole-design verification failure rollback。官方原始 test29/test30 單獨執行 functional merge 時分別合併 7/1 顆；`mini test/test45` 依官方 prompt 重播 AND/NOT conversion、cleanup、double-inverter collapse 後再 merge，分別完整合併 361/494 顆。兩題的 oracle、report、active-gate delta、mandatory/independent whole-design CEC 與 write/readback CEC 全部一致。
+另外 `mini test/test26` 的 functional search/merge regression 覆蓋直接 timeout、apply timeout、cycle-safe rewrite 與 `CertifiedRewrite` report。官方原始 test29/test30 單獨執行 functional merge 時分別合併 7/1 顆；`mini test/test45` 依官方 prompt 重播 AND/NOT conversion、cleanup、double-inverter collapse 後再 merge，並以開發期獨立 CEC 與 write/readback CEC 抽查結果。正式 edit flow 不執行 final whole-design SAT。

@@ -70,10 +70,10 @@ Check-Result `
     ($output.Contains("target_input_count: 3") -and $output.Contains("simplified_count: 1") -and $output.Contains("eliminated_target_gate_count: 0")) `
     "three-input NAND removes the neutral input without removing the NAND"
 Check-Result `
-    ($output.Contains("object: g_nand3") -and $output.Contains("type: NAND") -and $output.Contains("IN2 connected to net 'b'")) `
+    ($output.Contains("object: g_nand3") -and $output.Contains("type: NAND") -and $output.Contains("inputs=[IN1=a(PI), IN2=b(PI)]")) `
     "three-input NAND is reduced to two non-constant inputs"
 Check-Result `
-    ($output.Contains("object: g_xor3") -and $output.Contains("type: XNOR") -and $output.Contains("IN2 connected to net 'b'")) `
+    ($output.Contains("object: g_xor3") -and $output.Contains("type: XNOR") -and $output.Contains("inputs=[IN1=a(PI), IN2=b(PI)]")) `
     "multi-input XOR constant parity flips XOR to XNOR"
 Check-Result `
     ($output.Contains("target_gate_type: ALL") -and $output.Contains("skipped_count: 0")) `

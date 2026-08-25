@@ -80,6 +80,64 @@ std::string targetScopeName(TargetScope scope) {
     }
 }
 
+template <typename T>
+void appendUnique(std::vector<T>& values, const T& value) {
+    if (std::find(values.begin(), values.end(), value) == values.end()) {
+        values.push_back(value);
+    }
+}
+
+void collectChangedGraphObjects(
+    const Netlist& before,
+    const Netlist& after,
+    NetlistEditReport& report)
+{
+    const size_t gateCount = std::max(before.getGateCount(), after.getGateCount());
+    for (size_t index = 0; index < gateCount; ++index) {
+        const Gate* oldGate = index < before.getGateCount()
+            ? &before.getGate(static_cast<int>(index)) : nullptr;
+        const Gate* newGate = index < after.getGateCount()
+            ? &after.getGate(static_cast<int>(index)) : nullptr;
+        const bool changed =
+            oldGate == nullptr || newGate == nullptr ||
+            oldGate->id != newGate->id ||
+            oldGate->instName != newGate->instName ||
+            oldGate->type != newGate->type ||
+            oldGate->inputNetIds != newGate->inputNetIds ||
+            oldGate->inputPinNames != newGate->inputPinNames ||
+            oldGate->outputNetId != newGate->outputNetId;
+        if (!changed) continue;
+
+        const Gate& gate = newGate != nullptr ? *newGate : *oldGate;
+        appendUnique(report.changedGateIds, gate.id);
+        appendUnique(report.changedGateNames, gate.instName);
+    }
+
+    const size_t netCount = std::max(before.getNetCount(), after.getNetCount());
+    for (size_t index = 0; index < netCount; ++index) {
+        const Net* oldNet = index < before.getNetCount()
+            ? &before.getNet(static_cast<int>(index)) : nullptr;
+        const Net* newNet = index < after.getNetCount()
+            ? &after.getNet(static_cast<int>(index)) : nullptr;
+        const bool changed =
+            oldNet == nullptr || newNet == nullptr ||
+            oldNet->id != newNet->id ||
+            oldNet->name != newNet->name ||
+            oldNet->driverGateId != newNet->driverGateId ||
+            oldNet->loadGateIds != newNet->loadGateIds ||
+            oldNet->isPI != newNet->isPI ||
+            oldNet->isPO != newNet->isPO ||
+            oldNet->isConst != newNet->isConst ||
+            oldNet->isRemoved != newNet->isRemoved ||
+            oldNet->constVal != newNet->constVal;
+        if (!changed) continue;
+
+        const Net& net = newNet != nullptr ? *newNet : *oldNet;
+        appendUnique(report.changedNetIds, net.id);
+        appendUnique(report.changedNetNames, net.name);
+    }
+}
+
 bool isCombinationalGateType(GateType type) {
     switch (type) {
         case GateType::AND:
@@ -952,6 +1010,7 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                 candidate.changed = candidate.changed || core.changed;
                 candidate.costChange =
                     buildOptimizationCostChange(original, working, request);
+                collectChangedGraphObjects(original, working, candidate);
                 return candidate;
             };
 
@@ -1106,10 +1165,22 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                 "Equivalence certified by the qualified function-preserving optimization and lowering pipeline; whole-design SAT was not executed.");
 
             if (report.costChange.has_value()) {
-                report.message = std::string(areaGoal ? "Gate count" : "Depth")
-                               + " reduced from "
-                               + std::to_string(report.costChange->beforeValue) + " to "
-                               + std::to_string(report.costChange->afterValue) + ".";
+                const std::string metric = areaGoal ? "Gate count" : "Depth";
+                if (report.costChange->improved) {
+                    report.message = metric + " reduced from "
+                                   + std::to_string(report.costChange->beforeValue) + " to "
+                                   + std::to_string(report.costChange->afterValue) + ".";
+                } else if (report.costChange->beforeValue ==
+                           report.costChange->afterValue) {
+                    report.message = metric + " remained at "
+                                   + std::to_string(report.costChange->afterValue)
+                                   + " while the requested gate constraints were satisfied.";
+                } else {
+                    report.message = metric + " changed from "
+                                   + std::to_string(report.costChange->beforeValue) + " to "
+                                   + std::to_string(report.costChange->afterValue)
+                                   + " while the requested gate constraints were satisfied.";
+                }
             } else {
                 report.message = areaGoal ? "Gate count optimization applied."
                                           : "Depth optimization applied.";

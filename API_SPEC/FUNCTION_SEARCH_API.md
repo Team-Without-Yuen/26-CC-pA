@@ -402,4 +402,4 @@ test29/test30 的 artifact record 數與 `match_count` 完全一致；test70 是
 通用 FindAny 會先檢查 target 直接 driver 的 eligible inputs，再保留原始完整候選順序作 fallback。
 此排序不刪除候選、不影響 FindAll；test70 OR probe 的 simulation pair 數由 257,412,964 降為 1。
 
-`mini test/test45` 另重播 test29/test30 在 functional merge 前的官方順序：AND/NOT basis conversion、dead/dangling cleanup、double-inverter collapse，再建立只讀 oracle 並呼叫 `EditApply::MergeFunctionallyEquivalentGates`。此時分別完整合併 361/494 顆；oracle class size、merge records、`mergedGateCount` 與 active-gate delta 完全一致，mandatory CEC、獨立 CEC、write/readback CEC 皆通過。
+`mini test/test45` 另重播 test29/test30 在 functional merge 前的官方順序：AND/NOT basis conversion、dead/dangling cleanup、double-inverter collapse，再建立只讀 oracle 並呼叫 `EditApply::MergeFunctionallyEquivalentGates`。此時分別完整合併 361/494 顆；oracle class size、merge records、`mergedGateCount` 與 active-gate delta 完全一致。開發期獨立 CEC 與 write/readback CEC 皆通過；正式 edit flow 不執行 final whole-design SAT。

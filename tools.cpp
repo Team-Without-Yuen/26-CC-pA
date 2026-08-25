@@ -3552,7 +3552,99 @@ void printNetlistStats(const Netlist& netlist,
     printGateTypeMap(netlist, "    gate_type_counts", stats.gateTypeCounts);
 }
 
-void printEditReport(const Netlist& netlist, const Netlist::NetlistEditReport& report) {
+ListArtifactContent makeEditChangedListArtifactContent(
+    const Netlist::NetlistEditReport& report)
+{
+    ListArtifactContent content;
+    content.fields = {
+        {"operation_name", report.operationName},
+        {"report_message", report.message},
+        {"report_success", report.success ? "true" : "false"},
+        {"report_changed", report.changed ? "true" : "false"},
+        {"rolled_back", report.rolledBack ? "true" : "false"},
+        {"before_active_gate_count", std::to_string(report.beforeStats.activeGateCount)},
+        {"after_active_gate_count", std::to_string(report.afterStats.activeGateCount)},
+        {"before_active_net_count", std::to_string(report.beforeStats.activeNetCount)},
+        {"after_active_net_count", std::to_string(report.afterStats.activeNetCount)}
+    };
+    if (report.costChange) {
+        content.fields.push_back({"cost_metric", report.costChange->metricName});
+        content.fields.push_back(
+            {"cost_before", std::to_string(report.costChange->beforeValue)});
+        content.fields.push_back(
+            {"cost_after", std::to_string(report.costChange->afterValue)});
+    }
+
+    ListArtifactSection gateIds;
+    gateIds.title = "Changed gate IDs";
+    gateIds.generatedEntryCount = report.changedGateIds.size();
+    gateIds.generateEntry = [&report](size_t index) {
+        return std::to_string(report.changedGateIds[index]);
+    };
+    content.sections.push_back(std::move(gateIds));
+
+    ListArtifactSection netIds;
+    netIds.title = "Changed net IDs";
+    netIds.generatedEntryCount = report.changedNetIds.size();
+    netIds.generateEntry = [&report](size_t index) {
+        return std::to_string(report.changedNetIds[index]);
+    };
+    content.sections.push_back(std::move(netIds));
+
+    ListArtifactSection gateNames;
+    gateNames.title = "Changed gate names";
+    gateNames.entries = report.changedGateNames;
+    content.sections.push_back(std::move(gateNames));
+
+    ListArtifactSection netNames;
+    netNames.title = "Changed net names";
+    netNames.entries = report.changedNetNames;
+    content.sections.push_back(std::move(netNames));
+
+    if (report.functionalMerge) {
+        const auto& summary = *report.functionalMerge;
+        ListArtifactSection records;
+        records.title = "Functional merge records";
+        records.generatedEntryCount = summary.records.size();
+        records.generateEntry = [&summary](size_t index) {
+            const auto& record = summary.records[index];
+            std::ostringstream line;
+            line << "representative_gate=" << record.representativeGateName
+                 << " representative_gate_id=" << record.representativeGateId
+                 << " representative_net=" << record.representativeNetName
+                 << " representative_net_id=" << record.representativeNetId
+                 << " removed_gate=" << record.removedGateName
+                 << " removed_gate_id=" << record.removedGateId
+                 << " removed_net=" << record.removedNetName
+                 << " removed_net_id=" << record.removedNetId;
+            return line.str();
+        };
+        content.sections.push_back(std::move(records));
+
+        ListArtifactSection skipped;
+        skipped.title = "Functional merge skipped gate names";
+        skipped.entries = summary.skippedGateNames;
+        content.sections.push_back(std::move(skipped));
+    }
+    return content;
+}
+
+ListArtifactResult writeEditChangedListArtifactIfNeeded(
+    ToolSession& session,
+    const std::string& command,
+    const std::string& mode,
+    const Netlist::NetlistEditReport& report)
+{
+    return writeAutomaticListArtifact(
+        session,
+        command,
+        mode,
+        makeEditChangedListArtifactContent(report));
+}
+
+void printEditReport(const Netlist& netlist,
+                     const Netlist::NetlistEditReport& report,
+                     bool suppressChangedLists = false) {
     std::cout << "  report_success: " << (report.success ? "true" : "false") << "\n";
     std::cout << "  report_changed: " << (report.changed ? "true" : "false") << "\n";
     std::cout << "  rolled_back: " << (report.rolledBack ? "true" : "false") << "\n";
@@ -3725,6 +3817,8 @@ void printEditReport(const Netlist& netlist, const Netlist::NetlistEditReport& r
                   << (summary.searchComplete ? "true" : "false") << "\n";
         std::cout << "    search_timed_out: "
                   << (summary.searchTimedOut ? "true" : "false") << "\n";
+        std::cout << "    apply_timed_out: "
+                  << (summary.applyTimedOut ? "true" : "false") << "\n";
         std::cout << "    whole_design_equivalence_checked: "
                   << (summary.wholeDesignEquivalenceChecked ? "true" : "false")
                   << "\n";
@@ -3745,23 +3839,25 @@ void printEditReport(const Netlist& netlist, const Netlist::NetlistEditReport& r
         std::cout << "    total_elapsed_seconds: "
                   << summary.totalElapsedSeconds << "\n";
         std::cout << "    merge_record_count: " << summary.records.size() << "\n";
-        for (size_t index = 0; index < summary.records.size(); ++index) {
-            const auto& record = summary.records[index];
-            std::cout << "    merge_record " << (index + 1) << ":\n";
-            std::cout << "      representative_gate: "
-                      << record.representativeGateName << "\n";
-            std::cout << "      representative_gate_id: "
-                      << record.representativeGateId << "\n";
-            std::cout << "      representative_net: "
-                      << record.representativeNetName << "\n";
-            std::cout << "      representative_net_id: "
-                      << record.representativeNetId << "\n";
-            std::cout << "      removed_gate: " << record.removedGateName << "\n";
-            std::cout << "      removed_gate_id: " << record.removedGateId << "\n";
-            std::cout << "      removed_net: " << record.removedNetName << "\n";
-            std::cout << "      removed_net_id: " << record.removedNetId << "\n";
+        if (!suppressChangedLists) {
+            for (size_t index = 0; index < summary.records.size(); ++index) {
+                const auto& record = summary.records[index];
+                std::cout << "    merge_record " << (index + 1) << ":\n";
+                std::cout << "      representative_gate: "
+                          << record.representativeGateName << "\n";
+                std::cout << "      representative_gate_id: "
+                          << record.representativeGateId << "\n";
+                std::cout << "      representative_net: "
+                          << record.representativeNetName << "\n";
+                std::cout << "      representative_net_id: "
+                          << record.representativeNetId << "\n";
+                std::cout << "      removed_gate: " << record.removedGateName << "\n";
+                std::cout << "      removed_gate_id: " << record.removedGateId << "\n";
+                std::cout << "      removed_net: " << record.removedNetName << "\n";
+                std::cout << "      removed_net_id: " << record.removedNetId << "\n";
+            }
+            printStringList("    skipped_gate_names", summary.skippedGateNames);
         }
-        printStringList("    skipped_gate_names", summary.skippedGateNames);
     }
 
     if (report.optimization) {
@@ -3812,10 +3908,12 @@ void printEditReport(const Netlist& netlist, const Netlist::NetlistEditReport& r
         std::cout << "    elapsed_seconds: " << summary.elapsedSeconds << "\n";
     }
 
-    printIntList("  changed_gate_ids", report.changedGateIds);
-    printIntList("  changed_net_ids", report.changedNetIds);
-    printStringList("  changed_gate_names", report.changedGateNames);
-    printStringList("  changed_net_names", report.changedNetNames);
+    if (!suppressChangedLists) {
+        printIntList("  changed_gate_ids", report.changedGateIds);
+        printIntList("  changed_net_ids", report.changedNetIds);
+        printStringList("  changed_gate_names", report.changedGateNames);
+        printStringList("  changed_net_names", report.changedNetNames);
+    }
     printStringList("  warnings", report.warnings);
 }
 
@@ -6112,7 +6210,7 @@ void printHelp() {
         << "            [--target-cost N] [--time-limit seconds]\n"
         << "            [--allow-no-improvement] [--verbose]\n"
         << "  critical_path_depth minimizes logic depth; gate_count_minimization\n"
-        << "  minimizes combinational gate count\n"
+        << "  minimizes gate count (global scope includes DFF; cone scope counts combinational gates)\n"
         << "  --scope/--cost-scope select where the cost is measured\n"
         << "  --target-cost is a depth for critical_path_depth and a gate count\n"
         << "  for gate_count_minimization\n"
@@ -7234,8 +7332,11 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         response.mode = toLower(mode);
         response.message = report.message;
         response.complete = report.success;
+        const ListArtifactResult artifact = writeEditChangedListArtifactIfNeeded(
+            session, command, response.mode, report);
         emitToolResponse(session, response, [&]() {
-            printEditReport(session.current, report);
+            printEditReport(session.current, report, artifact.complete);
+            printListArtifactMetadata(artifact);
         });
         return true;
     }
@@ -7365,8 +7466,12 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         response.mode = "last_edit";
         response.message = "Cached last edit report.";
         response.complete = true;
+        const ListArtifactResult artifact = writeEditChangedListArtifactIfNeeded(
+            session, command, response.mode, *session.lastEditReport);
         emitToolResponse(session, response, [&]() {
-            printEditReport(session.current, *session.lastEditReport);
+            printEditReport(
+                session.current, *session.lastEditReport, artifact.complete);
+            printListArtifactMetadata(artifact);
         });
         return true;
     }
@@ -7402,6 +7507,7 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         const bool functionalMergeTimedOut =
             report.functionalMerge &&
             (report.functionalMerge->searchTimedOut ||
+             report.functionalMerge->applyTimedOut ||
              report.functionalMerge->wholeDesignTimedOut);
         const bool deadLogicTimedOut =
             report.deadLogic && report.deadLogic->timedOut;
@@ -7430,7 +7536,12 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             ? report.message
             : "Edit completed, but the requested equivalence certificate is unavailable. " + report.message;
         response.complete = report.success && equivalenceComplete && !anyTimedOut;
-        emitToolResponse(session, response, [&]() { printEditReport(session.current, report); });
+        const ListArtifactResult artifact = writeEditChangedListArtifactIfNeeded(
+            session, command, response.mode, report);
+        emitToolResponse(session, response, [&]() {
+            printEditReport(session.current, report, artifact.complete);
+            printListArtifactMetadata(artifact);
+        });
         return true;
     }
 

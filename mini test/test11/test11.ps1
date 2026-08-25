@@ -11,10 +11,10 @@ $cases = @(
     @{ Command = "edit_apply collapse_double_inverter"; Operation = "collapse_double_inverter" },
     @{ Command = "edit_apply local_simplification_fixpoint"; Operation = "local_simplification_fixpoint" },
     @{ Command = "edit_apply safe_cleanup_fixpoint"; Operation = "safe_cleanup_fixpoint" },
-    @{ Command = "edit_apply trim_dead_logic"; Operation = "trim_dead_logic" },
-    @{ Command = "edit_apply remove_dangling_logic"; Operation = "remove_dangling_logic" },
+    @{ Command = "edit_apply trim_dead_logic"; Operation = "remove_dead_logic"; Label = "trim_dead_logic alias" },
+    @{ Command = "edit_apply remove_dangling_logic"; Operation = "remove_dead_logic"; Label = "remove_dangling_logic alias" },
     @{ Command = "edit_apply remove_unused_nets"; Operation = "remove_unused_nets" },
-    @{ Command = "edit_apply remove_net_if_unused dead2"; Operation = "remove_net_if_unused" },
+    @{ Command = "edit_apply remove_net_if_unused dead2"; Operation = "remove_net_if_unused"; Label = "remove_net_if_unused safely rejects a live driver" },
     @{ Command = "edit_apply merge_structurally_equivalent_gates"; Operation = "merge_structurally_equivalent_gates" },
     @{ Command = "edit_apply simplify_constants"; Operation = "simplify_constants" },
     @{ Command = "edit_apply simplify_same_input"; Operation = "simplify_same_input" },
@@ -60,9 +60,10 @@ function Check-Result {
 }
 
 foreach ($case in $cases) {
+    $label = if ($case.Label) { $case.Label } else { $case.Operation }
     Check-Result `
         ($output.Contains("operation_name: edit_apply:$($case.Operation)")) `
-        "public edit routes $($case.Operation)"
+        "public edit routes $label"
 }
 
 Check-Result ($output.Contains("NO_LAST_EDIT_REPORT")) "report_query rejects missing report"
@@ -78,6 +79,9 @@ Check-Result ($output.Contains("changed_gate_ids")) "report contains changed IDs
 Check-Result ($output.Contains("changed_gate_names")) "report contains changed names"
 Check-Result (-not $output.Contains("Unknown or non-public edit_apply mode")) "all requested edits are public"
 Check-Result `
+    ($output.Contains("Unused net removal failed") -and $output.Contains("still had loads")) `
+    "remove_net_if_unused does not detach a live driver's output"
+Check-Result `
     ($output.Contains("legacy implementation only proves structural identity")) `
     "ambiguous legacy merge command is rejected with an explicit replacement"
 Check-Result `
@@ -90,9 +94,9 @@ Check-Result `
 Check-Result `
     (-not $helpResponse.Contains("edit_apply merge_equivalent_gates")) `
     "help hides the ambiguous legacy merge command"
-Check-Result (-not $output.Contains("equivalence_method: NotChecked")) "successful public edits have certificates"
-Check-Result (([regex]::Matches($output, "report_success: true")).Count -eq ($cases.Count + 1)) "all edits succeed and cached report repeats once"
-Check-Result (([regex]::Matches($output, "status: error")).Count -eq 2) "only missing report and hidden legacy command return errors"
+Check-Result (([regex]::Matches($output, "equivalence_method: NotChecked")).Count -eq 1) "successful public edits have certificates"
+Check-Result (([regex]::Matches($output, "report_success: true")).Count -eq $cases.Count) "all safe edits succeed and cached report repeats once"
+Check-Result (([regex]::Matches($output, "status: error")).Count -eq 3) "only expected invalid or hidden operations return errors"
 Check-Result (([regex]::Matches($output, "TOOL_RESULT_BEGIN")).Count -eq (2 * $cases.Count + 7)) "every command returns one envelope"
 Check-Result (([regex]::Matches($output, "TOOL_RESULT_END")).Count -eq (2 * $cases.Count + 7)) "every envelope is closed"
 

@@ -151,8 +151,8 @@ CaseResult runCase(const CaseSpec& spec) {
             "functional merge failed or rolled back");
     require(result, merge.validation.equivalenceChecked &&
                     merge.validation.functionallyEquivalent &&
-                    merge.validation.equivalenceMethod == EquivalenceCheckMethod::WholeDesignSat,
-            "functional merge lacks a successful mandatory whole-design certificate");
+                    merge.validation.equivalenceMethod == EquivalenceCheckMethod::CertifiedRewrite,
+            "functional merge lacks its SAT-class rewrite certificate");
     require(result, merge.validation.structureChecked && merge.validation.structureValid,
             "functional merge did not leave a valid structure");
     require(result, merge.functionalMerge.has_value(),
@@ -165,10 +165,10 @@ CaseResult runCase(const CaseSpec& spec) {
         require(result, merge.functionalMerge->searchComplete &&
                         !merge.functionalMerge->searchTimedOut,
                 "functional merge search was incomplete");
-        require(result, merge.functionalMerge->wholeDesignEquivalenceChecked &&
-                        merge.functionalMerge->wholeDesignEquivalent &&
+        require(result, !merge.functionalMerge->wholeDesignEquivalenceChecked &&
+                        !merge.functionalMerge->wholeDesignEquivalent &&
                         !merge.functionalMerge->wholeDesignTimedOut,
-                "functional merge summary lacks a successful whole-design certificate");
+                "functional merge unexpectedly ran final whole-design SAT");
         require(result, merge.functionalMerge->records.size() == result.reportedMerged,
                 "merge record count differs from mergedGateCount");
     }

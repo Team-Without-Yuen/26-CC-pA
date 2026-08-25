@@ -194,11 +194,12 @@ if ($responses.Count -ge 23) {
          $merge -match "operation_name: edit_apply:merge_functionally_equivalent_gates" -and
          $merge -match "report_success: true" -and
          $merge -match "report_changed: true" -and
-         $merge -match "equivalence_method: WholeDesignSat" -and
-         $merge -match "whole_design_equivalent: true" -and
+         $merge -match "equivalence_method: CertifiedRewrite" -and
+         $merge -match "whole_design_equivalence_checked: false" -and
+         $merge -match "whole_design_equivalent: false" -and
          $merge -match "merged_gate_count: 4" -and
          $merge -match "merge_record_count: 4") `
-        "public functional merge rewires all classes and proves whole-design equivalence"
+        "public functional merge rewires all SAT-proven classes without final whole-design SAT"
 
     Check-Result `
         ($cachedMerge -match "status: ok" -and
@@ -224,7 +225,8 @@ if ($responses.Count -ge 23) {
          $scopedMerge -match "scope: NET_FANIN" -and
          $scopedMerge -match "scope_name: y" -and
          $scopedMerge -match "merged_gate_count: 1" -and
-         $scopedMerge -match "whole_design_equivalent: true") `
+         $scopedMerge -match "equivalence_method: CertifiedRewrite" -and
+         $scopedMerge -match "whole_design_equivalence_checked: false") `
         "public functional merge respects net_fanin scope"
 
     Check-Result `
@@ -236,15 +238,15 @@ if ($responses.Count -ge 23) {
         "functional merge timeout occurs before mutation and is explicit"
 
     Check-Result `
-        ($rollbackMerge -match "status: error" -and
-         $rollbackMerge -match "complete: false" -and
-         $rollbackMerge -match "report_success: false" -and
+        ($rollbackMerge -match "status: ok" -and
+         $rollbackMerge -match "complete: true" -and
+         $rollbackMerge -match "report_success: true" -and
          $rollbackMerge -match "report_changed: true" -and
-         $rollbackMerge -match "rolled_back: true" -and
+         $rollbackMerge -match "rolled_back: false" -and
          $rollbackMerge -match "merged_gate_count: 1" -and
-         $rollbackMerge -match "whole_design_equivalence_checked: true" -and
-         $rollbackMerge -match "whole_design_equivalent: false") `
-        "whole-design verification failure rolls back the attempted merge"
+         $rollbackMerge -match "equivalence_method: CertifiedRewrite" -and
+         $rollbackMerge -match "whole_design_equivalence_checked: false") `
+        "functional merge does not require endpoint-based whole-design SAT"
 
     Check-Result `
         ($help -match "func_search equivalent_pairs <scope>" -and

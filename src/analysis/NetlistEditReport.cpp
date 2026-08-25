@@ -22,6 +22,25 @@ bool hasStatsChange(const NetlistDiff& diff) {
     return false;
 }
 
+bool hasStructureRegression(
+    const Netlist::StructureViolations& before,
+    const Netlist::StructureViolations& after)
+{
+    return
+        after.gateIdMismatch > before.gateIdMismatch ||
+        after.gateMissingOutput > before.gateMissingOutput ||
+        after.gateOutputOutOfRange > before.gateOutputOutOfRange ||
+        after.gateOutputNotDriver > before.gateOutputNotDriver ||
+        after.gateInputOutOfRange > before.gateInputOutOfRange ||
+        after.gateInputRemoved > before.gateInputRemoved ||
+        after.netInvalidDriver > before.netInvalidDriver ||
+        after.netDriverRemoved > before.netDriverRemoved ||
+        after.netDriverOutputMismatch > before.netDriverOutputMismatch ||
+        after.netInvalidLoad > before.netInvalidLoad ||
+        after.netLoadMissingInput > before.netLoadMissingInput ||
+        after.netLoadMultiplicity > before.netLoadMultiplicity;
+}
+
 }
 
 NetlistStats Netlist::collectNetlistStats() const {
@@ -99,11 +118,11 @@ EditValidationResult Netlist::validateEditResult(const Netlist& before, const Ne
     const StructureViolations beforeStructure =
         before.collectStructureViolations(false);   // baseline 不印訊息
     const StructureViolations afterStructure =
-        after.collectStructureViolations(true);
+        after.collectStructureViolations(false);
 
     result.structureBaselineValid = beforeStructure.clean();
     result.structureValid         = afterStructure.clean();
-    result.structureRegressed     = afterStructure.total() > beforeStructure.total();
+    result.structureRegressed     = hasStructureRegression(beforeStructure, afterStructure);
     result.structureViolationCount         = afterStructure.total();
     result.baselineStructureViolationCount = beforeStructure.total();
 
@@ -116,9 +135,9 @@ EditValidationResult Netlist::validateEditResult(const Netlist& before, const Ne
     }
     if (result.structureRegressed) {
         result.messages.push_back(
-            "Structural violations increased from " +
-            std::to_string(beforeStructure.total()) + " to " +
-            std::to_string(afterStructure.total()) + ".");
+            "One or more structural-violation categories regressed (total before: " +
+            std::to_string(beforeStructure.total()) + ", total after: " +
+            std::to_string(afterStructure.total()) + ").");
     }
 
     // ---- Problem A 約束 ----

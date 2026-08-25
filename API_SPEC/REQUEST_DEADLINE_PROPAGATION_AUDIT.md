@@ -10,7 +10,7 @@
 | 流程 | 目前狀態 | 結論 |
 |---|---|---|
 | Function Search | 單一 query start time，所有 simulation/SAT 共用 | 正確 |
-| Functional Merge | search 後以 `total - elapsed` 傳給 whole-design SAT | 正確 |
+| Functional Merge | Function Search 與 cycle-safe apply 共用同一總預算；無 final whole-design SAT | 正確 |
 | Whole-design Equivalence | global miter 使用剩餘總預算；diagnosis 公平分配 | 正確 |
 | Sequential Functional Analysis | query-wide deadline；per-DFF 自動公平分配 | 正確 |
 | Path Enumerate/Ranked | facade 建立單一 `RequestDeadline`；pre-count、reverse reachability、enumeration 與 K-best DP 各自共用單一 request budget | 正確；enumeration artifact filesystem flush 仍是不可搶占的同步 I/O |
@@ -33,7 +33,7 @@
 
 ## 4. 已完成接線
 
-- `Netlist::runEditApply()`：functional merge 使用剩餘時間；technology mapping 共用 deadline。
+- `Netlist::runEditApply()`：functional merge 的 SAT-class search 與 apply 使用同一總預算；technology mapping 共用 deadline。
 - `TechMapper`：worklist、rule scan 與 exact-synthesis SAT 均檢查同一 deadline。
 - `Netlist::runOptApply()`：scope/lower-bound、`DepthOptimizer`、`TechMapper` 與 validation 共用 deadline；whole-design SAT 僅由獨立 equivalence flow 管理。
 - `DepthOptimizer`：超時回 `OptimizationStatus::TIMEOUT` 並恢復進入 core 前的 snapshot。

@@ -2,7 +2,7 @@
 
 ## 1. 責任
 
-`edit_apply` 執行使用者已指定的高階 transformation，並建立統一 `NetlistEditReport`。public parser 不開放 unchecked rewiring、driver replacement 或任意 net merge；functional duplicate merge 只能走 SAT search、cycle-safe apply 與 whole-design rollback 的專用 mode。每次 public edit 預設要求 equivalence certificate。
+`edit_apply` 執行使用者已指定的高階 transformation，並建立統一 `NetlistEditReport`。public parser 不開放 unchecked rewiring、driver replacement 或任意 net merge；functional duplicate merge 只能走 SAT search、cycle-safe apply 與結構驗證的專用 mode。每次 public edit 預設要求 structural/local/certified rewrite certificate，但不執行 final whole-design SAT。
 
 完整性規則：不得因 report records 很多而省略 confirmed changes；若 prompt 只問數量，正式答案只回 delta 摘要。時間限制依題目指定。詳見 [`LLM_NOTES.md`](LLM_NOTES.md)。
 
@@ -189,7 +189,7 @@ prompt 說 "the cone of X"、"the logic cone of output X" 而未指明方向時�
 | `redundancy_removal` | 完整 pipeline 的總縮減量、已證明的 redundant pin 數、完整性 |
 | `structural_merge` | 合併的 gate 數與實際發生合併的結構相同組數 |
 | `dff_merge` | 合併的 register 數、組數與被跳過的原因計數 |
-| `functional_merge` | search/class/SAT 統計、merged/skipped gates、whole-design SAT 與逐筆 merge records |
+| `functional_merge` | search/class/SAT 統計、apply timeout、merged/skipped gates 與逐筆 merge records；legacy whole-design 欄位維持 false |
 | `fanout_change` | before/after max fanout 與 constraint result |
 | `changed_gate_names`, `changed_net_names` | 受影響物件 |
 
@@ -394,8 +394,8 @@ Note: prompt 寫明 structural 時用這個。它只看 gate type 與 input net�
 Prompt: Find and merge all gate pairs that are functionally equivalent.
 Command: edit_apply merge_functionally_equivalent_gates whole
 Read: functional_merge.merged_gate_count, validation.equivalence_method
-Require: report_success=true, rolled_back=false, whole_design_equivalent=true
-Note: 「functionally equivalent」才用這個。它跑 SAT search，成本高且可能 timeout。
+Require: report_success=true, rolled_back=false, validation.equivalence_method=CertifiedRewrite
+Note: 「functionally equivalent」才用這個。它對候選 gate 跑 SAT search，成本高且可能 timeout；不執行 final whole-design SAT。
 ```
 
 ```text
@@ -546,7 +546,7 @@ Read: report_changed, changed_net_names
 
 ## 9. 組合流程與限制
 
-修改後回答成果可再呼叫 `report_query last_edit`。`merge_functionally_equivalent_gates` 已強制執行 whole-design SAT；其他 edit 若題目明確要求 whole-design 功能不變，可再呼叫 `equiv_query previous_edit`，最終流程可使用 `equiv_query original`。
+修改後回答成果可再呼叫 `report_query last_edit`。所有 public edit（包含 `merge_functionally_equivalent_gates`）都不在 transaction 內執行 final whole-design SAT。只有 prompt 明確要求獨立 baseline comparison 時才呼叫 `equiv_query previous_edit` 或 `equiv_query original`。
 
 - 縮減類 mode 是包含關係：`remove_dead_logic` ⊂ `local_simplification_fixpoint` ⊂ `safe_cleanup_fixpoint` ⊂ `remove_redundant_logic`。呼叫外層之後不需要再呼叫內層，那不會有額外效果。
 - `remove_redundant_logic` 依剩餘時間分階段執行：便宜的結構化簡先跑滿，SAT 相關階段（常數傳播、functional merge、untestable stuck-at）依序用剩餘預算。時間不足時會跳過昂貴階段並回報 `complete:false`，但已完成的縮減仍然有效。
