@@ -29,6 +29,7 @@ std::string editCommandKindName(EditCommandKind kind) {
         case EditCommandKind::MergeEquivalentGates: return "merge_equivalent_gates";
         case EditCommandKind::MergeStructurallyEquivalentGates: return "merge_structurally_equivalent_gates";
         case EditCommandKind::MergeFunctionallyEquivalentGates: return "merge_functionally_equivalent_gates";
+        case EditCommandKind::MergeDuplicateDffs: return "merge_duplicate_dffs";
         case EditCommandKind::SimplifyConstants: return "simplify_constants";
         case EditCommandKind::SimplifySameInput: return "simplify_same_input";
         case EditCommandKind::RemoveRedundantLogic: return "remove_redundant_logic";
@@ -222,6 +223,8 @@ EditRequestValidation requireScopeTarget(const Netlist& netlist, TargetScope sco
         case TargetScope::GATE_FANIN:
         case TargetScope::GATE_FANOUT:
             return requireGateName(netlist, scopeName, "scopeName");
+        case TargetScope::SINGLE_GATE:
+            return requireGateName(netlist, scopeName, "scopeName");
         default:
             return failedValidation("Invalid technology mapping scope.");
     }
@@ -295,11 +298,17 @@ EditRequestValidation validateEditApplyRequest(const Netlist& netlist, const Edi
         case EditCommandKind::RemoveDeadLogic:
         case EditCommandKind::RemoveUnusedNets:
         case EditCommandKind::MergeStructurallyEquivalentGates:
+        case EditCommandKind::MergeDuplicateDffs:
         case EditCommandKind::SimplifySameInput:
         case EditCommandKind::RemoveRedundantLogic:
             return okValidation();
 
         case EditCommandKind::MergeFunctionallyEquivalentGates: {
+            if (request.scope == TargetScope::SINGLE_GATE) {
+                return failedValidation(
+                    "Functional merge needs at least two candidate gates; "
+                    "the single-gate scope is not applicable.");
+            }
             EditRequestValidation scopeCheck =
                 requireScopeTarget(netlist, request.scope, request.scopeName);
             if (!scopeCheck.ok) return scopeCheck;
@@ -551,6 +560,50 @@ RewriteScopeResolution resolveRewriteScope(
             result.message = "Resolved the net fanout rewrite scope.";
             return result;
 
+        case TargetScope::SINGLE_GATE: {
+            const int gateId = netlist.getGateId(name);
+            if (!netlist.isValidGateId(gateId) || netlist.isGateRemoved(gateId)) {
+                result.message = "Rewrite scope gate not found or already removed: " + name + ".";
+                return result;
+            }
+            const Gate& gate = netlist.getGate(gateId);
+            if (gate.type == GateType::DFF) {
+                result.message =
+                    "Single-gate rewrite scope does not accept a DFF instance; "
+                    "sequential cells cannot be rewritten by combinational mapping.";
+                return result;
+            }
+            const int outNetId = gate.outputNetId;
+            if (!netlist.isValidNetId(outNetId) ||
+                netlist.getNet(outNetId).isRemoved) {
+                result.message = "Rewrite scope gate has no valid output net: " + name + ".";
+                return result;
+            }
+
+            // getConeGateIds 是從 net-to-net edge 反推 gate，不是讀 netIds。
+            // 因此必須填 children[outputNet] = {各個 input net}，
+            // 只填 netIds 會讓 cone 的 gate 清單是空的。
+            result.cone.netIds.insert(outNetId);
+            result.cone.rootNetIds.push_back(outNetId);
+            std::vector<int>& edges = result.cone.children[outNetId];
+            for (int inNetId : gate.inputNetIds) {
+                if (!netlist.isValidNetId(inNetId)) continue;
+                if (netlist.getNet(inNetId).isRemoved) continue;
+                result.cone.netIds.insert(inNetId);
+                edges.push_back(inNetId);
+            }
+            if (edges.empty()) {
+                result.message = "Rewrite scope gate has no valid input net: " + name + ".";
+                result.cone = ConeResult{};
+                return result;
+            }
+
+            result.resolvedRootNetName = netlist.getNet(outNetId).name;
+            result.ok = true;
+            result.message = "Resolved the single-gate rewrite scope.";
+            return result;
+        }
+        
         case TargetScope::GATE_FANIN: {
             const int gateId = netlist.getGateId(name);
             if (!netlist.isValidGateId(gateId) || netlist.isGateRemoved(gateId)) {
@@ -563,21 +616,48 @@ RewriteScopeResolution resolveRewriteScope(
             }
 
             result.cone = netlist.getGateTransitiveFaninCone(name);
+
+            // 組合閘的 fanin cone，其 root 訊號就是這顆閘的輸出 net。
+            // 不設 resolvedRootNetName 的話，下游只拿得到 gate instance 名，
+            // 而 GenericLowering 的 cone 標記需要一個「PO 或 pseudo-PO 的 net 名」
+            // 才能在 mockturtle 網路上定位 —— 空字串會讓 gate-fanin scope
+            // 永遠退回 legacy path，異質 basis 題則直接失敗。
+            const int outputNetId = netlist.getGate(gateId).outputNetId;
+            if (netlist.isValidNetId(outputNetId) &&
+                !netlist.getNet(outputNetId).isRemoved) {
+                result.resolvedRootNetName = netlist.getNet(outputNetId).name;
+            } else if (!result.cone.rootNetIds.empty()) {
+                // 輸出未接線時退而求其次，用 cone 自己回報的 root。
+                const int rootNetId = result.cone.rootNetIds.front();
+                if (netlist.isValidNetId(rootNetId)) {
+                    result.resolvedRootNetName = netlist.getNet(rootNetId).name;
+                }
+            }
+
             result.ok = true;
             result.message = "Resolved the gate fanin rewrite scope.";
             return result;
         }
 
-        case TargetScope::GATE_FANOUT:
-            if (netlist.getGateId(name) < 0 ||
-                netlist.isGateRemoved(netlist.getGateId(name))) {
+        case TargetScope::GATE_FANOUT: {
+            const int gateId = netlist.getGateId(name);
+            if (gateId < 0 || netlist.isGateRemoved(gateId)) {
                 result.message = "Rewrite scope gate not found or already removed: " + name + ".";
                 return result;
             }
             result.cone = netlist.getGateTransitiveFanoutCone(name);
+
+            // fanout cone 的起點同樣是這顆閘的輸出 net。
+            const int outputNetId = netlist.getGate(gateId).outputNetId;
+            if (netlist.isValidNetId(outputNetId) &&
+                !netlist.getNet(outputNetId).isRemoved) {
+                result.resolvedRootNetName = netlist.getNet(outputNetId).name;
+            }
+
             result.ok = true;
             result.message = "Resolved the gate fanout rewrite scope.";
             return result;
+        }
 
         default:
             result.message = "Invalid rewrite target scope.";
@@ -646,8 +726,9 @@ NetlistEditReport Netlist::runEditApply(const EditApplyRequest& request) {
             break;
         }
         case EditCommandKind::MergeEquivalentGates:
-            report = mergeEquivalentGatesWithReport();
-            break;
+            return makeFailedEditApplyReport(*this, request.kind,
+                "MergeEquivalentGates is a removed legacy alias. Use "
+                "MergeStructurallyEquivalentGates or MergeFunctionallyEquivalentGates.");
         case EditCommandKind::MergeStructurallyEquivalentGates:
             report = mergeStructurallyEquivalentGatesWithReport();
             break;
@@ -658,6 +739,9 @@ NetlistEditReport Netlist::runEditApply(const EditApplyRequest& request) {
                 request.gateType,
                 request.simulationPatternCount,
                 deadline.remainingSeconds());
+            break;
+        case EditCommandKind::MergeDuplicateDffs:
+            report = mergeDuplicateDffsWithReport();
             break;
         case EditCommandKind::SimplifyConstants:
             report = simplifyGatesWithConstantsWithReport(

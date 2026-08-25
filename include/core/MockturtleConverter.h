@@ -53,6 +53,11 @@ void detachGate(Netlist& netlist, int gid);
 
 namespace lowering {
 
+enum class LoweringObjective {
+    MinDepth,   // (depth, area) 字典序
+    MinArea     // (area, depth) 字典序
+};
+
 // ---------------------------------------------------------------------------
 // 1. Basis 描述
 // ---------------------------------------------------------------------------
@@ -91,13 +96,14 @@ struct LoweringBasis {
 // ---------------------------------------------------------------------------
 
 struct LoweringSpec {
-    LoweringBasis defaultBasis;                 // cone 外 / 全域
+    LoweringBasis defaultBasis;
 
-    // 只在「某個 cone 內部受限」的題目才設定。
-    // coneRootName 必須是 PO net name 或某顆 DFF 的 D 端 net name
-    // (依題目保證,net 只會是 PI / PO / pseudo I-O)。
     std::optional<LoweringBasis> coneBasis;
     std::string coneRootName;
+
+    // 決定 DP 的字典序。兩個指標都會算，只是誰優先不同 ——
+    // 這樣「面積打平時挑淺的」與「深度打平時挑小的」都自然成立。
+    LoweringObjective objective = LoweringObjective::MinDepth;
 
     bool hasCone() const { return coneBasis.has_value() && !coneRootName.empty(); }
 };
@@ -109,6 +115,7 @@ struct LoweringResult {
 
     int  depth = -1;          // 產出電路的最大組合深度
     int  gateCount = 0;
+    double estimatedAreaFlow = 0.0;   // 所有 PO slot 的 area flow 總和，診斷用
     size_t coneNodeCount = 0; // 被判定在 cone 內的 mockturtle 節點數
 
     // 沒能保留原名的 DFF D-pin net。原因通常是：兩顆 DFF 的 D 被合成同一條線、

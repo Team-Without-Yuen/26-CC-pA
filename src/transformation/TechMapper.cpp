@@ -2864,6 +2864,7 @@ TechMapReport TechMapper::convertToBasis(Netlist& netlist,
             case TargetScope::NET_FANOUT:
             case TargetScope::GATE_FANIN:
             case TargetScope::GATE_FANOUT:
+            case TargetScope::SINGLE_GATE:
                 stepReport = mapTechnologyForCone(
                     netlist,
                     targetConstraints,
@@ -3048,6 +3049,7 @@ TechMapReport TechMapper::customMapTechnology(Netlist& netlist,
             case TargetScope::GATE_FANIN:
             case TargetScope::NET_FANOUT:
             case TargetScope::GATE_FANOUT:
+            case TargetScope::SINGLE_GATE:
                 return mapTechnologyForCone(
                     netlist,
                     targetConstraints,

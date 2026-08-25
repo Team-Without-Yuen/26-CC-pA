@@ -11,11 +11,12 @@ enum class OptPassKind {
     CleanupBufferChain,
     CollapseDoubleInverter,
     LocalSimplificationFixpoint,
-    CriticalPathDepth
+    DepthMinimization,       // cost = 深度
+    GateCountMinimization    // cost = 閘數
 };
 
-enum class OptDepthObjective {
-    GlobalMaximum,
+enum class OptCostScope {
+    WholeDesign,
     ScopedFaninCone
 };
 
@@ -55,7 +56,7 @@ struct OptApplyRequest {
     // 成本函數的作用域（= prompt 裡 "The cost function is ..." 那句）
     TargetScope scope = TargetScope::WHOLE_NETLIST;
     std::string scopeName;
-    OptDepthObjective depthObjective = OptDepthObjective::GlobalMaximum;
+    OptCostScope costScope = OptCostScope::WholeDesign;
     // 基底約束的作用域（= prompt 裡 "ensuring ... only ... gates" 那句）。
     // WHOLE_NETLIST = 約束整張 netlist；設成 cone = 只約束該 cone，cone 外不受限。
     // 與 scope/scopeName 完全獨立，例如：
@@ -64,11 +65,19 @@ struct OptApplyRequest {
     //   → scope = NET_FANIN/"n14"，basisScope = WHOLE_NETLIST
     TargetScope basisScope = TargetScope::WHOLE_NETLIST;
     std::string basisScopeName;
+    // cone 內的約束。只有 basisScope != WHOLE_NETLIST 時才有意義；
+    // basisScope == WHOLE_NETLIST 時必須為空。
     std::vector<GateType> allowedTypes;
     std::vector<GateType> bannedTypes;
-    int targetDepth = -1;
+
+    // cone 以外的約束。沒有 cone 時，「cone 以外」就是整張 netlist，
+    // 所以全域約束一律放這裡。語意不隨 basisScope 改變。
+    std::vector<GateType> outsideAllowedTypes;
+    std::vector<GateType> outsideBannedTypes;
+    // 深度模式下是目標深度，面積模式下是目標閘數。
+    int targetCost = -1;
     double timeLimitSeconds = request_time_budget::kGeneralToolBudgetSeconds;
-    bool requireDepthImprovement = true;
+    bool requireCostImprovement = true;
     bool verbose = false;
 
     bool validateEquivalence = false;

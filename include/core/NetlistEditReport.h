@@ -28,6 +28,7 @@ enum class NetlistEditOperationKind {
     TechnologyMapping,
     PrimitiveMutation,
     DepthOptimization,
+    AreaOptimization,
     CustomRewrite
 };
 
@@ -75,18 +76,24 @@ struct EditValidationResult {
     bool problemAConstraintsRegressed = false;
     bool equivalenceChecked = false;
     bool functionallyEquivalent = false;
+    bool   structureBaselineValid = false;
+    bool   structureRegressed     = false;
+    size_t structureViolationCount = 0;
+    size_t baselineStructureViolationCount = 0;
     EquivalenceCheckMethod equivalenceMethod = EquivalenceCheckMethod::NotChecked;
     std::vector<std::string> messages;
     std::vector<std::string> newProblemAConstraintViolations;
 };
 
-// Depth/timing change summary for depth-driven rewrites.
-struct DepthChange {
-    std::string endpointName;
-    int beforeDepth = -1;
-    int afterDepth = -1;
-    int targetDepth = -1;
-    bool improved = false;
+// 最佳化目標的變化摘要。
+// metricName 決定 before/after 裝的是深度還是閘數 —— 呼叫端不要假設。
+struct CostChange {
+    std::string metricName;
+    std::string targetName;
+    int  beforeValue = -1;
+    int  afterValue  = -1;
+    int  targetValue = -1;
+    bool improved    = false;
     bool meetsTarget = false;
 };
 
@@ -161,7 +168,10 @@ struct FunctionalMergeSummary {
     std::vector<std::string> skippedGateNames;
 };
 
-struct DepthOptimizationSummary {
+struct OptimizationSummary {
+    // opt::toString(CostMetric) 的四個值之一：
+    // global_maximum_depth / scoped_fanin_cone_depth /
+    // global_gate_count / scoped_fanin_cone_gate_count
     std::string objectiveMetric;
     std::string scope;
     std::string requestedScopeName;
@@ -171,8 +181,10 @@ struct DepthOptimizationSummary {
     std::string coreStatus;
     std::string coreMessage;
 
-    std::vector<GateType> allowedTypes;
+    std::vector<GateType> allowedTypes;         // basisScope 那個範圍的約束
     std::vector<GateType> bannedTypes;
+    std::vector<GateType> outsideAllowedTypes;  // cone 以外
+    std::vector<GateType> outsideBannedTypes;
 
     bool resolvedThroughDffDataPin = false;
     bool baselineConstraintsSatisfied = false;
@@ -206,17 +218,23 @@ struct RedundancyDiagnostics {
     size_t constantNetTiedCount      = 0;
     size_t constantNetSkippedPoCount = 0;
     size_t constantNetSkippedCount   = 0;
-    size_t pinCandidateCount         = 0;
-    size_t pinRejectedBySimulation   = 0;
-    size_t pinSkippedReconvergent    = 0;
-    size_t pinSkippedDffControl      = 0;
-    size_t pinExaminedBySat          = 0;
-    size_t satChecks                 = 0;
-    size_t abortedCandidateCount     = 0;
-    size_t deadLogicRemovedGateCount = 0;
-    bool   constantPhaseComplete = false;
-    bool   satPhaseComplete      = false;
-    bool   fraigComplete         = false;
+    size_t constantUnknownCount      = 0;   // SAT 回 Unknown 的候選數
+    size_t pinCandidateCount       = 0;
+    size_t pinRejectedBySimulation = 0;
+    size_t pinSkippedReconvergent  = 0;
+    size_t pinSkippedDffControl    = 0;
+    size_t pinExaminedBySat        = 0;
+    size_t satChecks               = 0;
+    size_t abortedCandidateCount   = 0;
+    size_t deferredOverlapCount  = 0;   // fanout cone 重疊而延後的候選
+    size_t satBudgetExhausted    = 0;   // 因 maxSatChecks 而未檢查的候選
+    int    structuralChangedCount = 0;
+    size_t mergedFunctionalCount  = 0;
+    bool   functionalMergeSkipped = false;
+    bool constantPhaseComplete = false;
+    bool satPhaseComplete      = false;
+    bool fraigComplete         = false;   // 診斷用，不進 summary.complete
+    bool fraigTruncated        = false;   // 新增：sweep 被 deadline 截斷
 };
 
 // Redundancy removal 結果。
@@ -240,6 +258,38 @@ struct RedundancyRemovalSummary {
     double elapsedSeconds = 0.0;
 };
 
+// Structural duplicate merge 結果。
+// mergedGateCount 是「合併了幾顆 gate」的正式答案來源。
+struct StructuralMergeSummary {
+    size_t mergedGateCount = 0;
+    size_t equivalenceClassCount = 0;   // 有幾組結構相同的 gate
+};
+
+// Cleanup fixpoint 的執行結果。
+// timedOut 讓呼叫端能分辨「已收斂」與「超時退出」——
+// 兩者的 changedCount 可能都非 0，但後者代表還有未清完的機會。
+struct FixpointResult {
+    int  changedCount = 0;
+    int  roundCount   = 0;
+    bool timedOut     = false;
+};
+
+// 給 report 使用的精簡摘要。
+struct CleanupFixpointSummary {
+    size_t changedCount = 0;
+    size_t roundCount   = 0;
+    bool   timedOut     = false;
+};
+
+// Register (DFF) 去重結果。
+// mergedDffCount 是「合併了幾顆 flip-flop」的正式答案來源。
+struct DffMergeSummary {
+    size_t mergedDffCount = 0;
+    size_t equivalenceClassCount = 0;   // 實際發生合併的組數
+    size_t skippedPoCount = 0;          // 兩顆 Q 都是 PO，無法合併
+    size_t skippedFeedbackCount = 0;    // Q 回授到 D，合併可能形成 cycle
+};
+
 // Single shared report for mutation / optimization / transformation flows.
 struct NetlistEditReport {
     bool success = false;
@@ -256,14 +306,17 @@ struct NetlistEditReport {
 
     EditValidationResult validation;
 
-    std::optional<DepthChange> depthChange;
+    std::optional<CostChange> costChange;
     std::optional<FanoutChange> fanoutChange;
     std::optional<MappingDelta> mappingDelta;
     std::optional<ConstantSimplificationSummary> constantSimplification;
     std::optional<FunctionalMergeSummary> functionalMerge;
-    std::optional<DepthOptimizationSummary> depthOptimization;
+    std::optional<OptimizationSummary> optimization;
     std::optional<DeadLogicSummary> deadLogic;
     std::optional<RedundancyRemovalSummary> redundancyRemoval;
+    std::optional<StructuralMergeSummary> structuralMerge;
+    std::optional<CleanupFixpointSummary> cleanupFixpoint;
+    std::optional<DffMergeSummary> dffMerge;
 
     std::vector<int> changedGateIds;
     std::vector<int> changedNetIds;

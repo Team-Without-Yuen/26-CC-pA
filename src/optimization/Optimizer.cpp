@@ -1,4 +1,4 @@
-#include "include/core/DepthOptimizer.h"
+#include "include/core/Optimizer.h"
 #include "include/SATEngine/SatTime.h"
 #include "include/SATEngine/Primitives.h"
 #include <limits>
@@ -236,7 +236,7 @@ EquivalenceOutcome verifyAgainstSnapshot(const Netlist& before,
 
 } // namespace
 
-DepthOptimizer::DepthOptimizer(const DepthOptimizerConfig& config)
+Optimizer::Optimizer(const OptimizerConfig& config)
     : config(config) {} // 使用初始化列表進行高效賦值
 
 bool isGateAllowed(GateType type, 
@@ -259,18 +259,19 @@ bool isGateAllowed(GateType type,
     return true;
 }
 
-// Critical Path 最佳化主控流程
-OptimizationResult DepthOptimizer::executeCriticalPathOptimization(
+// 最佳化主控流程
+OptimizationResult Optimizer::executeOptimization(
         Netlist& netlist,
         TechMapper& techMapper,
-        const depth_opt::OptimizationRequest& request,
+        const opt::OptimizationRequest& request,
         bool verbose,
         const request_time_budget::RequestDeadline* requestDeadline) {
 
-    using namespace depth_opt;
+    using namespace opt;
 
     OptimizationResult result;
-    result.passName = "Opt_CP";
+    // metric 決定這次是深度還是面積最佳化；passName 讓 log 與 report 分得出來。
+    result.passName = isDepthMetric(request.cost.metric) ? "Opt_CP" : "Opt_Area";
 
     // =====================================================================
     // 階段 0：Request 驗證（在碰 netlist 之前，失敗就零副作用返回）
@@ -282,14 +283,28 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(
         return result;
     }
 
-    static const BasisConstraint kNoBasis{};
-    const BasisConstraint& basis = request.basisConstraints.empty()
-        ? kNoBasis
-        : request.basisConstraints.front();
+        // basisConstraints 最多兩組：沒有 scope 的那組 = cone 外（無 cone 時就是全域），
+    // 有 scope 的那組 = 該 cone 內。兩者並存 = 異質 basis 題。
+    static const BasisConstraint kUnconstrained{};
+    const BasisConstraint* outsidePtr = nullptr;
+    const BasisConstraint* conePtr    = nullptr;
+    for (const auto& b : request.basisConstraints) {
+        if (b.isWholeNetlist()) outsidePtr = &b;
+        else                    conePtr    = &b;
+    }
 
-    const bool hasLocalBasisScope = !basis.isWholeNetlist();
-    const std::vector<GateType>& allowedTypes = basis.allowed;
-    const std::vector<GateType>& bannedTypes  = basis.banned;
+    const BasisConstraint& outsideBasis = outsidePtr ? *outsidePtr : kUnconstrained;
+    const bool hasLocalBasisScope = (conePtr != nullptr);
+
+    // legacy path 只認得單一組約束。cone 題給 cone 的那組（維持舊行為），
+    // 否則給全域那組。
+    const BasisConstraint& legacyBasis = hasLocalBasisScope ? *conePtr : outsideBasis;
+    const std::vector<GateType>& allowedTypes = legacyBasis.allowed;
+    const std::vector<GateType>& bannedTypes  = legacyBasis.banned;
+
+    // 兩區都受限時 legacy path 無法表達：Stage 4 的全域 convertToBasis
+    // 會把 cone 內剛強制好的 basis 一起改掉。這種題目只能走 lowering。
+    const bool requiresLowering = hasLocalBasisScope && outsideBasis.constrains();
 
     const Netlist originalSnapshot = netlist.cloneForRollback();
 
@@ -348,7 +363,15 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(
     if (verbose) {
         std::cout << "\n=================================================\n";
         std::cout << "[Flow Start] cost metric: " << result.costMetricName << "\n";
-        std::cout << "             basis scope: " << describeBasis(basis) << "\n";
+        std::cout << "             basis scope: ";
+        if (hasLocalBasisScope) {
+            std::cout << "cone '" << conePtr->scope->sourceName << "'"
+                      << (outsideBasis.constrains() ? " + constrained outside"
+                                                    : " (outside unconstrained)");
+        } else {
+            std::cout << (outsideBasis.constrains() ? "whole netlist" : "unconstrained");
+        }
+        std::cout << "\n";
         std::cout << "             old cost: "    << result.oldDepth
                   << " | global depth: "          << result.oldGlobalDepth
                   << " | gate count: "            << result.oldGateCount << "\n";
@@ -363,48 +386,71 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(
     std::string loweringSkipReason;
 
     {
-        // Lowering 的 cone 標記是「從某個 PO 往回的 transitive fanin」。
-        // fanout 方向的 scope 表達不了,直接退回舊路徑。
         auto scopeIsFaninCone = [](ConeQueryType t) {
             return t == ConeQueryType::NetTransitiveFanin  ||
                    t == ConeQueryType::GateTransitiveFanin ||
                    t == ConeQueryType::LargestOutputCone;
         };
 
-        if (!hasLocalBasisScope) {
-            loweringSpec.defaultBasis =
-                lowering::LoweringBasis::fromLists(allowedTypes, bannedTypes);
-            loweringUsable = loweringSpec.defaultBasis.complete();
-            if (!loweringUsable)
-                loweringSkipReason = "target basis {" +
-                    loweringSpec.defaultBasis.describe() + "} is not functionally complete";
+        // cone 外（或無 cone 時的全域）basis。
+        // outsideBasis 兩個清單都空時 fromLists 會允許全部閘型，
+        // 等同舊版「cone 外不受限」的行為。
+        loweringSpec.defaultBasis =
+            lowering::LoweringBasis::fromLists(outsideBasis.allowed, outsideBasis.banned);
 
-        } else if (!scopeIsFaninCone(basis.scope->type)) {
+        if (!loweringSpec.defaultBasis.complete()) {
+            loweringSkipReason = "the outside-cone basis {" +
+                loweringSpec.defaultBasis.describe() + "} is not functionally complete";
+
+        } else if (!hasLocalBasisScope) {
+            loweringUsable = true;
+
+        } else if (!scopeIsFaninCone(conePtr->scope->type)) {
             loweringSkipReason = "basis scope is a fanout cone; lowering only supports fanin cones";
 
         } else {
-            const ConeResolution cr = resolveConeGates(netlist, *basis.scope);
+            const ConeResolution cr = resolveConeGates(netlist, *conePtr->scope);
             if (!cr.ok) {
                 loweringSkipReason = "cannot resolve the basis cone root: " + cr.message;
             } else if (cr.rootNetName.empty()) {
                 loweringSkipReason = "basis cone root has no resolvable net name";
             } else {
-                loweringSpec.defaultBasis = lowering::LoweringBasis::fromLists({}, {});
-                loweringSpec.coneBasis    =
-                    lowering::LoweringBasis::fromLists(allowedTypes, bannedTypes);
+                loweringSpec.coneBasis =
+                    lowering::LoweringBasis::fromLists(conePtr->allowed, conePtr->banned);
                 loweringSpec.coneRootName = cr.rootNetName;
-                loweringUsable = loweringSpec.coneBasis->complete();
-                if (!loweringUsable)
-                    loweringSkipReason = "cone basis {" +
+
+                if (loweringSpec.coneBasis->complete()) {
+                    loweringUsable = true;
+                } else {
+                    loweringSkipReason = "the in-cone basis {" +
                         loweringSpec.coneBasis->describe() + "} is not functionally complete";
+                    loweringSpec.coneBasis.reset();
+                    loweringSpec.coneRootName.clear();
+                }
             }
         }
     }
 
+    // 沒有 legacy 退路的題目，與其產出違反約束的電路不如明確失敗。
+    if (requiresLowering && !loweringUsable) {
+        return returnFailure(
+            OptimizationStatus::ERROR_CONSTRAINT_UNSATISFIED,
+            "This request constrains both the inside and the outside of a cone, which "
+            "requires the direct-lowering path, but lowering is unavailable: "
+            + loweringSkipReason + ".");
+    }
+
+    // lowering 的 DP 用哪個字典序，與 Stage 2 的 pass 組合對齊。
+    loweringSpec.objective = isDepthMetric(request.cost.metric)
+                           ? lowering::LoweringObjective::MinDepth
+                           : lowering::LoweringObjective::MinArea;
+
     if (verbose) {
         if (loweringUsable)
-            std::cout << "             lowering  : enabled, basis {"
-                      << loweringSpec.defaultBasis.describe() << "}"
+            std::cout << "             lowering  : enabled ("
+                      << (loweringSpec.objective == lowering::LoweringObjective::MinDepth
+                            ? "min-depth" : "min-area")
+                      << "), outside {" << loweringSpec.defaultBasis.describe() << "}"
                       << (loweringSpec.hasCone()
                             ? (", cone '" + loweringSpec.coneRootName + "' {" +
                                loweringSpec.coneBasis->describe() + "}")
@@ -415,7 +461,6 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(
                       << "); falling back to the legacy basis-enforcement path\n";
     }
 
-    std::unordered_set<GateType> allowedSet(allowedTypes.begin(), allowedTypes.end());
     const bool canAbsorbInverters =
         isGateAllowed(GateType::NAND, allowedTypes, bannedTypes) ||
         isGateAllowed(GateType::NOR,  allowedTypes, bannedTypes) ||
@@ -461,6 +506,9 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(
     ctx.reserveSeconds    = totalReserve;
     ctx.firstIterEstimate = firstIterEstimate;
     ctx.verbose           = verbose;
+    // 深度目標跑 balancing + preserve_depth；面積目標跑 rewriting + resub +
+    // refactoring。runStage2Path 的 runPasses 依這個欄位分岔。
+    ctx.goal              = goalOf(request.cost.metric);
 
     auto stage2Left = [&]() -> double {
         const double byStage2  = stage2BudgetSeconds - stage2Elapsed();
@@ -473,17 +521,20 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(
         return budget > firstIterEstimate * 2.0;
     };
 
-    const bool xorAvailable = hasLocalBasisScope
-        ? true
-        : (isGateAllowed(GateType::XOR,  allowedTypes, bannedTypes) ||
-           isGateAllowed(GateType::XNOR, allowedTypes, bannedTypes));
+    // 先跑哪一條：目標 basis 做不出 XOR 時，esop_rebalancing / xag_npn 製造的
+    // XOR 節點在 lowering 時要付代價（深度 3 層、面積 4 顆閘），AIG 沒有這筆帳。
+    // cone basis 題的 cone 外不受限，XOR 可用，先跑 XAG。
+    const bool xorAvailable =
+        isGateAllowed(GateType::XOR,  outsideBasis.allowed, outsideBasis.banned) ||
+        isGateAllowed(GateType::XNOR, outsideBasis.allowed, outsideBasis.banned);
     const bool aigFirst = !xorAvailable;
 
     if (verbose) {
-        std::cout << "[Step 2] Dual-path optimization (first: "
-                  << (aigFirst ? "AIG" : "XAG") << ", target basis "
-                  << (xorAvailable ? "has" : "lacks") << " XOR/XNOR)"
-                  << " budget=" << stage2Left() << "s\n";
+        std::cout << "[Step 2] Dual-path "
+                  << (ctx.goal == OptimizationGoal::DEPTH ? "depth" : "area")
+                  << " optimization (first: " << (aigFirst ? "AIG" : "XAG")
+                  << ", target basis " << (xorAvailable ? "has" : "lacks")
+                  << " XOR/XNOR) budget=" << stage2Left() << "s\n";
     }
 
     // ---- 1. 兩條路徑的保底預算 ----
@@ -566,6 +617,15 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(
 
     const bool loweringApplied = loweringActive && haveCandidate;
 
+    // lowering 在 Stage 2 執行期失敗（loweringActive 被關掉）的話，
+    // 異質 basis 題就沒有任何路徑能滿足約束了。
+    if (requiresLowering && !loweringApplied) {
+        return returnFailure(
+            OptimizationStatus::ERROR_CONSTRAINT_UNSATISFIED,
+            "Lowering failed during optimization and no fallback path can satisfy "
+            "both the in-cone and outside-cone gate constraints.");
+    }
+
     // -----------------------------------------------------------------
     // 超時處理:lowering 產出的候選 by construction 就滿足目標 basis,
     // 所以任何時間點交出它都合法 —— 不需要回滾。
@@ -590,7 +650,7 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(
     // 階段 3：局部基底約束（legacy path）
     // =====================================================================
     if (!loweringApplied && hasLocalBasisScope) {
-        const ConeRef& basisCone = *basis.scope;
+        const ConeRef& basisCone = *conePtr->scope;
 
         if (requestTimedOut()) {
             return returnTimeout("Depth optimization exhausted the request time budget before local cone enforcement.");
@@ -673,7 +733,7 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(
     // 階段 4：全域基底強制（legacy path）
     // =====================================================================
     bool needBasisEnforce = false;
-    if (!loweringApplied && !hasLocalBasisScope && basis.constrains()) {
+    if (!loweringApplied && !hasLocalBasisScope && outsideBasis.constrains()) {
         static const std::vector<GateType> kAllComb = {
             GateType::AND, GateType::OR, GateType::NAND, GateType::NOR,
             GateType::NOT, GateType::BUF, GateType::XOR, GateType::XNOR };
@@ -863,13 +923,13 @@ OptimizationResult DepthOptimizer::executeCriticalPathOptimization(
 }
 
 template <typename Ntk>
-DepthOptimizer::Stage2PathResult DepthOptimizer::runStage2Path(
+Optimizer::Stage2PathResult Optimizer::runStage2Path(
         const Stage2Context& ctx,
         const char* pathName,
         double pathBudgetSeconds,
         const Ntk* warmStart) {
 
-    using namespace depth_opt;
+    using namespace opt;
     constexpr bool kIsXag = std::is_same_v<Ntk, mockturtle::xag_network>;
 
     Stage2PathResult out;
@@ -921,10 +981,18 @@ DepthOptimizer::Stage2PathResult DepthOptimizer::runStage2Path(
             return mockturtle::cleanup_dangling(NetlistToAig(*ctx.templateNetlist));
     };
 
-    // 一輪的最佳化 pass。兩條路徑的差別集中在這裡。
+    // 一輪的最佳化 pass。深度與面積的差別集中在這裡。
+    //
+    // 深度組合：balancing 壓深度 → cut_rewriting 在不變深的前提下省面積
+    //           → resubstitution 同樣不得變深
+    // 面積組合：不跑 balancing（它是用面積換深度）→ cut_rewriting 只接受
+    //           真的變小的改寫 → resubstitution 是主力 → refactoring 收尾
     auto runPasses = [&](Ntk& cand) {
-        // 1) balancing —— 唯一真正在壓深度的 pass
-        {
+        const bool depthGoal = (ctx.goal == OptimizationGoal::DEPTH);
+
+        // 1) balancing —— 唯一真正在壓深度的 pass。
+        //    面積目標下跑它只會把電路吹大，直接跳過。
+        if (depthGoal) {
             mockturtle::balancing_params bps;
             bps.cut_enumeration_ps.cut_size = 6u;
             if constexpr (kIsXag) {
@@ -936,24 +1004,46 @@ DepthOptimizer::Stage2PathResult DepthOptimizer::runStage2Path(
             }
         }
 
-        // 2) cut rewriting —— 面積導向，preserve_depth 保證不會變深
+        // 2) cut rewriting —— 兩個目標都跑，參數相反。
+        //    allow_zero_gain 在深度目標下開著，是為了讓結構「攤開」給下一輪
+        //    balancing 用；面積目標沒有這個下游，打平的改寫只是浪費時間。
         {
             mockturtle::cut_rewriting_params cr;
             cr.cut_enumeration_ps.cut_size = 4;
-            cr.preserve_depth  = true;
-            cr.allow_zero_gain = true;
+            cr.preserve_depth  = depthGoal;
+            cr.allow_zero_gain = depthGoal;
             mockturtle::xag_npn_resynthesis<Ntk> resyn;
             cand = mockturtle::cleanup_dangling(mockturtle::cut_rewriting(cand, resyn, cr));
         }
 
-        // 3) resubstitution —— 只有 XAG 有對應實作。
-        //    預設是面積導向，會把 balancing 壓下來的深度換回去。
-        if constexpr (kIsXag) {
+        // 3) resubstitution —— 面積目標的主力。
+        //    深度目標下必須 preserve_depth，否則它會把 balancing 壓下來的
+        //    深度換回去（test39 的 iter 3-5 深度回升就是這樣來的）。
+        {
             mockturtle::resubstitution_params rp;
-            rp.preserve_depth = true;
+            rp.preserve_depth = depthGoal;
             mockturtle::fanout_view fv{cand};
             mockturtle::depth_view  dv{fv};
-            mockturtle::xag_resubstitution(dv, rp);
+            if constexpr (kIsXag) {
+                mockturtle::xag_resubstitution(dv, rp);
+            } else {
+                // 深度版原本只對 XAG 跑 resub；面積目標下 AIG 也需要，
+                // 因為 resub 是這條路徑最主要的縮小手段。
+                mockturtle::aig_resubstitution(dv, rp);
+            }
+            cand = mockturtle::cleanup_dangling(cand);
+        }
+
+        // 4) refactoring —— 只有面積目標。
+        //    它會把 MFFC 整塊重新合成，是純面積導向，深度目標下會變深。
+        //    注意：resynthesis 必須用 sop_factoring 而非 xag_npn_resynthesis ——
+        //    後者是 4-input NPN 資料庫，max_pis > 4 時會在 kitty 內部斷言失敗。
+        if (!depthGoal) {
+            mockturtle::refactoring_params rf;
+            rf.max_pis = 6;
+            rf.allow_zero_gain = false;
+            mockturtle::sop_factoring<Ntk> resyn;
+            mockturtle::refactoring(cand, resyn, rf);
             cand = mockturtle::cleanup_dangling(cand);
         }
     };
@@ -1071,15 +1161,15 @@ DepthOptimizer::Stage2PathResult DepthOptimizer::runStage2Path(
     return out;
 }
 
-template DepthOptimizer::Stage2PathResult
-DepthOptimizer::runStage2Path<mockturtle::aig_network>(
+template Optimizer::Stage2PathResult
+Optimizer::runStage2Path<mockturtle::aig_network>(
     const Stage2Context&, const char*, double, const mockturtle::aig_network*);
-template DepthOptimizer::Stage2PathResult
-DepthOptimizer::runStage2Path<mockturtle::xag_network>(
+template Optimizer::Stage2PathResult
+Optimizer::runStage2Path<mockturtle::xag_network>(
     const Stage2Context&, const char*, double, const mockturtle::xag_network*);
 
 // 輔助函式：給定 Root 與 Cut 邊界，從 Netlist 走訪並建立 PatternNode (AST)，同時收集 TargetCone
-std::shared_ptr<PatternNode> DepthOptimizer::extractLhsFromCut(Netlist& netlist, 
+std::shared_ptr<PatternNode> Optimizer::extractLhsFromCut(Netlist& netlist, 
                                                                int rootGateId, 
                                                                const KCut& cut, 
                                                                std::unordered_set<int>& outTargetCone,
@@ -1276,7 +1366,7 @@ std::vector<KCut> mergeCuts(const std::vector<KCut>& leftCuts, const std::vector
 }
 
 // 在乾淨的 Cone 裡面找出最佳的 K-feasible Cut
-KCut DepthOptimizer::extractBestKFeasibleCut(Netlist& netlist, const OptimizationCandidate& candidate, OptimizationGoal goal) {
+KCut Optimizer::extractBestKFeasibleCut(Netlist& netlist, const OptimizationCandidate& candidate, OptimizationGoal goal) {
     // 1. 取得剛剛被我們清理過、現在非常乾淨的 coneGateSet
     std::vector<int> coneGateList = netlist.getConeGateIds(candidate.faninCone);
     std::unordered_set<int> coneGateSet(coneGateList.begin(), coneGateList.end());
@@ -1425,7 +1515,7 @@ KCut DepthOptimizer::extractBestKFeasibleCut(Netlist& netlist, const Optimizatio
 }
 
 // 輔助函式：AREA 模式下的 Cut 評分機制
-CutScore DepthOptimizer::evaluateAreaCut(Netlist& netlist, const KCut& cut, int rootGateId) {
+CutScore Optimizer::evaluateAreaCut(Netlist& netlist, const KCut& cut, int rootGateId) {
     CutScore score;
 
     // 1. 建立邊界查表 (使用 Lambda 搭配小陣列走訪，速度極快)
@@ -1509,7 +1599,7 @@ CutScore DepthOptimizer::evaluateAreaCut(Netlist& netlist, const KCut& cut, int 
 }
 
 // 輔助函式：DEPTH 模式下的 Cut 評分機制
-CutScore DepthOptimizer::evaluateDepthCut(Netlist& netlist, 
+CutScore Optimizer::evaluateDepthCut(Netlist& netlist, 
                                           const KCut& cut, 
                                           int rootGateId, 
                                           const std::unordered_set<int>& criticalGateSet) { // <--- 直接接收 Set
@@ -1577,7 +1667,7 @@ CutScore DepthOptimizer::evaluateDepthCut(Netlist& netlist,
 // 改變資格的候選，是 outNet 原本的下游負載——它們的 input 被 redirect 到
 // srcNet，若它們本身也是 NOT gate，「自己的 driver 是不是 NOT」這個判斷條件
 // 就可能因此改變，需要重新入列檢查。
-int DepthOptimizer::eliminateDoubleInverters(Netlist& netlist) {
+int Optimizer::eliminateDoubleInverters(Netlist& netlist) {
     int removed = 0;
 
     std::queue<int> worklist;
@@ -1628,13 +1718,13 @@ int DepthOptimizer::eliminateDoubleInverters(Netlist& netlist) {
 }
 
 template <typename NtkT, typename ToNetlistFn>
-depth_opt::CostMeasurement DepthOptimizer::evaluateCandidate(
+opt::CostMeasurement Optimizer::evaluateCandidate(
         const NtkT& ntk,
         const Netlist& templateNetlist,
         ToNetlistFn&& toNetlist,
-        const depth_opt::CostTarget& cost) {
+        const opt::CostTarget& cost) {
     Netlist probe = toNetlist(ntk, templateNetlist);
     eliminateDoubleInverters(probe);
     probe.trimDeadLogic();          // 讓 gateCount tie-break 有意義
-    return depth_opt::measureCost(probe, cost);
+    return opt::measureCost(probe, cost);
 }

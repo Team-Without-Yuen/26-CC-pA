@@ -217,6 +217,11 @@ bool Netlist::renameGate(const std::string& oldName, const std::string& newName)
 
     // 正式修改資料
     int gateId = it->second;
+    // 與 renameNet 一致：gateNameToId 在 markGateRemoved 時不會被清理，
+    // 死 gate 的名字仍在 map 中，直接改名會成功但物件不會被寫出。
+    if (gateId < 0 || gateId >= (int)gates.size() || isGateRemoved(gateId)) {
+        return false;
+    }
     gates[gateId].instName = newName;
 
     // 更新 Hash Map
@@ -239,7 +244,7 @@ NetlistEditReport Netlist::renameGateWithReport(const std::string& oldName, cons
         "renameGate",
         "Gate rename completed.",
         "Gate rename failed: old gate was missing, new name already existed, or the rename was invalid.",
-        {oldName, newName},
+        ok ? std::vector<std::string>{newName} : std::vector<std::string>{},
         {},
         oldGateId >= 0 ? std::vector<int>{oldGateId} : std::vector<int>{});
     if (report.success) {
@@ -300,7 +305,7 @@ NetlistEditReport Netlist::renameNetWithReport(const std::string& oldName, const
         "Net rename completed.",
         "Net rename failed: old net was missing, new name already existed, or the rename was invalid.",
         {},
-        {oldName, newName},
+        ok ? std::vector<std::string>{newName} : std::vector<std::string>{},
         {},
         oldNetId >= 0 ? std::vector<int>{oldNetId} : std::vector<int>{});
     if (report.success) {

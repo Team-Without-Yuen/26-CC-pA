@@ -2213,6 +2213,7 @@ std::string editOperationKindName(NetlistEditOperationKind kind) {
         case NetlistEditOperationKind::TechnologyMapping: return "TechnologyMapping";
         case NetlistEditOperationKind::PrimitiveMutation: return "PrimitiveMutation";
         case NetlistEditOperationKind::DepthOptimization: return "DepthOptimization";
+        case NetlistEditOperationKind::AreaOptimization: return "AreaOptimization";
         case NetlistEditOperationKind::CustomRewrite: return "CustomRewrite";
         case NetlistEditOperationKind::Unknown:
         default:
@@ -2226,7 +2227,8 @@ std::string optPassKindName(OptPassKind kind) {
         case OptPassKind::CollapseDoubleInverter: return "collapse_double_inverter";
         case OptPassKind::LocalSimplificationFixpoint:
             return "local_simplification_fixpoint";
-        case OptPassKind::CriticalPathDepth: return "critical_path_depth";
+        case OptPassKind::DepthMinimization: return "critical_path_depth";
+        case OptPassKind::GateCountMinimization: return "gate_count_minimization";
         case OptPassKind::Unknown:
         default:
             return "unknown";
@@ -2302,6 +2304,14 @@ void printEditReport(const Netlist& netlist, const Netlist::NetlistEditReport& r
               << (report.validation.structureChecked ? "true" : "false") << "\n";
     std::cout << "    structure_valid: "
               << (report.validation.structureValid ? "true" : "false") << "\n";
+    std::cout << "    structure_baseline_valid: "
+              << (report.validation.structureBaselineValid ? "true" : "false") << "\n";
+    std::cout << "    structure_regressed: "
+              << (report.validation.structureRegressed ? "true" : "false") << "\n";
+    std::cout << "    structure_violation_count: "
+              << report.validation.structureViolationCount << "\n";
+    std::cout << "    baseline_structure_violation_count: "
+              << report.validation.baselineStructureViolationCount << "\n";
     std::cout << "    problem_a_constraints_checked: "
               << (report.validation.problemAConstraintsChecked ? "true" : "false") << "\n";
     std::cout << "    problem_a_constraints_baseline_valid: "
@@ -2321,14 +2331,17 @@ void printEditReport(const Netlist& netlist, const Netlist::NetlistEditReport& r
         "    new_problem_a_constraint_violations",
         report.validation.newProblemAConstraintViolations);
 
-    if (report.depthChange) {
-        std::cout << "  depth_change:\n";
-        std::cout << "    endpoint_name: " << report.depthChange->endpointName << "\n";
-        std::cout << "    before_depth: " << report.depthChange->beforeDepth << "\n";
-        std::cout << "    after_depth: " << report.depthChange->afterDepth << "\n";
-        std::cout << "    target_depth: " << report.depthChange->targetDepth << "\n";
-        std::cout << "    improved: " << (report.depthChange->improved ? "true" : "false") << "\n";
-        std::cout << "    meets_target: " << (report.depthChange->meetsTarget ? "true" : "false") << "\n";
+    if (report.costChange) {
+        std::cout << "  cost_change:\n";
+        std::cout << "    metric_name: " << report.costChange->metricName << "\n";
+        std::cout << "    target_name: " << report.costChange->targetName << "\n";
+        std::cout << "    before_value: " << report.costChange->beforeValue << "\n";
+        std::cout << "    after_value: " << report.costChange->afterValue << "\n";
+        std::cout << "    target_value: " << report.costChange->targetValue << "\n";
+        std::cout << "    improved: "
+                  << (report.costChange->improved ? "true" : "false") << "\n";
+        std::cout << "    meets_target: "
+                  << (report.costChange->meetsTarget ? "true" : "false") << "\n";
     }
 
     if (report.fanoutChange) {
@@ -2348,6 +2361,14 @@ void printEditReport(const Netlist& netlist, const Netlist::NetlistEditReport& r
         printGateTypeMap(netlist, "    added_count_by_type", report.mappingDelta->addedCountByType);
         printGateTypeMap(netlist, "    final_gate_count_by_type", report.mappingDelta->finalGateCountByType);
         printStringList("    modified_gate_names", report.mappingDelta->modifiedGateNames);
+    }
+
+    if (report.cleanupFixpoint) {
+        const auto& s = *report.cleanupFixpoint;
+        std::cout << "  cleanup_fixpoint:\n";
+        std::cout << "    changed_count: " << s.changedCount << "\n";
+        std::cout << "    round_count: " << s.roundCount << "\n";
+        std::cout << "    timed_out: " << (s.timedOut ? "true" : "false") << "\n";
     }
 
     if (report.constantSimplification) {
@@ -2397,6 +2418,22 @@ void printEditReport(const Netlist& netlist, const Netlist::NetlistEditReport& r
         std::cout << "    complete: " << (s.complete ? "true" : "false") << "\n";
         std::cout << "    timed_out: " << (s.timedOut ? "true" : "false") << "\n";
         std::cout << "    elapsed_seconds: " << s.elapsedSeconds << "\n";
+    }
+
+    if (report.structuralMerge) {
+        const auto& s = *report.structuralMerge;
+        std::cout << "  structural_merge:\n";
+        std::cout << "    merged_gate_count: " << s.mergedGateCount << "\n";
+        std::cout << "    equivalence_class_count: " << s.equivalenceClassCount << "\n";
+    }
+
+    if (report.dffMerge) {
+        const auto& s = *report.dffMerge;
+        std::cout << "  dff_merge:\n";
+        std::cout << "    merged_dff_count: " << s.mergedDffCount << "\n";
+        std::cout << "    equivalence_class_count: " << s.equivalenceClassCount << "\n";
+        std::cout << "    skipped_po_count: " << s.skippedPoCount << "\n";
+        std::cout << "    skipped_feedback_count: " << s.skippedFeedbackCount << "\n";
     }
 
     if (report.functionalMerge) {
@@ -2453,13 +2490,12 @@ void printEditReport(const Netlist& netlist, const Netlist::NetlistEditReport& r
         printStringList("    skipped_gate_names", summary.skippedGateNames);
     }
 
-    if (report.depthOptimization) {
-        const auto& summary = *report.depthOptimization;
-        std::cout << "  depth_optimization:\n";
+    if (report.optimization) {
+        const auto& summary = *report.optimization;
+        std::cout << "  optimization:\n";
         std::cout << "    objective_metric: " << summary.objectiveMetric << "\n";
-        std::cout << "    scope: " << summary.scope << "\n";
-        std::cout << "    requested_scope_name: "
-                  << summary.requestedScopeName << "\n";
+        std::cout << "    cost_scope: " << summary.scope << "\n";
+        std::cout << "    cost_scope_name: " << summary.requestedScopeName << "\n";
         std::cout << "    basis_scope: " << summary.basisScope << "\n";
         std::cout << "    basis_scope_name: " << summary.basisScopeName << "\n";
         std::cout << "    resolved_root_net_name: "
@@ -2470,6 +2506,10 @@ void printEditReport(const Netlist& netlist, const Netlist::NetlistEditReport& r
             netlist, "    allowed_gate_types", summary.allowedTypes);
         printGateTypeList(
             netlist, "    banned_gate_types", summary.bannedTypes);
+        printGateTypeList(netlist, "    outside_allowed_gate_types",
+                          summary.outsideAllowedTypes);
+        printGateTypeList(netlist, "    outside_banned_gate_types",
+                          summary.outsideBannedTypes);
         std::cout << "    baseline_constraints_satisfied: "
                   << (summary.baselineConstraintsSatisfied ? "true" : "false")
                   << "\n";
@@ -3579,6 +3619,8 @@ bool parseTargetScope(const std::string& token, TargetScope& scope) {
         scope = TargetScope::GATE_FANIN;
     } else if (value == "gate_fanout") {
         scope = TargetScope::GATE_FANOUT;
+    } else if (value == "gate" || value == "single_gate") {
+        scope = TargetScope::SINGLE_GATE;
     } else {
         return false;
     }
@@ -3673,7 +3715,8 @@ bool parseTechnologyEditApply(const Netlist& netlist,
 
     std::string scopeToken;
     if (!(iss >> scopeToken) || !parseTargetScope(scopeToken, request.scope)) {
-        error = "Missing or invalid scope. Use whole, net_fanin, net_fanout, gate_fanin, or gate_fanout.";
+        error = "Missing or invalid scope. Use whole, net_fanin, net_fanout, "
+                "gate_fanin, gate_fanout, or gate.";
         return false;
     }
     if (scopeNeedsName(request.scope) && !(iss >> request.scopeName)) {
@@ -3765,11 +3808,18 @@ bool parsePublicOptApply(const Netlist& netlist,
                          const std::string& mode,
                          Netlist::OptApplyRequest& request,
                          std::string& error) {
-    if (toLower(mode) != "critical_path_depth") {
-        error = "Unknown or non-public opt_apply mode: " + mode;
+    const std::string loweredMode = toLower(mode);
+    if (loweredMode == "critical_path_depth" ||
+        loweredMode == "depth_minimization") {
+        request.passKind = OptPassKind::DepthMinimization;
+    } else if (loweredMode == "gate_count_minimization" ||
+               loweredMode == "area_minimization") {
+        request.passKind = OptPassKind::GateCountMinimization;
+    } else {
+        error = "Unknown or non-public opt_apply mode: " + mode +
+                ". Use critical_path_depth or gate_count_minimization.";
         return false;
     }
-    request.passKind = OptPassKind::CriticalPathDepth;
 
     std::vector<std::string> args;
     std::string token;
@@ -3781,7 +3831,8 @@ bool parsePublicOptApply(const Netlist& netlist,
         const std::string option = toLower(args[i]);
         if (option == "--scope" || option == "-scope") {
             if (++i >= args.size() || !parseTargetScope(args[i], request.scope)) {
-                error = "--scope requires whole, net_fanin, net_fanout, gate_fanin, or gate_fanout.";
+                error = "--scope requires whole, net_fanin, net_fanout, gate_fanin, or gate_fanout "
+                        "(opt_apply does not support the single-gate scope).";
                 return false;
             }
             ++i;
@@ -3799,7 +3850,8 @@ bool parsePublicOptApply(const Netlist& netlist,
         } else if (option == "--basis-scope" || option == "--basis_scope" ||
                    option == "-basis_scope") {
             if (++i >= args.size() || !parseTargetScope(args[i], request.basisScope)) {
-                error = "--basis-scope requires whole, net_fanin, net_fanout, gate_fanin, or gate_fanout.";
+                error = "--basis-scope requires whole, net_fanin, net_fanout, gate_fanin, or gate_fanout "
+                        "(opt_apply does not support the single-gate scope).";
                 return false;
             }
             ++i;
@@ -3814,20 +3866,23 @@ bool parsePublicOptApply(const Netlist& netlist,
                 return false;
             }
             request.basisScopeName = args[i++];
-        } else if (option == "--objective" || option == "-objective") {
+        } else if (option == "--cost-scope" || option == "--cost_scope" ||
+                   option == "-cost_scope" ||
+                   option == "--objective" || option == "-objective") {
             if (++i >= args.size()) {
-                error = "--objective requires global or cone.";
+                error = "--cost-scope requires whole or cone.";
                 return false;
             }
-            const std::string objective = toLower(args[i++]);
-            if (objective == "global" || objective == "global_maximum") {
-                request.depthObjective = OptDepthObjective::GlobalMaximum;
-            } else if (objective == "cone" ||
-                       objective == "scoped_fanin" ||
-                       objective == "scoped_fanin_cone") {
-                request.depthObjective = OptDepthObjective::ScopedFaninCone;
+            const std::string value = toLower(args[i++]);
+            if (value == "whole" || value == "global" || value == "global_maximum" ||
+                value == "whole_design") {
+                request.costScope = OptCostScope::WholeDesign;
+            } else if (value == "cone" ||
+                       value == "scoped_fanin" ||
+                       value == "scoped_fanin_cone") {
+                request.costScope = OptCostScope::ScopedFaninCone;
             } else {
-                error = "--objective requires global or cone.";
+                error = "--cost-scope requires whole or cone.";
                 return false;
             }
         } else if (option == "--allowed" || option == "--allow" ||
@@ -3853,13 +3908,34 @@ bool parsePublicOptApply(const Netlist& netlist,
                     : "--banned requires at least one gate type.";
                 return false;
             }
-        } else if (option == "--target-depth" ||
-                   option == "--target_depth" ||
+        } else if (option == "--outside-allowed" || option == "--outside_allowed" ||
+                   option == "-outside_allowed" ||
+                   option == "--outside-banned"  || option == "--outside_banned" ||
+                   option == "-outside_banned") {
+            const bool allowed = option.find("allowed") != std::string::npos;
+            std::vector<GateType>& destination =
+                allowed ? request.outsideAllowedTypes : request.outsideBannedTypes;
+            const size_t firstType = ++i;
+            while (i < args.size() && !isCliOptionToken(args[i])) {
+                if (!appendOptGateTypes(netlist, args[i], destination, error)) return false;
+                ++i;
+            }
+            if (i == firstType) {
+                error = allowed
+                    ? "--outside-allowed requires at least one gate type."
+                    : "--outside-banned requires at least one gate type.";
+                return false;
+            }
+        } else if (option == "--target-cost" || option == "--target_cost" ||
+                   option == "-target_cost" ||
+                   option == "--target-depth" || option == "--target_depth" ||
                    option == "-target_depth") {
             if (++i >= args.size() ||
-                !parseStrictInteger(args[i], request.targetDepth) ||
-                request.targetDepth < 0) {
-                error = "--target-depth requires a non-negative integer.";
+                !parseStrictInteger(args[i], request.targetCost) ||
+                request.targetCost < 0) {
+                error = "--target-cost requires a non-negative integer "
+                        "(depth for critical_path_depth, gate count for "
+                        "gate_count_minimization).";
                 return false;
             }
             ++i;
@@ -3875,7 +3951,7 @@ bool parsePublicOptApply(const Netlist& netlist,
             ++i;
         } else if (option == "--allow-no-improvement" ||
                    option == "--allow_no_improvement") {
-            request.requireDepthImprovement = false;
+            request.requireCostImprovement = false;
             ++i;
         } else if (option == "--verbose" || option == "-verbose") {
             request.verbose = true;
@@ -3885,7 +3961,12 @@ bool parsePublicOptApply(const Netlist& netlist,
             return false;
         }
     }
-
+    if (request.scope == TargetScope::SINGLE_GATE ||
+        request.basisScope == TargetScope::SINGLE_GATE) {
+        error = "opt_apply does not support the single-gate scope; "
+                "depth optimization needs a cone or the whole netlist.";
+        return false;
+    }
     if (scopeNeedsName(request.scope) && request.scopeName.empty()) {
         error = "The selected scope requires --name <net_or_gate>, or the name immediately after --scope.";
         return false;
@@ -3894,10 +3975,10 @@ bool parsePublicOptApply(const Netlist& netlist,
         error = "Whole-netlist scope does not accept --name.";
         return false;
     }
-    if (request.depthObjective == OptDepthObjective::ScopedFaninCone &&
+    if (request.costScope == OptCostScope::ScopedFaninCone &&
         request.scope != TargetScope::NET_FANIN &&
         request.scope != TargetScope::GATE_FANIN) {
-        error = "Cone depth objective requires net_fanin or gate_fanin scope.";
+        error = "A cone-scoped cost function requires net_fanin or gate_fanin scope.";
         return false;
     }
     if (scopeNeedsName(request.basisScope) && request.basisScopeName.empty()) {
@@ -3905,21 +3986,42 @@ bool parsePublicOptApply(const Netlist& netlist,
                 "immediately after --basis-scope.";
         return false;
     }
+    if (request.basisScope == TargetScope::NET_FANOUT ||
+        request.basisScope == TargetScope::GATE_FANOUT) {
+        error = "--basis-scope must be a fanin cone (net_fanin or gate_fanin) or whole; "
+                "gate-type constraints on a fanout cone are not supported.";
+        return false;
+    }
     if (!scopeNeedsName(request.basisScope) && !request.basisScopeName.empty()) {
         error = "Whole-netlist basis scope does not accept --basis-name.";
         return false;
     }
-    if (request.basisScope != TargetScope::WHOLE_NETLIST &&
-        request.allowedTypes.empty() && request.bannedTypes.empty()) {
-        error = "--basis-scope only makes sense together with --allowed and/or --banned.";
+    if (request.basisScope == TargetScope::WHOLE_NETLIST) {
+        if (!request.outsideAllowedTypes.empty() || !request.outsideBannedTypes.empty()) {
+            error = "--outside-allowed/--outside-banned require --basis-scope; "
+                    "without a cone there is no 'outside'. Use --allowed/--banned.";
+            return false;
+        }
+        request.outsideAllowedTypes = std::move(request.allowedTypes);
+        request.outsideBannedTypes  = std::move(request.bannedTypes);
+        request.allowedTypes.clear();
+        request.bannedTypes.clear();
+    } else if (request.allowedTypes.empty() && request.bannedTypes.empty()) {
+        error = "--basis-scope requires --allowed and/or --banned for the cone itself.";
         return false;
     }
     for (GateType type : request.allowedTypes) {
-        if (std::find(
-                request.bannedTypes.begin(),
-                request.bannedTypes.end(),
-                type) != request.bannedTypes.end()) {
+        if (std::find(request.bannedTypes.begin(), request.bannedTypes.end(), type)
+            != request.bannedTypes.end()) {
             error = "A gate type cannot appear in both --allowed and --banned.";
+            return false;
+        }
+    }
+    for (GateType type : request.outsideAllowedTypes) {
+        if (std::find(request.outsideBannedTypes.begin(),
+                      request.outsideBannedTypes.end(), type)
+            != request.outsideBannedTypes.end()) {
+            error = "A gate type cannot appear in both --outside-allowed and --outside-banned.";
             return false;
         }
     }
@@ -4041,6 +4143,8 @@ bool parsePublicEditApply(const Netlist& netlist,
         return false;
     } else if (m == "merge_structurally_equivalent_gates") {
         request.kind = Netlist::EditCommandKind::MergeStructurallyEquivalentGates;
+    } else if (m == "merge_duplicate_dffs" || m == "merge_duplicate_registers") {
+        request.kind = Netlist::EditCommandKind::MergeDuplicateDffs;
     } else if (m == "simplify_constants") {
         return parseConstantSimplificationEdit(netlist, iss, request, error);
     } else if (m == "simplify_same_input") {
@@ -4303,27 +4407,36 @@ void printHelp() {
         << "  functional classification is always enabled for canonical and restructured logic\n"
         << "  --verify-sat/--functional-fallback are retained for compatibility;\n"
         << "  explicit functional tuning options still require --functional-fallback\n"
-        << "\nDepth optimization\n"
-        << "  opt_query critical_path_depth\n"
-        << "  opt_apply critical_path_depth [--scope <scope> [scope_name]]\n"
-        << "            [--name <scope_name>] [--objective global|cone]\n"
+        << "\nOptimization\n"
+        << "  opt_query critical_path_depth | gate_count_minimization\n"
+        << "  opt_apply <critical_path_depth|gate_count_minimization>\n"
+        << "            [--scope <scope> [scope_name]] [--name <scope_name>]\n"
+        << "            [--cost-scope whole|cone]\n"
         << "            [--basis-scope <scope> [scope_name]] [--basis-name <name>]\n"
         << "            [--allowed <type...>] [--banned <type...>]\n"
-        << "            [--target-depth N] [--time-limit seconds]\n"
+        << "            [--outside-allowed <type...>] [--outside-banned <type...>]\n"
+        << "            [--target-cost N] [--time-limit seconds]\n"
         << "            [--allow-no-improvement] [--verbose]\n"
-        << "  --scope/--objective select the cost function; --basis-scope selects where\n"
-        << "  the gate-type constraint applies (default: the whole netlist)\n"
-        << "  gate-type lists accept spaces or commas, for example NOR NOT or nor,not\n"
-        << "  accepted rewrites use CertifiedRewrite; use equiv_query only for explicit SAT proof\n"
+        << "  critical_path_depth minimizes logic depth; gate_count_minimization\n"
+        << "  minimizes combinational gate count\n"
+        << "  --scope/--cost-scope select where the cost is measured\n"
+        << "  --target-cost is a depth for critical_path_depth and a gate count\n"
+        << "  for gate_count_minimization\n"
+        << "  --allowed/--banned constrain whatever --basis-scope names\n"
+        << "  (the whole netlist when --basis-scope is omitted)\n"
+        << "  --outside-allowed/--outside-banned constrain everything outside that cone\n"
+        << "  and require --basis-scope\n"
+        << "  aliases kept for compatibility: --objective, --target-depth\n"
         << "\nEdit apply\n"
         << "  edit_apply rename_gate <old> <new> | rename_net <old> <new>\n"
         << "  edit_apply cleanup_buffers | collapse_double_inverter | local_simplification_fixpoint\n"
         << "  edit_apply remove_dead_logic [--include-sequential]\n"
         << "             (aliases: trim_dead_logic, remove_dangling_logic)\n"
-        << "  edit_apply safe_cleanup_fixpoint | trim_dead_logic | remove_dangling_logic\n"
+        << "  edit_apply safe_cleanup_fixpoint\n"
         << "  edit_apply remove_unused_nets | remove_net_if_unused <net>\n"
         << "  edit_apply remove_redundant_logic [--time-limit seconds]\n"
         << "  edit_apply merge_structurally_equivalent_gates\n"
+        << "  edit_apply merge_duplicate_dffs\n"
         << "  edit_apply merge_functionally_equivalent_gates <scope> [scope_name]\n"
         << "             [--gate-type type] [--patterns 1..4096] [--time-limit seconds]\n"
         << "  edit_apply simplify_constants [gate_type|all] [0|1|any] [--inputs N]\n"
@@ -4336,11 +4449,12 @@ void printHelp() {
         << "  edit_apply insert_buffers_by_gate_type <type> [-inputs] [-outputs] [-both]\n"
         << "  edit_apply convert_basis <scope> [scope_name] -allow <type...> [-ban <type...>] [--validate_equivalence]\n"
         << "  edit_apply replace_type <scope> [scope_name] <target_type> -allow <type...> [--validate_equivalence]\n"
-        << "  scope: whole | net_fanin <net> | net_fanout <net> | gate_fanin <gate> | gate_fanout <gate>\n"
+        << "  scope: whole | net_fanin <net> | net_fanout <net> | gate_fanin <gate> | gate_fanout <gate> | gate <gate>\n"
         << "  examples:\n"
         << "    edit_apply convert_basis whole -allow AND NOT\n"
         << "    edit_apply convert_basis net_fanin n10 -allow NOR NOT\n"
         << "    edit_apply replace_type whole XOR -allow NAND\n"
+        << "    edit_apply replace_type gate g123 XOR -allow NAND\n"
         << "\nCached report query\n"
         << "  report_query last_edit\n"
         << "\nWhole-design equivalence\n"
@@ -4412,11 +4526,20 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         session.designLoaded = true;
 
         const NetlistStats stats = session.current.collectNetlistStats();
+        const Netlist::StructureViolations loadViolations =
+            session.current.collectStructureViolations(false);
+        const size_t multiDriverCount = session.reader.multiDriverCount();
+
         ToolResponse response;
         response.ok = true;
         response.status = ToolStatus::Ok;
         response.command = command;
-        response.message = "Design loaded and original snapshot created.";
+        response.message = loadViolations.clean()
+            ? "Design loaded and original snapshot created."
+            : "Design loaded with " +
+              std::to_string(loadViolations.total()) +
+              " structural violation(s) in the source file; the original snapshot "
+              "was created and edits will be judged against this baseline.";
         response.complete = true;
         emitToolResponse(session, response, [&]() {
             std::cout << "  loaded_file: " << filepath << "\n";
@@ -4424,6 +4547,8 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             std::cout << "  net_count: " << stats.activeNetCount << "\n";
             std::cout << "  primary_input_count: " << stats.primaryInputCount << "\n";
             std::cout << "  primary_output_count: " << stats.primaryOutputCount << "\n";
+            std::cout << "  structure_violation_count: " << loadViolations.total() << "\n";
+            std::cout << "  multi_driver_net_count: " << multiDriverCount << "\n";
             std::cout << "  original_snapshot_available: true\n";
         });
         return true;
@@ -5227,45 +5352,41 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         return true;
     }
 
-    if (command == "opt_query") {
+        if (command == "opt_query") {
         if (!requireDesign()) return true;
         std::string mode;
         if (!(iss >> mode)) {
-            emitToolError(
-                session,
-                command,
-                "",
-                "Usage: opt_query critical_path_depth");
+            emitToolError(session, command, "",
+                "Usage: opt_query critical_path_depth | gate_count_minimization");
             return true;
         }
-        if (toLower(mode) != "critical_path_depth") {
-            emitToolError(
-                session,
-                command,
-                mode,
+        const std::string loweredMode = toLower(mode);
+        Netlist::OptQueryRequest request;
+        if (loweredMode == "critical_path_depth" ||
+            loweredMode == "depth_minimization") {
+            request.passKind = OptPassKind::DepthMinimization;
+        } else if (loweredMode == "gate_count_minimization" ||
+                   loweredMode == "area_minimization") {
+            request.passKind = OptPassKind::GateCountMinimization;
+        } else {
+            emitToolError(session, command, mode,
                 "Unknown or non-public opt_query mode: " + mode);
             return true;
         }
         std::string extra;
         if (iss >> extra) {
-            emitToolError(
-                session,
-                command,
-                mode,
+            emitToolError(session, command, mode,
                 "Unexpected opt_query argument: " + extra);
             return true;
         }
 
-        Netlist::OptQueryRequest request;
-        request.passKind = OptPassKind::CriticalPathDepth;
-        const Netlist::OptQueryReport report =
-            session.current.runOptQuery(request);
+        const Netlist::OptQueryReport report = session.current.runOptQuery(request);
 
         ToolResponse response;
         response.ok = report.ok;
         response.status = report.ok ? ToolStatus::Ok : ToolStatus::Error;
         response.command = command;
-        response.mode = "critical_path_depth";
+        response.mode = optPassKindName(request.passKind);
         response.message = report.message;
         response.complete = report.ok;
         emitToolResponse(session, response, [&]() {
@@ -5282,12 +5403,12 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
                 session,
                 command,
                 "",
-                "Usage: opt_apply critical_path_depth [options]");
+                "Usage: opt_apply critical_path_depth|gate_count_minimization [options]");
             return true;
         }
 
         Netlist::OptApplyRequest request;
-        request.validateEquivalence = true;
+        request.validateEquivalence = false;
         request.rollbackOnFailure = true;
         std::string error;
         if (!parsePublicOptApply(
@@ -5305,11 +5426,8 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         }
 
         const bool optimizationTimedOut =
-            report.depthOptimization &&
-            report.depthOptimization->coreStatus == "TIMEOUT";
-        const bool equivalenceComplete =
-            report.validation.equivalenceChecked &&
-            report.validation.functionallyEquivalent;
+            report.optimization &&
+            report.optimization->coreStatus == "TIMEOUT";
 
         ToolResponse response;
         response.ok = report.success;
@@ -5470,7 +5588,7 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         }
 
         Netlist::EditApplyRequest request;
-        request.validateEquivalence = true;
+        request.validateEquivalence = false;
         request.rollbackOnFailure = true;
         std::string error;
         if (!parsePublicEditApply(session.current, iss, mode, request, error)) {
@@ -5497,8 +5615,11 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             report.deadLogic && report.deadLogic->timedOut;
         const bool redundancyTimedOut =
             report.redundancyRemoval && report.redundancyRemoval->timedOut;
+        const bool cleanupTimedOut =
+            report.cleanupFixpoint && report.cleanupFixpoint->timedOut;
         const bool anyTimedOut =
-            functionalMergeTimedOut || deadLogicTimedOut || redundancyTimedOut;
+            functionalMergeTimedOut || deadLogicTimedOut ||
+            redundancyTimedOut || cleanupTimedOut;
 
         ToolResponse response;
         response.ok = report.success;

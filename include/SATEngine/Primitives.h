@@ -14,6 +14,7 @@
 #include "Types.h"
 #include "NameMap.h"
 #include "AigBuilder.h"
+#include "include/core/RequestTimeBudget.h"
 
 class Netlist;
 
@@ -395,6 +396,11 @@ public:
                           uint64_t sim_memory_bytes,
                           uint32_t max_rounds = 0); // 0 = 沿用現值
 
+    // 讓 sweep 使用整個 request 的 deadline，而不是自己起算。
+    // 傳 nullptr 恢復成用 set_fraig_budget 的 total_seconds。
+    void set_fraig_deadline(const request_time_budget::RequestDeadline* deadline);
+    bool fraig_sweep_truncated() const;
+
 private:
     // ---------- dirty / rebuild ----------
     void ensure_fresh();
@@ -456,6 +462,7 @@ private:
     uint8_t  fraigTriedLevel_  = 0;   // 已嘗試過的最高層級(失敗也算,避免反覆重試)
     bool     fraigSimOnlyCap_  = false;
     uint32_t fraigMaxRounds_   = 64;
+    const request_time_budget::RequestDeadline* fraigDeadline_ = nullptr;
 
     struct CofactorKey {
         uint64_t functionData = 0;
@@ -499,6 +506,23 @@ public:
         return "stale SigRef/Cut used across a netlist modification "
                "-- call resolve(name) again after any edit";
     }
+};
+
+class FraigDeadlineScope {
+public:
+    FraigDeadlineScope(Primitives& p,
+                       const request_time_budget::RequestDeadline* d)
+        : prim_(p) { prim_.set_fraig_deadline(d); }
+
+    ~FraigDeadlineScope() { prim_.set_fraig_deadline(nullptr); }
+
+    FraigDeadlineScope(const FraigDeadlineScope&)            = delete;
+    FraigDeadlineScope& operator=(const FraigDeadlineScope&) = delete;
+    FraigDeadlineScope(FraigDeadlineScope&&)                 = delete;
+    FraigDeadlineScope& operator=(FraigDeadlineScope&&)      = delete;
+
+private:
+    Primitives& prim_;
 };
 
 } // namespace eqeng
