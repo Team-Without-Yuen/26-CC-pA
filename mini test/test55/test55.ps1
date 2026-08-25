@@ -67,6 +67,42 @@ foreach ($case in $validCases) {
     Assert-Contains $result 'complete: true' "$($case.Label) is complete"
 }
 
+# Category counts are scalar report metadata and must remain visible even when
+# the corresponding load lists are moved to an artifact.
+$dataLoadCategories = Invoke-Tools @($read, 'structure_query fanout_load n1')
+Assert-Contains $dataLoadCategories 'fanout load count (QA definition): 3' `
+    'fanout total preserves pin-level sum'
+Assert-Contains $dataLoadCategories 'combinational gate input load count: 2' `
+    'fanout reports combinational input count'
+Assert-Contains $dataLoadCategories 'DFF D-pin load count: 1' `
+    'fanout reports DFF data count'
+Assert-Contains $dataLoadCategories 'DFF clock-pin load count: 0' `
+    'fanout reports explicit zero clock count'
+Assert-Contains $dataLoadCategories 'distinct direct-load gate count: 3' `
+    'fanout reports distinct direct-load gate count'
+Assert-Contains $dataLoadCategories 'Direct load gates (3)' `
+    'fanout reports distinct direct-load gate names'
+
+$clockLoadCategories = Invoke-Tools @($read, 'structure_query fanout_load clk')
+Assert-Contains $clockLoadCategories 'DFF clock-pin load count: 1' `
+    'fanout reports DFF clock count'
+Assert-Contains $clockLoadCategories 'DFF D-pin load count: 0' `
+    'clock net keeps data category separate'
+
+$resetLoadCategories = Invoke-Tools @($read, 'structure_query fanout_load rst_n')
+Assert-Contains $resetLoadCategories 'DFF reset/set-pin load count: 1' `
+    'fanout reports DFF reset-set count'
+Assert-Contains $resetLoadCategories 'DFF other-pin load count: 0' `
+    'fanout reports explicit zero other-pin count'
+
+$busLoadCategories = Invoke-Tools @($read, 'structure_query fanout_load data_in')
+Assert-Contains $busLoadCategories 'fanout load count (QA definition): 2' `
+    'bus fanout total aggregates all active bits'
+Assert-Contains $busLoadCategories 'combinational gate input load count: 2' `
+    'bus fanout category count aggregates all active bits'
+Assert-Contains $busLoadCategories 'DFF clock-pin load count: 0' `
+    'bus fanout preserves explicit zero categories'
+
 # All active candidates participate in extrema even when zero-fanout detail
 # reports are omitted. Otherwise an all-zero PI scope has max=0 but no winners.
 $allZeroPi = Invoke-Tools @(
@@ -84,6 +120,17 @@ Assert-Contains $allZeroPi 'unused_b fanout=0' 'second zero-fanout PI is reporte
 # Generalized fanout predicates use QA pin-level loads. The fixture has PI
 # fanouts zero=0, one=1, two=2 (same gate, two pins), and three=3.
 $filterRead = "read $fanoutFilterCircuit"
+$tiedPinFanout = Invoke-Tools @(
+    $filterRead,
+    'structure_query fanout_load two'
+)
+Assert-Contains $tiedPinFanout 'fanout load count (QA definition): 2' `
+    'tied input pins remain two pin-level fanout loads'
+Assert-Contains $tiedPinFanout 'distinct direct-load gate count: 1' `
+    'tied input pins map to one distinct direct-load gate'
+Assert-Contains $tiedPinFanout 'Direct load gates (1)' `
+    'tied input direct-load list is deduplicated'
+
 $filterCases = @(
     @{ Command = 'structure_query fanout_filter pi eq 0'; Count = 1; Names = @('zero fanout=0'); Label = 'equal zero' },
     @{ Command = 'structure_query fanout_filter pi eq 2'; Count = 1; Names = @('two fanout=2'); Label = 'equal two pin loads' },

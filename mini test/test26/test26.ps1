@@ -78,18 +78,33 @@ if ($responses.Count -ge 23) {
     $limitedFile = Get-OutputFile $limited
     $andOnlyFile = Get-OutputFile $andOnly
     $findAllFileExists = [bool]($findAllFile -and (Test-Path -LiteralPath $findAllFile))
+    $findAllArtifact = if ($findAllFileExists) {
+        Get-Content -LiteralPath $findAllFile -Raw
+    } else {
+        ""
+    }
     $findAllFileMatchCount = if ($findAllFileExists) {
         @(Select-String -LiteralPath $findAllFile -Pattern '^Match [0-9]+$').Count
     } else {
         -1
     }
     $limitedFileExists = [bool]($limitedFile -and (Test-Path -LiteralPath $limitedFile))
+    $limitedArtifact = if ($limitedFileExists) {
+        Get-Content -LiteralPath $limitedFile -Raw
+    } else {
+        ""
+    }
     $limitedFileMatchCount = if ($limitedFileExists) {
         @(Select-String -LiteralPath $limitedFile -Pattern '^Match [0-9]+$').Count
     } else {
         -1
     }
     $andOnlyFileExists = [bool]($andOnlyFile -and (Test-Path -LiteralPath $andOnlyFile))
+    $andOnlyArtifact = if ($andOnlyFileExists) {
+        Get-Content -LiteralPath $andOnlyFile -Raw
+    } else {
+        ""
+    }
 
     Check-Result `
         ($findAny -match "status: ok" -and
@@ -107,7 +122,18 @@ if ($responses.Count -ge 23) {
          $findAll -match "stored_match_count: 0" -and
          $findAll -match "wrote_matches_to_file: true" -and
          $findAllFileExists -and
-         (Get-Content -LiteralPath $findAllFile -Raw) -match "member_count: 4" -and
+         $findAllArtifact -match "artifact_format: FUNCTION_SEARCH_ARTIFACT_V2" -and
+         $findAllArtifact -match "query_type: EQUIVALENT_GATE_PAIRS" -and
+         $findAllArtifact -match "search_mode: FIND_ALL" -and
+         $findAllArtifact -match "target: not_applicable" -and
+         $findAllArtifact -match "scope: WHOLE_DESIGN" -and
+         $findAllArtifact -match "gate_type_filter: ANY" -and
+         $findAllArtifact -match "candidate_domain: active_combinational_gate_outputs" -and
+         $findAllArtifact -match "result_policy: explicit_max_results" -and
+         $findAllArtifact -match "max_results: 64" -and
+         $findAllArtifact -match "member_count: 4" -and
+         $findAllArtifact -match "records_end" -and
+         $findAllArtifact -match "equivalence_class_count: 2" -and
          $findAllFileMatchCount -eq 7) `
         "FindAll writes complete classes and expanded pairs to an artifact"
 
@@ -118,6 +144,10 @@ if ($responses.Count -ge 23) {
          $limited -match "equivalent_pair_count: 7" -and
          $limited -match "match_count: 7" -and
          $limitedFileExists -and
+         $limitedArtifact -match "result_policy: explicit_max_results" -and
+         $limitedArtifact -match "max_results: 2" -and
+         $limitedArtifact -match "truncated: true" -and
+         $limitedArtifact -match "Complete: no" -and
          $limitedFileMatchCount -eq 2) `
         "result limits truncate pair output without losing class statistics"
 
@@ -125,7 +155,10 @@ if ($responses.Count -ge 23) {
         ($andOnly -match "gate_type_filter: AND" -and
          $andOnly -match "equivalent_pair_count: 1" -and
          $andOnlyFileExists -and
-         (Get-Content -LiteralPath $andOnlyFile -Raw) -match "member_count: 2") `
+         $andOnlyArtifact -match "gate_type_filter: AND" -and
+         $andOnlyArtifact -match "result_policy: all_matches" -and
+         $andOnlyArtifact -match "max_results: unlimited" -and
+         $andOnlyArtifact -match "member_count: 2") `
         "gate-type filter reaches the public report"
 
     Check-Result `
@@ -152,7 +185,7 @@ if ($responses.Count -ge 23) {
 
     Check-Result `
         ($badOption -match "status: error" -and
-         $badOption -match "--allow-same is only valid for nand_pair") `
+         $badOption -match "--allow-same is only valid for nand_pair or binary pattern searches") `
         "mode-specific options cannot leak across search types"
 
     Check-Result `

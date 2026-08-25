@@ -142,6 +142,19 @@ structure_query net_loads n10
 若 `output` 被回報為不存在的 net，或回傳 scope 與 prompt 不同，代表參數擷取錯誤，
 應修正 command 後重試，不能把工具 error 當成題目答案。
 
+### 多結果、比較與 artifact
+
+LLM 預設不能讀取 artifact 內容。若比較的是 count、depth、maximum 等 scalar，分別取得各
+operand 相同語意的 complete envelope 後直接比較；artifact 只交付完整 records。若比較的是
+集合內容、交集、差集或逐筆屬性，必須使用直接回傳衍生結果的專用高階 query，不能由兩個
+counts 猜答案，也不能依賴 LLM 開啟 artifact 後自行運算。
+
+正式答案不能只貼 artifact path：prompt 要求的 scalar、yes/no、winner/tie 與關鍵結論必須直接
+回答；prompt 要求的完整大型 payload 則以 count、complete 與 `output_file` 交付。Artifact 不是
+LLM 的資料來源，也不是下一個 tools command 可直接引用的 session result；不能把
+`list entry count` 當成任意 mode 的 object count。完整規則以
+[`LLM_NOTES.md`](LLM_NOTES.md) 的「Result Assembly 與 Artifact」為準。
+
 ## 全域參數抽取規則
 
 先從 prompt 原文抽出 object names、object kinds、scope、gate types、數值限制與量詞，
@@ -210,7 +223,7 @@ types 以空白或逗號分隔；不得把「NOR and NOT only」解讀為只允�
 | 路徑限制 | `avoid`、`without passing`、`does not traverse` 必須保留為 `-avoid`；`through`、`must pass` 不得降成普通 existence query |
 | 名稱 | 完整保留 gate/net/port 名稱；bus bit `n4[0]` 不得改成 `n4` |
 | Scope | whole、fanin、fanout、指定 endpoints 與指定 candidate set 不得互換 |
-| 比較題 | `A or B which...` 分別查 A、B，再比較相同 metric；不能改查全設計 winner |
+| 比較題 | `A or B which...` 分別查 A、B，核對 identity/complete 後比較相同 semantic metric；集合比較另依 `LLM_NOTES.md` 讀 records 或用專用 query |
 | 修改後追問 | edit/opt 後重新查 current design；詢問修改 delta 才使用 `report_query last_edit` |
 | Sequential boundary | DFF.Q fanin 是空 combinational cone；空結果不是 error，也不能回追同一顆 DFF.D |
 | 完整性 | 只有 `complete:true` 及對應 artifact complete 才能宣稱 `all` 已完整 |
@@ -230,6 +243,15 @@ Find signals a and b such that OR(a,b)==n15.
 
 Find a signal whose inversion equals n5.
 -> func_search pattern NOT n5
+
+Is output n16 always 0?
+-> func_query always_zero n16
+
+List all signals that are functionally constant 0 or 1.
+-> func_search constant_signals either --all
+
+List all pairs of internal signals that compute complementary functions.
+-> func_search complementary_pairs signals whole --all
 
 Does a path from A to B exist that does not traverse X?
 -> path_query exists net:A net:B -avoid net:X
@@ -301,8 +323,8 @@ Which primary input has the highest direct fanout?
 
 責任邊界：只處理物件本身與一層 connectivity。題目若要求 transitive cone，改用 `ConeQuery`；若要求 A 到 B 的完整路徑，改用 `PathQuery`；若問 signal 是否功能常數，不是 structural constant connection，改用 `FunctionQuery`。
 
-大型 object/load/issue 名單會自動完整寫入 list artifact；LLM 讀取 count、
-`list artifact complete` 與 `output_file`，不需也不能指定輸出門檻或檔名。
+大型 object/load/issue 名單會自動完整寫入 list artifact；LLM 只從 envelope 讀取 count、
+`list artifact complete` 與 `output_file`，不開啟 artifact，也不需或不能指定輸出門檻或檔名。
 自動切換以單一 prompt 的 4096-token 上限為基準，使用保守 token estimate 並保留 envelope
 空間；估算達到或超過上限即寫 artifact。門檻只決定呈現位置，不改變查詢結果數量。
 
@@ -323,6 +345,11 @@ net classification 使用無參數的 `net_classes`，一次取得所有分類 c
 net driver/load 預設回 gate-level names；prompt 明確要求 exact pin、gate type 或 pin role 時使用
 `net_driver <net> --with-pins` / `net_loads <net> --with-pins`。其中 `count` 是去重 gate 數，
 `pin connection count` 才是逐 pin edge 數。
+
+prompt 同時問某 net 的 QA fanout 數量與它直接驅動的所有 gates 時，只呼叫
+`structure_query fanout_load <net>`。同一份結果的 `fanout load count (QA definition)` 是
+pin-level load 數，`distinct direct-load gate count` 與 `Direct load gates` 是去重 gate instances；
+不得混用兩種 count，也不需要額外呼叫 `net_loads`。
 
 詳細用法：[`STRUCTURE_QUERY_TOOL.md`](STRUCTURE_QUERY_TOOL.md)
 
@@ -378,6 +405,8 @@ XNOR BUF DFF`，多個 type 是聯集。prompt 要求 pin/net connection 時再�
 
 - path existence、任一條 path、所有 paths 與 path count。
 - shortest/longest path，以及 through/avoid constraint。
+- exactly/at-least/at-most/between logic depth 的 path count 或完整列表。
+- Top-K/Nth shortest 或 longest paths，含多 endpoint global ranking。
 - PI-to-PO、PI-to-DFF.D、DFF.Q-to-PO 與 DFF.Q-to-DFF.D path。
 - register-to-register path。
 - every-path condition、mandatory nodes、separator 與 PI-to-PO cut。
@@ -387,13 +416,16 @@ XNOR BUF DFF`，多個 type 是聯集。prompt 要求 pin/net connection 時再�
 ```text
 Is there a path from n1 to n20?
 List all paths from input a to output y that avoid n8.
+How many paths from a to y have logic depth exactly 5?
 Find the longest path from ff1.Q to ff2.D.
+List the five shortest paths from input a to output y.
+Report the third longest register-to-register path.
 Which nodes occur on every path from a to y?
 Find all articulation points in the combinational graph between n2 and n14.
 Is n10 a separator between the primary inputs and outputs?
 ```
 
-責任邊界：題目必須關心兩個 endpoints 之間如何連通。只問某個 signal 的完整 fanin/fanout 範圍使用 `ConeQuery`；只問全設計 endpoint depth 或 critical path 使用 `DepthQuery`。separator/mandatory-node 題目對外仍由 `PathQuery` 處理，不直接選內部 `GraphQuery`。`articulation points between A and B` 應呼叫 `path_query articulation_between A B`；此處語意為所有 directed A-to-B paths 的共同 internal nets，不是無向圖的全域 articulation vertices。
+責任邊界：題目必須關心兩個 endpoints 之間如何連通。只問某個 signal 的完整 fanin/fanout 範圍使用 `ConeQuery`；只問全設計 endpoint depth 或 critical path 使用 `DepthQuery`。題目要求 path depth exactly/at-least/at-most/between 時使用 `path_query enumerate` 的 depth predicate；若同時要求 Top-K/Nth，改用對應 ranked mode 並套用相同 predicate。`min_depth/max_depth` 只找 extrema witness。separator/mandatory-node 題目對外仍由 `PathQuery` 處理，不直接選內部 `GraphQuery`。`articulation points between A and B` 應呼叫 `path_query articulation_between A B`；此處語意為所有 directed A-to-B paths 的共同 internal nets，不是無向圖的全域 articulation vertices。
 
 詳細用法：[`PATH_QUERY_TOOL.md`](PATH_QUERY_TOOL.md)
 
@@ -407,16 +439,21 @@ Is n10 a separator between the primary inputs and outputs?
 
 - 指定 net、PO 或 DFF.D endpoint 的 depth。
 - 所有 PO/DFF.D 的 depth report。
-- 超過指定 depth threshold 的 endpoints 與數量。
+- 依 all/PO/DFF.D scope 篩選 depth 等於、不等於、大於、大於等於、小於、小於等於，
+  或位於 inclusive range 的 endpoints 與數量。
 - global maximum logic depth、critical endpoint 與代表性 critical path。
+- 判斷單一 gate，或一次列出/計數所有位於任一 global maximum-depth path 上的 gates。
 
 典型 prompt：
 
 ```text
 How many outputs have a logic depth greater than 4?
+List all DFF D-pins with logic depth between 2 and 5 inclusive.
+How many outputs have logic depth at most 4?
 What is the logic depth of n15?
 Which output has the greatest depth?
 Report the critical path and maximum logic depth.
+List every gate that lies on at least one maximum-depth path.
 ```
 
 責任邊界：`DepthQuery` 只量測與回報 current design，不會修改電路。若 prompt 使用 `reduce`、`minimize`、`optimize`、`best depth` 或 cost function，屬於 optimization，不可因為能查到 critical path 就宣稱可以完成最佳化。
@@ -486,13 +523,23 @@ Find a signal whose inversion is equivalent to n5.
 Does any signal pair in the design satisfy the requested Boolean relation?
 List all functionally equivalent gate pairs in the design.
 Find equivalent AND gates in the fanin cone of n10.
+List all signals that are functionally constant 0 or 1.
+Does any internal signal remain at logic 0 for every input assignment?
 ```
 
-目前公開支援 BUF/NOT/AND/NAND/OR/NOR/XOR/XNOR operand search，以及 whole design / cone
-scope 內的 arbitrary equivalent combinational gate-pair search。使用
+目前公開支援 BUF/NOT/AND/NAND/OR/NOR/XOR/XNOR operand search、whole design / cone
+scope 內的 arbitrary equivalent combinational gate-pair search、functionally constant 0/1 signal
+batch search，以及 signal/gate-output complementary-pair search。使用
 `func_search pattern <type> <target>`；舊 NAND prompt 仍可用 `nand_pair`。`equivalent_pairs` 可依
 gate type 過濾並回傳 SAT-proven equivalence classes，但不代表 gate 已可直接刪除；MUX decomposition、
 任意 observability-aware redundancy candidate 或其他尚未列於 Usage 的 Boolean search，不可假設已支援。
+
+已知 net 名稱的單點 constant 問題使用 `func_query always_zero/always_one`；候選名稱未知、要
+搜尋或完整列出 constant signals 時使用 `func_search constant_signals <zero|one|either>`。
+未知 candidates 的 `f(a)=!f(b)` 關係使用
+`func_search complementary_pairs <signals|gates> <scope> [scope_name]`；signals 可選擇加入 PI/PO，
+gates 可依 gate type 過濾。FindAll 的 phase-class artifact 以
+`positive_members x negative_members` 表示完整 pair 集合。
 
 詳細用法：[`FUNCTION_SEARCH_TOOL.md`](FUNCTION_SEARCH_TOOL.md)
 

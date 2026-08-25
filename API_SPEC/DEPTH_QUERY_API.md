@@ -21,6 +21,7 @@ DFF.D depth
 global critical path
 depth 超標 endpoint
 gate 是否位在任一 maximum-depth path
+列出位在任一 global maximum-depth path 上的所有 combinational gates
 最深 primary output fanin cone
 ```
 
@@ -166,6 +167,24 @@ enum class DepthEndpointType {
 };
 ```
 
+`DepthFilterScope` 與 `DepthPredicate`：
+
+```cpp
+enum class DepthFilterScope {
+    AllTimingEndpoints, PrimaryOutputs, DffD
+};
+
+enum class DepthPredicate {
+    None, Equal, NotEqual, GreaterThan, GreaterOrEqual,
+    LessThan, LessOrEqual, BetweenInclusive
+};
+
+enum class DepthStatus {
+    Unknown, Available, NoTimingPath,
+    GraphInconsistent, AnalysisFailure
+};
+```
+
 `DepthReport`：
 
 ```cpp
@@ -174,7 +193,22 @@ struct DepthReport {
     std::string endpointName;
     int endpointNetId = -1;
     int depth = -1;
+    DepthStatus depthStatus = DepthStatus::Unknown;
     CombinationalPath criticalPath;
+};
+```
+
+`CriticalGateReport`：
+
+```cpp
+struct CriticalGateReport {
+    std::string gateName;
+    int gateId = -1;
+    std::string gateTypeName;
+    std::string outputNetName;
+    int outputNetId = -1;
+    int arrivalDepth = -1;
+    int remainingDepth = -1;
 };
 ```
 
@@ -186,6 +220,9 @@ struct DepthQuery {
     std::string netName;
     std::string gateName;
     int threshold = -1;
+    int upperThreshold = -1;
+    DepthFilterScope filterScope = DepthFilterScope::AllTimingEndpoints;
+    DepthPredicate predicate = DepthPredicate::None;
     bool includeCriticalPath = true;
 };
 ```
@@ -196,15 +233,36 @@ struct DepthQuery {
 struct DepthReportSet {
     bool ok = false;
     bool exists = false;
+    bool complete = true;
     std::string message;
     DepthQueryType type = DepthQueryType::SpecificNet;
     std::vector<DepthReport> reports;
     DepthReport worst;
     int threshold = -1;
+    int upperThreshold = -1;
     size_t count = 0;
+    bool filterApplied = false;
+    DepthFilterScope filterScope = DepthFilterScope::AllTimingEndpoints;
+    DepthPredicate predicate = DepthPredicate::None;
+    size_t checkedEndpointCount = 0;
+    size_t matchedEndpointCount = 0;
+    size_t definedDepthEndpointCount = 0;
+    size_t noTimingPathEndpointCount = 0;
+    size_t graphInconsistentEndpointCount = 0;
+    size_t analysisFailureEndpointCount = 0;
+    size_t unavailableEndpointCount = 0;
     std::string gateName;
     int gateId = -1;
     bool gateOnCriticalPath = false;
+    bool criticalGateBatchApplied = false;
+    size_t checkedGateCount = 0;
+    size_t analyzableGateCount = 0;
+    size_t criticalGateCount = 0;
+    size_t noTimingPathGateCount = 0;
+    size_t graphInconsistentGateCount = 0;
+    size_t analysisFailureGateCount = 0;
+    std::map<GateType, size_t> criticalGateTypeCounts;
+    std::vector<CriticalGateReport> criticalGates;
 };
 ```
 
@@ -228,10 +286,21 @@ dispatch 對照：
 | `GlobalCriticalPath` | single level pass + endpoint metadata selection | `worst`, `reports[0]` |
 | `EndpointsExceedingDepth` | single level pass + all-endpoint threshold filter | `reports`, `count`, `worst` |
 | `PrimaryOutputsExceedingDepth` | single level pass + PO-only threshold filter | `reports`, `count`, `worst` |
+| `EndpointDepthFilter` | single level pass + scope/predicate filter | `checkedEndpointCount`, `matchedEndpointCount`, `unavailableEndpointCount`, `reports`, `complete` |
 | `GateOnCriticalPath` | net level + iterative remaining-depth DP | `gateOnCriticalPath`, `exists`, `worst` |
+| `CriticalGateBatch` | one forward level pass + one iterative reverse remaining-depth pass | `criticalGates`, gate counts, `worst`, `complete` |
 | `DeepestOutputCone` | shared net levels + active PO collector | `worst`, `reports`, `count` |
 
 `analyzePrimaryOutputDepths()` 與 `analyzeDffDDepths()` 會先計算一次全設計 net levels，再讓所有 endpoint 共用；不會為每個 output/DFF.D 重跑整張 graph。critical path 也從同一份 level vector 重建。
+
+`EndpointDepthFilter` 支援 `Equal / NotEqual / GreaterThan / GreaterOrEqual /
+LessThan / LessOrEqual / BetweenInclusive`。`BetweenInclusive` 使用閉區間；filter 是
+summary-only，不建立 matched endpoint critical paths。`AllTimingEndpoints` 的 stable order 為
+所有 active PO bits 後接 active DFF.D。`count == matchedEndpointCount == reports.size()`；
+沒有 timing path 的 endpoint 不參與數值 predicate，但會計入 `noTimingPathEndpointCount`。
+`complete` 表示 traversal 沒有 graph inconsistency 或 backend failure；因此合法的
+`NoTimingPath` 不會使結果變成 partial。`unavailableEndpointCount` 是三種非 `Available`
+狀態的相容總和，不能單獨用來判斷 `complete`。
 
 `GateOnCriticalPath` 的語意：
 
@@ -242,14 +311,48 @@ fanin depth to gate + gate cost + remaining depth to timing endpoint
 是否等於 global maximum depth。
 ```
 
+`CriticalGateBatch` 使用相同 membership 定義，但一次分類所有 active combinational gates：
+
+```text
+arrivalDepth(gate.output) + remainingDepth(gate.output) == globalMaximumDepth
+```
+
+其中 `remainingDepth` 是 gate output 到任一可達 PO 或 DFF.D timing endpoint 的最大剩餘
+combinational gate 數。結果依 gate ID 穩定排序、每顆 gate 最多出現一次，且是所有同深度
+maximum paths 的聯集，不是 `GlobalCriticalPath` 代表性單一路徑上的 gate 集合。DFF 本身是
+boundary，不列入 `checkedGateCount` 或 `criticalGates`。
+
+Batch report 契約：
+
+```text
+count == criticalGateCount == criticalGates.size()
+sum(criticalGateTypeCounts) == criticalGateCount
+checkedGateCount == 所有 active non-DFF gates
+analyzableGateCount == 同時具有 arrivalDepth 與 remainingDepth 的 gates
+complete == endpoint summary 與所有 checked gates 均無 graph/backend failure
+```
+
+合法但無法到達任何 timing endpoint 的 gate 計入 `noTimingPathGateCount`，不會令
+`complete=false`。graph inconsistency 或 analysis failure 會令結果 partial，但已確認的
+`criticalGates` 仍保留。
+`criticalGateTypeCounts` 固定包含 AND、OR、NAND、NOR、NOT、BUF、XOR、XNOR 八種
+combinational type，沒有 match 的 type 也保留明確零值。統計在同一次 batch traversal 中完成，
+不需要再逐 gate 掃描 artifact 或重跑 `GateOnCriticalPath`。
+
 實作規則：
 
 ```text
 1. level、endpoint collection 與 critical-path reconstruction 只接受 active gate/net。
 2. traversal edge 必須同時存在於 net.loadGateIds 與 gate.inputNetIds；driver 也必須雙向一致。
+   combinational gate 的每一條不同 input net 都必須有反向 load edge，否則整顆 gate 不參與 levelization；
+   tied inputs 即使 load list 已去重仍視為合法。
 3. includeCriticalPath=false 時不建立稍後會被丟棄的 path。
 4. Global/threshold query 先用同一份 netLevels 收集 metadata，只替必要 endpoint 建 path。
-5. GateOnCriticalPath 在 combinational DAG 上使用 iterative reverse-depth DP，避免深鏈遞迴 stack overflow。
+5. GateOnCriticalPath 與 CriticalGateBatch 在 combinational DAG 上共用 iterative reverse-depth DP，
+   避免深鏈遞迴 stack overflow；batch 不會對每顆 gate 重跑全圖。
+6. request-local status pass 以非遞迴方式傳播 `NoTimingPath`；缺 driver 是合法 no-path，
+   stale/missing reverse edge 是 `GraphInconsistent`，有效 graph 卻未 levelize 才是
+   `AnalysisFailure`。
 ```
 
 ---
@@ -352,6 +455,7 @@ findGlobalCriticalPath()
 findEndpointsExceedingDepth()
 runDepthQuery(GateOnCriticalPath)
 runDepthQuery(DeepestOutputCone)
+runDepthQuery(EndpointDepthFilter)
 DepthQuery / DepthReportSet / runDepthQuery()
 ```
 
@@ -360,8 +464,11 @@ DepthQuery / DepthReportSet / runDepthQuery()
 ```text
 mini test/tester.cpp 已覆蓋 computeNetLevels / computeGateLevels /
 findCriticalPathToNet / runDepthQuery(SpecificNet, DffD, GlobalCriticalPath)。
-mini test/test5/test5.cpp 已覆蓋 GateOnCriticalPath / DeepestOutputCone、
-includeCriticalPath=false、tombstone/stale edge 與 30000-level deep-chain regression。
+mini test/test5/test5.cpp 已覆蓋 GateOnCriticalPath / DeepestOutputCone、七種 depth predicates、
+all/po/dff_d scopes、zero match、legacy gt compatibility、undriven/floating no-timing-path、
+graph inconsistency partial、
+includeCriticalPath=false、driver/input stale edge、tombstone、tied input、
+reconvergent depth 與 30000-level deep-chain regression。
 ```
 
 後續建議補：

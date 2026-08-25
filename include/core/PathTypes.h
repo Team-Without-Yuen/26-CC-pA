@@ -1,8 +1,10 @@
 #pragma once
 
+#include <map>
 #include <string>
 #include <vector>
 
+#include "include/core/NetlistTypes.h"
 #include "include/core/RequestTimeBudget.h"
 
 // =========================================================================
@@ -54,13 +56,55 @@ enum class DepthEndpointType {
     DffD
 };
 
+// Depth filter 的 endpoint 範圍。AllTimingEndpoints 的 stable order 為 PO bits 後接 DFF.D。
+enum class DepthFilterScope {
+    AllTimingEndpoints,
+    PrimaryOutputs,
+    DffD
+};
+
+// Depth filter 的比較運算；BetweenInclusive 同時使用 threshold 與 upperThreshold。
+enum class DepthPredicate {
+    None,
+    Equal,
+    NotEqual,
+    GreaterThan,
+    GreaterOrEqual,
+    LessThan,
+    LessOrEqual,
+    BetweenInclusive
+};
+
+// Depth 數值的可用狀態。depth=-1 保留為相容 sentinel，實際原因由此欄位區分。
+enum class DepthStatus {
+    Unknown,
+    Available,
+    NoTimingPath,
+    GraphInconsistent,
+    AnalysisFailure
+};
+
 // 保存單一 endpoint 的 depth 分析結果。
 struct DepthReport {
     DepthEndpointType endpointType = DepthEndpointType::Unknown; // endpoint 的來源類型
     std::string endpointName;        // 可讀名稱，例如 y、n10、ff1.D
     int endpointNetId = -1;          // 被分析的 endpoint net ID
     int depth = -1;                  // 到該 endpoint 的最大 combinational depth
+    DepthStatus depthStatus = DepthStatus::Unknown; // depth=-1 的明確原因
     CombinationalPath criticalPath;  // 到該 endpoint 的一條 critical path
+};
+
+// 保存一個位於至少一條 global maximum-depth path 上的 combinational gate。
+// arrivalDepth 是 gate output 的 level；remainingDepth 是 output 到任一可達
+// timing endpoint 的最大剩餘 combinational gate 數。
+struct CriticalGateReport {
+    std::string gateName;
+    int gateId = -1;
+    std::string gateTypeName;
+    std::string outputNetName;
+    int outputNetId = -1;
+    int arrivalDepth = -1;
+    int remainingDepth = -1;
 };
 
 // 表示 DepthQuery 要執行哪一種 depth/timing 查詢。
@@ -72,7 +116,9 @@ enum class DepthQueryType {
     EndpointsExceedingDepth,  // 找出所有 depth 大於 threshold 的 timing endpoints
     PrimaryOutputsExceedingDepth, // 只找 depth 大於 threshold 的 primary outputs
     GateOnCriticalPath,       // 判斷 gate 是否位在任一 global maximum-depth path 上
-    DeepestOutputCone         // 找出 fanin logic cone depth 最深的 primary output
+    DeepestOutputCone,        // 找出 fanin logic cone depth 最深的 primary output
+    EndpointDepthFilter,      // 依 scope/predicate 篩選 timing endpoints
+    CriticalGateBatch         // 列出位於任一 global maximum-depth path 的 gates
 };
 
 // 描述一個 Depth Query；這一層只處理 depth/timing，不處理 function 或 through/avoid path 條件。
@@ -81,6 +127,9 @@ struct DepthQuery {
     std::string netName;             // SpecificNet 使用的 endpoint net name
     std::string gateName;            // GateOnCriticalPath 使用的 gate instance name
     int threshold = -1;              // EndpointsExceedingDepth 使用的 depth 門檻
+    int upperThreshold = -1;         // BetweenInclusive 使用的 inclusive upper bound
+    DepthFilterScope filterScope = DepthFilterScope::AllTimingEndpoints;
+    DepthPredicate predicate = DepthPredicate::None;
     bool includeCriticalPath = true; // false 時回傳 report 會清空 criticalPath，降低資料量
 };
 
@@ -88,6 +137,7 @@ struct DepthQuery {
 struct DepthReportSet {
     bool ok = false;                 // query 是否成功
     bool exists = false;             // yes/no 型 depth query 的主要答案
+    bool complete = true;            // query 是否無 graph inconsistency / analysis failure
     std::string message;             // 給 debug / LLM response 的簡短訊息
     DepthQueryType type = DepthQueryType::SpecificNet;
 
@@ -95,11 +145,33 @@ struct DepthReportSet {
     DepthReport worst;                // reports 中 depth 最大者；GlobalCriticalPath 的主要結果
 
     int threshold = -1;               // query 使用的 depth 門檻；未使用時為 -1
+    int upperThreshold = -1;          // BetweenInclusive 的 inclusive upper bound
     size_t count = 0;                 // reports 數量
+
+    bool filterApplied = false;       // EndpointDepthFilter 時為 true
+    DepthFilterScope filterScope = DepthFilterScope::AllTimingEndpoints;
+    DepthPredicate predicate = DepthPredicate::None;
+    size_t checkedEndpointCount = 0;  // filter scope 內納入檢查的 active endpoints
+    size_t matchedEndpointCount = 0;  // 通過 predicate 的 endpoint 數；等於 reports.size()
+    size_t definedDepthEndpointCount = 0; // 具有可比較 depth 的 endpoint 數
+    size_t noTimingPathEndpointCount = 0; // 合法但沒有 timing source/path 的 endpoint 數
+    size_t graphInconsistentEndpointCount = 0; // named graph 雙向關係不一致
+    size_t analysisFailureEndpointCount = 0; // graph 合法但 backend 未能計算
+    size_t unavailableEndpointCount = 0; // 相容欄位：上述三種非 Available 的總和
 
     std::string gateName;             // GateOnCriticalPath 的查詢目標
     int gateId = -1;                  // GateOnCriticalPath 的 gate ID
     bool gateOnCriticalPath = false;  // GateOnCriticalPath 的主要 yes/no 答案
+
+    bool criticalGateBatchApplied = false; // CriticalGateBatch 時為 true
+    size_t checkedGateCount = 0;      // 所有 active combinational gates
+    size_t analyzableGateCount = 0;   // 同時具有 arrival 與 timing-endpoint remaining depth
+    size_t criticalGateCount = 0;     // 等於 criticalGates.size()；batch 時也等於 count
+    size_t noTimingPathGateCount = 0; // graph 合法但不在任何完整 timing path 上
+    size_t graphInconsistentGateCount = 0; // gate 的 input/load 或 output/driver 不一致
+    size_t analysisFailureGateCount = 0; // graph 合法但 depth backend 未能分類
+    std::map<GateType, size_t> criticalGateTypeCounts; // 八種 combinational type，包含明確零值
+    std::vector<CriticalGateReport> criticalGates; // stable gate-ID order
 };
 
 // 表示 path query 的抽象起點或終點類型。
@@ -136,6 +208,7 @@ enum class PathQueryMode {
     Exists,             // 是否至少存在一條符合條件的路徑
     FindAny,            // 回傳任意一條符合條件的路徑
     EnumerateAll,       // 回傳所有符合條件的路徑
+    RankedPaths,        // 回傳指定 rank window 的 shortest/longest paths
     MinDepth,           // 回傳最短邏輯深度路徑
     MaxDepth,           // 回傳最長邏輯深度路徑
     EveryPathThrough,   // 判斷所有路徑是否都經過 requiredNodes
@@ -143,6 +216,19 @@ enum class PathQueryMode {
     FindMandatoryNodes, // 找出 source/target 間所有 directed paths 的共同 internal nets
     IsSeparator,        // 指定 net 是否為 endpoints 間的 directed separator
     DirectPiPoConnections // 找出 PI/PO 共用同一 net 的 depth-0 direct wires
+};
+
+enum class PathRankingOrder {
+    ShortestFirst,
+    LongestFirst
+};
+
+// 精確描述一段連續 global ranks 的共同 logic depth。
+// RankedPaths 已依 depth 排序，因此相同 depth 必定形成連續區間。
+struct RankedPathDepthRange {
+    size_t firstRank = 0;
+    size_t lastRank = 0;
+    int depth = -1;
 };
 
 // 描述一個完整的 startpoint-to-endpoint path query。
@@ -161,6 +247,11 @@ struct PathQuery {
     double enumerationTimeLimitSeconds =
         request_time_budget::kGeneralToolBudgetSeconds;
     bool countOnly = false;                 // EnumerateAll 只計數，不保存每條 path
+    int minimumAcceptedDepth = -1;          // EnumerateAll/RankedPaths inclusive lower bound
+    int maximumAcceptedDepth = -1;          // EnumerateAll/RankedPaths inclusive upper bound
+    PathRankingOrder rankingOrder = PathRankingOrder::ShortestFirst;
+    size_t firstRank = 1;                   // RankedPaths 1-based first requested rank
+    size_t resultCount = 1;                 // RankedPaths requested window size
 };
 
 // 保存統一 path query 的結果；不同 mode 會使用不同欄位。
@@ -183,7 +274,7 @@ struct PathQueryResult {
     size_t checkedEndpointCount = 0;
     int depth = -1;                         // min/max depth 類查詢的邏輯深度
     CombinationalPath path;                 // find any/min/max depth 的代表路徑
-    std::vector<CombinationalPath> paths;   // enumerate all 的所有路徑
+    std::vector<CombinationalPath> paths;   // enumerate samples 或 ranked result window
     size_t pathCount = 0;                   // enumerate all 的完整路徑數量
     bool wrotePathsToFile = false;          // 是否已將完整 enumerate 結果寫到檔案
     std::string outputFilePath;             // 實際輸出檔案路徑
@@ -192,6 +283,18 @@ struct PathQueryResult {
     bool enumerationPathLimitReached = false; // Legacy result field；目前應維持 false
     bool countOnly = false;                 // true 表示 paths 可能為空，只保留 pathCount
     std::string enumerationStopReason;      // 截斷原因，完整列舉時為空
+    int minimumAcceptedDepth = -1;          // 實際套用的 inclusive lower bound
+    int maximumAcceptedDepth = -1;          // 實際套用的 inclusive upper bound
+    PathRankingOrder rankingOrder = PathRankingOrder::ShortestFirst;
+    size_t requestedFirstRank = 1;
+    size_t requestedResultCount = 0;
+    size_t returnedRankedPathCount = 0;
+    bool rankExists = false;
+    bool rankingComplete = true;
+    bool populationExhausted = false;
+    int firstReturnedRankDepth = -1;
+    int lastReturnedRankDepth = -1;
+    std::vector<RankedPathDepthRange> rankedDepthRanges;
     std::vector<std::string> unresolvedStartpoints; // 無法解析的 start endpoint descriptions
     std::vector<std::string> unresolvedEndpoints;   // 無法解析的 end endpoint descriptions
     std::vector<std::string> unresolvedRequiredNodes; // 無法解析的 required nodes

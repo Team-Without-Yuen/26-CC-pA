@@ -275,9 +275,16 @@ Netlist::DirectConnectivityReport report =
 |---|---|
 | QA fanout load 總數 | `report.fanoutLoadReport.totalLoadCount` 或 `report.count` |
 | primitive gate input loads | `report.fanoutLoadReport.combinationalGateLoads` |
+| primitive gate input load 數 | `report.fanoutLoadReport.combinationalGateLoadCount` |
 | DFF D-pin loads | `report.fanoutLoadReport.dffDataLoads` |
+| DFF D-pin load 數 | `report.fanoutLoadReport.dffDataLoadCount` |
 | DFF clock loads | `report.fanoutLoadReport.dffClockLoads` |
+| DFF clock load 數 | `report.fanoutLoadReport.dffClockLoadCount` |
 | DFF reset/set loads | `report.fanoutLoadReport.dffResetSetLoads` |
+| DFF reset/set load 數 | `report.fanoutLoadReport.dffResetSetLoadCount` |
+| DFF other-pin load 數 | `report.fanoutLoadReport.dffOtherLoadCount` |
+| 所有不重複的直接 load gates | `report.fanoutLoadReport.distinctGateLoadIds` |
+| 不重複的直接 load gate 數 | `report.fanoutLoadReport.distinctGateLoadCount` |
 | 是否直接 drive PO | `report.fanoutLoadReport.drivesPrimaryOutput` |
 | PO load 數 | `report.fanoutLoadReport.primaryOutputLoadCount` |
 
@@ -295,6 +302,13 @@ FanoutLoadReport("rst_n").dffResetSetLoads.size() == 2
 
 同樣地，若一般 gate 兩個 input pins 都接同一條 net，FanoutLoadReport 會計成兩個
 pin-level loads；這和 NetLoadGates 的 gate-level 去重不同。
+
+若同一個 prompt 同時問「fanout 是多少」與「直接驅動哪些 gates」，只需一次
+`FanoutLoadReport`：前者讀 `totalLoadCount`，後者讀 `distinctGateLoadCount` 與
+`distinctGateLoadIds`。不需要再組合第二個 `NetLoadGates` query。
+
+五個 category count 永遠保留在 public report。即使完整名稱清單因 4096-token policy 寫入
+artifact，呼叫端仍可直接回答各類 load 數量，不需要讀取 artifact 重新計數。
 
 ---
 
@@ -530,6 +544,7 @@ bus base name 會依 declaration order 展開所有 active bits；`connected` �
 | Which gate drives net n1? | `NetDriverGates` | `netName = "n1"` | `gateNames` |
 | Report every gate connected to net n1. | `NetLoadGates` | `netName = "n1"` | `gateNames` |
 | How many fanout loads does n1 have? | `FanoutLoadReport` | `netName = "n1"` | `fanoutLoadReport.totalLoadCount` |
+| What is the fanout of n1? List every gate it drives directly. | `FanoutLoadReport` | `netName = "n1"` | `totalLoadCount`, `distinctGateLoadCount`, `distinctGateLoadIds` |
 | List DFF clock/reset loads driven by n1. | `FanoutLoadReport` | `netName = "n1"` | `dffClockLoads`, `dffResetSetLoads` |
 | Does n1 directly drive a primary output? | `FanoutLoadReport` | `netName = "n1"` | `drivesPrimaryOutput` |
 | Which primary input has the highest fanout? | `GlobalFanoutReport` | `primaryInputsOnly = true` | `maxFanoutReports` |

@@ -13,11 +13,14 @@ $commands = @(
     "func_search nand_pair target --patterns 0"
     "func_search nand_pair target --time-limit 0.000000000001"
     "func_search pattern NOT not_a --include-boundary-signals"
-    "func_search pattern AND and_ab --include-boundary-signals"
+    "func_search pattern AND and_ab --include-boundary-signals --allow-same"
     "func_search pattern AND and_ab --include-boundary-signals --scope net_fanin and_ab"
     "func_search pattern OR target --all --include-boundary-signals"
     "func_search pattern DFF target"
     "func_search pattern NOT not_a --allow-same"
+    "func_search nand_pair target --all --find-any"
+    "func_search pattern AND and_ab --include-boundary-signals -include_boundary_signals"
+    "func_search nand_pair target --max-results 2"
     "help"
     "quit"
 ) -join "`n"
@@ -57,8 +60,8 @@ function Get-IntegerField {
     return [int64]$match.Groups[1].Value
 }
 
-Check-Result ($responses.Count -eq 16) "every Function Search command returns one envelope"
-if ($responses.Count -ge 16) {
+Check-Result ($responses.Count -eq 19) "every Function Search command returns one envelope"
+if ($responses.Count -ge 19) {
     $findAny = $responses[1]
     $findAll = $responses[2]
     $limited = $responses[3]
@@ -72,17 +75,38 @@ if ($responses.Count -ge 16) {
     $patternOrAll = $responses[11]
     $invalidPattern = $responses[12]
     $invalidUnaryOption = $responses[13]
-    $help = $responses[14]
+    $conflictingMode = $responses[14]
+    $duplicateOption = $responses[15]
+    $findAnyLimit = $responses[16]
+    $help = $responses[17]
+    $functionSearchHelpMatch = [regex]::Match(
+        $help,
+        "(?s)Function search\r?\n(.*?)\r?\nSequential pattern query")
+    $functionSearchHelp = if ($functionSearchHelpMatch.Success) {
+        $functionSearchHelpMatch.Groups[1].Value
+    } else {
+        ""
+    }
     $findAllFile = Get-OutputFile $findAll
     $limitedFile = Get-OutputFile $limited
     $findAllMatchCount = Get-IntegerField $findAll "match_count"
     $findAllFileExists = [bool]($findAllFile -and (Test-Path -LiteralPath $findAllFile))
+    $findAllArtifact = if ($findAllFileExists) {
+        Get-Content -LiteralPath $findAllFile -Raw
+    } else {
+        ""
+    }
     $findAllFileMatchCount = if ($findAllFileExists) {
         @(Select-String -LiteralPath $findAllFile -Pattern '^Match [0-9]+$').Count
     } else {
         -1
     }
     $limitedFileExists = [bool]($limitedFile -and (Test-Path -LiteralPath $limitedFile))
+    $limitedArtifact = if ($limitedFileExists) {
+        Get-Content -LiteralPath $limitedFile -Raw
+    } else {
+        ""
+    }
     $limitedFileMatchCount = if ($limitedFileExists) {
         @(Select-String -LiteralPath $limitedFile -Pattern '^Match [0-9]+$').Count
     } else {
@@ -90,6 +114,11 @@ if ($responses.Count -ge 16) {
     }
     $patternOrFile = Get-OutputFile $patternOrAll
     $patternOrFileExists = [bool]($patternOrFile -and (Test-Path -LiteralPath $patternOrFile))
+    $patternOrArtifact = if ($patternOrFileExists) {
+        Get-Content -LiteralPath $patternOrFile -Raw
+    } else {
+        ""
+    }
 
     Check-Result `
         ($findAny -match "status: ok" -and
@@ -109,6 +138,20 @@ if ($responses.Count -ge 16) {
          $findAll -match "stored_match_count: 0" -and
          $findAll -match "wrote_matches_to_file: true" -and
          $findAllFileExists -and
+         $findAllArtifact -match "artifact_format: FUNCTION_SEARCH_ARTIFACT_V2" -and
+         $findAllArtifact -match "query_type: NAND_EQUIVALENT_INPUT_PAIRS" -and
+         $findAllArtifact -match "search_mode: FIND_ALL" -and
+         $findAllArtifact -match "target: target" -and
+         $findAllArtifact -match "scope: WHOLE_DESIGN" -and
+         $findAllArtifact -match "gate_type_filter: not_applicable" -and
+         $findAllArtifact -match "candidate_domain: driven_non_port_signals_including_internal_dff_q" -and
+         $findAllArtifact -match "include_pi_po_port_signals: false" -and
+         $findAllArtifact -match "internal_dff_q_signals_included: true" -and
+         $findAllArtifact -match "dff_q_output_port_requires_boundary_opt_in: true" -and
+         $findAllArtifact -match "result_policy: explicit_max_results" -and
+         $findAllArtifact -match "max_results: 64" -and
+         $findAllArtifact -match "records_end" -and
+         $findAllArtifact -match "all_candidates_examined: true" -and
          $findAllFileMatchCount -eq $findAllMatchCount) `
         "FindAll writes every SAT-proven match to a complete artifact"
 
@@ -119,6 +162,10 @@ if ($responses.Count -ge 16) {
          $limited -match "truncated: true" -and
          $limited -match "match_count: 1" -and
          $limitedFileExists -and
+         $limitedArtifact -match "result_policy: explicit_max_results" -and
+         $limitedArtifact -match "max_results: 1" -and
+         $limitedArtifact -match "truncated: true" -and
+         $limitedArtifact -match "Complete: no" -and
          $limitedFileMatchCount -eq 1) `
         "result limit is reported as partial instead of complete"
 
@@ -179,7 +226,16 @@ if ($responses.Count -ge 16) {
          $patternOrAll -match "complete: true" -and
          $patternOrAll -match "wrote_matches_to_file: true" -and
          $patternOrFileExists -and
-         (Get-Content -LiteralPath $patternOrFile -Raw) -match "pattern: OR") `
+         $patternOrArtifact -match "artifact_format: FUNCTION_SEARCH_ARTIFACT_V2" -and
+         $patternOrArtifact -match "query_type: FUNCTIONAL_PATTERN_OPERANDS" -and
+         $patternOrArtifact -match "pattern: OR" -and
+         $patternOrArtifact -match "operand_arity: 2" -and
+         $patternOrArtifact -match "include_boundary_signals: true" -and
+         $patternOrArtifact -match "include_pi_po_port_signals: true" -and
+         $patternOrArtifact -match "internal_dff_q_signals_included: true" -and
+         $patternOrArtifact -match "allow_same_signal_pair: false" -and
+         $patternOrArtifact -match "result_policy: all_matches" -and
+         $patternOrArtifact -match "max_results: unlimited") `
         "generic FindAll writes a self-describing artifact"
 
     Check-Result `
@@ -193,11 +249,27 @@ if ($responses.Count -ge 16) {
         "generic pattern parser rejects binary-only option for unary search"
 
     Check-Result `
-        ($help -match "func_search nand_pair <target_net>" -and
-         $help -match "func_search pattern <BUF\|NOT\|AND\|NAND\|OR\|NOR\|XOR\|XNOR>" -and
-         $help -match "--all" -and
-         $help -match "--time-limit") `
-        "public help exposes Function Search grammar"
+        ($conflictingMode -match "status: error" -and
+         $conflictingMode -match "--all and --find-any are mutually exclusive") `
+        "conflicting search modes are rejected instead of using last-option-wins"
+
+    Check-Result `
+        ($duplicateOption -match "status: error" -and
+         $duplicateOption -match "Duplicate func_search option: --include-boundary-signals") `
+        "canonical and alias spellings of the same option are rejected as duplicates"
+
+    Check-Result `
+        ($findAnyLimit -match "status: error" -and
+         $findAnyLimit -match "--max-results is only valid with --all") `
+        "FindAny rejects a meaningless result limit"
+
+    Check-Result `
+        ($functionSearchHelp -match "func_search nand_pair <target_net>" -and
+         $functionSearchHelp -match "func_search pattern <BUF\|NOT\|AND\|NAND\|OR\|NOR\|XOR\|XNOR>" -and
+         $functionSearchHelp -match "--all" -and
+         $functionSearchHelp -notmatch "--patterns" -and
+         $functionSearchHelp -notmatch "--time-limit") `
+        "public help exposes only LLM-facing Function Search grammar"
 }
 
 Write-Output "Summary: $passed passed, $failed failed."

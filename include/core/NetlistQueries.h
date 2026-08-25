@@ -169,6 +169,8 @@ struct BasicReport {
     bool isConstant = false;                // NetInfo 使用
     bool isBus = false;                     // PortInfo 使用
     int portWidth = -1;                     // PortInfo 使用
+    int portLeftBound = -1;                 // PortInfo declaration left bound；scalar 為 -1
+    int portRightBound = -1;                // PortInfo declaration right bound；scalar 為 -1
 
     std::vector<int> gateIds;               // 查詢得到的 gate IDs
     std::vector<int> netIds;                // 查詢得到的 net IDs
@@ -305,6 +307,17 @@ struct FanoutLoadReport {
     std::vector<int> dffResetSetLoads;       // DFF .RN / .SN pin loads
     std::vector<int> dffOtherLoads;          // 其他 DFF input pin loads，保留給未來擴充
     std::vector<int> allGateLoadIds;         // 上面所有 gate/DFF pin loads 的合併結果
+    std::vector<int> distinctGateLoadIds;    // 直接 load gates，依首次 pin 出現順序去重
+
+    // Category aggregates remain available even when the corresponding lists
+    // are moved to an artifact. Counts are pin-level, so one gate may contribute
+    // more than once when multiple input pins use the queried net.
+    size_t combinationalGateLoadCount = 0;
+    size_t dffDataLoadCount = 0;
+    size_t dffClockLoadCount = 0;
+    size_t dffResetSetLoadCount = 0;
+    size_t dffOtherLoadCount = 0;
+    size_t distinctGateLoadCount = 0;        // 不重複的直接 load gate instance 數
 
     bool drivesPrimaryOutput = false;        // 是否直接連到 primary output
     size_t primaryOutputLoadCount = 0;       // scalar PO 為 1；bus aggregate 可大於 1
@@ -497,7 +510,20 @@ struct FunctionReport {
 enum class FunctionSearchQueryType {
     NandEquivalentInputPairs, // 搜尋 NAND(a, b) 與 targetNetName 功能等價的 internal signal pair
     FunctionalPatternOperands, // 搜尋指定 BUF/NOT/AND/NAND/OR/NOR/XOR/XNOR operands
-    EquivalentGatePairs       // 搜尋 output function 相同的 active combinational gate pairs
+    EquivalentGatePairs,      // 搜尋 output function 相同的 active combinational gate pairs
+    FunctionalConstantSignals, // 批次搜尋 functionally constant 0/1 signals；append-only
+    ComplementaryPairs        // 搜尋 f(a) = !f(b) 的 signal / combinational gate-output pairs
+};
+
+enum class FunctionSearchConstantFilter {
+    Zero,
+    One,
+    Either
+};
+
+enum class FunctionSearchCandidateDomain {
+    Signals,
+    CombinationalGateOutputs
 };
 
 enum class FunctionSearchMode {
@@ -523,8 +549,15 @@ struct FunctionSearchQuery {
     GateType gateTypeFilter = GateType::UNKNOWN;
     // FunctionalPatternOperands 必填；NandEquivalentInputPairs 會忽略此欄並固定使用 NAND。
     GateType patternGateType = GateType::UNKNOWN;
+    // FunctionalConstantSignals 的 constant value filter；其他 mode 忽略。
+    FunctionSearchConstantFilter constantFilter =
+        FunctionSearchConstantFilter::Either;
+    // ComplementaryPairs 的候選種類；其他 mode 忽略。
+    FunctionSearchCandidateDomain candidateDomain =
+        FunctionSearchCandidateDomain::Signals;
 
-    // 第一版只搜尋 active、scalar、非 PI/PO/constant、且有 driver 的 internal signals。
+    // 預設搜尋 active、scalar、非 PI/PO/constant、且有 driver 的 internal signals；
+    // internal DFF.Q 是合法 Boolean source。DFF.Q 若同時是 PO，仍依 port policy 排除。
     bool internalSignalsOnly = true;
     bool allowSameSignalPair = false;
 
@@ -551,6 +584,7 @@ struct FunctionSearchMatch {
     std::vector<int> operandNetIds;
     std::vector<std::string> operandNetNames;
     bool provenEquivalent = false;
+    bool provenComplementary = false;
     std::string proofMethod;  // 目前為 "SAT_UNSAT_MITER"
     std::string solverStatus; // 等價 proof 成功時為 "UNSAT"
 };
@@ -564,9 +598,41 @@ struct FunctionSearchEquivalenceClass {
     std::string proofMethod;
 };
 
+struct FunctionSearchConstantRecord {
+    int netId = -1;
+    std::string netName;
+    int driverGateId = -1;
+    std::string driverGateName;
+    GateType driverGateType = GateType::UNKNOWN;
+    std::string driverGateTypeName;
+    int constantValue = -1;
+    bool provenConstant = false;
+    std::string proofMethod;
+    std::string solverStatus;
+};
+
+struct FunctionSearchComplementaryMember {
+    int netId = -1;
+    std::string netName;
+    int gateId = -1;
+    std::string gateName;
+    GateType gateType = GateType::UNKNOWN;
+    std::string gateTypeName;
+};
+
+// 每個 positive member 都與每個 negative member 功能互補。
+// 這個 Cartesian-product 表示可完整描述大型結果而不逐 pair 展開。
+struct FunctionSearchComplementaryClass {
+    std::vector<FunctionSearchComplementaryMember> positiveMembers;
+    std::vector<FunctionSearchComplementaryMember> negativeMembers;
+    size_t pairCount = 0;
+    bool provenComplementary = false;
+    std::string proofMethod;
+};
+
 struct FunctionSearchReport {
     bool ok = false;       // request 合法且答案已確定；partial/timeout 時為 false
-    bool found = false;    // 至少找到一組 SAT-proven match
+    bool found = false;    // 至少找到一組 AIG/SAT-proven match
     bool complete = false; // FindAny 已決定 exists，或 FindAll 已完整列舉
     bool allCandidatesExamined = false;
     bool timedOut = false;
@@ -584,6 +650,10 @@ struct FunctionSearchReport {
     GateType patternGateType = GateType::UNKNOWN;
     std::string patternTypeName;
     size_t operandArity = 0;
+    FunctionSearchConstantFilter constantFilter =
+        FunctionSearchConstantFilter::Either;
+    FunctionSearchCandidateDomain candidateDomain =
+        FunctionSearchCandidateDomain::Signals;
 
     size_t candidateSignalCount = 0;
     size_t candidateGateCount = 0;
@@ -591,11 +661,19 @@ struct FunctionSearchReport {
     size_t simulationBucketCount = 0;
     size_t candidatePairsConsidered = 0;
     size_t candidatePairsRejectedBySimulation = 0;
+    size_t candidateSignalsRejectedBySimulation = 0;
+    size_t provenNonConstantSignalCount = 0;
+    size_t inconclusiveSignalCount = 0;
     size_t satChecks = 0;
     size_t satUnknownCount = 0;
     size_t unsupportedSignalCount = 0;
     size_t equivalenceClassCount = 0;
     size_t equivalentPairCount = 0;
+    size_t constantZeroCount = 0;
+    size_t constantOneCount = 0;
+    size_t complementaryClassCount = 0;
+    size_t complementaryPairCount = 0;
+    size_t inconclusiveCandidateCount = 0;
     size_t matchCount = 0; // 完整找到的 match 數；不等於 samples vector 大小
     size_t simulationPatternCount = 0;
     double elapsedSeconds = 0.0;
@@ -605,6 +683,9 @@ struct FunctionSearchReport {
 
     std::vector<FunctionSearchMatch> matches; // 只保存 query.maxStoredMatches 筆 samples
     std::vector<FunctionSearchEquivalenceClass> equivalenceClasses;
+    // FunctionalConstantSignals 的 AIG/SAT-proven samples；完整 FindAll 可 streaming 寫檔。
+    std::vector<FunctionSearchConstantRecord> constantSignals;
+    std::vector<FunctionSearchComplementaryClass> complementaryClasses;
 };
 
 // =========================================================================

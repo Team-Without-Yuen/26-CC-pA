@@ -156,6 +156,8 @@ if (report.ok) {
 | `isConstant` | net 是否 constant |
 | `isBus` | port 是否 bus |
 | `portWidth` | port bit width |
+| `portLeftBound` | port declaration left bound；不依數值大小正規化，scalar 為 `-1` |
+| `portRightBound` | port declaration right bound；不依數值大小正規化，scalar 為 `-1` |
 | `ports` | PI/PO structured summaries；batch list 回多筆，`PortInfo` 固定回一筆；每筆含 name、width、msb/lsb、bus 與 direction flags |
 
 ### 4.4 List 類欄位
@@ -428,8 +430,8 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 | 是否 bus | `report.isBus` |
 | bit width | `report.portWidth` |
 | structured port snapshot | `report.ports[0]` |
-| declaration left bound（歷史欄位名 msb） | `report.ports[0].msb` |
-| declaration right bound（歷史欄位名 lsb） | `report.ports[0].lsb` |
+| declaration left bound | `report.portLeftBound`；相容 record 為 `report.ports[0].msb` |
+| declaration right bound | `report.portRightBound`；相容 record 為 `report.ports[0].lsb` |
 | bit net names | `report.netNames` |
 | bit net IDs | `report.netIds` |
 
@@ -439,6 +441,8 @@ Verilog port declaration order 排列，且相同 index 對應同一個 bit。�
 
 `PortSummary.msb/lsb` 沿用既有名稱，但代表 declaration left/right bounds，不會正規化成
 數值最大/最小值。因此 `[0:31]` 必須讀成 `msb=0, lsb=31`。scalar 使用 `-1/-1`。
+`portLeftBound/portRightBound` 是同一資料的 scalar metadata；即使完整 bit names 與
+`PortSummary` 因輸出大小移入 artifact，這兩欄仍留在主要 report。
 關閉 `includeIds` 或 `includeNames` 只會讓對應 flat vector 保持空白，不會移除 `ports[0]`。
 
 ---
@@ -652,7 +656,7 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 | Is gate g1 a DFF? | `GateInfo` | `name = "g1"` | `isDff` |
 | Is net n1 a PI? | `NetInfo` | `name = "n1"` | `isPrimaryInput` |
 | Is output y a bus? | `PortInfo` | `name = "y"` | `isBus`, `portWidth` |
-| Is port data declared `[31:0]` or `[0:31]`? | `PortInfo` | `name = "data"` | `ports[0].msb`, `ports[0].lsb` |
+| Is port data declared `[31:0]` or `[0:31]`? | `PortInfo` | `name = "data"` | `portLeftBound`, `portRightBound` |
 | Find gates with constant input. | `GatesWithConstantInput` | 可選 `gateType`, `constValue` | `gateNames`, `gateCount` |
 | List constant-input gates with their input/output signals. | `GatesWithConstantInput` | `includeConnectionDetails = true` | `gateConnections`, `gateCount` |
 | Find floating nets. | `StructuralIssues` | 無 | `floatingNets` |

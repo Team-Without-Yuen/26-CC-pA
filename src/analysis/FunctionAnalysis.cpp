@@ -1951,7 +1951,62 @@ FunctionSearchEquivalenceClass makeEquivalenceClassReport(
     return result;
 }
 
-bool openFunctionSearchOutput(const FunctionSearchQuery& query,
+const char* functionSearchQueryTypeName(FunctionSearchQueryType type) {
+    switch (type) {
+    case FunctionSearchQueryType::NandEquivalentInputPairs:
+        return "NAND_EQUIVALENT_INPUT_PAIRS";
+    case FunctionSearchQueryType::FunctionalPatternOperands:
+        return "FUNCTIONAL_PATTERN_OPERANDS";
+    case FunctionSearchQueryType::EquivalentGatePairs:
+        return "EQUIVALENT_GATE_PAIRS";
+    case FunctionSearchQueryType::FunctionalConstantSignals:
+        return "FUNCTIONAL_CONSTANT_SIGNALS";
+    case FunctionSearchQueryType::ComplementaryPairs:
+        return "COMPLEMENTARY_PAIRS";
+    }
+    return "UNKNOWN";
+}
+
+const char* functionSearchConstantFilterName(FunctionSearchConstantFilter filter) {
+    switch (filter) {
+    case FunctionSearchConstantFilter::Zero:
+        return "ZERO";
+    case FunctionSearchConstantFilter::One:
+        return "ONE";
+    case FunctionSearchConstantFilter::Either:
+        return "EITHER";
+    }
+    return "UNKNOWN";
+}
+
+const char* functionSearchCandidateDomainName(FunctionSearchCandidateDomain domain) {
+    switch (domain) {
+    case FunctionSearchCandidateDomain::Signals:
+        return "SIGNALS";
+    case FunctionSearchCandidateDomain::CombinationalGateOutputs:
+        return "COMBINATIONAL_GATE_OUTPUTS";
+    }
+    return "UNKNOWN";
+}
+
+const char* functionSearchScopeName(FunctionSearchScope scope) {
+    switch (scope) {
+    case FunctionSearchScope::WholeDesign:
+        return "WHOLE_DESIGN";
+    case FunctionSearchScope::NetFanin:
+        return "NET_FANIN";
+    case FunctionSearchScope::NetFanout:
+        return "NET_FANOUT";
+    case FunctionSearchScope::GateFanin:
+        return "GATE_FANIN";
+    case FunctionSearchScope::GateFanout:
+        return "GATE_FANOUT";
+    }
+    return "UNKNOWN";
+}
+
+bool openFunctionSearchOutput(const Netlist& netlist,
+                              const FunctionSearchQuery& query,
                               FunctionSearchReport& report,
                               std::ofstream& output) {
     if (!query.writeMatchesToFile) {
@@ -1969,12 +2024,147 @@ bool openFunctionSearchOutput(const FunctionSearchQuery& query,
     }
     report.wroteMatchesToFile = true;
     output << "Function search matches\n";
-    output << "  target: " << report.targetNetName << "\n";
-    if (!report.patternTypeName.empty()) {
-        output << "  pattern: " << report.patternTypeName << "\n";
-        output << "  operand_arity: " << report.operandArity << "\n";
+    output << "artifact_format: FUNCTION_SEARCH_ARTIFACT_V2\n";
+    output << "query_type: " << functionSearchQueryTypeName(query.type) << "\n";
+    output << "search_mode: "
+           << (query.mode == FunctionSearchMode::FindAny ? "FIND_ANY" : "FIND_ALL")
+           << "\n";
+    output << "target: "
+           << (query.type == FunctionSearchQueryType::EquivalentGatePairs ||
+                       query.type == FunctionSearchQueryType::FunctionalConstantSignals ||
+                       query.type == FunctionSearchQueryType::ComplementaryPairs
+                   ? "not_applicable"
+                   : report.targetNetName)
+           << "\n";
+    output << "constant_filter: "
+           << (query.type == FunctionSearchQueryType::FunctionalConstantSignals
+                   ? functionSearchConstantFilterName(query.constantFilter)
+                   : "not_applicable")
+           << "\n";
+    output << "pattern: "
+           << (report.patternTypeName.empty()
+                   ? "not_applicable"
+                   : report.patternTypeName)
+           << "\n";
+    output << "operand_arity: "
+           << (report.operandArity == 0
+                   ? "not_applicable"
+                   : std::to_string(report.operandArity))
+           << "\n";
+    output << "scope: " << functionSearchScopeName(query.scope) << "\n";
+    output << "scope_name: "
+           << (query.scope == FunctionSearchScope::WholeDesign
+                   ? "not_applicable"
+                   : query.scopeName)
+           << "\n";
+    if (query.type == FunctionSearchQueryType::EquivalentGatePairs) {
+        output << "gate_type_filter: "
+               << (query.gateTypeFilter == GateType::UNKNOWN
+                       ? "ANY"
+                       : netlist.gateTypeToString(query.gateTypeFilter))
+               << "\n";
+        output << "candidate_domain: active_combinational_gate_outputs\n";
+        output << "include_boundary_signals: not_applicable\n";
+        output << "include_pi_po_port_signals: not_applicable\n";
+        output << "internal_dff_q_signals_included: not_applicable\n";
+        output << "dff_q_output_port_requires_boundary_opt_in: not_applicable\n";
+        output << "allow_same_signal_pair: not_applicable\n";
+        output << "expand_equivalent_pairs: "
+               << (query.expandEquivalentPairs ? "true" : "false") << "\n";
+    } else if (query.type == FunctionSearchQueryType::ComplementaryPairs) {
+        const bool signalDomain =
+            query.candidateDomain == FunctionSearchCandidateDomain::Signals;
+        output << "gate_type_filter: ";
+        if (signalDomain) {
+            output << "not_applicable\n";
+        } else {
+            output << (query.gateTypeFilter == GateType::UNKNOWN
+                           ? "ANY"
+                           : netlist.gateTypeToString(query.gateTypeFilter))
+                   << "\n";
+        }
+        output << "candidate_domain: "
+               << functionSearchCandidateDomainName(query.candidateDomain) << "\n";
+        output << "include_boundary_signals: "
+               << (signalDomain
+                       ? (query.internalSignalsOnly ? "false" : "true")
+                       : "not_applicable")
+               << "\n";
+        output << "include_pi_po_port_signals: "
+               << (signalDomain
+                       ? (query.internalSignalsOnly ? "false" : "true")
+                       : "not_applicable")
+               << "\n";
+        output << "internal_dff_q_signals_included: "
+               << (signalDomain ? "true" : "not_applicable") << "\n";
+        output << "dff_q_output_port_requires_boundary_opt_in: "
+               << (signalDomain ? "true" : "not_applicable") << "\n";
+        output << "allow_same_signal_pair: not_applicable\n";
+        output << "expand_equivalent_pairs: not_applicable\n";
+        output << "pair_representation: "
+               << (query.maxResults == 0
+                       ? "phase_class_cartesian_product"
+                       : "literal_pairs_explicit_limit")
+               << "\n";
+    } else {
+        output << "gate_type_filter: not_applicable\n";
+        output << "candidate_domain: "
+               << (query.internalSignalsOnly
+                       ? "driven_non_port_signals_including_internal_dff_q"
+                       : "primary_inputs_and_driven_signals_including_output_ports")
+               << "\n";
+        output << "include_boundary_signals: "
+               << (query.internalSignalsOnly ? "false" : "true") << "\n";
+        output << "include_pi_po_port_signals: "
+               << (query.internalSignalsOnly ? "false" : "true") << "\n";
+        output << "internal_dff_q_signals_included: true\n";
+        output << "dff_q_output_port_requires_boundary_opt_in: true\n";
+        output << "allow_same_signal_pair: ";
+        if (query.type == FunctionSearchQueryType::FunctionalConstantSignals ||
+            report.operandArity == 1) {
+            output << "not_applicable\n";
+        } else {
+            output << (query.allowSameSignalPair ? "true" : "false") << "\n";
+        }
+        output << "expand_equivalent_pairs: not_applicable\n";
     }
-    output << "\n";
+    output << "target_signal_excluded: "
+           << (query.type == FunctionSearchQueryType::EquivalentGatePairs ||
+                       query.type == FunctionSearchQueryType::FunctionalConstantSignals ||
+                       query.type == FunctionSearchQueryType::ComplementaryPairs
+                   ? "not_applicable"
+                   : "true")
+           << "\n";
+    output << "constant_signals_excluded: "
+           << (query.type == FunctionSearchQueryType::EquivalentGatePairs
+                   ? "not_applicable"
+                   : query.type == FunctionSearchQueryType::FunctionalConstantSignals
+                       ? "false"
+                       : "true")
+           << "\n";
+    output << "literal_constant_nets_excluded: "
+           << (query.type == FunctionSearchQueryType::FunctionalConstantSignals ||
+                       query.type == FunctionSearchQueryType::ComplementaryPairs
+                   ? "true"
+                   : "not_applicable")
+           << "\n";
+    output << "result_policy: ";
+    if (query.mode == FunctionSearchMode::FindAny) {
+        output << "first_proven_match\n";
+    } else if (query.maxResults == 0) {
+        output << "all_matches\n";
+    } else {
+        output << "explicit_max_results\n";
+    }
+    output << "max_results: ";
+    if (query.mode == FunctionSearchMode::FindAny) {
+        output << "not_applicable\n";
+    } else if (query.maxResults == 0) {
+        output << "unlimited\n";
+    } else {
+        output << query.maxResults << "\n";
+    }
+    output << "records_begin\n\n";
     return true;
 }
 
@@ -2004,7 +2194,33 @@ bool writeFunctionSearchMatchRecord(std::ostream& output,
                << " (id=" << match.netIdB << ")\n";
     }
     output << "  proof_method: " << match.proofMethod << "\n";
-    output << "  solver_status: " << match.solverStatus << "\n\n";
+    output << "  solver_status: " << match.solverStatus << "\n";
+    if (match.provenComplementary) {
+        output << "  relation: BOOLEAN_COMPLEMENT\n";
+        output << "  proven_complementary: true\n";
+    }
+    output << "\n";
+    return static_cast<bool>(output);
+}
+
+bool writeFunctionSearchConstantRecord(
+    std::ostream& output,
+    const FunctionSearchConstantRecord& record,
+    size_t index) {
+    output << "Constant signal " << index << "\n";
+    output << "  net: " << record.netName
+           << " (id=" << record.netId << ")\n";
+    output << "  constant_value: " << record.constantValue << "\n";
+    if (record.driverGateId >= 0) {
+        output << "  driver_gate: " << record.driverGateName
+               << " (id=" << record.driverGateId << ")\n";
+        output << "  driver_gate_type: " << record.driverGateTypeName << "\n";
+    } else {
+        output << "  driver_gate: none\n";
+        output << "  driver_gate_type: none\n";
+    }
+    output << "  proof_method: " << record.proofMethod << "\n";
+    output << "  solver_status: " << record.solverStatus << "\n\n";
     return static_cast<bool>(output);
 }
 
@@ -2026,14 +2242,97 @@ bool writeFunctionSearchClassRecord(
     return static_cast<bool>(output);
 }
 
+bool writeFunctionSearchComplementaryMember(
+    std::ostream& output,
+    const char* phase,
+    size_t index,
+    const FunctionSearchComplementaryMember& member) {
+    output << "  " << phase << "_member " << index << ": "
+           << member.netName << " (net_id=" << member.netId;
+    if (member.gateId >= 0) {
+        output << ", gate=" << member.gateName
+               << ", gate_id=" << member.gateId
+               << ", gate_type=" << member.gateTypeName;
+    }
+    output << ")\n";
+    return static_cast<bool>(output);
+}
+
+bool writeFunctionSearchComplementaryClassRecord(
+    std::ostream& output,
+    const FunctionSearchComplementaryClass& complementaryClass,
+    size_t index) {
+    output << "Complementary class " << index << "\n";
+    output << "  relation: every positive_member is the Boolean complement of "
+              "every negative_member\n";
+    output << "  reconstruction: positive_members x negative_members\n";
+    output << "  proof_method: " << complementaryClass.proofMethod << "\n";
+    output << "  positive_member_count: "
+           << complementaryClass.positiveMembers.size() << "\n";
+    output << "  negative_member_count: "
+           << complementaryClass.negativeMembers.size() << "\n";
+    output << "  pair_count: " << complementaryClass.pairCount << "\n";
+    for (size_t member = 0;
+         member < complementaryClass.positiveMembers.size(); ++member) {
+        if (!writeFunctionSearchComplementaryMember(
+                output, "positive", member + 1,
+                complementaryClass.positiveMembers[member])) {
+            return false;
+        }
+    }
+    for (size_t member = 0;
+         member < complementaryClass.negativeMembers.size(); ++member) {
+        if (!writeFunctionSearchComplementaryMember(
+                output, "negative", member + 1,
+                complementaryClass.negativeMembers[member])) {
+            return false;
+        }
+    }
+    output << "\n";
+    return static_cast<bool>(output);
+}
+
 void finalizeFunctionSearchOutput(std::ofstream& output,
                                   FunctionSearchReport& report) {
     if (!output.is_open()) {
         return;
     }
+    output << "records_end\n";
     output << "Total matches: " << report.matchCount << "\n";
     output << "Complete: " << (report.complete ? "yes" : "no") << "\n";
     output << "Status: " << report.status << "\n";
+    output << "found: " << (report.found ? "true" : "false") << "\n";
+    output << "all_candidates_examined: "
+           << (report.allCandidatesExamined ? "true" : "false") << "\n";
+    output << "timed_out: " << (report.timedOut ? "true" : "false") << "\n";
+    output << "truncated: " << (report.truncated ? "true" : "false") << "\n";
+    output << "candidate_signal_count: " << report.candidateSignalCount << "\n";
+    output << "candidate_gate_count: " << report.candidateGateCount << "\n";
+    output << "candidate_pairs_considered: "
+           << report.candidatePairsConsidered << "\n";
+    output << "candidate_signals_rejected_by_simulation: "
+           << report.candidateSignalsRejectedBySimulation << "\n";
+    output << "proven_non_constant_signal_count: "
+           << report.provenNonConstantSignalCount << "\n";
+    output << "inconclusive_signal_count: "
+           << report.inconclusiveSignalCount << "\n";
+    output << "sat_check_count: " << report.satChecks << "\n";
+    output << "sat_unknown_count: " << report.satUnknownCount << "\n";
+    output << "unsupported_signal_count: "
+           << report.unsupportedSignalCount << "\n";
+    output << "equivalence_class_count: "
+           << report.equivalenceClassCount << "\n";
+    output << "equivalent_pair_count: " << report.equivalentPairCount << "\n";
+    output << "constant_zero_count: " << report.constantZeroCount << "\n";
+    output << "constant_one_count: " << report.constantOneCount << "\n";
+    output << "complementary_class_count: "
+           << report.complementaryClassCount << "\n";
+    output << "complementary_pair_count: "
+           << report.complementaryPairCount << "\n";
+    output << "inconclusive_candidate_count: "
+           << report.inconclusiveCandidateCount << "\n";
+    output << "simulation_pattern_count: "
+           << report.simulationPatternCount << "\n";
     output.flush();
     if (!output) {
         report.ok = false;
@@ -2095,7 +2394,7 @@ FunctionSearchReport searchEquivalentGatePairs(
         report.message = "Function Search scope could not be resolved: " + scopeError;
         return finish();
     }
-    if (!openFunctionSearchOutput(query, report, matchOutput)) {
+    if (!openFunctionSearchOutput(netlist, query, report, matchOutput)) {
         return finish();
     }
 
@@ -2355,6 +2654,795 @@ FunctionSearchReport searchEquivalentGatePairs(
     return finish();
 }
 
+SimulationSignature complementSimulationSignature(
+    const SimulationSignature& signature,
+    std::uint64_t lastWordMask) {
+    SimulationSignature result(signature.size(), 0);
+    for (size_t word = 0; word < signature.size(); ++word) {
+        result[word] = ~signature[word];
+    }
+    if (!result.empty()) result.back() &= lastWordMask;
+    return result;
+}
+
+FunctionSearchComplementaryMember makeComplementaryMember(
+    const Netlist& netlist,
+    int netId,
+    int gateId) {
+    FunctionSearchComplementaryMember member;
+    member.netId = netId;
+    member.netName = netlist.getNet(netId).name;
+    member.gateId = gateId;
+    if (netlist.isValidGateId(gateId)) {
+        const Gate& gate = netlist.getGate(gateId);
+        member.gateName = gate.instName;
+        member.gateType = gate.type;
+        member.gateTypeName = netlist.gateTypeToString(gate.type);
+    }
+    return member;
+}
+
+FunctionSearchMatch makeComplementaryPairMatch(
+    const FunctionSearchComplementaryMember& a,
+    const FunctionSearchComplementaryMember& b,
+    const std::string& proofMethod) {
+    FunctionSearchMatch match;
+    match.gateIdA = a.gateId;
+    match.gateIdB = b.gateId;
+    match.netIdA = a.netId;
+    match.netIdB = b.netId;
+    match.gateNameA = a.gateName;
+    match.gateNameB = b.gateName;
+    match.netNameA = a.netName;
+    match.netNameB = b.netName;
+    match.provenComplementary = true;
+    match.proofMethod = proofMethod;
+    match.solverStatus = "UNSAT";
+    return match;
+}
+
+template <typename GetPrimitives>
+FunctionSearchReport searchComplementaryPairs(
+    const Netlist& netlist,
+    const FunctionSearchQuery& query,
+    GetPrimitives&& getPrimitives) {
+    FunctionSearchReport report;
+    report.queryType = query.type;
+    report.scope = query.scope;
+    report.scopeName = query.scopeName;
+    report.gateTypeFilter = query.gateTypeFilter;
+    report.candidateDomain = query.candidateDomain;
+    report.simulationPatternCount = query.simulationPatternCount;
+
+    const auto startedAt = std::chrono::steady_clock::now();
+    std::ofstream matchOutput;
+    auto elapsedSeconds = [&]() {
+        return std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - startedAt).count();
+    };
+    auto finish = [&]() -> FunctionSearchReport {
+        report.elapsedSeconds = elapsedSeconds();
+        finalizeFunctionSearchOutput(matchOutput, report);
+        return report;
+    };
+
+    const bool gateDomain = query.candidateDomain ==
+        FunctionSearchCandidateDomain::CombinationalGateOutputs;
+    const bool validGateTypeFilter =
+        query.gateTypeFilter == GateType::UNKNOWN ||
+        query.gateTypeFilter == GateType::AND ||
+        query.gateTypeFilter == GateType::OR ||
+        query.gateTypeFilter == GateType::NAND ||
+        query.gateTypeFilter == GateType::NOR ||
+        query.gateTypeFilter == GateType::NOT ||
+        query.gateTypeFilter == GateType::BUF ||
+        query.gateTypeFilter == GateType::XOR ||
+        query.gateTypeFilter == GateType::XNOR;
+    if (query.simulationPatternCount == 0 ||
+        query.simulationPatternCount > 4096 ||
+        !std::isfinite(query.timeLimitSeconds) ||
+        query.timeLimitSeconds <= 0.0 || !validGateTypeFilter ||
+        (!gateDomain && query.gateTypeFilter != GateType::UNKNOWN)) {
+        report.status = "INVALID_ARGUMENT";
+        report.message = "Complementary-pair search requires 1..4096 simulation "
+                         "patterns, positive timeLimitSeconds, and a gate-type "
+                         "filter only for the gates domain.";
+        return finish();
+    }
+
+    std::vector<int> scopeGateIds;
+    std::vector<int> scopeNetIds;
+    std::string scopeError;
+    if (!collectFunctionSearchScopeGates(
+            netlist, query, scopeGateIds, scopeError, &scopeNetIds)) {
+        report.status = "SCOPE_NOT_FOUND";
+        report.message = "Function Search scope could not be resolved: " + scopeError;
+        return finish();
+    }
+    if (!openFunctionSearchOutput(netlist, query, report, matchOutput)) {
+        return finish();
+    }
+
+    SimulationResult simulation =
+        simulateNetlist(netlist, query.simulationPatternCount);
+    if (elapsedSeconds() >= query.timeLimitSeconds) {
+        report.status = "TIMEOUT";
+        report.message = "Complementary-pair search reached its time limit during simulation.";
+        report.timedOut = true;
+        return finish();
+    }
+
+    struct Candidate {
+        int netId = -1;
+        int gateId = -1;
+        bool simulationPhase = false;
+    };
+    std::vector<Candidate> candidates;
+    std::map<SimulationSignature, std::vector<size_t>> buckets;
+    std::unordered_set<int> scopedNets;
+    if (query.scope != FunctionSearchScope::WholeDesign) {
+        scopedNets.insert(scopeNetIds.begin(), scopeNetIds.end());
+    }
+
+    auto addCandidate = [&](int netId, int gateId) {
+        ++report.candidateSignalCount;
+        if (gateDomain) ++report.candidateGateCount;
+        if (static_cast<size_t>(netId) >= simulation.known.size() ||
+            !simulation.known[netId]) {
+            ++report.unsupportedSignalCount;
+            ++report.inconclusiveCandidateCount;
+            report.unsupported = true;
+            return;
+        }
+        const SimulationSignature& signature = simulation.signatures[netId];
+        SimulationSignature inverted = complementSimulationSignature(
+            signature, simulation.lastWordMask);
+        const bool invertedIsCanonical = inverted < signature;
+        const SimulationSignature& key = invertedIsCanonical ? inverted : signature;
+        const size_t candidateIndex = candidates.size();
+        candidates.push_back({netId, gateId, invertedIsCanonical});
+        buckets[key].push_back(candidateIndex);
+        ++report.simulationEligibleSignalCount;
+    };
+
+    if (gateDomain) {
+        for (int gateId : scopeGateIds) {
+            if (!netlist.isValidGateId(gateId) ||
+                !netlist.isCombinationalGate(gateId)) {
+                continue;
+            }
+            const Gate& gate = netlist.getGate(gateId);
+            if (query.gateTypeFilter != GateType::UNKNOWN &&
+                gate.type != query.gateTypeFilter) {
+                continue;
+            }
+            if (!netlist.isValidNetId(gate.outputNetId)) continue;
+            const Net& net = netlist.getNet(gate.outputNetId);
+            if (net.isRemoved || net.isConst || net.name.empty() ||
+                net.driverGateId != gateId) {
+                continue;
+            }
+            addCandidate(gate.outputNetId, gateId);
+        }
+    } else {
+        for (size_t index = 0; index < netlist.getNetCount(); ++index) {
+            const int netId = static_cast<int>(index);
+            if (query.scope != FunctionSearchScope::WholeDesign &&
+                scopedNets.count(netId) == 0) {
+                continue;
+            }
+            const Net& net = netlist.getNet(netId);
+            if (net.isRemoved || net.isConst || net.name.empty()) continue;
+            const bool hasDefinedDriver =
+                netlist.isValidGateId(net.driverGateId) &&
+                netlist.getGate(net.driverGateId).type != GateType::UNKNOWN;
+            if (query.internalSignalsOnly) {
+                if (net.isPI || net.isPO || !hasDefinedDriver) continue;
+            } else if (!net.isPI && !hasDefinedDriver) {
+                continue;
+            }
+            addCandidate(netId, hasDefinedDriver ? net.driverGateId : -1);
+        }
+    }
+
+    // Rare-trigger functions can all look constant under a short simulation and
+    // create a quadratic SAT collision bucket. Refine only large buckets; this
+    // remains a rejection filter and never replaces the AIG/SAT positive proof.
+    size_t largestBucket = 0;
+    for (const auto& bucket : buckets) {
+        largestBucket = std::max(largestBucket, bucket.second.size());
+    }
+    if (largestBucket > 32 && query.simulationPatternCount < 4096) {
+        SimulationResult refinedSimulation = simulateNetlist(netlist, 4096);
+        if (elapsedSeconds() >= query.timeLimitSeconds) {
+            report.status = "TIMEOUT";
+            report.message = "Complementary-pair search reached its time limit during adaptive simulation refinement.";
+            report.timedOut = true;
+            return finish();
+        }
+        std::vector<Candidate> refinedCandidates;
+        std::map<SimulationSignature, std::vector<size_t>> refinedBuckets;
+        refinedCandidates.reserve(candidates.size());
+        for (const Candidate& candidate : candidates) {
+            if (static_cast<size_t>(candidate.netId) >= refinedSimulation.known.size() ||
+                !refinedSimulation.known[candidate.netId]) {
+                ++report.unsupportedSignalCount;
+                ++report.inconclusiveCandidateCount;
+                report.unsupported = true;
+                continue;
+            }
+            const SimulationSignature& signature =
+                refinedSimulation.signatures[candidate.netId];
+            SimulationSignature inverted = complementSimulationSignature(
+                signature, refinedSimulation.lastWordMask);
+            const bool invertedIsCanonical = inverted < signature;
+            const SimulationSignature& key = invertedIsCanonical ? inverted : signature;
+            const size_t candidateIndex = refinedCandidates.size();
+            refinedCandidates.push_back(
+                {candidate.netId, candidate.gateId, invertedIsCanonical});
+            refinedBuckets[key].push_back(candidateIndex);
+        }
+        simulation = std::move(refinedSimulation);
+        candidates = std::move(refinedCandidates);
+        buckets = std::move(refinedBuckets);
+        report.simulationEligibleSignalCount = candidates.size();
+        report.simulationPatternCount = simulation.patternCount;
+    }
+
+    report.simulationBucketCount = buckets.size();
+    const size_t eligible = report.simulationEligibleSignalCount;
+    const size_t allEligiblePairs = eligible < 2 ? 0 : eligible * (eligible - 1) / 2;
+    size_t sameBucketPairs = 0;
+    for (const auto& bucket : buckets) {
+        const size_t count = bucket.second.size();
+        if (count >= 2) sameBucketPairs += count * (count - 1) / 2;
+    }
+    report.candidatePairsRejectedBySimulation = allEligiblePairs - sameBucketPairs;
+
+    eqeng::Primitives* primitives = nullptr;
+    std::vector<std::optional<eqeng::SigRef>> signalCache(candidates.size());
+    std::vector<bool> signalResolved(candidates.size(), false);
+    auto resolveCandidate = [&](size_t candidateIndex)
+        -> std::optional<eqeng::SigRef> {
+        if (signalResolved[candidateIndex]) return signalCache[candidateIndex];
+        signalResolved[candidateIndex] = true;
+        if (primitives == nullptr) primitives = &getPrimitives();
+        const std::string& name =
+            netlist.getNet(candidates[candidateIndex].netId).name;
+        std::optional<eqeng::SigRef> signal = primitives->try_resolve(name);
+        if (signal && !primitives->is_trustworthy(*signal)) signal.reset();
+        signalCache[candidateIndex] = signal;
+        return signal;
+    };
+
+    struct WorkingClass {
+        size_t representative = 0;
+        std::vector<size_t> positive;
+        std::vector<size_t> negative;
+        bool usedSat = false;
+    };
+    std::vector<WorkingClass> provenClasses;
+    bool stop = false;
+    for (const auto& bucketEntry : buckets) {
+        std::vector<WorkingClass> bucketClasses;
+        for (size_t candidateIndex : bucketEntry.second) {
+            if (elapsedSeconds() >= query.timeLimitSeconds) {
+                report.timedOut = true;
+                stop = true;
+                break;
+            }
+            const std::optional<eqeng::SigRef> candidateSignal =
+                resolveCandidate(candidateIndex);
+            if (!candidateSignal) {
+                ++report.unsupportedSignalCount;
+                ++report.inconclusiveCandidateCount;
+                report.unsupported = true;
+                continue;
+            }
+
+            bool matched = false;
+            bool candidateInconclusive = false;
+            for (WorkingClass& candidateClass : bucketClasses) {
+                ++report.candidatePairsConsidered;
+                const std::optional<eqeng::SigRef> representativeSignal =
+                    resolveCandidate(candidateClass.representative);
+                if (!representativeSignal) {
+                    candidateInconclusive = true;
+                    report.unsupported = true;
+                    continue;
+                }
+                const bool complementaryPhase =
+                    candidates[candidateIndex].simulationPhase !=
+                    candidates[candidateClass.representative].simulationPhase;
+                const eqeng::SigRef desired = complementaryPhase
+                    ? !*representativeSignal
+                    : *representativeSignal;
+                eqeng::EquivResult proof = eqeng::EquivResult::Unknown;
+                bool usedSat = false;
+                if (*candidateSignal == desired) {
+                    proof = eqeng::EquivResult::Equal;
+                } else {
+                    const double remaining =
+                        query.timeLimitSeconds - elapsedSeconds();
+                    if (remaining <= 0.0) {
+                        report.timedOut = true;
+                        stop = true;
+                        break;
+                    }
+                    ++report.satChecks;
+                    usedSat = true;
+                    try {
+                        proof = primitives->equiv_checked(
+                            *candidateSignal, desired, remaining);
+                    } catch (const std::exception&) {
+                        report.unsupported = true;
+                        proof = eqeng::EquivResult::Unknown;
+                    }
+                }
+                if (proof == eqeng::EquivResult::Unknown) {
+                    ++report.satUnknownCount;
+                    candidateInconclusive = true;
+                    if (primitives != nullptr && primitives->last_proof_timed_out()) {
+                        report.timedOut = true;
+                        stop = true;
+                        break;
+                    }
+                    continue;
+                }
+                if (proof == eqeng::EquivResult::NotEqual) continue;
+
+                if (complementaryPhase) {
+                    candidateClass.negative.push_back(candidateIndex);
+                } else {
+                    candidateClass.positive.push_back(candidateIndex);
+                }
+                candidateClass.usedSat = candidateClass.usedSat || usedSat;
+                matched = true;
+
+                if (query.mode == FunctionSearchMode::FindAny &&
+                    !candidateClass.positive.empty() &&
+                    !candidateClass.negative.empty()) {
+                    const size_t positiveIndex = candidateClass.positive.front();
+                    const size_t negativeIndex = candidateClass.negative.front();
+                    const std::string proofMethod = candidateClass.usedSat
+                        ? "AIG_AND_INCREMENTAL_SAT_COMPLEMENT"
+                        : "AIG_LITERAL_PHASE_COMPLEMENT";
+                    const FunctionSearchComplementaryMember positive =
+                        makeComplementaryMember(
+                            netlist, candidates[positiveIndex].netId,
+                            candidates[positiveIndex].gateId);
+                    const FunctionSearchComplementaryMember negative =
+                        makeComplementaryMember(
+                            netlist, candidates[negativeIndex].netId,
+                            candidates[negativeIndex].gateId);
+                    FunctionSearchComplementaryClass resultClass;
+                    resultClass.positiveMembers.push_back(positive);
+                    resultClass.negativeMembers.push_back(negative);
+                    resultClass.pairCount = 1;
+                    resultClass.provenComplementary = true;
+                    resultClass.proofMethod = proofMethod;
+                    report.complementaryClasses.push_back(resultClass);
+                    report.matches.push_back(makeComplementaryPairMatch(
+                        positive, negative, proofMethod));
+                    report.complementaryClassCount = 1;
+                    report.complementaryPairCount = 1;
+                    report.matchCount = 1;
+                    report.found = true;
+                    report.ok = true;
+                    report.complete = true;
+                    report.status = "MATCH_FOUND";
+                    report.message = "Found an AIG/SAT-proven functionally complementary pair.";
+                    if (matchOutput.is_open()) {
+                        writeFunctionSearchComplementaryClassRecord(
+                            matchOutput, report.complementaryClasses.front(), 1);
+                    }
+                    return finish();
+                }
+                break;
+            }
+            if (stop) break;
+            if (candidateInconclusive) ++report.inconclusiveCandidateCount;
+            if (!matched) {
+                WorkingClass newClass;
+                newClass.representative = candidateIndex;
+                newClass.positive.push_back(candidateIndex);
+                bucketClasses.push_back(std::move(newClass));
+            }
+        }
+        for (WorkingClass& candidateClass : bucketClasses) {
+            if (!candidateClass.positive.empty() &&
+                !candidateClass.negative.empty()) {
+                provenClasses.push_back(std::move(candidateClass));
+            }
+        }
+        if (stop) break;
+    }
+
+    size_t storedMatchCount = 0;
+    for (const WorkingClass& candidateClass : provenClasses) {
+        FunctionSearchComplementaryClass resultClass;
+        resultClass.provenComplementary = true;
+        resultClass.proofMethod = candidateClass.usedSat
+            ? "AIG_AND_INCREMENTAL_SAT_PHASE_CLASS"
+            : "AIG_LITERAL_PHASE_CLASS";
+        for (size_t index : candidateClass.positive) {
+            resultClass.positiveMembers.push_back(makeComplementaryMember(
+                netlist, candidates[index].netId, candidates[index].gateId));
+        }
+        for (size_t index : candidateClass.negative) {
+            resultClass.negativeMembers.push_back(makeComplementaryMember(
+                netlist, candidates[index].netId, candidates[index].gateId));
+        }
+        resultClass.pairCount = resultClass.positiveMembers.size() *
+                                resultClass.negativeMembers.size();
+        report.complementaryPairCount += resultClass.pairCount;
+        report.complementaryClasses.push_back(std::move(resultClass));
+    }
+    report.complementaryClassCount = report.complementaryClasses.size();
+    report.matchCount = report.complementaryPairCount;
+    report.found = report.complementaryPairCount > 0;
+
+    if (query.maxResults > 0 && report.matchCount > query.maxResults) {
+        report.truncated = true;
+    }
+    for (const FunctionSearchComplementaryClass& resultClass :
+         report.complementaryClasses) {
+        for (const FunctionSearchComplementaryMember& positive :
+             resultClass.positiveMembers) {
+            for (const FunctionSearchComplementaryMember& negative :
+                 resultClass.negativeMembers) {
+                if (query.maxResults > 0 && storedMatchCount >= query.maxResults) break;
+                if (query.maxStoredMatches > 0 &&
+                    report.matches.size() < query.maxStoredMatches) {
+                    report.matches.push_back(makeComplementaryPairMatch(
+                        positive, negative, resultClass.proofMethod));
+                }
+                ++storedMatchCount;
+            }
+            if (query.maxResults > 0 && storedMatchCount >= query.maxResults) break;
+        }
+        if (query.maxResults > 0 && storedMatchCount >= query.maxResults) break;
+    }
+
+    if (matchOutput.is_open() && query.maxResults == 0) {
+        for (size_t index = 0; index < report.complementaryClasses.size(); ++index) {
+            if (!writeFunctionSearchComplementaryClassRecord(
+                    matchOutput, report.complementaryClasses[index], index + 1)) {
+                report.status = "OUTPUT_ERROR";
+                report.message = "Failed to write complementary classes to: " +
+                                 report.outputFilePath;
+                return finish();
+            }
+        }
+    } else if (matchOutput.is_open()) {
+        size_t emitted = 0;
+        for (const FunctionSearchComplementaryClass& resultClass :
+             report.complementaryClasses) {
+            for (const FunctionSearchComplementaryMember& positive :
+                 resultClass.positiveMembers) {
+                for (const FunctionSearchComplementaryMember& negative :
+                     resultClass.negativeMembers) {
+                    if (emitted >= query.maxResults) break;
+                    const FunctionSearchMatch match = makeComplementaryPairMatch(
+                        positive, negative, resultClass.proofMethod);
+                    if (!writeFunctionSearchMatchRecord(
+                            matchOutput, match, emitted + 1)) {
+                        report.status = "OUTPUT_ERROR";
+                        report.message = "Failed to write complementary pairs to: " +
+                                         report.outputFilePath;
+                        return finish();
+                    }
+                    ++emitted;
+                }
+                if (emitted >= query.maxResults) break;
+            }
+            if (emitted >= query.maxResults) break;
+        }
+    }
+
+    if (report.timedOut) {
+        report.status = "TIMEOUT";
+        report.message = "Complementary-pair search reached its time limit; proven results are partial.";
+        return finish();
+    }
+    if (report.truncated) {
+        report.status = "RESULT_LIMIT_REACHED";
+        report.message = "Complementary-pair search reached maxResults; results are partial.";
+        return finish();
+    }
+    if (report.satUnknownCount > 0 || report.unsupportedSignalCount > 0 ||
+        report.inconclusiveCandidateCount > 0 || report.unsupported) {
+        report.status = report.unsupported
+            ? "UNSUPPORTED_OR_PARTIAL"
+            : "SOLVER_UNKNOWN";
+        report.message = "Complementary-pair search could not classify every candidate.";
+        return finish();
+    }
+
+    report.ok = true;
+    report.complete = true;
+    report.allCandidatesExamined = true;
+    report.status = report.found ? "MATCHES_FOUND" : "NO_MATCH";
+    report.message = report.found
+        ? "All eligible candidates were classified into proven complementary phase classes."
+        : "No functionally complementary pair exists in the selected candidate domain and scope.";
+    return finish();
+}
+
+bool simulationSignatureIsZero(const SimulationSignature& signature) {
+    return std::all_of(
+        signature.begin(), signature.end(),
+        [](std::uint64_t word) { return word == 0; });
+}
+
+bool simulationSignatureIsOne(const SimulationSignature& signature,
+                              std::uint64_t lastWordMask) {
+    if (signature.empty()) return false;
+    for (size_t word = 0; word < signature.size(); ++word) {
+        const std::uint64_t expected = word + 1 == signature.size()
+            ? lastWordMask
+            : ~std::uint64_t{0};
+        if (signature[word] != expected) return false;
+    }
+    return true;
+}
+
+template <typename GetPrimitives>
+FunctionSearchReport searchFunctionalConstantSignals(
+    const Netlist& netlist,
+    const FunctionSearchQuery& query,
+    GetPrimitives&& getPrimitives) {
+    FunctionSearchReport report;
+    report.queryType = query.type;
+    report.scope = query.scope;
+    report.scopeName = query.scopeName;
+    report.constantFilter = query.constantFilter;
+    report.simulationPatternCount = query.simulationPatternCount;
+
+    const auto startedAt = std::chrono::steady_clock::now();
+    const request_time_budget::RequestDeadline deadline(query.timeLimitSeconds);
+    std::ofstream matchOutput;
+    auto elapsedSeconds = [&]() {
+        return std::chrono::duration<double>(
+            std::chrono::steady_clock::now() - startedAt).count();
+    };
+    auto finish = [&]() -> FunctionSearchReport {
+        report.elapsedSeconds = elapsedSeconds();
+        finalizeFunctionSearchOutput(matchOutput, report);
+        return report;
+    };
+
+    if (query.simulationPatternCount == 0 ||
+        query.simulationPatternCount > 4096 ||
+        !std::isfinite(query.timeLimitSeconds) || query.timeLimitSeconds <= 0.0) {
+        report.status = "INVALID_ARGUMENT";
+        report.message = "Functional constant search requires 1..4096 simulation "
+                         "patterns and positive timeLimitSeconds.";
+        return finish();
+    }
+    if (!openFunctionSearchOutput(netlist, query, report, matchOutput)) {
+        return finish();
+    }
+
+    std::unordered_set<int> scopedCandidateNetIds;
+    if (query.scope != FunctionSearchScope::WholeDesign) {
+        std::vector<int> scopeGateIds;
+        std::vector<int> scopeNetIds;
+        std::string scopeError;
+        if (!collectFunctionSearchScopeGates(
+                netlist, query, scopeGateIds, scopeError, &scopeNetIds)) {
+            report.status = "SCOPE_NOT_FOUND";
+            report.message = scopeError;
+            return finish();
+        }
+        scopedCandidateNetIds.insert(scopeNetIds.begin(), scopeNetIds.end());
+    }
+
+    const SimulationResult simulation =
+        simulateNetlist(netlist, query.simulationPatternCount);
+    if (deadline.expired()) {
+        report.timedOut = true;
+        report.status = "TIMEOUT";
+        report.message = "Functional constant search reached its time limit during simulation.";
+        return finish();
+    }
+
+    struct ConstantCandidate {
+        int netId = -1;
+        int value = -1;
+    };
+    std::vector<ConstantCandidate> proofCandidates;
+    bool hasZeroBucket = false;
+    bool hasOneBucket = false;
+
+    for (size_t index = 0; index < netlist.getNetCount(); ++index) {
+        const int netId = static_cast<int>(index);
+        const Net& net = netlist.getNet(netId);
+        if (query.scope != FunctionSearchScope::WholeDesign &&
+            scopedCandidateNetIds.count(netId) == 0) {
+            continue;
+        }
+        if (net.isRemoved || net.isConst || net.name.empty()) continue;
+
+        const bool hasDefinedDriver =
+            netlist.isValidGateId(net.driverGateId) &&
+            netlist.getGate(net.driverGateId).type != GateType::UNKNOWN;
+        if (query.internalSignalsOnly) {
+            if (net.isPI || net.isPO || !hasDefinedDriver) continue;
+        } else if (!net.isPI && !hasDefinedDriver) {
+            continue;
+        }
+
+        ++report.candidateSignalCount;
+        if (hasDefinedDriver) ++report.candidateGateCount;
+        if (static_cast<size_t>(netId) >= simulation.known.size() ||
+            !simulation.known[netId]) {
+            ++report.unsupportedSignalCount;
+            ++report.inconclusiveSignalCount;
+            report.unsupported = true;
+            continue;
+        }
+
+        const SimulationSignature& signature = simulation.signatures[netId];
+        const bool allZero = simulationSignatureIsZero(signature);
+        const bool allOne = simulationSignatureIsOne(
+            signature, simulation.lastWordMask);
+        int candidateValue = -1;
+        switch (query.constantFilter) {
+        case FunctionSearchConstantFilter::Zero:
+            if (allZero) candidateValue = 0;
+            break;
+        case FunctionSearchConstantFilter::One:
+            if (allOne) candidateValue = 1;
+            break;
+        case FunctionSearchConstantFilter::Either:
+            if (allZero) candidateValue = 0;
+            else if (allOne) candidateValue = 1;
+            break;
+        }
+        if (candidateValue < 0) {
+            ++report.candidateSignalsRejectedBySimulation;
+            if (query.constantFilter == FunctionSearchConstantFilter::Either) {
+                ++report.provenNonConstantSignalCount;
+            }
+            continue;
+        }
+        proofCandidates.push_back({netId, candidateValue});
+        hasZeroBucket = hasZeroBucket || candidateValue == 0;
+        hasOneBucket = hasOneBucket || candidateValue == 1;
+    }
+    report.simulationEligibleSignalCount = proofCandidates.size();
+    report.simulationBucketCount =
+        static_cast<size_t>(hasZeroBucket) + static_cast<size_t>(hasOneBucket);
+
+    eqeng::Primitives* primitives = nullptr;
+    for (const ConstantCandidate& candidate : proofCandidates) {
+        if (deadline.expired()) {
+            report.timedOut = true;
+            break;
+        }
+
+        ++report.satChecks;
+        std::optional<eqeng::SigRef> signal;
+        eqeng::EquivResult proof = eqeng::EquivResult::Unknown;
+        bool literalEquality = false;
+        bool candidateUnsupported = false;
+        try {
+            if (primitives == nullptr) primitives = &getPrimitives();
+            const Net& net = netlist.getNet(candidate.netId);
+            signal = primitives->try_resolve(net.name);
+            if (!signal || !primitives->is_trustworthy(*signal)) {
+                candidateUnsupported = true;
+                report.unsupported = true;
+            } else {
+                literalEquality = primitives->is_constant(*signal);
+                proof = primitives->is_const_checked(
+                    *signal, candidate.value, deadline.remainingSeconds());
+            }
+        } catch (const std::exception&) {
+            candidateUnsupported = true;
+            report.unsupported = true;
+        }
+
+        if (proof == eqeng::EquivResult::Unknown) {
+            ++report.satUnknownCount;
+            ++report.inconclusiveSignalCount;
+            if (candidateUnsupported) ++report.unsupportedSignalCount;
+            if (deadline.expired() ||
+                (primitives != nullptr && primitives->last_proof_timed_out())) {
+                report.timedOut = true;
+                break;
+            }
+            continue;
+        }
+        if (proof == eqeng::EquivResult::NotEqual) {
+            ++report.provenNonConstantSignalCount;
+            continue;
+        }
+
+        if (query.mode == FunctionSearchMode::FindAll &&
+            query.maxResults > 0 && report.matchCount >= query.maxResults) {
+            report.truncated = true;
+            break;
+        }
+
+        const Net& net = netlist.getNet(candidate.netId);
+        FunctionSearchConstantRecord record;
+        record.netId = candidate.netId;
+        record.netName = net.name;
+        record.constantValue = candidate.value;
+        record.provenConstant = true;
+        record.proofMethod = literalEquality
+            ? "AIG_LITERAL_EQUALITY"
+            : "AIG_INCREMENTAL_SAT";
+        record.solverStatus = "UNSAT";
+        if (netlist.isValidGateId(net.driverGateId)) {
+            const Gate& driver = netlist.getGate(net.driverGateId);
+            if (driver.type != GateType::UNKNOWN) {
+                record.driverGateId = net.driverGateId;
+                record.driverGateName = driver.instName;
+                record.driverGateType = driver.type;
+                record.driverGateTypeName =
+                    netlist.gateTypeToString(driver.type);
+            }
+        }
+
+        ++report.matchCount;
+        if (candidate.value == 0) ++report.constantZeroCount;
+        else ++report.constantOneCount;
+        if (matchOutput.is_open() &&
+            !writeFunctionSearchConstantRecord(
+                matchOutput, record, report.matchCount)) {
+            report.status = "OUTPUT_ERROR";
+            report.message = "Failed to write functional constant results to: " +
+                             report.outputFilePath;
+            return finish();
+        }
+        if (query.mode == FunctionSearchMode::FindAny ||
+            (query.maxStoredMatches > 0 &&
+             report.constantSignals.size() < query.maxStoredMatches)) {
+            report.constantSignals.push_back(record);
+        }
+        report.found = true;
+
+        if (query.mode == FunctionSearchMode::FindAny) {
+            report.ok = true;
+            report.complete = true;
+            report.status = "MATCH_FOUND";
+            report.message = "Found a SAT-proven functionally constant signal.";
+            return finish();
+        }
+    }
+
+    if (report.timedOut) {
+        report.status = "TIMEOUT";
+        report.message = "Functional constant search reached its time limit; results are partial.";
+        return finish();
+    }
+    if (report.truncated) {
+        report.status = "RESULT_LIMIT_REACHED";
+        report.message = "Functional constant search reached maxResults; results are partial.";
+        return finish();
+    }
+    if (report.satUnknownCount > 0 || report.unsupportedSignalCount > 0 ||
+        report.unsupported) {
+        report.status = report.unsupported
+            ? "UNSUPPORTED_OR_PARTIAL"
+            : "SOLVER_UNKNOWN";
+        report.message = "Functional constant search could not classify every candidate.";
+        return finish();
+    }
+
+    report.ok = true;
+    report.complete = true;
+    report.allCandidatesExamined = true;
+    report.status = report.found ? "MATCHES_FOUND" : "NO_MATCH";
+    report.message = report.found
+        ? "All eligible signals were classified and SAT-proven constants were collected."
+        : "No eligible signal satisfies the requested functional constant filter.";
+    return finish();
+}
+
 } // namespace
 
 BitParallelSimulationResult simulateNetlistBitParallel(
@@ -2370,6 +3458,8 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
     report.scope = query.scope;
     report.scopeName = query.scopeName;
     report.gateTypeFilter = query.gateTypeFilter;
+    report.constantFilter = query.constantFilter;
+    report.candidateDomain = query.candidateDomain;
     report.patternGateType = query.type == FunctionSearchQueryType::NandEquivalentInputPairs
         ? GateType::NAND
         : query.patternGateType;
@@ -2391,6 +3481,18 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
 
     if (query.type == FunctionSearchQueryType::EquivalentGatePairs) {
         return searchEquivalentGatePairs(
+            *this,
+            query,
+            [this]() -> eqeng::Primitives& { return booleanPrimitives(); });
+    }
+    if (query.type == FunctionSearchQueryType::FunctionalConstantSignals) {
+        return searchFunctionalConstantSignals(
+            *this,
+            query,
+            [this]() -> eqeng::Primitives& { return booleanPrimitives(); });
+    }
+    if (query.type == FunctionSearchQueryType::ComplementaryPairs) {
+        return searchComplementaryPairs(
             *this,
             query,
             [this]() -> eqeng::Primitives& { return booleanPrimitives(); });
@@ -2439,7 +3541,7 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
         report.message = "Target net is missing or removed: " + query.targetNetName;
         return finish();
     }
-    if (!openFunctionSearchOutput(query, report, matchOutput)) {
+    if (!openFunctionSearchOutput(*this, query, report, matchOutput)) {
         return finish();
     }
 

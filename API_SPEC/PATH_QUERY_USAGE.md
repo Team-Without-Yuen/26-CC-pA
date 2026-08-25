@@ -42,6 +42,13 @@ path_query direct_pi_po
 4. 有輸出檔時讀 outputFilePath，不把 terminal 省略的 samples 當完整列表。
 ```
 
+Path 以 gate instance 為 structural traversal edge。同一來源 net 即使接到同一 gate 的多個
+input pins，也只形成一條 path edge；不同 gate instances 則分別計數。
+
+Endpoint、gate pin 與 `-req/-avoid` 只接受 current active objects。cleanup 後仍留在 name map
+中的 removed net 或 `UNKNOWN` gate 會回 unresolved error；active endpoints 之間確實沒有 path
+才是成功的零結果。
+
 ## 2. Mode / Command 總表
 
 | Mode | 必要輸入 | 主要輸出 | 語意 |
@@ -93,6 +100,13 @@ bare constraint token 預設視為 net。多個 `-req` 必須全部經過；任�
 | Option | 語意 | 正常 LLM 使用政策 |
 |---|---|---|
 | `-count_only` | 只計數，不建立完整 path file | prompt 只問數量時使用 |
+| `-depth_eq N` | 只接受 depth 等於 N 的 path | exactly N |
+| `-depth_ge N` | 只接受 depth 大於等於 N 的 path | at least N |
+| `-depth_le N` | 只接受 depth 小於等於 N 的 path | at most N |
+
+`-depth_ge L -depth_le U` 表示 inclusive range。這三個 option 適用 `enumerate` 與四個 ranked
+aliases，可與 `-req`、`-avoid` 組合；`-count_only` 仍只屬 `enumerate`。重複條件取交集；
+空交集、負數、小數、缺值與 overflow 都會 fail closed。
 
 `outputFilePath`、`maxPrintedPaths`、`maxEnumeratedPaths` 與
 `enumerationTimeLimitSeconds` 仍是 C++ facade 的內部執行欄位，可供 regression、printer 與
@@ -168,6 +182,12 @@ enumerationPathLimitReached == false
 - `isSeparator=true`：candidate 確實切斷原本存在的 directed connectivity。
 - source 與 target 不計入 mandatory internal nodes。
 
+### 4.4 Ranked path completeness
+
+精確排名必須確認 `rankingComplete=true`。`rankExists=false` 只有在 ranking complete 時才能解讀
+為 Nth path 不存在；`populationExhausted=true` 表示已證明沒有更多合法 paths。timeout 時工具不會
+輸出未證明的 partial rank。
+
 ## 5. 各 Mode 使用範例
 
 ### 5.1 Exists
@@ -204,7 +224,36 @@ path_query enumerate all_dff_q all_dff_d -count_only
 
 讀取 `pathCount`，並確認完整性。
 
-### 5.4 MinDepth
+依 path length 篩選：
+
+```text
+path_query enumerate pi:a po:y -depth_eq 5 -count_only
+path_query enumerate all_pi all_po -depth_ge 3 -depth_le 7 -count_only
+```
+
+第一行回答 depth exactly 5 的數量與存在性；第二行回答 inclusive depth 3 到 7。要列出完整
+matching paths 時移除 `-count_only`，工具會把完整 literal paths 寫入 artifact。
+
+### 5.4 RankedPaths
+
+```text
+path_query top_k_shortest pi:a po:y 5
+path_query top_k_longest all_pi all_dff_d 10
+path_query nth_shortest net:a net:y 3
+path_query nth_longest net:a net:y 2 -depth_ge 4 -avoid gate:g7
+```
+
+前兩行分別回 global Top-5 shortest 與 Top-10 longest；後兩行回 1-based Nth path。多 endpoint
+scope 採全域排名，不會對每一組 endpoint 各取 K。相同 depth 依 start/end、gate name sequence、
+net name sequence 決定穩定順序。結果過大時自動寫 self-contained artifact，每筆保留原 rank。
+
+純 Nth-depth prompt 直接讀 `firstReturnedRankDepth`；CLI 對應欄位為 `Requested rank depth`。
+Top-K 的每個 depth 可由 `rankedDepthRanges` 精確還原，例如 `(1,200,16)` 表示 ranks 1 到 200
+全部為 depth 16。若完整 literal paths 已外移但 ranges 足夠小，CLI 仍在 envelope 顯示
+`Ranked path depth ranges`；若 ranges 本身也超過 token-safe budget，首末 depth 與 range count
+仍留在 envelope，完整 mapping 位於同一個 complete artifact。
+
+### 5.5 MinDepth
 
 ```text
 path_query min_depth pi:a dff_d:ff1
@@ -212,7 +261,7 @@ path_query min_depth pi:a dff_d:ff1
 
 讀取 `depth` 與代表 path。
 
-### 5.5 MaxDepth
+### 5.6 MaxDepth
 
 ```text
 path_query max_depth all_dff_q all_dff_d
@@ -220,7 +269,7 @@ path_query max_depth all_dff_q all_dff_d
 
 讀取 `depth` 與 longest witness path。全域 design critical depth 改用 `depth_query`。
 
-### 5.6 EveryPathThrough
+### 5.7 EveryPathThrough
 
 ```text
 path_query every_through net:n2 net:n12 -req gate:g0
@@ -228,7 +277,7 @@ path_query every_through net:n2 net:n12 -req gate:g0
 
 只有原始 path 存在且每條都通過 `g0` 時回 true。
 
-### 5.7 EveryPathAvoids
+### 5.8 EveryPathAvoids
 
 ```text
 path_query every_avoids net:n2 net:n12 -avoid net:n10
@@ -236,7 +285,7 @@ path_query every_avoids net:n2 net:n12 -avoid net:n10
 
 只有原始 path 存在且每條都避開 `n10` 時回 true。
 
-### 5.8 FindMandatoryNodes
+### 5.9 FindMandatoryNodes
 
 ```text
 path_query mandatory_nodes net:n2 net:n14
@@ -244,7 +293,7 @@ path_query mandatory_nodes net:n2 net:n14
 
 讀取 `pathExists`、`status` 與 `mandatoryNetNames`。底層使用 dominator，不列舉 paths。
 
-### 5.9 IsSeparator
+### 5.10 IsSeparator
 
 ```text
 path_query is_separator net:n2 net:n14 n10
@@ -252,7 +301,7 @@ path_query is_separator net:n2 net:n14 n10
 
 讀取 `pathExists` 與 `isSeparator`。
 
-### 5.10 PI-to-PO Cut
+### 5.11 PI-to-PO Cut
 
 ```text
 path_query pi_po_cut n55104
@@ -260,7 +309,7 @@ path_query pi_po_cut n55104
 
 若 candidate 切斷至少一組原本相連的 PI/PO，回 `isSeparator=true` 並提供 witness pair。
 
-### 5.11 Direct PI-to-PO
+### 5.12 Direct PI-to-PO
 
 ```text
 path_query direct_pi_po
@@ -268,7 +317,7 @@ path_query direct_pi_po
 
 回傳全部 PI/PO 共用同一 net 的 depth-0 connections；每筆 path 沒有 gate，depth 為 0。
 
-### 5.12 C++ Register-to-Register
+### 5.13 C++ Register-to-Register
 
 ```cpp
 Netlist::PathQuery query;
@@ -289,8 +338,13 @@ const auto result = netlist.runPathQuery(query);
 | Find one path from A to B | `find_any` | `path`, `depth` |
 | List every path from A to B | `enumerate` | file、`pathCount`、completion |
 | How many paths from A to B? | `enumerate -count_only` | `pathCount`、completion |
+| How many paths have depth exactly/at least/at most N? | `enumerate -depth_eq/-depth_ge/-depth_le N -count_only` | normalized bounds、`pathCount`、completion |
+| Does a path of depth N exist? | `enumerate -depth_eq N -count_only` | `exists`/`pathCount`、completion |
+| List paths with depth between L and U | `enumerate -depth_ge L -depth_le U` | literal artifact、completion |
 | Shortest path/depth between A and B | `min_depth` | `depth`, `path` |
 | Longest/critical path between named endpoints | `max_depth` | `depth`, `path` |
+| Top-K shortest/longest paths | `top_k_shortest/top_k_longest ... K` | ordered paths、completion、population exhaustion |
+| Nth shortest/longest path | `nth_shortest/nth_longest ... N` | original rank、`rankExists`、path |
 | All register-to-register paths | `enumerate all_dff_q all_dff_d` | file/count/completion |
 | Number of register-to-register paths | 同上加 `-count_only` | `pathCount` |
 | Does every path pass through X? | `every_through -req X` | `exists` |
@@ -321,8 +375,23 @@ CLI: tools.cpp
 ```
 
 所有 `PathQueryMode` 已完成 dispatch。官方 testcase 已驗證 existence、avoid、enumeration、
-count-only、min/max depth、every-path、mandatory、separator/cut、direct PI-to-PO 與 all-DFF
-endpoints。
+count-only、min/max depth、every-path、mandatory、separator/cut、direct PI-to-PO、all-DFF
+endpoints，以及大型 released design 的 Top-K shortest/longest extrema consistency。
+
+`mini test/test35` 另覆蓋 tied-input gate 與 distinct parallel gate：count-only 和 literal
+artifact 都必須得到 2 條 unique structural paths，不能因 input-pin multiplicity 重複計數；
+並覆蓋 `remove_dead_logic` 後 endpoint、gate pin、required/avoided tombstone 的 fail-closed 語意。
+
+`mini test/test59` 覆蓋單一 request deadline：exact pre-count、reverse reachability 與正式
+enumeration 共用同一個 `RequestDeadline`。timeout 時 report 與 literal artifact 必須同時標示
+incomplete/timed-out，且 footer 的 `Written paths` 必須等於實際 records 數量。
+
+`mini test/test60` 覆蓋 depth 0、exact/ge/le/between、multi-endpoint、tied-input、DFF.D、
+required/avoided constraints、depth-aware count DP、self-contained filtered artifact 與 strict parser。
+
+`mini test/test61` 覆蓋 Top-K/Nth shortest/longest、1-based rank、canonical tie-break、global
+multi-endpoint ranking、上游與下游 endpoints、depth/required/avoided 組合、tied-input、DFF.D、
+rank 不存在、K 大於 population、200-path artifact、timeout 不輸出未證明 rank 與 strict parser。
 
 已知限制：
 
