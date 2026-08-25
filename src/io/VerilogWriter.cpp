@@ -27,7 +27,8 @@ bool VerilogWriter::write(const std::string& filepath, const Netlist& netlist) {
 }
 
 void VerilogWriter::writeTopModule(std::ofstream& file, const Netlist& netlist) const {
-    file << "module top(";
+    // 用來源檔案的 module 名稱，而不是寫死 "top"。
+    file << "module " << netlist.getTopModuleName() << "(";
 
     std::vector<std::string> allPorts;
 

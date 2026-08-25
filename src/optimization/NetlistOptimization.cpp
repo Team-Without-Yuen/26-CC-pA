@@ -13,6 +13,143 @@
 
 namespace {
 
+// b 是否為 a 的結構反相：b 由一顆 NOT 驅動，且該 NOT 的輸入就是 a。
+// 只做結構判定，不做 SAT——功能等價的反相關係由 functional merge 負責。
+bool isStructuralComplement(const Netlist& netlist, int aNetId, int bNetId) {
+    if (!netlist.isValidNetId(aNetId) || !netlist.isValidNetId(bNetId)) return false;
+    if (aNetId == bNetId) return false;
+
+    const int driverId = netlist.getNet(bNetId).driverGateId;
+    if (!netlist.isValidGateId(driverId) || netlist.isGateRemoved(driverId)) return false;
+
+    const Gate& driver = netlist.getGate(driverId);
+    if (driver.type != GateType::NOT) return false;
+    if (driver.inputNetIds.size() != 1) return false;
+    return driver.inputNetIds[0] == aNetId;
+}
+
+// 兩條 net 是否互為反相（任一方向）。
+bool areComplementary(const Netlist& netlist, int x, int y) {
+    return isStructuralComplement(netlist, x, y) ||
+           isStructuralComplement(netlist, y, x);
+}
+
+// 取得（必要時建立）值為 value 的常數 net。
+// parser 把 Verilog 字面值直接當 net 名，因此常數 net 一律用正規名字。
+int ensureConstantNet(Netlist& netlist, int value) {
+    const std::string name = (value == 1) ? "1'b1" : "1'b0";
+    const int existing = netlist.getNetId(name);
+    
+    if (netlist.isValidNetId(existing) && !netlist.getNet(existing).isRemoved) {
+        return existing;
+    }
+    
+    return netlist.addNet(name); 
+}
+
+// DFF 的比對 key：四個具名 pin 各自接的 net。
+// 不能像 combinational gate 那樣排序 —— pin 是具名的，
+// DFF(.D(a),.CK(b)) 與 DFF(.D(b),.CK(a)) 是完全不同的電路。
+// 而且 parser 依 Verilog 宣告順序存 pin，兩顆同功能的 DFF 宣告順序可能不同，
+// 所以要按 pin name 正規化，不是按 index 比。
+struct DffPinKey {
+    int d  = -1;
+    int ck = -1;
+    int rn = -1;
+    int sn = -1;
+    bool hasUnknownPin = false;   // 出現 D/CK/RN/SN 以外的 pin
+
+    bool operator==(const DffPinKey& other) const {
+        return !hasUnknownPin && !other.hasUnknownPin &&
+               d == other.d && ck == other.ck &&
+               rn == other.rn && sn == other.sn;
+    }
+};
+
+struct DffPinKeyHash {
+    std::size_t operator()(const DffPinKey& key) const noexcept {
+        std::size_t seed = std::hash<int>{}(key.d);
+        auto mix = [&seed](int value) {
+            seed ^= std::hash<int>{}(value) + 0x9e3779b97f4a7c15ull +
+                    (seed << 6) + (seed >> 2);
+        };
+        mix(key.ck);
+        mix(key.rn);
+        mix(key.sn);
+        return seed;
+    }
+};
+
+DffPinKey makeDffPinKey(const Netlist& netlist, int gateId) {
+    DffPinKey key;
+    if (!netlist.isValidGateId(gateId)) return key;
+    const Gate& gate = netlist.getGate(gateId);
+    if (gate.type != GateType::DFF) return key;
+
+    for (size_t i = 0; i < gate.inputNetIds.size(); ++i) {
+        const int netId = gate.inputNetIds[i];
+        if (netId < 0 || !netlist.isValidNetId(netId)) continue;
+        if (netlist.getNet(netId).isRemoved) continue;
+        const std::string& pin =
+            i < gate.inputPinNames.size() ? gate.inputPinNames[i] : std::string();
+        if (pin == "D")       key.d  = netId;
+        else if (pin == "CK") key.ck = netId;
+        else if (pin == "RN") key.rn = netId;
+        else if (pin == "SN") key.sn = netId;
+        else return DffPinKey{};   // 未知 pin：回空 key，之後不參與合併
+    }
+    return key;
+}
+
+// 合併候選的基本安全條件。
+bool isSafeDffMergeCandidate(const Netlist& netlist, int gateId) {
+    if (!netlist.isValidGateId(gateId) || netlist.isGateRemoved(gateId)) return false;
+    const Gate& gate = netlist.getGate(gateId);
+    if (gate.type != GateType::DFF || gate.id != gateId) return false;
+    if (!netlist.isValidNetId(gate.outputNetId)) return false;
+
+    const Net& output = netlist.getNet(gate.outputNetId);
+    if (output.isRemoved || output.isPI || output.isConst ||
+        output.driverGateId != gateId) {
+        return false;
+    }
+    return true;
+}
+
+bool outputDependsOnNet(const Netlist& netlist, int outputNetId, int ancestorNetId) {
+    if (!netlist.isValidNetId(outputNetId) || !netlist.isValidNetId(ancestorNetId)) {
+        return false;
+    }
+
+    std::queue<int> pending;
+    std::unordered_set<int> visited;
+    pending.push(outputNetId);
+    visited.insert(outputNetId);
+
+    while (!pending.empty()) {
+        const int netId = pending.front();
+        pending.pop();
+        if (netId == ancestorNetId) {
+            return true;
+        }
+
+        const Net& net = netlist.getNet(netId);
+        if (!netlist.isValidGateId(net.driverGateId)) {
+            continue;
+        }
+        const Gate& driver = netlist.getGate(net.driverGateId);
+        if (driver.type == GateType::DFF || driver.type == GateType::UNKNOWN) {
+            continue;
+        }
+        for (int inputNetId : driver.inputNetIds) {
+            if (netlist.isValidNetId(inputNetId) && visited.insert(inputNetId).second) {
+                pending.push(inputNetId);
+            }
+        }
+    }
+    return false;
+}
+
 void rebuildNetLoadGateIds(Netlist& netlist) {
     for (size_t netIndex = 0; netIndex < netlist.getNetCount(); ++netIndex) {
         netlist.getNetMutable(static_cast<int>(netIndex)).loadGateIds.clear();
@@ -95,8 +232,8 @@ bool isSafeDoubleInverterPair(const Netlist& netlist, int g1id, int g2id) {
 bool isSafeStructuralMergeCandidate(const Netlist& netlist, int gateId) {
     if (!netlist.isValidGateId(gateId)) return false;
     const Gate& gate = netlist.getGate(gateId);
-    if (gate.type == GateType::UNKNOWN || gate.id != gateId ||
-        !netlist.isValidNetId(gate.outputNetId)) {
+    if (gate.type == GateType::UNKNOWN || gate.type == GateType::DFF ||
+        gate.id != gateId || !netlist.isValidNetId(gate.outputNetId)) {
         return false;
     }
 
@@ -163,7 +300,7 @@ NetlistEditReport finalizeEditReport(
     NetlistEditReport report = Netlist::buildEditReport(before, netlist, operationName, kind);
     report.changed = report.changed || changedCount > 0;
     if (computeDepthChange) {
-        report.depthChange = Netlist::buildDepthChangeReport(before, netlist);
+        report.costChange = Netlist::buildDepthCostChange(before, netlist);
     }
     report.message = report.success ? successMessage : rollbackMessage;
 
@@ -204,10 +341,8 @@ NetlistEditReport finalizeBooleanPrimitiveReport(
     report.changedNetIds = changedNetIds;
 
     if (!operationSucceeded) {
-        if (report.changed) {
-            netlist.restoreFrom(before);
-            report.rolledBack = true;
-        }
+        netlist.restoreFrom(before);
+        report.rolledBack = true;
         report.success = false;
         report.message = failureMessage;
         return report;
@@ -400,6 +535,14 @@ DeadLogicSummary Netlist::removeDeadLogic(const DeadLogicOptions& options) {
         if (isGateRemoved(i)) continue;
         if (gateUseful[i]) continue;
 
+        // 來源檔案的 multi-driver：這顆 gate 的 output net 由別人驅動，
+        // 反向走訪永遠到不了它，會被誤判為 dead。移除會改變寫回的內容
+        // （原本兩顆 driver 變成一顆），因此保守保留。
+        const int outNet = gates[i].outputNetId;
+        if (isValidNetId(outNet) && nets[outNet].driverGateId != i) {
+            continue;
+        }
+
         const bool isDff = gates[i].type == GateType::DFF;
         if (markGateRemoved(i)) {
             ++summary.removedGateCount;
@@ -439,7 +582,7 @@ NetlistEditReport Netlist::removeDeadLogicWithReport(const DeadLogicOptions& opt
               "no change was applied."
             : "Dead logic removal completed.",
         "Dead logic removal failed validation and was rolled back.",
-        EquivalenceCheckMethod::StructuralIdentity,
+        EquivalenceCheckMethod::CertifiedRewrite,
         options.includeSequential
             ? "Equivalence certified by removing logic that is unreachable from any "
               "primary output, including registers whose Q is unobservable."
@@ -536,7 +679,7 @@ NetlistEditReport Netlist::collapseBackToBackInvertersWithReport() {
 //  合併結構等價的 gate（相同 type + 相同 input net 集合）
 //  回傳合併的 gate 數量
 // ─────────────────────────────────────────────────────────────────────────────
-int Netlist::mergeEquivalentGates() {
+/*int Netlist::mergeEquivalentGates() {
     int merged = 0;
 
     std::map<std::pair<int, std::vector<int>>, int> seen;
@@ -628,7 +771,7 @@ NetlistEditReport Netlist::mergeEquivalentGatesWithReport() {
         EquivalenceCheckMethod::StructuralIdentity,
         "Equivalence certified by merging gates with identical type and input structure.",
         false);
-}
+}*/
 
 // =============================================================================
 //  新增 function（對應 CLEANUP_SIMPLIFICATION_NOTES.md 各 section）
@@ -708,99 +851,127 @@ int Netlist::compactRemovedGates() {
 // ─────────────────────────────────────────────────────────────────────────────
 //  Section 1.7: Validation / Rollback
 // ─────────────────────────────────────────────────────────────────────────────
-bool Netlist::validateStructure() const {
-    bool ok = true;
+Netlist::StructureViolations Netlist::collectStructureViolations(bool verbose) const {
+    StructureViolations v;
+
+    // 1M gates 上壞掉的結構可能有數萬條，全部印出來會淹沒 terminal，
+    // 而 LLM 的 context 也吃不下。只印前幾條，其餘靠計數呈現。
+    constexpr int kMaxReported = 20;
+    int reported = 0;
+    auto report = [&](const std::string& message) {
+        if (!verbose) return;
+        if (reported < kMaxReported) {
+            std::cerr << "[validateStructure] " << message << "\n";
+        } else if (reported == kMaxReported) {
+            std::cerr << "[validateStructure] ... further messages suppressed\n";
+        }
+        ++reported;
+    };
+
+    // expectedLoads 是 pin-level：一顆 gate 有 K 個 pin 接同一條 net 就出現 K 次。
     std::vector<std::vector<int>> expectedLoads(nets.size());
 
-    for (int gi = 0; gi < (int)gates.size(); gi++) {
+    for (int gi = 0; gi < (int)gates.size(); ++gi) {
         const Gate& g = gates[gi];
         if (g.type == GateType::UNKNOWN) continue;
 
-        if (g.outputNetId < 0 && g.type != GateType::DFF) {
-            std::cerr << "[validateStructure] live gate[" << gi << "] has no output net\n";
-            ok = false;
+        if (g.id != gi) {
+            ++v.gateIdMismatch;
+            report("gate id mismatch: gate[" + std::to_string(gi) +
+                   "].id=" + std::to_string(g.id));
         }
 
-        if (g.id != gi) {
-            std::cerr << "[validateStructure] gate id mismatch: gate[" << gi << "].id=" << g.id << "\n";
-            ok = false;
+        if (g.outputNetId < 0 && g.type != GateType::DFF) {
+            ++v.gateMissingOutput;
+            report("live gate[" + std::to_string(gi) + "] (" + g.instName +
+                   ") has no output net");
         }
 
         if (g.outputNetId >= 0) {
             if (g.outputNetId >= (int)nets.size()) {
-                std::cerr << "[validateStructure] gate[" << gi << "] outputNetId out of range\n";
-                ok = false;
+                ++v.gateOutputOutOfRange;
+                report("gate[" + std::to_string(gi) + "] outputNetId out of range");
             } else if (nets[g.outputNetId].driverGateId != gi) {
-                std::cerr << "[validateStructure] gate[" << gi << "] outputNet["
-                          << g.outputNetId << "].driverGateId="
-                          << nets[g.outputNetId].driverGateId << " mismatch\n";
-                ok = false;
+                // 常見於來源檔案本身就有多個 driver：後來的 gate 覆寫了
+                // net 的 driverGateId，但先前那顆 gate 仍指著這條 net。
+                ++v.gateOutputNotDriver;
+                report("gate[" + std::to_string(gi) + "] (" + g.instName +
+                       ") outputNet[" + std::to_string(g.outputNetId) +
+                       "].driverGateId=" +
+                       std::to_string(nets[g.outputNetId].driverGateId) + " mismatch");
             }
         }
 
         for (int inNetId : g.inputNetIds) {
             if (inNetId < 0) continue;
             if (inNetId >= (int)nets.size()) {
-                std::cerr << "[validateStructure] gate[" << gi << "] inputNetId out of range\n";
-                ok = false;
+                ++v.gateInputOutOfRange;
+                report("gate[" + std::to_string(gi) + "] inputNetId out of range");
                 continue;
             }
             if (nets[inNetId].isRemoved) {
-                std::cerr << "[validateStructure] gate[" << gi
-                          << "] references removed input net[" << inNetId << "]\n";
-                ok = false;
+                ++v.gateInputRemoved;
+                report("gate[" + std::to_string(gi) + "] references removed input net[" +
+                       std::to_string(inNetId) + "]");
                 continue;
             }
             expectedLoads[inNetId].push_back(gi);
         }
     }
 
-    for (int ni = 0; ni < (int)nets.size(); ni++) {
+    for (int ni = 0; ni < (int)nets.size(); ++ni) {
         if (nets[ni].isRemoved) continue;
-        int driverGateId = nets[ni].driverGateId;
+
+        const int driverGateId = nets[ni].driverGateId;
         if (driverGateId >= 0) {
             if (driverGateId >= (int)gates.size()) {
-                std::cerr << "[validateStructure] net[" << ni
-                          << "] has invalid driverGateId=" << driverGateId << "\n";
-                ok = false;
+                ++v.netInvalidDriver;
+                report("net[" + std::to_string(ni) + "] has invalid driverGateId=" +
+                       std::to_string(driverGateId));
             } else if (gates[driverGateId].type == GateType::UNKNOWN) {
-                std::cerr << "[validateStructure] net[" << ni
-                          << "] is driven by removed gate[" << driverGateId << "]\n";
-                ok = false;
+                ++v.netDriverRemoved;
+                report("net[" + std::to_string(ni) + "] is driven by removed gate[" +
+                       std::to_string(driverGateId) + "]");
             } else if (gates[driverGateId].outputNetId != ni) {
-                std::cerr << "[validateStructure] net[" << ni
-                          << "] driverGate[" << driverGateId
-                          << "] does not output to this net\n";
-                ok = false;
+                ++v.netDriverOutputMismatch;
+                report("net[" + std::to_string(ni) + "] driverGate[" +
+                       std::to_string(driverGateId) + "] does not output to this net");
             }
         }
 
         for (int lgid : nets[ni].loadGateIds) {
             if (lgid < 0 || lgid >= (int)gates.size()) {
-                std::cerr << "[validateStructure] net[" << ni << "] has invalid loadGateId=" << lgid << "\n";
-                ok = false;
+                ++v.netInvalidLoad;
+                report("net[" + std::to_string(ni) + "] has invalid loadGateId=" +
+                       std::to_string(lgid));
                 continue;
             }
             bool found = false;
-            for (int inNetId : gates[lgid].inputNetIds)
+            for (int inNetId : gates[lgid].inputNetIds) {
                 if (inNetId == ni) { found = true; break; }
+            }
             if (!found) {
-                std::cerr << "[validateStructure] net[" << ni << "] loadGate["
-                          << lgid << "] does not have this net as input\n";
-                ok = false;
+                ++v.netLoadMissingInput;
+                report("net[" + std::to_string(ni) + "] loadGate[" +
+                       std::to_string(lgid) + "] does not have this net as input");
             }
         }
 
         std::vector<int> actualLoads = nets[ni].loadGateIds;
         std::sort(actualLoads.begin(), actualLoads.end());
+        std::sort(expectedLoads[ni].begin(), expectedLoads[ni].end());
         if (actualLoads != expectedLoads[ni]) {
-            std::cerr << "[validateStructure] net[" << ni
-                      << "] pin-level loadGateIds multiplicity mismatch\n";
-            ok = false;
+            ++v.netLoadMultiplicity;
+            report("net[" + std::to_string(ni) +
+                   "] pin-level loadGateIds multiplicity mismatch");
         }
     }
 
-    return ok;
+    return v;
+}
+
+bool Netlist::validateStructure() const {
+    return collectStructureViolations(true).clean();
 }
 
 bool Netlist::validateProblemAConstraints() const {
@@ -996,7 +1167,7 @@ NetlistEditReport Netlist::cleanupAllRemovableBuffersWithReport() {
         NetlistEditOperationKind::Cleanup);
 
     report.changed = report.changed || removed > 0;
-    report.depthChange = buildDepthChangeReport(before, *this);
+    report.costChange = buildDepthCostChange(before, *this);
     if (report.success) {
         certifyEquivalence(
             report,
@@ -1275,27 +1446,68 @@ std::vector<int> Netlist::findSameInputGates() const {
     return result;
 }
 
+// 從所有 fanin net 的 load list 移除這顆 gate。
+// a == b 時 loadGateIds 裡有兩份，remove 會一次清掉全部，正確。
+void Netlist::detachGateInputs(int gateId) {
+    if (!isValidGateId(gateId)) return;
+    for (int inNetId : gates[gateId].inputNetIds) {
+        if (!isValidNetId(inNetId)) continue;
+        auto& loads = nets[inNetId].loadGateIds;
+        loads.erase(std::remove(loads.begin(), loads.end(), gateId), loads.end());
+    }
+}
+
+// 就地改寫 gate 的型別與輸入，並同步維護 load list。
+bool Netlist::rewriteInPlace(int gateId, GateType newType,
+                             const std::vector<int>& newInputs) {
+    if (!isValidGateId(gateId)) return false;
+    Gate& g = gates[gateId];
+    if (g.type == newType && g.inputNetIds == newInputs) return false;
+
+    detachGateInputs(gateId);
+    g.type = newType;
+    g.inputNetIds = newInputs;
+    for (int inNetId : newInputs) {
+        if (!isValidNetId(inNetId)) continue;
+        nets[inNetId].loadGateIds.push_back(gateId);
+    }
+    markDirty();
+    return true;
+}
+
 bool Netlist::simplifySameInputGate(int gateId) {
     if (gateId < 0 || gateId >= (int)gates.size()) return false;
     Gate& g = gates[gateId];
-    if (g.type == GateType::UNKNOWN) return false;
+    if (g.type == GateType::UNKNOWN || g.type == GateType::DFF) return false;
     if (g.inputNetIds.size() < 2) return false;
-    if (g.inputNetIds[0] < 0 || g.inputNetIds[0] != g.inputNetIds[1]) return false;
     if (g.outputNetId < 0) return false;
-    if (nets[g.outputNetId].isPO) return false;
 
-    int a        = g.inputNetIds[0];
-    int outNetId = g.outputNetId;
-    int const0   = getConst0NetId();
-    int const1   = getConst1NetId();
-    GateType t   = g.type;
+    const int a = g.inputNetIds[0];
+    const int b = g.inputNetIds[1];
+    if (a < 0 || b < 0) return false;
 
-    auto replaceGateWithNet = [&](int srcNetId) -> bool {
-        if (srcNetId < 0) return false;
+    const bool sameInput = (a == b);
+    const bool complementary = !sameInput && areComplementary(*this, a, b);
+    if (!sameInput && !complementary) return false;
+
+    const int outNetId = g.outputNetId;
+    const GateType t = g.type;
+
+    // 常數 net 可能尚未存在（電路裡沒有任何 1'b0/1'b1 字面值）。
+    // 用 ensureConstantNet 而非 getConstXNetId，後者會回 -1 導致靜默不化簡。
+    auto constNet = [&](int value) { return ensureConstantNet(*this, value); };
+
+    // 把整顆 gate 換成一條既有 net。outNet 是 PO 時保留 gate 並改成 BUF，
+    // 以維持 port 的 driver 結構。
+    auto replaceWithNet = [&](int srcNetId) -> bool {
+        if (!isValidNetId(srcNetId)) return false;
+        if (srcNetId == outNetId) return false;
+
+        if (nets[outNetId].isPO) {
+            return rewriteInPlace(gateId, GateType::BUF, {srcNetId});
+        }
         replaceAllLoadsOfNet(outNetId, srcNetId);
-        // a == b，loadGateIds 裡有兩份 gateId，全部移除
-        auto& loads = nets[a].loadGateIds;
-        loads.erase(std::remove(loads.begin(), loads.end(), gateId), loads.end());
+        detachGateInputs(gateId);
         nets[outNetId].driverGateId = -1;
         g.type = GateType::UNKNOWN;
         g.inputNetIds.clear();
@@ -1304,26 +1516,36 @@ bool Netlist::simplifySameInputGate(int gateId) {
         return true;
     };
 
-    auto replaceGateWithNot = [&](int srcNetId) -> bool {
-        if (srcNetId < 0) return false;
-        // 移除 loadGateIds 裡的兩份 gateId，之後只保留一份（重新 connect）
-        auto& loads = nets[a].loadGateIds;
-        loads.erase(std::remove(loads.begin(), loads.end(), gateId), loads.end());
-        g.type = GateType::NOT;
-        g.inputNetIds = { srcNetId };
-        nets[srcNetId].loadGateIds.push_back(gateId);
-        markDirty();
-        return true;
+    auto replaceWithNot = [&](int srcNetId) -> bool {
+        return rewriteInPlace(gateId, GateType::NOT, {srcNetId});
     };
 
-    if      (t == GateType::AND)  return replaceGateWithNet(a);
-    else if (t == GateType::OR)   return replaceGateWithNet(a);
-    else if (t == GateType::XOR)  return replaceGateWithNet(const0);
-    else if (t == GateType::XNOR) return replaceGateWithNet(const1);
-    else if (t == GateType::NAND) return replaceGateWithNot(a);
-    else if (t == GateType::NOR)  return replaceGateWithNot(a);
+    if (sameInput) {
+        // AND(x,x)=x  OR(x,x)=x  XOR(x,x)=0  XNOR(x,x)=1
+        // NAND(x,x)=~x  NOR(x,x)=~x
+        switch (t) {
+            case GateType::AND:
+            case GateType::OR:   return replaceWithNet(a);
+            case GateType::XOR:  return replaceWithNet(constNet(0));
+            case GateType::XNOR: return replaceWithNet(constNet(1));
+            case GateType::NAND:
+            case GateType::NOR:  return replaceWithNot(a);
+            default: return false;
+        }
+    }
 
-    return false;
+    // complementary：x 與 ~x
+    // AND(x,~x)=0   OR(x,~x)=1    XOR(x,~x)=1
+    // NAND(x,~x)=1  NOR(x,~x)=0   XNOR(x,~x)=0
+    switch (t) {
+        case GateType::AND:  return replaceWithNet(constNet(0));
+        case GateType::OR:   return replaceWithNet(constNet(1));
+        case GateType::XOR:  return replaceWithNet(constNet(1));
+        case GateType::NAND: return replaceWithNet(constNet(1));
+        case GateType::NOR:  return replaceWithNet(constNet(0));
+        case GateType::XNOR: return replaceWithNet(constNet(0));
+        default: return false;
+    }
 }
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -1481,31 +1703,36 @@ NetlistEditReport Netlist::removeDanglingLogicWithReport() {
 // ─────────────────────────────────────────────────────────────────────────────
 //  Section 2.7: Structural hashing
 // ─────────────────────────────────────────────────────────────────────────────
-std::string Netlist::makeStructuralKey(int gateId) const {
-    if (gateId < 0 || gateId >= (int)gates.size()) return "";
+std::uint64_t Netlist::makeStructuralKey(int gateId) const {
+    if (gateId < 0 || gateId >= (int)gates.size()) return 0;
     const Gate& g = gates[gateId];
-    if (g.type == GateType::UNKNOWN) return "";
+    if (g.type == GateType::UNKNOWN) return 0;
+    if (g.inputNetIds.empty() || g.inputNetIds.size() > 2) return 0;
 
-    std::vector<int> inputs = g.inputNetIds;
-    if (g.type == GateType::AND || g.type == GateType::OR  || g.type == GateType::XOR ||
-        g.type == GateType::NAND || g.type == GateType::NOR || g.type == GateType::XNOR)
-        std::sort(inputs.begin(), inputs.end());
+    int a = g.inputNetIds[0];
+    int b = g.inputNetIds.size() > 1 ? g.inputNetIds[1] : -1;
 
-    std::string key = std::to_string((int)g.type) + ":";
-    for (int i = 0; i < (int)inputs.size(); i++) {
-        if (i > 0) key += ",";
-        key += std::to_string(inputs[i]);
-    }
-    return key;
+    // 可交換的 gate 排序，讓 AND(x,y) 與 AND(y,x) 得到相同 key。
+    // DFF 不在此列，但它的 4 個 input 已經被上面的 size 檢查擋掉。
+    const bool commutative =
+        g.type == GateType::AND  || g.type == GateType::OR   ||
+        g.type == GateType::NAND || g.type == GateType::NOR  ||
+        g.type == GateType::XOR  || g.type == GateType::XNOR;
+    if (commutative && a > b) std::swap(a, b);
+
+    // net id 上限 100 萬遠小於 2^30；-1（不存在的第二輸入）編碼為 0。
+    const std::uint64_t ta = static_cast<std::uint64_t>(a + 1) & 0x3FFFFFFFull;
+    const std::uint64_t tb = static_cast<std::uint64_t>(b + 1) & 0x3FFFFFFFull;
+    return (static_cast<std::uint64_t>(g.type) << 60) | (ta << 30) | tb;
 }
 
 std::vector<std::vector<int>> Netlist::findStructurallyEquivalentGateGroups() const {
-    std::unordered_map<std::string, std::vector<int>> keyToGates;
+    std::unordered_map<std::uint64_t, std::vector<int>> keyToGates;
     for (int i = 0; i < (int)gates.size(); i++) {
         if (gates[i].type == GateType::UNKNOWN) continue;
         if (gates[i].outputNetId < 0) continue;
-        std::string key = makeStructuralKey(i);
-        if (!key.empty()) keyToGates[key].push_back(i);
+        const std::uint64_t key = makeStructuralKey(i);
+        if (key != 0) keyToGates[key].push_back(i);
     }
 
     std::vector<std::vector<int>> result;
@@ -1515,10 +1742,13 @@ std::vector<std::vector<int>> Netlist::findStructurallyEquivalentGateGroups() co
     return result;
 }
 
-int Netlist::mergeStructurallyEquivalentGates() {
-    int merged = 0;
+StructuralMergeSummary Netlist::mergeStructurallyEquivalentGates() {
+    StructuralMergeSummary summary;
 
-    std::unordered_map<std::string, int> canonicalByKey;
+    std::unordered_map<std::uint64_t, int> canonicalByKey;
+    // 記錄真的發生過合併的 key，用來算 equivalenceClassCount。
+    std::unordered_set<std::uint64_t> mergedKeys;
+
     std::queue<int> worklist;
     std::vector<unsigned char> queued(gates.size(), 0);
     auto enqueue = [&](int gateId) {
@@ -1538,8 +1768,8 @@ int Netlist::mergeStructurallyEquivalentGates() {
         queued[gateId] = 0;
         if (!isSafeStructuralMergeCandidate(*this, gateId)) continue;
 
-        const std::string key = makeStructuralKey(gateId);
-        if (key.empty()) continue;
+        const std::uint64_t key = makeStructuralKey(gateId);
+        if (key == 0) continue;
         auto canonicalIt = canonicalByKey.find(key);
         if (canonicalIt == canonicalByKey.end()) {
             canonicalByKey.emplace(key, gateId);
@@ -1559,6 +1789,7 @@ int Netlist::mergeStructurallyEquivalentGates() {
         int deadOutNet = gates[deadGateId].outputNetId;
         const bool keepIsPo = nets[keepOutNet].isPO;
         const bool deadIsPo = nets[deadOutNet].isPO;
+        // 兩邊都是 PO：合併會讓兩個 port 指向同一條 net，破壞 port 對應。
         if (keepIsPo && deadIsPo) {
             continue;
         }
@@ -1579,27 +1810,31 @@ int Netlist::mergeStructurallyEquivalentGates() {
         gates[deadGateId].type = GateType::UNKNOWN;
         gates[deadGateId].outputNetId = -1;
         gates[deadGateId].inputNetIds.clear();
-        ++merged;
+        ++summary.mergedGateCount;
+        mergedKeys.insert(key);
 
         for (int affectedGateId : affectedGateIds) {
             enqueue(affectedGateId);
         }
     }
 
-    if (merged > 0) {
+    summary.equivalenceClassCount = mergedKeys.size();
+
+    if (summary.mergedGateCount > 0) {
         rebuildNetLoadGateIds(*this);
         markDirty();
     }
-    return merged;
+    return summary;
 }
 
 NetlistEditReport Netlist::mergeStructurallyEquivalentGatesWithReport() {
     Netlist before = cloneForRollback();
-    int merged = mergeStructurallyEquivalentGates();
-    return finalizeEditReport(
+    const StructuralMergeSummary summary = mergeStructurallyEquivalentGates();
+
+    NetlistEditReport report = finalizeEditReport(
         *this,
         before,
-        merged,
+        static_cast<int>(summary.mergedGateCount),
         "mergeStructurallyEquivalentGates",
         NetlistEditOperationKind::Simplification,
         "Structurally equivalent gate merge completed.",
@@ -1607,6 +1842,12 @@ NetlistEditReport Netlist::mergeStructurallyEquivalentGatesWithReport() {
         EquivalenceCheckMethod::StructuralIdentity,
         "Equivalence certified by structural hashing over gate type and input nets.",
         false);
+
+    report.structuralMerge = summary;
+    if (report.success && summary.mergedGateCount == 0) {
+        report.addWarning("No structural duplicate gate was found.");
+    }
+    return report;
 }
 
 // =============================================================================
@@ -2572,86 +2813,148 @@ NetlistEditReport Netlist::simplifyAllSameInputGatesWithReport() {
 
 // 反覆執行所有 local simplification，直到 fixpoint（沒有任何改變）
 // 回傳總共化簡的 gate 數
-int Netlist::runLocalSimplificationFixpoint(const request_time_budget::RequestDeadline* deadline) {
-    int total = 0;
+FixpointResult Netlist::runLocalSimplificationFixpoint(
+    const request_time_budget::RequestDeadline* deadline) {
+    FixpointResult result;
+
+    auto expired = [&]() { return deadline != nullptr && deadline->expired(); };
+
     for (;;) {
-        if (deadline && deadline->expired()) break;
+        if (expired()) { result.timedOut = true; break; }
 
         int round = 0;
+
         round += simplifyAllGatesWithConstants();
+        if (expired()) { result.changedCount += round; result.timedOut = true; break; }
+
         round += simplifyAllSameInputGates();
+        if (expired()) { result.changedCount += round; result.timedOut = true; break; }
+
         round += cleanupAllRemovableBuffers();
+        if (expired()) { result.changedCount += round; result.timedOut = true; break; }
+
         round += collapseBackToBackInverters();
+        if (expired()) { result.changedCount += round; result.timedOut = true; break; }
 
         DeadLogicOptions options;
         options.deadline = deadline;
+        const DeadLogicSummary dead = removeDeadLogic(options);
         // 只用 gate 數判斷是否收斂：net 回收不會再開啟新的 simplification 機會。
-        round += static_cast<int>(removeDeadLogic(options).removedGateCount);
+        round += static_cast<int>(dead.removedGateCount);
+        if (dead.timedOut) result.timedOut = true;
 
-        total += round;
-        if (round == 0) break;
+        result.changedCount += round;
+        ++result.roundCount;
+        if (round == 0 || result.timedOut) break;
     }
-    return total;
+    return result;
 }
 
-NetlistEditReport Netlist::runLocalSimplificationFixpointWithReport(const request_time_budget::RequestDeadline* deadline) {
+NetlistEditReport Netlist::runLocalSimplificationFixpointWithReport(
+    const request_time_budget::RequestDeadline* deadline) {
     Netlist before = cloneForRollback();
 
-    int changedCount = runLocalSimplificationFixpoint(deadline);
-    return finalizeEditReport(
+    const FixpointResult fixpoint = runLocalSimplificationFixpoint(deadline);
+
+    NetlistEditReport report = finalizeEditReport(
         *this,
         before,
-        changedCount,
+        fixpoint.changedCount,
         "runLocalSimplificationFixpoint",
         NetlistEditOperationKind::Simplification,
-        "Local simplification fixpoint completed.",
+        fixpoint.timedOut
+            ? "Local simplification fixpoint stopped at the time limit; the design was not fully simplified."
+            : "Local simplification fixpoint completed.",
         "Local simplification fixpoint failed validation and was rolled back.",
         EquivalenceCheckMethod::LocalRewriteRule,
         "Equivalence certified by composing local cleanup and simplification rewrite rules.",
         false);
+
+    CleanupFixpointSummary summary;
+    summary.changedCount = static_cast<size_t>(std::max(0, fixpoint.changedCount));
+    summary.roundCount   = static_cast<size_t>(std::max(0, fixpoint.roundCount));
+    summary.timedOut     = fixpoint.timedOut;
+    report.cleanupFixpoint = summary;
+
+    if (fixpoint.timedOut) {
+        report.addWarning(
+            "Simplification did not converge within the time limit; more opportunities "
+            "may remain. Do not claim the design is fully simplified.");
+    } else if (report.success && fixpoint.changedCount == 0) {
+        report.addWarning("No local simplification opportunities were found.");
+    }
+    return report;
 }
 
 // 反覆執行安全 cleanup pass，直到 fixpoint。
 // 適合對應「trim/prune/remove unused or redundant logic」這類高階 prompt。
-int Netlist::runSafeCleanupFixpoint(const request_time_budget::RequestDeadline* deadline) {
-    int total = 0;
-    for (;;) {
-        if (deadline && deadline->expired()) break;
+FixpointResult Netlist::runSafeCleanupFixpoint(
+    const request_time_budget::RequestDeadline* deadline) {
+    FixpointResult result;
 
-        int round = 0;
-        round += runLocalSimplificationFixpoint(deadline);
-        round += mergeStructurallyEquivalentGates();
+    auto expired = [&]() { return deadline != nullptr && deadline->expired(); };
+
+    for (;;) {
+        if (expired()) { result.timedOut = true; break; }
+
+        const FixpointResult local = runLocalSimplificationFixpoint(deadline);
+        result.changedCount += local.changedCount;
+        if (local.timedOut) { result.timedOut = true; break; }
+
+        int outer = 0;
+        outer += static_cast<int>(mergeStructurallyEquivalentGates().mergedGateCount);
+        if (expired()) {
+            result.changedCount += outer;
+            result.timedOut = true;
+            break;
+        }
 
         DeadLogicOptions options;
         options.deadline = deadline;
-        round += static_cast<int>(removeDeadLogic(options).removedGateCount);
+        const DeadLogicSummary dead = removeDeadLogic(options);
+        outer += static_cast<int>(dead.removedGateCount);
+        if (dead.timedOut) result.timedOut = true;
 
-        total += round;
-        if (round == 0) break;
+        result.changedCount += outer;
+        ++result.roundCount;
+        if (outer == 0 || result.timedOut) break;
     }
-    return total;
+    return result;
 }
 
-NetlistEditReport Netlist::runSafeCleanupFixpointWithReport(const request_time_budget::RequestDeadline* deadline) {
+NetlistEditReport Netlist::runSafeCleanupFixpointWithReport(
+    const request_time_budget::RequestDeadline* deadline) {
     Netlist before = cloneForRollback();
 
-    int changedCount = runSafeCleanupFixpoint(deadline);
+    const FixpointResult fixpoint = runSafeCleanupFixpoint(deadline);
+
     NetlistEditReport report = finalizeEditReport(
         *this,
         before,
-        changedCount,
+        fixpoint.changedCount,
         "runSafeCleanupFixpoint",
         NetlistEditOperationKind::Simplification,
-        "Safe cleanup fixpoint completed.",
+        fixpoint.timedOut
+            ? "Safe cleanup fixpoint stopped at the time limit; the design was not fully cleaned."
+            : "Safe cleanup fixpoint completed.",
         "Safe cleanup fixpoint failed validation and was rolled back.",
         EquivalenceCheckMethod::LocalRewriteRule,
         "Equivalence certified by composing safe local rewrite, structural cleanup, and unreachable-logic removal rules.",
         false);
 
-    if (report.success && changedCount == 0) {
+    CleanupFixpointSummary summary;
+    summary.changedCount = static_cast<size_t>(std::max(0, fixpoint.changedCount));
+    summary.roundCount   = static_cast<size_t>(std::max(0, fixpoint.roundCount));
+    summary.timedOut     = fixpoint.timedOut;
+    report.cleanupFixpoint = summary;
+
+    if (fixpoint.timedOut) {
+        report.addWarning(
+            "Cleanup did not converge within the time limit; more cleanup opportunities "
+            "may remain. Do not claim the design is fully cleaned.");
+    } else if (report.success && fixpoint.changedCount == 0) {
         report.addWarning("No safe cleanup opportunities were found.");
     }
-
     return report;
 }
 
@@ -3012,19 +3315,6 @@ std::vector<SimulationSignature> computeObservabilityMasks(
     return obs;
 }
 
-// 取得（必要時建立）值為 value 的常數 net。
-// parser 把 Verilog 字面值直接當 net 名，因此常數 net 一律用正規名字。
-int ensureConstantNet(Netlist& netlist, int value) {
-    const std::string name = (value == 1) ? "1'b1" : "1'b0";
-    const int existing = netlist.getNetId(name);
-    
-    if (netlist.isValidNetId(existing) && !netlist.getNet(existing).isRemoved) {
-        return existing;
-    }
-    
-    return netlist.addNet(name); 
-}
-
 } // namespace
 
 namespace {
@@ -3130,10 +3420,13 @@ void Netlist::removeConstantRedundancy(
 
     eqeng::Primitives& primitives = booleanPrimitives();
 
-    // 只做模擬分類，不做完整 SAT 驗證。
-    // equivalence_report() 內部會 ensure_fraig(true)，在 1M gates 下太貴。
-    primitives.request_fraig_sweep(false);
-    diagnostics.fraigComplete = primitives.fraig_complete();
+    // sweep 用整個 request 的 deadline，不自己起算碼表。
+    // 截斷時未掃描的節點會讓 fraig_lookup 回 Unknown 而退回 SAT，
+    // 結果仍然正確，只是少了查表加速 —— 因此 truncated 不影響完整性。
+    eqeng::FraigDeadlineScope guard(primitives, options.deadline);
+    primitives.request_fraig_sweep(false);          // simulate-only
+    diagnostics.fraigComplete  = primitives.fraig_complete();
+    diagnostics.fraigTruncated = primitives.fraig_sweep_truncated();
 
     const SimulationResult simulation =
         simulateNetlist(*this, options.simulationPatternCount);
@@ -3179,14 +3472,21 @@ void Netlist::removeConstantRedundancy(
         const bool targetValue = allOne;
         const eqeng::EquivResult result = primitives.is_const_checked(
             *signal, targetValue, options.perQuerySeconds);
+        if (result == eqeng::EquivResult::Unknown) {
+            // 「沒證出來」不等於「證明不是常數」。這是 partial 結果，
+            // 必須反映在完整性上，否則會漏掉可移除的邏輯卻宣稱搜尋完整。
+            ++diagnostics.constantUnknownCount;
+            continue;
+        }
         if (result != eqeng::EquivResult::Equal) {
+            // NotEqual：確定不是常數，這是完整的否定結論。
             ++diagnostics.constantNetSkippedCount;
             continue;
         }
         confirmed.emplace_back(netId, targetValue ? 1 : 0);
     }
 
-    diagnostics.constantPhaseComplete = !summary.timedOut;
+    diagnostics.constantPhaseComplete = !summary.timedOut && diagnostics.constantUnknownCount == 0;
 
     // ---- Apply ----
     // 先全部確認完再一次套用：中途改動 netlist 會 bump revision，
@@ -3236,11 +3536,12 @@ void Netlist::removeSinglePathRedundancy(
             if (!isValidNetId(netId) || nets[netId].isRemoved) continue;
             if (!simulation.known[netId]) continue;
 
-            ++diagnostics.pinCandidateCount;
+            // 一根 pin 有 sa0/sa1 兩個 fault。計數單位統一成 fault，
+            // 才能和 rejected / examined / aborted 對得起來。
+            diagnostics.pinCandidateCount += 2;
 
-            // Boolean 等價不代表時序安全：CK/RN/SN 的 cone 一律排除。
             if (controlCone[netId] != 0) {
-                ++diagnostics.pinSkippedDffControl;
+                diagnostics.pinSkippedDffControl += 2;
                 continue;
             }
 
@@ -3248,6 +3549,10 @@ void Netlist::removeSinglePathRedundancy(
                 if (options.deadline && options.deadline->expired()) {
                     summary.timedOut = true;
                     break;
+                }
+                if (diagnostics.satChecks >= options.maxSatChecks) {
+                    ++diagnostics.satBudgetExhausted;
+                    continue;
                 }
 
                 // 模擬篩選：obs & (value ⊕ stuck) 非零 ⟹ 一定可測。
@@ -3327,19 +3632,71 @@ void Netlist::removeSinglePathRedundancy(
     }
 
     diagnostics.satPhaseComplete =
-        !summary.timedOut && diagnostics.abortedCandidateCount == 0;
+        !summary.timedOut &&
+        diagnostics.abortedCandidateCount == 0 &&
+        diagnostics.satBudgetExhausted == 0;
 
     // ---- Apply ----
     // 候選之間不獨立：移除一個 redundancy 可能讓另一個變成必要的。
-    // 沒有 whole-design CEC 當安全網，因此一次只套用一個；
-    // 其餘留待下一次呼叫重新證明。
+    // 但 fanout cone 互不相交的候選彼此無法影響，可以安全地一起套用 ——
+    // 這比「一次只套一個」實用得多，又不需要重新證明。
+    //
+    // claimedNet 標記已被套用候選的 fanout cone 覆蓋的 net。
+    // seenStamp + stamp 是共用的 visited buffer，避免每個候選都配置一個 vector。
     if (!proven.empty()) {
-        const RedundantPin& pin = proven.front();
-        const int constNetId = ensureConstantNet(*this,pin.stuckValue ? 1 : 0);
-        if (isValidNetId(constNetId) && isValidGateId(pin.gateId)) {
-            Gate& target = getGateMutable(pin.gateId);
-            const int oldNetId = target.inputNetIds[pin.pinIndex];
-            target.inputNetIds[pin.pinIndex] = constNetId;
+        std::vector<uint8_t> claimedNet(nets.size(), 0);
+        std::vector<uint32_t> seenStamp(nets.size(), 0);
+        uint32_t stamp = 0;
+        std::vector<int> work;
+
+        // 走 netId 的 transitive fanout，對每個 net 呼叫 visit。
+        // DFF 是 sequential boundary，不穿透。
+        auto walkFanout = [&](int startNetId, const auto& visit) {
+            ++stamp;
+            work.clear();
+            work.push_back(startNetId);
+            while (!work.empty()) {
+                const int netId = work.back();
+                work.pop_back();
+                if (!isValidNetId(netId)) continue;
+                if (seenStamp[netId] == stamp) continue;
+                seenStamp[netId] = stamp;
+                if (!visit(netId)) return false;
+                for (int loadId : nets[netId].loadGateIds) {
+                    if (!isValidGateId(loadId) || isGateRemoved(loadId)) continue;
+                    if (gates[loadId].type == GateType::DFF) continue;
+                    const int outNet = gates[loadId].outputNetId;
+                    if (isValidNetId(outNet)) work.push_back(outNet);
+                }
+            }
+            return true;
+        };
+
+        for (const RedundantPin& pin : proven) {
+            if (!isValidGateId(pin.gateId) || isGateRemoved(pin.gateId)) continue;
+            const int outNet = gates[pin.gateId].outputNetId;
+            if (!isValidNetId(outNet)) continue;
+
+            // 先探測：這個候選的 fanout cone 是否碰到已套用的區域。
+            const bool free = walkFanout(outNet, [&](int netId) {
+                return claimedNet[netId] == 0;
+            });
+            if (!free) {
+                ++diagnostics.deferredOverlapCount;
+                continue;
+            }
+
+            const int constNetId = ensureConstantNet(*this, pin.stuckValue ? 1 : 0);
+            if (!isValidNetId(constNetId)) continue;
+            // ensureConstantNet 可能 addNet 讓 nets 重新配置，
+            // 兩個以 nets.size() 為長度的 bitmap 必須同步擴充。
+            if (claimedNet.size() < nets.size()) {
+                claimedNet.resize(nets.size(), 0);
+                seenStamp.resize(nets.size(), 0);
+            }
+
+            const int oldNetId = gates[pin.gateId].inputNetIds[pin.pinIndex];
+            gates[pin.gateId].inputNetIds[pin.pinIndex] = constNetId;
             if (isValidNetId(oldNetId)) {
                 auto& loads = nets[oldNetId].loadGateIds;
                 loads.erase(std::remove(loads.begin(), loads.end(), pin.gateId),
@@ -3347,11 +3704,18 @@ void Netlist::removeSinglePathRedundancy(
             }
             nets[constNetId].loadGateIds.push_back(pin.gateId);
             ++summary.provenRedundantPinCount;
-            markDirty();
+
+            // 佔用這個候選的 fanout cone，之後重疊的候選一律延後。
+            walkFanout(outNet, [&](int netId) {
+                claimedNet[netId] = 1;
+                return true;
+            });
         }
-        if (proven.size() > 1) {
-            diagnostics.satPhaseComplete = false;   // 還有未套用的候選
+
+        if (diagnostics.deferredOverlapCount > 0) {
+            diagnostics.satPhaseComplete = false;
         }
+        if (summary.provenRedundantPinCount > 0) markDirty();
     }
 }
 
@@ -3360,70 +3724,266 @@ NetlistEditReport Netlist::removeRedundantLogicWithReport(
 
     const auto startedAt = std::chrono::steady_clock::now();
     Netlist before = cloneForRollback();
+    const NetlistStats startStats = before.collectNetlistStats();
+    const size_t gatesAtStart = startStats.activeGateCount;
+    const size_t netsAtStart  = startStats.activeNetCount;
 
     RedundancyRemovalSummary summary;
     RedundancyDiagnostics diagnostics;
 
-    // 兩個階段固定依序執行：常數傳播先把候選規模壓下來，
-    // 單路徑 stuck-at 分析才有合理的成本。
-    removeConstantRedundancy(options, summary, diagnostics);
-    if (!summary.timedOut) {
-        removeSinglePathRedundancy(options, summary, diagnostics);
+    // 總預算：deadline 的 budgetSeconds() 是這個 request 一開始的額度，
+    // 不隨時間遞減，適合當比例的分母。
+    const double totalBudget =
+        (options.deadline != nullptr && options.deadline->valid())
+            ? options.deadline->budgetSeconds()
+            : options.assumedBudgetSeconds;
+
+    auto hasBudget = [&](double fraction, double floorSeconds) {
+        if (options.deadline == nullptr) return true;
+        const double need = std::max(floorSeconds, totalBudget * fraction);
+        return options.deadline->remainingSeconds() > need;
+    };
+
+    // 每個 SAT 階段之後都要再化簡一次：常數傳播、merge 與 pin tie-off
+    // 都會製造新的化簡機會（常數輸入、same-input gate、失去 load 的邏輯）。
+    auto runCleanup = [&]() {
+        if (!hasBudget(options.minStageFraction, options.minStageFloorSeconds)) return;
+        const FixpointResult result = runSafeCleanupFixpoint(options.deadline);
+        diagnostics.structuralChangedCount += result.changedCount;
+        if (result.timedOut) summary.timedOut = true;
+    };
+
+    // ---- 階段 1：結構化簡到 fixpoint ----
+    // 涵蓋 constant folding、same/complementary input、buffer/inverter 清理、
+    // structural duplicate merge 與 dead logic。這是 gate 縮減的主力，
+    // 也讓後續昂貴的 SAT 階段面對已經縮小過的電路。
+    runCleanup();
+
+    // ---- 階段 2：SAT-proven 常數傳播 ----
+    if (!summary.timedOut &&
+        hasBudget(options.minSatStageFraction, options.minSatStageFloorSeconds)) {
+        removeConstantRedundancy(options, summary, diagnostics);
+        if (diagnostics.constantNetTiedCount > 0) runCleanup();
+    } else if (!summary.timedOut) {
+        diagnostics.constantPhaseComplete = false;
     }
 
-    // 收尾：把因常數傳播 / pin tie-off 而失去所有 load 的邏輯一次清掉。
+    // ---- 階段 3：SAT-proven functional merge ----
+    // 它內部有 whole-design SAT 與自己的 rollback；失敗只會退回本階段開始時的
+    // 狀態，不影響前面已完成的縮減。成本最高，所以門檻也最高。
+    if (!summary.timedOut &&
+        hasBudget(options.minFunctionalMergeFraction,
+                  options.minFunctionalMergeFloorSeconds)) {
+        // 分一半剩餘時間給它，另一半留給後面的 stuck-at 與收尾。
+        const double mergeBudget = options.deadline
+            ? options.deadline->remainingSeconds() * 0.5
+            : totalBudget * 0.3;
+        const NetlistEditReport mergeReport = mergeFunctionallyEquivalentGatesWithReport(
+            TargetScope::WHOLE_NETLIST,
+            std::string(),
+            GateType::UNKNOWN,
+            options.simulationPatternCount,
+            mergeBudget);
+        if (mergeReport.success && mergeReport.functionalMerge) {
+            diagnostics.mergedFunctionalCount =
+                mergeReport.functionalMerge->mergedGateCount;
+        }
+        if (diagnostics.mergedFunctionalCount > 0) runCleanup();
+    } else {
+        diagnostics.functionalMergeSkipped = true;
+    }
+
+    // ---- 階段 4：單路徑 untestable stuck-at ----
+    // 放在所有 merge 之後：它的單路徑判定依賴 fanout 結構，
+    // 而 merge 會改變 fanout；此時的電路也已經是最小的，候選最少。
+    if (!summary.timedOut &&
+        hasBudget(options.minSatStageFraction, options.minSatStageFloorSeconds)) {
+        removeSinglePathRedundancy(options, summary, diagnostics);
+        if (summary.provenRedundantPinCount > 0) runCleanup();
+    } else if (!summary.timedOut) {
+        diagnostics.satPhaseComplete = false;
+    }
+
+    // ---- 階段 5：收尾 ----
     DeadLogicOptions deadLogicOptions;
     deadLogicOptions.deadline = options.deadline;
     const DeadLogicSummary dead = removeDeadLogic(deadLogicOptions);
+    if (dead.timedOut) summary.timedOut = true;
+    removeUnusedNets();
 
-    summary.removedGateCount = dead.removedGateCount;
-    summary.removedNetCount  = dead.removedNetCount;
-    summary.timedOut = summary.timedOut || dead.timedOut;
+    // ---- 統計 ----
+    // 多個階段都會移除 gate，不能只讀某一個 pass 的數字；
+    // 用 before/after 的 active count 差才是這次操作的總縮減量。
+    const NetlistStats afterStats = collectNetlistStats();
+    summary.removedGateCount = gatesAtStart > afterStats.activeGateCount
+        ? gatesAtStart - afterStats.activeGateCount : 0;
+    summary.removedNetCount = netsAtStart > afterStats.activeNetCount
+        ? netsAtStart - afterStats.activeNetCount : 0;
+
     summary.complete =
         diagnostics.constantPhaseComplete &&
         diagnostics.satPhaseComplete &&
-        diagnostics.fraigComplete &&
+        !diagnostics.functionalMergeSkipped &&
         !summary.timedOut;
     summary.elapsedSeconds = std::chrono::duration<double>(
         std::chrono::steady_clock::now() - startedAt).count();
 
-    const int changedCount = static_cast<int>(
-        summary.removedGateCount + diagnostics.constantNetTiedCount);
-
     NetlistEditReport report = finalizeEditReport(
-        *this, before, changedCount,
+        *this, before,
+        static_cast<int>(summary.removedGateCount),
         "removeRedundantLogic",
         NetlistEditOperationKind::Simplification,
         "Redundant logic removal completed.",
         "Redundant logic removal failed validation and was rolled back.",
-        EquivalenceCheckMethod::LocalRewriteRule,
-        "Equivalence certified by SAT-proven constant propagation and untestable "
-        "stuck-at fault removal, followed by unreachable-logic cleanup.");
+        EquivalenceCheckMethod::CertifiedRewrite,
+        "Equivalence certified by composing structural simplification, SAT-proven "
+        "constant propagation, SAT-proven duplicate merging, untestable stuck-at "
+        "fault removal, and unreachable-logic cleanup.");
 
     report.redundancyRemoval = summary;
 
     if (!summary.complete) {
         report.addWarning(
-            "Redundancy search did not complete. removed_gate_count is the number "
-            "found within the time budget, not the total present in the design.");
+            "Redundancy removal did not run every stage within the time budget. "
+            "removed_gate_count is what was achieved, not the total possible.");
     }
     if (diagnostics.constantNetSkippedPoCount > 0) {
         report.addWarning(
             "Constant primary-output nets were left unchanged to preserve port structure.");
     }
 
-    // 分階段統計只給開發者，不進 report。
-    std::cerr << "[removeRedundantLogic] const_candidates="
-              << diagnostics.constantNetCandidateCount
+    std::cerr << "[removeRedundantLogic]"
+              << " structural=" << diagnostics.structuralChangedCount
+              << " const_candidates=" << diagnostics.constantNetCandidateCount
               << " const_tied=" << diagnostics.constantNetTiedCount
-              << " const_skipped_po=" << diagnostics.constantNetSkippedPoCount
+              << " const_unknown=" << diagnostics.constantUnknownCount
+              << " func_merged=" << diagnostics.mergedFunctionalCount
+              << " func_skipped=" << (diagnostics.functionalMergeSkipped ? "yes" : "no")
               << " pin_candidates=" << diagnostics.pinCandidateCount
-              << " pin_rejected_by_sim=" << diagnostics.pinRejectedBySimulation
-              << " pin_skipped_reconv=" << diagnostics.pinSkippedReconvergent
-              << " pin_skipped_dff_ctrl=" << diagnostics.pinSkippedDffControl
               << " sat_checks=" << diagnostics.satChecks
-              << " aborted=" << diagnostics.abortedCandidateCount
-              << " dead_removed=" << dead.removedGateCount << "\n";
+              << " proven_pins=" << summary.provenRedundantPinCount
+              << " dead_removed=" << dead.removedGateCount
+              << " total_removed=" << summary.removedGateCount
+              << " elapsed=" << summary.elapsedSeconds << "\n";
 
+    return report;
+}
+
+DffMergeSummary Netlist::mergeDuplicateDffs() {
+    DffMergeSummary summary;
+
+    std::unordered_map<DffPinKey, int, DffPinKeyHash> canonicalByKey;
+    std::unordered_set<size_t> mergedKeyHashes;
+    const DffPinKeyHash hasher;
+
+    for (int gateId = 0; gateId < static_cast<int>(gates.size()); ++gateId) {
+        if (!isSafeDffMergeCandidate(*this, gateId)) continue;
+
+        const DffPinKey key = makeDffPinKey(*this, gateId);
+        if (key.hasUnknownPin) continue;   // 無法安全比對的 pin 組合
+
+        auto canonicalIt = canonicalByKey.find(key);
+        if (canonicalIt == canonicalByKey.end()) {
+            canonicalByKey.emplace(key, gateId);
+            continue;
+        }
+
+        int keepGateId = canonicalIt->second;
+        if (!isSafeDffMergeCandidate(*this, keepGateId) ||
+            !(makeDffPinKey(*this, keepGateId) == key)) {
+            canonicalIt->second = gateId;
+            continue;
+        }
+        if (keepGateId == gateId) continue;
+
+        int deadGateId = gateId;
+        int keepOutNet = gates[keepGateId].outputNetId;
+        int deadOutNet = gates[deadGateId].outputNetId;
+
+        // 兩顆 Q 都是 PO：合併會讓兩個 port 指向同一條 net，破壞 port 對應。
+        const bool keepIsPo = nets[keepOutNet].isPO;
+        const bool deadIsPo = nets[deadOutNet].isPO;
+        if (keepIsPo && deadIsPo) {
+            ++summary.skippedPoCount;
+            continue;
+        }
+        if (deadIsPo) {
+            std::swap(keepGateId, deadGateId);
+            std::swap(keepOutNet, deadOutNet);
+            canonicalIt->second = keepGateId;
+        }
+        if (keepOutNet == deadOutNet) continue;
+
+        // 任一顆的 Q 出現在共用的 D cone 裡時，合併可能把時序回授
+        // 折成組合迴路。D 未接（-1）時沒有 cone 可查，直接視為安全。
+        if (key.d >= 0 &&
+            (outputDependsOnNet(*this, key.d, keepOutNet) ||
+             outputDependsOnNet(*this, key.d, deadOutNet))) {
+            ++summary.skippedFeedbackCount;
+            continue;
+        }
+
+        std::vector<int> affectedGateIds;
+        if (!collectActiveStructuralLoads(*this, deadOutNet, affectedGateIds) ||
+            !replaceAllLoadsOfNet(deadOutNet, keepOutNet)) {
+            continue;
+        }
+
+        nets[deadOutNet].driverGateId = -1;
+        gates[deadGateId].type = GateType::UNKNOWN;
+        gates[deadGateId].outputNetId = -1;
+        gates[deadGateId].inputNetIds.clear();
+        gates[deadGateId].inputPinNames.clear();
+        ++summary.mergedDffCount;
+        mergedKeyHashes.insert(hasher(key));
+    }
+
+    summary.equivalenceClassCount = mergedKeyHashes.size();
+
+    if (summary.mergedDffCount > 0) {
+        rebuildNetLoadGateIds(*this);
+        markDirty();
+    }
+    return summary;
+}
+
+DffMergeSummary Netlist::mergeDuplicateDffsToFixpoint() {
+    DffMergeSummary total;
+    for (;;) {
+        const DffMergeSummary round = mergeDuplicateDffs();
+        total.mergedDffCount        += round.mergedDffCount;
+        total.equivalenceClassCount += round.equivalenceClassCount;
+        total.skippedPoCount         = round.skippedPoCount;
+        total.skippedFeedbackCount   = round.skippedFeedbackCount;
+        if (round.mergedDffCount == 0) break;
+    }
+    return total;
+}
+
+NetlistEditReport Netlist::mergeDuplicateDffsWithReport() {
+    Netlist before = cloneForRollback();
+    const DffMergeSummary summary = mergeDuplicateDffsToFixpoint();
+
+    NetlistEditReport report = finalizeEditReport(
+        *this,
+        before,
+        static_cast<int>(summary.mergedDffCount),
+        "mergeDuplicateDffs",
+        NetlistEditOperationKind::Simplification,
+        "Duplicate flip-flop merge completed.",
+        "Duplicate flip-flop merge failed validation and was rolled back.",
+        EquivalenceCheckMethod::StructuralIdentity,
+        "Equivalence certified because merged registers share identical D, CK, RN, and SN connections.",
+        false);
+
+    report.dffMerge = summary;
+    if (report.success && summary.mergedDffCount == 0) {
+        report.addWarning("No duplicate flip-flop was found.");
+    }
+    if (summary.skippedPoCount > 0) {
+        report.addWarning(
+            "Some duplicate register pairs were skipped because both Q outputs are "
+            "primary outputs and merging would collapse two ports onto one net.");
+    }
     return report;
 }

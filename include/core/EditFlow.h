@@ -13,7 +13,8 @@ enum class TargetScope {
     NET_FANIN,
     NET_FANOUT,
     GATE_FANIN,
-    GATE_FANOUT
+    GATE_FANOUT,
+    SINGLE_GATE
 };
 
 class Netlist;
@@ -59,6 +60,7 @@ enum class EditCommandKind {
     MergeEquivalentGates, // Legacy/internal structural merge alias；不可作為 functional merge 對外公開
     MergeStructurallyEquivalentGates,
     MergeFunctionallyEquivalentGates,
+    MergeDuplicateDffs,
     SimplifyConstants,
     SimplifySameInput,
     RemoveRedundantLogic,
@@ -137,8 +139,25 @@ struct DeadLogicOptions {
 };
 
 struct RedundancyRemovalOptions {
-    size_t simulationPatternCount = 256;
-    // Layer B 每個候選 pin 的 SAT 上限；總預算另由 deadline 控制。
+    size_t simulationPatternCount = 1024;
     double perQuerySeconds = 0.5;
+    size_t maxSatChecks = 20000;
+
+    // 各階段的進入門檻：剩餘時間必須高於「總預算 × fraction」才開始該階段。
+    // 用比例而非固定秒數，題目給 30 秒或 290 秒都能得到合理的階段分配。
+    // floor 是絕對下限，避免預算極小時用 3 秒去啟動一個昂貴階段
+    // —— 那只會在內部 timeout，把時間浪費掉而沒有任何產出。
+    double minStageFraction      = 0.05;   // 便宜的結構化簡
+    double minStageFloorSeconds  = 1.0;
+
+    double minSatStageFraction     = 0.15;  // Layer A / Layer B
+    double minSatStageFloorSeconds = 5.0;
+
+    double minFunctionalMergeFraction     = 0.30;  // functional merge 最貴
+    double minFunctionalMergeFloorSeconds = 15.0;
+
+    // deadline 為 nullptr 時假定的總預算，只用來換算 fraction。
+    double assumedBudgetSeconds = request_time_budget::kGeneralToolBudgetSeconds;
+
     const request_time_budget::RequestDeadline* deadline = nullptr;
 };

@@ -4,7 +4,7 @@
 #include "include/core/MockturtleConverter.h"
 #include "include/core/TechMapper.h"
 #include "include/core/RequestTimeBudget.h"
-#include "include/core/DepthOptimizerRequest.h"
+#include "include/core/OptimizerRequest.h"
 #include <vector>
 #include <algorithm>
 #include <mockturtle/networks/aig.hpp>
@@ -30,6 +30,7 @@
 #include <mockturtle/algorithms/node_resynthesis/xag_npn.hpp>
 #include <mockturtle/algorithms/mig_resub.hpp>
 #include <mockturtle/algorithms/node_resynthesis/mig_npn.hpp>
+#include <mockturtle/algorithms/node_resynthesis/sop_factoring.hpp>
 #include <mockturtle/algorithms/refactoring.hpp>
 
 // 定義常數
@@ -105,7 +106,7 @@ struct CutScore {
 // =========================================================================
 // 深度最佳化引擎設定 (Hyperparameters & Constraints)
 // =========================================================================
-struct DepthOptimizerConfig {
+struct OptimizerConfig {
     // 面積限制設定 (Area Constraints)
     // -1 表示「不限制」單一 Critical Path 最佳化時增加的邏輯閘數量 (Default)
     int maxAreaIncreasePerPath;    
@@ -115,7 +116,7 @@ struct DepthOptimizerConfig {
     // 若大於 0，則作為單一 Critical Path 最佳化時的目標深度限制
     int targetDepthPerPath;
 
-    depth_opt::IterationPolicy stage2Policy;   // Stage 2 的迭代與 patience 設定
+    opt::IterationPolicy stage2Policy;   // Stage 2 的迭代與 patience 設定
 
     // Stage 2 離開迴圈後還要做「最終 lowering + 結算量測」,這段時間不能被砍。
     // 實際保留值會依閘數放大,這是下限。
@@ -130,7 +131,7 @@ struct DepthOptimizerConfig {
     // 想要最保守就打開。
     bool rollbackOnInconclusiveEquivalence;
 
-    DepthOptimizerConfig() {
+    OptimizerConfig() {
         maxAreaIncreasePerPath = -1;
         targetDepthPerPath = -1;
         finalizeReserveSeconds = 3.0;
@@ -149,64 +150,42 @@ struct DepthOptimizerConfig {
 //
 // 縮減成功與否以及面積的變化會回傳在 OptimizationResult 之中。
 // =========================================================================
-class DepthOptimizer {
+class Optimizer {
 public:
     // 初始化時傳入設定，若不傳則使用預設值
-    explicit DepthOptimizer(const DepthOptimizerConfig& config = DepthOptimizerConfig());
+    explicit Optimizer(const OptimizerConfig& config = OptimizerConfig());
 
     // -------------------------------------------------------------------------
     // 高階入口 API (High-Level APIs)
     // -------------------------------------------------------------------------
 
-    // Critical Path 最佳化主控流程
-    //
-    // ============================ 整體流程總覽 ============================
-    // 依「題目約束的類型」分派到不同路徑。約束分三大類：
-    //
-    //  (A) 純基底題（bannedTypes 空 + allowed 剛好是 AIG 或 XAG 的閘集）
-    //        → 對應 mockturtle 網路直接優化，優化完即輸出，不做反相吸收
-    //
-    //  (B) 全域一般限制題（允許複合閘、或禁止某些基礎閘，但非純 AIG/XAG）
-    //        → 先用 XAG 自由優化取得最小深度
-    //        → 【基底強制】把「被禁止的基礎閘」換成允許的等價組合（合規，不可選）
-    //        → 【反相吸收】把散落的 NOT 吃進 NAND/NOR/XNOR（省深度，機會型）
-    //        → 輸出
-    //
-    //  (C) 局部 Cone 限制題（某個 cone 內部只能用特定閘集）
-    //        → 先把整個電路當「無限制」自由優化（XAG）
-    //        → 切出受限 cone（K-feasible cut 界定範圍）
-    //        → 對該 cone 依受限基底重合成（exact synthesis / 受限 resynth）
-    //        → 縫回原電路
-    //        → 輸出
-    //
-    // 每個階段之後都做 trimDeadLogic 清死邏輯，結算前必做一次確保面積正確。
-    // =====================================================================
-
     // cost target 與 basis scope 分離。動作路徑不因 cost metric 改變：
     // 一律全域最佳化，cost metric 只影響候選挑選與回報。
-    OptimizationResult executeCriticalPathOptimization(
+    OptimizationResult executeOptimization(
         Netlist& netlist,
         TechMapper& techMapper,
-        const depth_opt::OptimizationRequest& request,
+        const opt::OptimizationRequest& request,
         bool verbose = false,
         const request_time_budget::RequestDeadline* requestDeadline = nullptr);
 
 private:
-    friend struct DepthOptimizerTestAccess;
+    friend struct OptimizerTestAccess;
 
-    DepthOptimizerConfig config; // 用來儲存引擎的設定值
+    OptimizerConfig config; // 用來儲存引擎的設定值
 
     // Stage 2 單一路徑所需的全部輸入。兩條路徑共用，確保分數可比。
     struct Stage2Context {
         const Netlist* templateNetlist = nullptr;   // PI/PO/DFF 介面來源
-        const depth_opt::OptimizationRequest* request = nullptr;
+        const opt::OptimizationRequest* request = nullptr;
         const lowering::LoweringSpec* loweringSpec = nullptr;
         bool* loweringActive = nullptr;             // 兩條路徑共享，失敗即全域關閉
-        depth_opt::IterationPolicy policy;
+        opt::IterationPolicy policy;
         const request_time_budget::RequestDeadline* deadline = nullptr;
         double reserveSeconds = 0.0;                // 離開 Stage 2 後仍需要的時間
         double firstIterEstimate = 0.0;
         bool verbose = false;
+        // 由 cost metric 推導。決定 Stage 2 跑哪一組 mockturtle pass。
+        OptimizationGoal goal = OptimizationGoal::DEPTH;
     };
 
     enum class Stage2StopReason {
@@ -219,7 +198,7 @@ private:
         bool ok = false;
         std::string name;
         Netlist netlist;                            // 已 lowering、已合規
-        depth_opt::CostMeasurement cost;
+        opt::CostMeasurement cost;
         int    iterationsRun = 0;
         double elapsedSeconds = 0.0;
 
@@ -264,8 +243,8 @@ private:
     // 這是 Stage 2 唯一的評估入口——所有候選都必須經過同一條路徑，
     // 否則不同候選的分數不可比。
     template <typename NtkT, typename ToNetlistFn>
-    depth_opt::CostMeasurement evaluateCandidate(const NtkT& ntk,
+    opt::CostMeasurement evaluateCandidate(const NtkT& ntk,
                                                  const Netlist& templateNetlist,
                                                  ToNetlistFn&& toNetlist,
-                                                 const depth_opt::CostTarget& cost);
+                                                 const opt::CostTarget& cost);
 };

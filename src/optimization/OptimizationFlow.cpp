@@ -1,5 +1,5 @@
 #include "include/core/Netlist.h"
-#include "include/core/DepthOptimizer.h"
+#include "include/core/Optimizer.h"
 #include "include/core/TechMapper.h"
 #include "include/core/OptimizationFlow.h"
 
@@ -19,11 +19,25 @@ std::string optPassKindName(OptPassKind passKind) {
             return "collapse_double_inverter";
         case OptPassKind::LocalSimplificationFixpoint:
             return "local_simplification_fixpoint";
-        case OptPassKind::CriticalPathDepth:
-            return "critical_path_depth";
+        case OptPassKind::DepthMinimization:
+            return "critical_path_depth";   // 對外協定名，不隨型別改名而變
+        case OptPassKind::GateCountMinimization:
+            return "gate_count_minimization";
         default:
             return "unknown";
     }
+}
+
+// passKind 決定量什麼、costScope 決定量哪裡。兩者合起來就是核心的 CostMetric。
+// 這是「request -> metric」的唯一定義處；報表字串一律由 opt::toString 產生，
+// 避免同一組字串在 CostChange 與 OptimizationSummary 各寫一份而漂移。
+opt::CostMetric costMetricOf(const OptApplyRequest& request) {
+    const bool areaGoal  = (request.passKind == OptPassKind::GateCountMinimization);
+    const bool coneScoped = (request.costScope == OptCostScope::ScopedFaninCone);
+    return areaGoal ? (coneScoped ? opt::CostMetric::ConeGateCount
+                                  : opt::CostMetric::GlobalGateCount)
+                    : (coneScoped ? opt::CostMetric::ConeDepth
+                                  : opt::CostMetric::GlobalMaxDepth);
 }
 
 std::string optimizationStatusName(OptimizationStatus status) {
@@ -59,15 +73,11 @@ std::string targetScopeName(TargetScope scope) {
             return "gate_fanin";
         case TargetScope::GATE_FANOUT:
             return "gate_fanout";
+        case TargetScope::SINGLE_GATE: 
+            return "SINGLE_GATE";
         default:
             return "unknown";
     }
-}
-
-std::string depthObjectiveName(OptDepthObjective objective) {
-    return objective == OptDepthObjective::ScopedFaninCone
-        ? "scoped_fanin_cone_depth"
-        : "global_maximum_depth";
 }
 
 bool isCombinationalGateType(GateType type) {
@@ -86,10 +96,10 @@ bool isCombinationalGateType(GateType type) {
     }
 }
 
-bool isValidDepthObjective(OptDepthObjective objective) {
-    switch (objective) {
-        case OptDepthObjective::GlobalMaximum:
-        case OptDepthObjective::ScopedFaninCone:
+bool isValidCostScope(OptCostScope scope) {
+    switch (scope) {
+        case OptCostScope::WholeDesign:
+        case OptCostScope::ScopedFaninCone:
             return true;
         default:
             return false;
@@ -155,6 +165,47 @@ bool scopeSatisfiesGateConstraints(
     return true;
 }
 
+// 兩區域的 gate 約束檢查。
+//   basisScope == WHOLE_NETLIST：整張 netlist 對 outside*Types 檢查
+//   basisScope == cone         ：cone 內對 cone*Types，cone 外對 outside*Types
+// 舊版只檢查單一 scope，cone 外完全沒驗 —— 異質 basis 題會給出錯誤的 true，
+// 讓一張違反 cone 外約束的電路被接受。
+bool designSatisfiesGateConstraints(
+    const Netlist& netlist,
+    TargetScope basisScope,
+    const std::string& basisScopeName,
+    const std::vector<GateType>& coneAllowed,
+    const std::vector<GateType>& coneBanned,
+    const std::vector<GateType>& outsideAllowed,
+    const std::vector<GateType>& outsideBanned)
+{
+    const bool checkCone    = !coneAllowed.empty()    || !coneBanned.empty();
+    const bool checkOutside = !outsideAllowed.empty() || !outsideBanned.empty();
+    if (!checkCone && !checkOutside) return true;
+
+    std::unordered_set<int> coneGates;
+    if (basisScope != TargetScope::WHOLE_NETLIST) {
+        const RewriteScopeResolution resolved =
+            resolveRewriteScope(netlist, basisScope, basisScopeName);
+        if (!resolved.ok) return false;
+        const std::vector<int> ids = netlist.getConeGateIds(resolved.cone);
+        coneGates.insert(ids.begin(), ids.end());
+    }
+
+    for (int gateId = 0; gateId < static_cast<int>(netlist.getGateCount()); ++gateId) {
+        if (!netlist.isValidGateId(gateId) || netlist.isGateRemoved(gateId)) continue;
+        const GateType type = netlist.getGate(gateId).type;
+        if (!isCombinationalGateType(type)) continue;
+
+        if (coneGates.count(gateId)) {
+            if (checkCone && !gateTypeAllowed(type, coneAllowed, coneBanned)) return false;
+        } else {
+            if (checkOutside && !gateTypeAllowed(type, outsideAllowed, outsideBanned)) return false;
+        }
+    }
+    return true;
+}
+
 ConeQueryType coneQueryTypeForScope(TargetScope scope) {
     switch (scope) {
         case TargetScope::NET_FANOUT:
@@ -163,14 +214,18 @@ ConeQueryType coneQueryTypeForScope(TargetScope scope) {
             return ConeQueryType::GateTransitiveFanin;
         case TargetScope::GATE_FANOUT:
             return ConeQueryType::GateTransitiveFanout;
+        case TargetScope::SINGLE_GATE:
+            // opt_apply 不支援單一 gate scope（parsePublicOptApply 已拒絕）。
+            // 退回 gate fanin 只是為了讓 switch 完整，不應該實際走到。
+            return ConeQueryType::GateTransitiveFanin;
         case TargetScope::NET_FANIN:
         default:
             return ConeQueryType::NetTransitiveFanin;
     }
 }
 
-depth_opt::ConeRef makeConeRef(TargetScope scope, const std::string& name) {
-    depth_opt::ConeRef ref;
+opt::ConeRef makeConeRef(TargetScope scope, const std::string& name) {
+    opt::ConeRef ref;
     ref.type       = coneQueryTypeForScope(scope);
     ref.sourceName = name;
     return ref;
@@ -194,11 +249,13 @@ ResolvedBasisScope resolveBasisScope(const OptApplyRequest& request) {
         out.name  = request.basisScopeName;
         return out;
     }
+    // 舊呼叫端只有一組約束，語意是「有 gate 約束 + 非全域 scope = 約束該 cone」。
+    // 正規化之後那組約束在 outside*Types，推導成立時要搬回 cone 側。
     const bool hasGateConstraints =
-        !request.allowedTypes.empty() || !request.bannedTypes.empty();
+        !request.outsideAllowedTypes.empty() || !request.outsideBannedTypes.empty();
     if (hasGateConstraints &&
         request.scope != TargetScope::WHOLE_NETLIST &&
-        request.depthObjective == OptDepthObjective::GlobalMaximum) {
+        request.costScope == OptCostScope::WholeDesign) {
         out.scope    = request.scope;
         out.name     = request.scopeName;
         out.inferred = true;
@@ -206,14 +263,26 @@ ResolvedBasisScope resolveBasisScope(const OptApplyRequest& request) {
     return out;
 }
 
-int measureDepthObjective(const Netlist& netlist, const OptApplyRequest& request) {
-    if (request.depthObjective == OptDepthObjective::GlobalMaximum) {
-        return netlist.findGlobalCriticalPath().depth;
+int measureCostObjective(const Netlist& netlist, const OptApplyRequest& request) {
+    const bool areaGoal = (request.passKind == OptPassKind::GateCountMinimization);
+    const bool coneScoped = (request.costScope == OptCostScope::ScopedFaninCone);
+
+    if (!coneScoped) {
+        if (!areaGoal) return netlist.findGlobalCriticalPath().depth;
+        // 全域閘數含 DFF：DFF 數量在最佳化前後不變（常數偏移，不影響挑候選），
+        // 但回報的絕對值要跟評分器算的一致。
+        int total = 0;
+        for (const auto& pair : netlist.countGatesByType()) total += pair.second;
+        return total;
     }
 
     const RewriteScopeResolution resolved =
         resolveRewriteScope(netlist, request.scope, request.scopeName);
     if (!resolved.ok) return -1;
+
+    if (areaGoal) {
+        return static_cast<int>(netlist.getConeGateCount(resolved.cone));
+    }
 
     std::string rootName = resolved.resolvedRootNetName;
     if (rootName.empty() && !resolved.cone.rootNetIds.empty()) {
@@ -225,26 +294,32 @@ int measureDepthObjective(const Netlist& netlist, const OptApplyRequest& request
     return rootName.empty() ? -1 : netlist.getMaxDepthToNet(rootName);
 }
 
-DepthChange buildOptimizationDepthChange(
+CostChange buildOptimizationCostChange(
     const Netlist& before,
     const Netlist& after,
     const OptApplyRequest& request)
 {
-    DepthChange change;
-    change.endpointName = request.depthObjective == OptDepthObjective::GlobalMaximum
-        ? before.findGlobalCriticalPath().endpointName
-        : request.scopeName;
-    change.beforeDepth = measureDepthObjective(before, request);
-    change.afterDepth = measureDepthObjective(after, request);
-    change.targetDepth = request.targetDepth;
+    const bool areaGoal = (request.passKind == OptPassKind::GateCountMinimization);
+    const bool coneScoped = (request.costScope == OptCostScope::ScopedFaninCone);
+
+    CostChange change;
+    change.metricName = opt::toString(costMetricOf(request));
+    change.targetName = coneScoped
+        ? request.scopeName
+        : (areaGoal ? std::string("whole_netlist")
+                    : before.findGlobalCriticalPath().endpointName);
+
+    change.beforeValue = measureCostObjective(before, request);
+    change.afterValue  = measureCostObjective(after, request);
+    change.targetValue = request.targetCost;
     change.improved =
-        change.beforeDepth >= 0 &&
-        change.afterDepth >= 0 &&
-        change.afterDepth < change.beforeDepth;
+        change.beforeValue >= 0 &&
+        change.afterValue  >= 0 &&
+        change.afterValue  <  change.beforeValue;
     change.meetsTarget =
-        request.targetDepth >= 0 &&
-        change.afterDepth >= 0 &&
-        change.afterDepth <= request.targetDepth;
+        request.targetCost >= 0 &&
+        change.afterValue  >= 0 &&
+        change.afterValue  <= request.targetCost;
     return change;
 }
 
@@ -282,14 +357,16 @@ bool isIndependentBoundaryNet(const Netlist& netlist, int netId) {
 ScopedDepthLowerBoundProof proveScopedDepthLowerBound(
     const Netlist& netlist,
     const OptApplyRequest& request,
-    const RewriteScopeResolution& scope)
+    const RewriteScopeResolution& scope,
+    const std::vector<GateType>& uniformAllowed,
+    const std::vector<GateType>& uniformBanned)
 {
     ScopedDepthLowerBoundProof proof;
-    if (request.depthObjective != OptDepthObjective::ScopedFaninCone) {
+    if (request.costScope != OptCostScope::ScopedFaninCone) {
         return proof;
     }
 
-    const int currentDepth = measureDepthObjective(netlist, request);
+    const int currentDepth = measureCostObjective(netlist, request);
     if (currentDepth == 0) {
         proof.proven = true;
         proof.lowerBound = 0;
@@ -299,11 +376,8 @@ ScopedDepthLowerBoundProof proveScopedDepthLowerBound(
     }
 
     if (currentDepth != 2 ||
-        !hasExactAllowedBasis(
-            request.allowedTypes,
-            request.bannedTypes,
-            GateType::NAND,
-            GateType::NOT)) {
+        !hasExactAllowedBasis(uniformAllowed, uniformBanned,
+                              GateType::NAND, GateType::NOT)) {
         return proof;
     }
 
@@ -389,9 +463,12 @@ NetlistEditReport makeFailedOptApplyReport(
     const std::string& message)
 {
     NetlistEditReport report;
-    report.operationKind = passKind == OptPassKind::CriticalPathDepth
-        ? NetlistEditOperationKind::DepthOptimization
-        : NetlistEditOperationKind::CustomRewrite;
+    report.operationKind =
+        passKind == OptPassKind::GateCountMinimization
+            ? NetlistEditOperationKind::AreaOptimization
+            : (passKind == OptPassKind::DepthMinimization
+                   ? NetlistEditOperationKind::DepthOptimization
+                   : NetlistEditOperationKind::CustomRewrite);
     report.operationName = "opt_apply:" + optPassKindName(passKind);
     report.message = message;
     report.beforeStats = netlist.collectNetlistStats();
@@ -419,19 +496,19 @@ std::vector<std::string> unsupportedLegacyOptApplyFields(
     if (request.candidateIds != defaults.candidateIds) fields.push_back("candidateIds");
     if (request.scope != defaults.scope) fields.push_back("scope");
     if (request.scopeName != defaults.scopeName) fields.push_back("scopeName");
-    if (request.depthObjective != defaults.depthObjective) {
-        fields.push_back("depthObjective");
+    if (request.costScope != defaults.costScope) {
+        fields.push_back("costScope");
     }
     if (request.basisScope != defaults.basisScope) fields.push_back("basisScope");
     if (request.basisScopeName != defaults.basisScopeName) fields.push_back("basisScopeName");
     if (request.allowedTypes != defaults.allowedTypes) fields.push_back("allowedTypes");
     if (request.bannedTypes != defaults.bannedTypes) fields.push_back("bannedTypes");
-    if (request.targetDepth != defaults.targetDepth) fields.push_back("targetDepth");
+    if (request.targetCost != defaults.targetCost) fields.push_back("targetCost");
     if (request.timeLimitSeconds != defaults.timeLimitSeconds) {
         fields.push_back("timeLimitSeconds");
     }
-    if (request.requireDepthImprovement != defaults.requireDepthImprovement) {
-        fields.push_back("requireDepthImprovement");
+    if (request.requireCostImprovement != defaults.requireCostImprovement) {
+        fields.push_back("requireCostImprovement");
     }
     if (request.validateEquivalence != defaults.validateEquivalence) {
         fields.push_back("validateEquivalence");
@@ -439,6 +516,10 @@ std::vector<std::string> unsupportedLegacyOptApplyFields(
     if (request.rollbackOnFailure != defaults.rollbackOnFailure) {
         fields.push_back("rollbackOnFailure");
     }
+    if (request.outsideAllowedTypes != defaults.outsideAllowedTypes)
+        fields.push_back("outsideAllowedTypes");
+    if (request.outsideBannedTypes != defaults.outsideBannedTypes)
+        fields.push_back("outsideBannedTypes");
     return fields;
 }
 
@@ -512,17 +593,28 @@ OptQueryReport Netlist::runOptQuery(const OptQueryRequest& request) const {
             report.warnings.push_back("This first opt_query version does not enumerate every sub-simplification candidate.");
             break;
         }
-        case OptPassKind::CriticalPathDepth: {
+        case OptPassKind::DepthMinimization:
+        case OptPassKind::GateCountMinimization: {
+            const bool areaGoal =
+                (request.passKind == OptPassKind::GateCountMinimization);
+
             OptCandidate candidate;
             candidate.id = candidateId++;
             candidate.passKind = request.passKind;
-            candidate.reason =
-                "Run best-effort critical-path restructuring, then validate depth and gate-type constraints.";
+            candidate.reason = areaGoal
+                ? "Run best-effort gate-count minimization, then validate the "
+                  "gate-type constraints."
+                : "Run best-effort critical-path restructuring, then validate depth "
+                  "and gate-type constraints.";
             candidate.estimatedGateDelta = 0;
             candidate.estimatedNetDelta = 0;
+            // 這個 pass 不自己做全設計 CEC；等價驗證交給 equiv_query。
+            candidate.requiresEquivalenceCheck = false;
             report.candidates.push_back(candidate);
             report.ok = true;
-            report.message = "Critical-path depth optimization is available as a pass-level candidate.";
+            report.message = areaGoal
+                ? "Gate-count minimization is available as a pass-level candidate."
+                : "Critical-path depth optimization is available as a pass-level candidate.";
             break;
         }
         default:
@@ -565,10 +657,24 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
             report = runLocalSimplificationFixpointWithReport(&deadline);
             report.operationName = "opt_apply:local_simplification_fixpoint";
             break;
-        case OptPassKind::CriticalPathDepth: {
-            auto elapsedSeconds = [&]() {
-                return deadline.elapsedSeconds();
-            };
+        case OptPassKind::DepthMinimization:
+        case OptPassKind::GateCountMinimization: {
+            // 這一整段 case 由 passKind 決定量深度還是量閘數。
+            // 這三個值在後面每個 report 建構點都要用，集中在這裡算一次。
+            const bool areaGoal =
+                (request.passKind == OptPassKind::GateCountMinimization);
+            const char* opName = areaGoal ? "opt_apply:gate_count_minimization"
+                                          : "opt_apply:critical_path_depth";
+            const NetlistEditOperationKind opKind =
+                areaGoal ? NetlistEditOperationKind::AreaOptimization
+                         : NetlistEditOperationKind::DepthOptimization;
+            // 所有對外訊息都用這個字，否則面積模式會回報 "Depth optimization ..."。
+            const char* goalLabel = areaGoal ? "Gate count optimization"
+                                             : "Depth optimization";
+            const char* targetLabel = areaGoal ? "targetCost (gate count)"
+                                               : "targetCost (depth)";
+
+            auto elapsedSeconds = [&]() { return deadline.elapsedSeconds(); };
 
             if (!std::isfinite(request.timeLimitSeconds) ||
                 request.timeLimitSeconds <= 0.0) {
@@ -577,27 +683,36 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                     request.passKind,
                     "timeLimitSeconds must be finite and positive.");
             }
-            if (request.targetDepth < -1) {
+            if (request.targetCost < -1) {
                 return makeFailedOptApplyReport(
-                    *this, request.passKind, "targetDepth must be -1 or a non-negative depth.");
+                    *this, request.passKind, "targetCost must be -1 or a non-negative value.");
             }
-            if (!isValidDepthObjective(request.depthObjective)) {
+            if (!isValidCostScope(request.costScope)) {
                 return makeFailedOptApplyReport(
-                    *this, request.passKind, "Unsupported depth objective.");
+                    *this, request.passKind, "Unsupported cost scope.");
             }
-            if (!hasValidGateTypeConstraints(request.allowedTypes, request.bannedTypes)) {
+            if (!hasValidGateTypeConstraints(request.allowedTypes, request.bannedTypes) ||
+                !hasValidGateTypeConstraints(request.outsideAllowedTypes,
+                                             request.outsideBannedTypes)) {
                 return makeFailedOptApplyReport(
-                    *this,
-                    request.passKind,
-                    "allowedTypes/bannedTypes must contain valid, non-overlapping combinational gate types.");
+                    *this, request.passKind,
+                    "allowedTypes/bannedTypes must contain valid, non-overlapping "
+                    "combinational gate types.");
             }
-            if (request.depthObjective == OptDepthObjective::ScopedFaninCone &&
+            if (request.basisScope == TargetScope::WHOLE_NETLIST &&
+                (!request.allowedTypes.empty() || !request.bannedTypes.empty())) {
+                return makeFailedOptApplyReport(
+                    *this, request.passKind,
+                    "allowedTypes/bannedTypes are cone-only; without basisScope put the "
+                    "constraint in outsideAllowedTypes/outsideBannedTypes.");
+            }
+            if (request.costScope == OptCostScope::ScopedFaninCone &&
                 request.scope != TargetScope::NET_FANIN &&
                 request.scope != TargetScope::GATE_FANIN) {
                 return makeFailedOptApplyReport(
                     *this,
                     request.passKind,
-                    "ScopedFaninCone depth requires NET_FANIN or GATE_FANIN scope.");
+                    "A cone-scoped cost function requires NET_FANIN or GATE_FANIN scope.");
             }
 
             const RewriteScopeResolution originalScope =
@@ -610,6 +725,17 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
             }
 
             const ResolvedBasisScope basisScope = resolveBasisScope(request);
+            // 推導成立時，request 的 outside* 其實是那個 cone 的約束，搬過來。
+            std::vector<GateType> coneAllowed    = request.allowedTypes;
+            std::vector<GateType> coneBanned     = request.bannedTypes;
+            std::vector<GateType> outsideAllowed = request.outsideAllowedTypes;
+            std::vector<GateType> outsideBanned  = request.outsideBannedTypes;
+            if (basisScope.inferred) {
+                coneAllowed = std::move(outsideAllowed);
+                coneBanned  = std::move(outsideBanned);
+                outsideAllowed.clear();
+                outsideBanned.clear();
+            }
             if (basisScope.scope != TargetScope::WHOLE_NETLIST) {
                 const RewriteScopeResolution basisResolution =
                     resolveRewriteScope(*this, basisScope.scope, basisScope.name);
@@ -623,19 +749,25 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
             const Netlist original = cloneForRollback();
             Netlist working = original.cloneForRollback();
             // 約束檢查一律以「基底作用域」為準，不是成本作用域。
-            const bool baselineConstraintsSatisfied = scopeSatisfiesGateConstraints(
+            const bool baselineConstraintsSatisfied = designSatisfiesGateConstraints(
                 original, basisScope.scope, basisScope.name,
-                request.allowedTypes, request.bannedTypes);
+                coneAllowed, coneBanned, outsideAllowed, outsideBanned);
 
-            DepthOptimizationSummary summary;
-            summary.objectiveMetric = depthObjectiveName(request.depthObjective);
+            OptimizationSummary summary;
+            summary.objectiveMetric = opt::toString(costMetricOf(request));
             summary.scope = targetScopeName(request.scope);
             summary.requestedScopeName = request.scopeName;
             summary.resolvedRootNetName = originalScope.resolvedRootNetName;
             summary.resolvedThroughDffDataPin =
                 originalScope.resolvedThroughDffDataPin;
-            summary.allowedTypes = request.allowedTypes;
-            summary.bannedTypes = request.bannedTypes;
+            // 有 cone 時回報 cone 的約束（那是 basisScope 指向的範圍）；
+            // 沒有 cone 時 coneAllowed 為空，回報全域那組。
+            summary.allowedTypes = coneAllowed.empty() ? outsideAllowed : coneAllowed;
+            summary.bannedTypes  = coneBanned.empty()  ? outsideBanned  : coneBanned;
+            summary.outsideAllowedTypes = outsideAllowed;
+            summary.outsideBannedTypes  = outsideBanned;
+            summary.basisScope     = targetScopeName(basisScope.scope);
+            summary.basisScopeName = basisScope.name;
             summary.baselineConstraintsSatisfied = baselineConstraintsSatisfied;
             summary.timeBudgetSeconds = request.timeLimitSeconds;
 
@@ -643,13 +775,13 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                 NetlistEditReport timeoutReport = Netlist::buildEditReport(
                     original,
                     original,
-                    "opt_apply:critical_path_depth",
-                    NetlistEditOperationKind::DepthOptimization);
+                    opName,
+                    opKind);
                 timeoutReport.success = false;
                 timeoutReport.changed = false;
                 timeoutReport.rolledBack = false;
-                timeoutReport.depthChange =
-                    buildOptimizationDepthChange(original, original, request);
+                timeoutReport.costChange =
+                    buildOptimizationCostChange(original, original, request);
                 summary.coreStatus = "TIMEOUT";
                 summary.coreMessage =
                     "The transaction time budget was exhausted before optimizer core execution.";
@@ -657,7 +789,7 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                 summary.candidateGenerated = false;
                 summary.candidateAccepted = false;
                 summary.elapsedSeconds = elapsedSeconds();
-                timeoutReport.depthOptimization = summary;
+                timeoutReport.optimization = summary;
                 Netlist::certifyEquivalence(
                     timeoutReport,
                     EquivalenceCheckMethod::StructuralIdentity,
@@ -675,10 +807,10 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                 NetlistEditReport originalReport = Netlist::buildEditReport(
                     original,
                     original,
-                    "opt_apply:critical_path_depth",
-                    NetlistEditOperationKind::DepthOptimization);
-                originalReport.depthChange =
-                    buildOptimizationDepthChange(original, original, request);
+                    opName,
+                    opKind);
+                originalReport.costChange =
+                    buildOptimizationCostChange(original, original, request);
 
                 summary.coreStatus = "NO_IMPROVEMENT";
                 summary.coreMessage =
@@ -688,16 +820,16 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                 summary.candidateGenerated = false;
                 summary.candidateAccepted = false;
                 summary.elapsedSeconds = elapsedSeconds();
-                originalReport.depthOptimization = summary;
+                originalReport.optimization = summary;
                 Netlist::certifyEquivalence(
                     originalReport,
                     EquivalenceCheckMethod::StructuralIdentity,
                     "The original design was retained because the resolved optimization scope is empty.");
 
                 const bool targetMet =
-                    request.targetDepth < 0 ||
-                    (originalReport.depthChange.has_value() &&
-                     originalReport.depthChange->meetsTarget);
+                    request.targetCost < 0 ||
+                    (originalReport.costChange.has_value() &&
+                     originalReport.costChange->meetsTarget);
                 if (!targetMet) {
                     originalReport.success = false;
                     originalReport.changed = false;
@@ -715,8 +847,21 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                 return originalReport;
             }
 
-            const ScopedDepthLowerBoundProof lowerBound =
-                proveScopedDepthLowerBound(original, request, originalScope);
+            // 這個 lower bound 證的是「NAND/NOT 下 AND(a,b) 至少要 2 層」，
+            // 前提是單一均勻 basis、而且目標是深度。
+            // 面積目標下它證的東西無關（閘數的下界是另一回事），
+            // 異質 basis 下前提也不成立。
+            const bool uniformBasis =
+                (basisScope.scope == TargetScope::WHOLE_NETLIST) &&
+                coneAllowed.empty() && coneBanned.empty();
+            const bool lowerBoundApplicable =
+                uniformBasis && !areaGoal &&
+                request.costScope == OptCostScope::ScopedFaninCone;
+
+            const ScopedDepthLowerBoundProof lowerBound = lowerBoundApplicable
+                ? proveScopedDepthLowerBound(original, request, originalScope,
+                                             outsideAllowed, outsideBanned)
+                : ScopedDepthLowerBoundProof{};
             if (elapsedSeconds() >= request.timeLimitSeconds) {
                 return makePreCoreTimeoutReport();
             }
@@ -724,10 +869,10 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                 NetlistEditReport originalReport = Netlist::buildEditReport(
                     original,
                     original,
-                    "opt_apply:critical_path_depth",
-                    NetlistEditOperationKind::DepthOptimization);
-                originalReport.depthChange =
-                    buildOptimizationDepthChange(original, original, request);
+                    opName,
+                    opKind);
+                originalReport.costChange =
+                    buildOptimizationCostChange(original, original, request);
 
                 summary.coreStatus = "NO_IMPROVEMENT";
                 summary.coreMessage = lowerBound.reason;
@@ -735,17 +880,17 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                 summary.candidateGenerated = false;
                 summary.candidateAccepted = false;
                 summary.elapsedSeconds = elapsedSeconds();
-                originalReport.depthOptimization = summary;
+                originalReport.optimization = summary;
                 Netlist::certifyEquivalence(
                     originalReport,
                     EquivalenceCheckMethod::StructuralIdentity,
                     "The original design was retained under a proven scoped-depth lower bound.");
 
-                if (request.targetDepth >= 0 &&
-                    lowerBound.lowerBound > request.targetDepth) {
+                if (request.targetCost >= 0 &&
+                    lowerBound.lowerBound > request.targetCost) {
                     originalReport.success = false;
                     originalReport.message =
-                        "targetDepth is below the proven scoped-depth lower bound; "
+                        "targetCost is below the proven scoped-depth lower bound; "
                         "the original design was retained.";
                 } else {
                     originalReport.success = true;
@@ -758,21 +903,28 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                 return originalReport;
             }
 
-            depth_opt::OptimizationRequest coreRequest;
-            if (request.depthObjective == OptDepthObjective::ScopedFaninCone) {
-                coreRequest.cost.metric = depth_opt::CostMetric::ConeDepth;
-                coreRequest.cost.cone   = makeConeRef(request.scope, request.scopeName);
-            } else {
-                coreRequest.cost.metric = depth_opt::CostMetric::GlobalMaxDepth;
+            opt::OptimizationRequest coreRequest;
+            {
+                coreRequest.cost.metric = costMetricOf(request);
+                if (request.costScope == OptCostScope::ScopedFaninCone) {
+                    coreRequest.cost.cone = makeConeRef(request.scope, request.scopeName);
+                }
             }
             {
-                depth_opt::BasisConstraint coreBasis;
-                coreBasis.allowed = request.allowedTypes;
-                coreBasis.banned  = request.bannedTypes;
+                // cone 外（無 cone 時就是全域）。永遠推進去，即使沒有約束 ——
+                // 核心用「沒有 scope 的那組」來判斷 cone 外的 basis。
+                opt::BasisConstraint outside;
+                outside.allowed = outsideAllowed;
+                outside.banned  = outsideBanned;
+                coreRequest.basisConstraints.push_back(std::move(outside));
+
                 if (basisScope.scope != TargetScope::WHOLE_NETLIST) {
-                    coreBasis.scope = makeConeRef(basisScope.scope, basisScope.name);
+                    opt::BasisConstraint cone;
+                    cone.allowed = coneAllowed;
+                    cone.banned  = coneBanned;
+                    cone.scope   = makeConeRef(basisScope.scope, basisScope.name);
+                    coreRequest.basisConstraints.push_back(std::move(cone));
                 }
-                coreRequest.basisConstraints.push_back(std::move(coreBasis));
             }
 
             if (elapsedSeconds() >= request.timeLimitSeconds) {
@@ -780,32 +932,32 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
             }
 
             TechMapper techMapper(&deadline);
-            DepthOptimizer optimizer;
-            const OptimizationResult core = optimizer.executeCriticalPathOptimization(
+            Optimizer optimizer;
+            const OptimizationResult core = optimizer.executeOptimization(
                 working, techMapper, coreRequest, request.verbose, &deadline);
 
             summary.coreStatus = optimizationStatusName(core.status);
             summary.coreMessage = core.message;
             summary.candidateGenerated = core.changed;
-            summary.finalConstraintsSatisfied = scopeSatisfiesGateConstraints(
+            summary.finalConstraintsSatisfied = designSatisfiesGateConstraints(
                 working, basisScope.scope, basisScope.name,
-                request.allowedTypes, request.bannedTypes);
+                coneAllowed, coneBanned, outsideAllowed, outsideBanned);
 
             auto buildCandidateReport = [&]() {
                 NetlistEditReport candidate = Netlist::buildEditReport(
                     original,
                     working,
-                    "opt_apply:critical_path_depth",
-                    NetlistEditOperationKind::DepthOptimization);
+                    opName,
+                    opKind);
                 candidate.changed = candidate.changed || core.changed;
-                candidate.depthChange =
-                    buildOptimizationDepthChange(original, working, request);
+                candidate.costChange =
+                    buildOptimizationCostChange(original, working, request);
                 return candidate;
             };
 
             auto finishReport = [&](NetlistEditReport candidate) {
                 summary.elapsedSeconds = elapsedSeconds();
-                candidate.depthOptimization = summary;
+                candidate.optimization = summary;
                 if (basisScope.inferred) {
                     candidate.addWarning(
                         "The gate-constraint scope was inferred from 'scope'. Set basisScope/"
@@ -819,11 +971,14 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                 }
                 if (!request.rollbackOnFailure) {
                     candidate.addWarning(
-                        "CriticalPathDepth always keeps the original design on failure; rollbackOnFailure=false is ignored.");
+                        std::string(goalLabel) +
+                        " always keeps the original design on failure; "
+                        "rollbackOnFailure=false is ignored.");
                 }
                 if (!request.candidateIds.empty()) {
                     candidate.addWarning(
-                        "CriticalPathDepth is a pass-level search; candidateIds are currently ignored.");
+                        std::string(goalLabel) +
+                        " is a pass-level search; candidateIds are currently ignored.");
                 }
                 return candidate;
             };
@@ -851,35 +1006,36 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                 report = buildCandidateReport();
                 report.success = false;
                 report.rolledBack = core.changed;
-                report.message = "Depth optimization did not produce a usable candidate: " + core.message;
+                report.message = std::string(goalLabel) +
+                                 " did not produce a usable candidate: " + core.message;
                 return finishReport(std::move(report));
             }
 
             report = buildCandidateReport();
             if (!report.success) {
                 report.rolledBack = core.changed;
-                report.message =
-                    "Depth optimization candidate failed structural validation and was discarded.";
+                report.message = std::string(goalLabel) +
+                                 " candidate failed structural validation and was discarded.";
                 return finishReport(std::move(report));
             }
             if (!summary.finalConstraintsSatisfied) {
                 report.success = false;
                 report.rolledBack = core.changed;
-                report.message =
-                    "Depth optimization candidate violated the requested gate constraints and was discarded.";
+                report.message = std::string(goalLabel) +
+                                 " candidate violated the requested gate constraints and was discarded.";
                 return finishReport(std::move(report));
             }
 
-            const bool depthImproved =
-                report.depthChange.has_value() && report.depthChange->improved;
+            const bool costImproved =
+                report.costChange.has_value() && report.costChange->improved;
             const bool targetMet =
-                request.targetDepth < 0 ||
-                (report.depthChange.has_value() && report.depthChange->meetsTarget);
+                request.targetCost < 0 ||
+                (report.costChange.has_value() && report.costChange->meetsTarget);
             if (!targetMet) {
                 report.success = false;
                 report.rolledBack = core.changed;
-                report.message =
-                    "Depth optimization candidate did not meet targetDepth and was discarded.";
+                report.message = std::string(goalLabel) + " candidate did not meet " +
+                                 targetLabel + " and was discarded.";
                 return finishReport(std::move(report));
             }
 
@@ -901,33 +1057,37 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                 return finishReport(std::move(report));
             }
 
-            if (request.requireDepthImprovement &&
+            if (request.requireCostImprovement &&
                 baselineConstraintsSatisfied &&
-                !depthImproved) {
+                !costImproved) {
                 NetlistEditReport originalReport = Netlist::buildEditReport(
                     original,
                     original,
-                    "opt_apply:critical_path_depth",
-                    NetlistEditOperationKind::DepthOptimization);
+                    opName,
+                    opKind);
                 originalReport.success = true;
                 originalReport.changed = false;
                 originalReport.rolledBack = core.changed;
-                originalReport.depthChange =
-                    buildOptimizationDepthChange(original, original, request);
+                originalReport.costChange =
+                    buildOptimizationCostChange(original, original, request);
                 Netlist::certifyEquivalence(
                     originalReport,
                     EquivalenceCheckMethod::StructuralIdentity,
                     "The original design was retained because no accepted depth improvement was found.");
                 originalReport.message =
-                    "No depth improvement was found; the original design was retained.";
+                    std::string("No ") + (areaGoal ? "gate count" : "depth") +
+                    " improvement was found; the original design was retained.";
                 return finishReport(std::move(originalReport));
             }
 
-            if (request.requireDepthImprovement &&
+            if (request.requireCostImprovement &&
                 !baselineConstraintsSatisfied &&
-                !depthImproved) {
+                !costImproved) {
                 report.addWarning(
-                    "The candidate did not improve depth, but it is eligible because the original design violated a hard gate constraint.");
+                    std::string("The candidate did not improve ") +
+                    (areaGoal ? "gate count" : "depth") +
+                    ", but it is eligible because the original design violated a "
+                    "hard gate constraint.");
             }
 
             // Competition runtime skips whole-design CEC. The accepted candidate
@@ -945,12 +1105,14 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                 EquivalenceCheckMethod::CertifiedRewrite,
                 "Equivalence certified by the qualified function-preserving optimization and lowering pipeline; whole-design SAT was not executed.");
 
-            if (report.depthChange.has_value()) {
-                report.message = "Depth reduced from "
-                               + std::to_string(report.depthChange->beforeDepth) + " to "
-                               + std::to_string(report.depthChange->afterDepth) + ".";
+            if (report.costChange.has_value()) {
+                report.message = std::string(areaGoal ? "Gate count" : "Depth")
+                               + " reduced from "
+                               + std::to_string(report.costChange->beforeValue) + " to "
+                               + std::to_string(report.costChange->afterValue) + ".";
             } else {
-                report.message = "Depth optimization applied.";
+                report.message = areaGoal ? "Gate count optimization applied."
+                                          : "Depth optimization applied.";
             }
             return finishReport(std::move(report));
         }

@@ -637,7 +637,8 @@ std::string LoweringBasis::describe() const {
 // ============================================================================
 namespace {
 
-constexpr int kInf = INT_MAX / 4;
+constexpr int    kInf     = INT_MAX / 4;
+constexpr double kInfArea = 1e18;
 
 // 指向 LNode 的參照,帶極性
 struct LRef {
@@ -669,10 +670,11 @@ enum class Impl : uint8_t {
 };
 
 struct SlotPlan {
-    Impl kind  = Impl::NONE;
-    bool q0    = false;   // fanin 0 需要的極性
-    bool q1    = false;   // fanin 1 需要的極性
-    int  depth = kInf;
+    Impl   kind  = Impl::NONE;
+    bool   q0    = false;
+    bool   q1    = false;
+    int    depth = kInf;
+    double area  = kInfArea;   // area flow
 };
 
 // ---------------------------------------------------------------------------
@@ -856,15 +858,60 @@ LoweringResult DoLowerToNetlist(const Ntk& ntk,
     // -----------------------------------------------------------------------
     // 3. Forward DP — 每個節點兩個 slot 的最小到達層數
     // -----------------------------------------------------------------------
+    // -----------------------------------------------------------------------
+    // 3a. 結構 fanout —— area flow 的分母
+    //
+    // 一個 LNode 被幾個地方消費：其他 LNode 的 fanin，加上直接接到 PO 的次數。
+    // 建圖之後就固定，不隨 DP 的選擇改變（這正是 area flow 的近似之處：
+    // 實際上不同極性的 fanout 不同，這裡不區分）。
+    // -----------------------------------------------------------------------
+    std::vector<uint32_t> fanoutCount(numL, 0);
+    for (uint32_t i = 0; i < numL; ++i) {
+        const LNode& n = nodes[i];
+        if (n.kind == LNode::Kind::AND || n.kind == LNode::Kind::XOR) {
+            ++fanoutCount[n.fanin[0]];
+            ++fanoutCount[n.fanin[1]];
+        }
+    }
+    for (uint32_t i = 0; i < ntk.num_pos(); ++i) {
+        const LRef base = ntkToL[ntk.get_node(ntk.po_at(i))];
+        ++fanoutCount[base.node];
+    }
+
+    // -----------------------------------------------------------------------
+    // 3b. Forward DP —— 每個節點兩個 slot 的最小成本
+    // -----------------------------------------------------------------------
     std::vector<std::array<SlotPlan, 2>> plan(numL);
 
-    // PI / CONST 的 slot0 是現成的
-    plan[lConst][0] = SlotPlan{Impl::EXTERNAL, false, false, 0};
-    plan[lConst][1] = SlotPlan{Impl::EXTERNAL, false, false, 0};  // 常數兩極性都免費
-    for (uint32_t pi : piL) plan[pi][0] = SlotPlan{Impl::EXTERNAL, false, false, 0};
+    // PI / CONST 的 slot 是現成的：深度 0、面積 0
+    plan[lConst][0] = SlotPlan{Impl::EXTERNAL, false, false, 0, 0.0};
+    plan[lConst][1] = SlotPlan{Impl::EXTERNAL, false, false, 0, 0.0};
+    for (uint32_t pi : piL) plan[pi][0] = SlotPlan{Impl::EXTERNAL, false, false, 0, 0.0};
 
-    auto consider = [](SlotPlan& slot, Impl kind, bool q0, bool q1, int depth) {
-        if (depth < slot.depth) slot = SlotPlan{kind, q0, q1, depth};
+    const bool areaFirst = (spec.objective == LoweringObjective::MinArea);
+
+    // 字典序比較。兩個指標都算，只是誰優先不同。
+    auto consider = [&](SlotPlan& slot, Impl kind, bool q0, bool q1,
+                        int depth, double area) {
+        constexpr double kEps = 1e-9;
+        bool better;
+        if (areaFirst) {
+            if (area < slot.area - kEps)                    better = true;
+            else if (area > slot.area + kEps)               better = false;
+            else                                            better = (depth < slot.depth);
+        } else {
+            if (depth != slot.depth)                        better = (depth < slot.depth);
+            else                                            better = (area < slot.area - kEps);
+        }
+        if (better) slot = SlotPlan{kind, q0, q1, depth, area};
+    };
+
+    // fanin 某極性分攤過來的 area flow
+    auto afShare = [&](uint32_t fanin, int pol) -> double {
+        const double a = plan[fanin][pol].area;
+        if (a >= kInfArea) return kInfArea;
+        const double share = static_cast<double>(std::max<uint32_t>(1u, fanoutCount[fanin]));
+        return a / share;
     };
 
     for (uint32_t i = 0; i < numL; ++i) {
@@ -872,25 +919,39 @@ LoweringResult DoLowerToNetlist(const Ntk& ntk,
         const LoweringBasis& B = bases[n.basisId];
 
         if (n.kind == LNode::Kind::AND) {
-            const int a0 = plan[n.fanin[0]][n.comp[0] ? 1 : 0].depth;   // f0 @ c0
-            const int a1 = plan[n.fanin[1]][n.comp[1] ? 1 : 0].depth;   // f1 @ c1
-            const int b0 = plan[n.fanin[0]][n.comp[0] ? 0 : 1].depth;   // f0 @ !c0
-            const int b1 = plan[n.fanin[1]][n.comp[1] ? 0 : 1].depth;   // f1 @ !c1
+            const int p0 = n.comp[0] ? 1 : 0;   // fanin0 @ c0
+            const int p1 = n.comp[1] ? 1 : 0;   // fanin1 @ c1
+            const int n0 = 1 - p0;              // fanin0 @ !c0
+            const int n1 = 1 - p1;
 
-            const int dSame = (a0 >= kInf || a1 >= kInf) ? kInf : std::max(a0, a1) + 1;
-            const int dFlip = (b0 >= kInf || b1 >= kInf) ? kInf : std::max(b0, b1) + 1;
+            const int dSame = (plan[n.fanin[0]][p0].depth >= kInf ||
+                               plan[n.fanin[1]][p1].depth >= kInf)
+                            ? kInf
+                            : std::max(plan[n.fanin[0]][p0].depth,
+                                       plan[n.fanin[1]][p1].depth) + 1;
+            const int dFlip = (plan[n.fanin[0]][n0].depth >= kInf ||
+                               plan[n.fanin[1]][n1].depth >= kInf)
+                            ? kInf
+                            : std::max(plan[n.fanin[0]][n0].depth,
+                                       plan[n.fanin[1]][n1].depth) + 1;
+
+            const double aSame = 1.0 + afShare(n.fanin[0], p0) + afShare(n.fanin[1], p1);
+            const double aFlip = 1.0 + afShare(n.fanin[0], n0) + afShare(n.fanin[1], n1);
 
             // 正相
-            if (B.has(GateType::AND)) consider(plan[i][0], Impl::AND_POS, n.comp[0], n.comp[1], dSame);
-            if (B.has(GateType::NOR)) consider(plan[i][0], Impl::NOR_POS, !n.comp[0], !n.comp[1], dFlip);
+            if (B.has(GateType::AND))
+                consider(plan[i][0], Impl::AND_POS,  n.comp[0],  n.comp[1], dSame, aSame);
+            if (B.has(GateType::NOR))
+                consider(plan[i][0], Impl::NOR_POS, !n.comp[0], !n.comp[1], dFlip, aFlip);
             // 反相
-            if (B.has(GateType::NAND)) consider(plan[i][1], Impl::NAND_NEG, n.comp[0], n.comp[1], dSame);
-            if (B.has(GateType::OR))   consider(plan[i][1], Impl::OR_NEG,   !n.comp[0], !n.comp[1], dFlip);
+            if (B.has(GateType::NAND))
+                consider(plan[i][1], Impl::NAND_NEG, n.comp[0],  n.comp[1], dSame, aSame);
+            if (B.has(GateType::OR))
+                consider(plan[i][1], Impl::OR_NEG,  !n.comp[0], !n.comp[1], dFlip, aFlip);
 
         } else if (n.kind == LNode::Kind::XOR) {
             // fanin 的 comp 已在建圖時正規化為 false。
-            // XOR(f0@q0, f1@q1) 的值 = f0 ^ f1 ^ q0 ^ q1
-            //   → slot p 需要 q0^q1 == p
+            // XOR(f0@q0, f1@q1) = f0 ^ f1 ^ q0 ^ q1 → slot p 需要 q0^q1 == p
             // XNOR 則需要 q0^q1 == !p
             for (int p = 0; p < 2; ++p) {
                 for (int q0 = 0; q0 < 2; ++q0) {
@@ -898,25 +959,30 @@ LoweringResult DoLowerToNetlist(const Ntk& ntk,
                         const int d0 = plan[n.fanin[0]][q0].depth;
                         const int d1 = plan[n.fanin[1]][q1].depth;
                         if (d0 >= kInf || d1 >= kInf) continue;
-                        const int d = std::max(d0, d1) + 1;
+                        const int    d = std::max(d0, d1) + 1;
+                        const double a = 1.0 + afShare(n.fanin[0], q0)
+                                             + afShare(n.fanin[1], q1);
                         const int parity = q0 ^ q1;
                         if (B.has(GateType::XOR)  && parity == p)
-                            consider(plan[i][p], Impl::XOR_G, q0, q1, d);
+                            consider(plan[i][p], Impl::XOR_G,  q0, q1, d, a);
                         if (B.has(GateType::XNOR) && parity == (p ^ 1))
-                            consider(plan[i][p], Impl::XNOR_G, q0, q1, d);
+                            consider(plan[i][p], Impl::XNOR_G, q0, q1, d, a);
                     }
                 }
             }
         }
 
-        // 反相鬆弛:從另一個 slot 插一顆 NOT(等價閘)過來。
-        // 做兩次就收斂 —— 若 slot A 是由 slot B 反相而來,B 不可能再由 A 反相
-        // 而改善(那需要 d+2 < d)。
+        // 反相鬆弛：從另一個 slot 插一顆 NOT（等價閘）過來。
+        // NOT 是這個 slot 專屬的一顆閘，不分攤，所以 area 直接 +1。
+        // 做兩次就收斂 —— slot A 由 slot B 反相而來時，B 不可能再由 A
+        // 反相而改善（那需要 cost+2 < cost）。
         if (B.canInvert()) {
             for (int r = 0; r < 2; ++r) {
                 for (int p = 0; p < 2; ++p) {
-                    const int other = plan[i][1 - p].depth;
-                    if (other < kInf) consider(plan[i][p], Impl::INVERT, false, false, other + 1);
+                    const SlotPlan& other = plan[i][1 - p];
+                    if (other.depth >= kInf) continue;
+                    consider(plan[i][p], Impl::INVERT, false, false,
+                             other.depth + 1, other.area + 1.0);
                 }
             }
         }
@@ -976,6 +1042,11 @@ LoweringResult DoLowerToNetlist(const Ntk& ntk,
                 return out;
             }
         }
+    }
+
+    for (uint32_t i = 0; i < ntk.num_pos(); ++i) {
+        const auto [ln, pol] = poNeed[i];
+        if (plan[ln][pol].area < kInfArea) out.estimatedAreaFlow += plan[ln][pol].area;
     }
 
     // -----------------------------------------------------------------------
@@ -1234,7 +1305,7 @@ LoweringResult DoLowerToNetlist(const Ntk& ntk,
     nl.trimDeadLogic();
 
      // debug: 統計各種 gate 的數量
-    int cnt[10] = {0};
+    /*int cnt[10] = {0};
     for (uint32_t i = 0; i < numL; ++i)
         for (int p = 0; p < 2; ++p)
             if (need[i][p]) cnt[(int)plan[i][p].kind]++;
@@ -1245,7 +1316,7 @@ LoweringResult DoLowerToNetlist(const Ntk& ntk,
               << " XOR_G="    << cnt[(int)Impl::XOR_G]
               << " INVERT="   << cnt[(int)Impl::INVERT]
               << " / LNodes=" << numL
-              << " xag.size=" << ntk.size() << "\n";
+              << " xag.size=" << ntk.size() << "\n";*/
     
 
     out.netlist   = std::move(nl);

@@ -230,6 +230,8 @@ void Primitives::ensure_fresh() {
 void Primitives::rebuild() {
     const auto t0 = std::chrono::steady_clock::now();
 
+    fraigDeadline_ = nullptr;
+
     // 銷毀順序與依賴相反:Fraig 依賴 SatEngine,SatEngine 依賴 AIG。
     fraig_.reset();
     sat_.reset();
@@ -269,9 +271,9 @@ void Primitives::rebuild() {
     }
 
     if (model_->num_tainted_nets() > 0) {
-        std::cerr << "[Primitives][WARN] " << model_->num_tainted_nets()
+        /*std::cerr << "[Primitives][WARN] " << model_->num_tainted_nets()
                   << " untrustworthy net(s); queries touching them will return "
-                     "Unknown. " << model_->taint_summary() << "\n";
+                     "Unknown. " << model_->taint_summary() << "\n";*/
     }
 }
 
@@ -300,14 +302,14 @@ Sig Primitives::unwrap(SigRef s) {
         case StaleSigPolicy::Ignore:
             return s.sig_;
         case StaleSigPolicy::RebuildAndWarn:
-            std::cerr << "[Primitives][WARN] stale SigRef (gen " << s.gen_
+            /*std::cerr << "[Primitives][WARN] stale SigRef (gen " << s.gen_
                       << " vs current " << generation_
-                      << ") -- the answer will be meaningless\n";
+                      << ") -- the answer will be meaningless\n";*/
             return s.sig_;
         default:
-            std::cerr << "[Primitives] stale SigRef: generation " << s.gen_
+            /*std::cerr << "[Primitives] stale SigRef: generation " << s.gen_
                       << ", current " << generation_
-                      << ". Call resolve(name) again after any netlist edit.\n";
+                      << ". Call resolve(name) again after any netlist edit.\n";*/
             throw StaleSignal{};
     }
 }
@@ -490,12 +492,12 @@ AigSnapshot Primitives::snapshot() {
     snap.generation_ = generation_;
 
     if (model_ == nullptr) {
-        std::cerr << "[Primitives][WARN] snapshot: model has not been built\n";
+        // std::cerr << "[Primitives][WARN] snapshot: model has not been built\n";
         return snap;                                   // valid_ 維持 false
     }
     if (cfg_.strict_global_health && !model_->can_prove()) {
-        std::cerr << "[Primitives][WARN] snapshot: strict_global_health is on and the "
-                     "model is Invalid -- snapshot marked unusable\n";
+        /*std::cerr << "[Primitives][WARN] snapshot: strict_global_health is on and the "
+                     "model is Invalid -- snapshot marked unusable\n";*/
         return snap;
     }
 
@@ -522,8 +524,8 @@ AigSnapshot Primitives::snapshot() {
     snap.valid_ = ok;
 
     if (!ok)
-        std::cerr << "[Primitives][WARN] snapshot: cone copy incomplete "
-                     "-- comparison results would be unreliable\n";
+        /*std::cerr << "[Primitives][WARN] snapshot: cone copy incomplete "
+                     "-- comparison results would be unreliable\n";*/
 
     if (cfg_.verbose_rebuild) {
         std::size_t untrusted = 0;

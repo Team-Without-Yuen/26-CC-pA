@@ -20,6 +20,7 @@ bool VerilogReader::read(const std::string& filepath, Netlist& netlist) {
         // Detect and parse the top module declaration
         if (line.find("module") == 0) {
             modulePorts = parseTopModule(line);
+            netlist.setTopModuleName(parseModuleName(line));
         }
         // Detect input declaration
         else if (line.find("input ") == 0) {
@@ -42,7 +43,25 @@ bool VerilogReader::read(const std::string& filepath, Netlist& netlist) {
     }
 
     file.close();
+    if (multiDriverCount_ > 0) {
+        std::cerr << "[VerilogReader][WARN] " << multiDriverCount_
+                  << " net(s) are driven by more than one gate in the source file. "
+                     "The netlist keeps every driver so the design writes back "
+                     "unchanged, but structural validation will report mismatches.\n";
+    }
     return true;
+}
+
+// 從 "module top(a, b, out);" 取出 "top"。
+// 名稱是 "module" 之後、'(' 或空白之前的那一段。
+std::string VerilogReader::parseModuleName(const std::string& line) const {
+    const size_t afterKeyword = 6;   // strlen("module")
+    const size_t nameStart = line.find_first_not_of(" \t", afterKeyword);
+    if (nameStart == std::string::npos) return "";
+    const size_t nameEnd = line.find_first_of(" \t(#;", nameStart);
+    return trim(nameEnd == std::string::npos
+                    ? line.substr(nameStart)
+                    : line.substr(nameStart, nameEnd - nameStart));
 }
 
 std::vector<std::string> VerilogReader::parseTopModule(const std::string& line) {
@@ -197,6 +216,12 @@ void VerilogReader::parseGateInstance(const std::string& line, Netlist& netlist)
                 }
 
                 if (pinName == "Q") {
+                    // 不拒絕：來源檔案的 multi-driver 必須原樣寫回，
+                    // 拒絕會讓該 gate 失去 .Q 而改變輸出檔內容。這裡只統計。
+                    if (netId >= 0 && netlist.isValidNetId(netId) &&
+                        netlist.getNet(netId).driverGateId >= 0) {
+                        ++multiDriverCount_;
+                    }
                     netlist.connectGateOutput(gateId, netId);
                 } else {
                     netlist.connectGateInput(gateId, netId, pinName);
@@ -214,6 +239,10 @@ void VerilogReader::parseGateInstance(const std::string& line, Netlist& netlist)
             
             // The first argument is the output; the remaining arguments are inputs.
             if (i == 0) {
+                if (netId >= 0 && netlist.isValidNetId(netId) &&
+                    netlist.getNet(netId).driverGateId >= 0) {
+                    ++multiDriverCount_;
+                }
                 netlist.connectGateOutput(gateId, netId);
             } else {
                 netlist.connectGateInput(gateId, netId);

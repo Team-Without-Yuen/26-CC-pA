@@ -74,6 +74,11 @@ struct Fraig::Impl {
     uint32_t numNodes  = 0;      // = sweep 當下的 aig.size()
     uint32_t numPis    = 0;
 
+    // 前置階段完成到哪：index < sweptNodeCount 的節點才有可信的模擬資料。
+    // 正常跑完時等於 numNodes；被 deadline 截斷時小於它。
+    uint32_t sweptNodeCount = 0;
+    bool     truncated      = false;
+
     // ---- 拓撲快取(建一次,模擬時反覆掃)----
     // 不在內層迴圈呼叫 foreach_fanin:1.3M 節點 × 數十 word 的 lambda 呼叫
     // 成本非常可觀。攤平成陣列後內層是一條沒有分支的直線。
@@ -111,6 +116,8 @@ struct Fraig::Impl {
 
     // ---------------------------------------------------------------------
     bool out_of_budget() const {
+        // deadline 是整個 request 共用的碼表，優先於 sweep 自己的預算。
+        if (cfg.deadline != nullptr) return cfg.deadline->expired();
         if (cfg.total_time_budget <= 0.0) return false;
         const auto now = std::chrono::steady_clock::now();
         return std::chrono::duration<double>(now - t0).count() >= cfg.total_time_budget;
@@ -138,11 +145,11 @@ struct Fraig::Impl {
     // ---------------------------------------------------------------------
     //  拓撲快取
     // ---------------------------------------------------------------------
-    void build_topology() {
+    bool build_topology() {
         numNodes = static_cast<uint32_t>(aig.size());
 
         isLeaf.assign(numNodes, 0);
-        isLeaf[0] = 1;                       // 常數節點
+        isLeaf[0] = 1;
 
         piNodeIdx.clear();
         aig.foreach_pi([&](Node const& n) {
@@ -155,7 +162,14 @@ struct Fraig::Impl {
         faninIdx.assign(2ull * numNodes, 0);
         faninCompl.assign(2ull * numNodes, 0);
 
+        // 每 4096 個節點檢查一次；檢查本身是一次 steady_clock::now()，
+        // 逐節點檢查會讓時間量測本身變成瓶頸。
+        constexpr uint32_t kCheckStride = 4096;
         for (uint32_t i = 1; i < numNodes; ++i) {
+            if ((i & (kCheckStride - 1)) == 0 && out_of_budget()) {
+                truncated = true;
+                return false;
+            }
             if (isLeaf[i]) continue;
             uint32_t k = 0;
             aig.foreach_fanin(aig.index_to_node(i), [&](Sig const& s) {
@@ -166,6 +180,8 @@ struct Fraig::Impl {
                 ++k;
             });
         }
+        sweptNodeCount = numNodes;
+        return true;
     }
 
     // ---------------------------------------------------------------------
@@ -183,16 +199,24 @@ struct Fraig::Impl {
         return w;
     }
 
-    void simulate_word(uint32_t w, const std::vector<uint64_t>* piWord, int bias = 0) {
+    // 回傳實際完成到的 node index（exclusive）。
+    // 中途停止時，index >= 回傳值的節點其模擬值不可信。
+    uint32_t simulate_word(uint32_t w, const std::vector<uint64_t>* piWord,
+                           int bias = 0, uint32_t limit = 0) {
         uint64_t* base = &sim[static_cast<size_t>(w) * numNodes];
+        const uint32_t stop = (limit == 0 || limit > numNodes) ? numNodes : limit;
 
-        base[0] = 0ull;                       // 常數節點恆為 0
+        base[0] = 0ull;
         for (uint32_t p = 0; p < numPis; ++p) {
+            if (piNodeIdx[p] >= stop) continue;
             base[piNodeIdx[p]] = piWord ? (*piWord)[p] : biased_word(bias);
         }
 
-        // node index 遞增 = 合法拓撲序(見檔頭)。
-        for (uint32_t i = 1; i < numNodes; ++i) {
+        constexpr uint32_t kCheckStride = 8192;
+        for (uint32_t i = 1; i < stop; ++i) {
+            if ((i & (kCheckStride - 1)) == 0 && out_of_budget()) {
+                return i;
+            }
             if (isLeaf[i]) continue;
             const uint32_t i0 = faninIdx[2ull * i];
             const uint32_t i1 = faninIdx[2ull * i + 1];
@@ -202,42 +226,64 @@ struct Fraig::Impl {
             if (faninCompl[2ull * i + 1]) v1 = ~v1;
             base[i] = v0 & v1;
         }
+        return stop;
     }
 
-    void full_simulate(uint32_t nwords) {
+    // 回傳 false 代表被時間預算截斷。
+    bool full_simulate(uint32_t nwords) {
         const auto s0 = std::chrono::steady_clock::now();
         words = nwords;
         sim.assign(static_cast<size_t>(words) * numNodes, 0ull);
         const uint32_t nBiased = 0;
         static const int kBias[8] = {-3, 3, -4, 4, -2, 2, -5, 5};
 
+        // 所有 word 必須模擬到同一個 node 範圍，否則 signature 會拿到
+        // 半途而廢的資料。先跑第一個 word 決定範圍，其餘 word 沿用。
+        uint32_t reached = numNodes;
         for (uint32_t w = 0; w < words; ++w) {
             const int bias = (nBiased > 0 && w >= words - nBiased)
                            ? kBias[(w - (words - nBiased)) % 8]
                            : 0;
-            simulate_word(w, nullptr, bias);
+            const uint32_t done = simulate_word(w, nullptr, bias, reached);
+            reached = std::min(reached, done);
+            if (reached <= 1) break;
         }
+
         st.sim_seconds +=
             std::chrono::duration<double>(std::chrono::steady_clock::now() - s0).count();
         ++st.sim_rounds;
 
-        // signature 的正規化方向由 word0 的 bit0 決定,而 word0 一旦產生就
-        // 不再改變 → simPhase 只算一次,之後 repartition 直接沿用。
+        sweptNodeCount = std::min(sweptNodeCount, reached);
+        if (reached < numNodes) truncated = true;
+
         simPhase.assign(numNodes, 0);
         const uint64_t* w0 = sim.data();
-        for (uint32_t i = 0; i < numNodes; ++i)
+        for (uint32_t i = 0; i < sweptNodeCount; ++i)
             simPhase[i] = static_cast<uint8_t>(w0[i] & 1ull);
+
+        return !truncated;
     }
 
     // 追加一個 word(反例回收)。回傳 false 表示已達記憶體上限。
     bool append_word(const std::vector<uint64_t>& piWord) {
         if (words >= maxWords) return false;
         const auto s0 = std::chrono::steady_clock::now();
-        sim.resize(static_cast<size_t>(words + 1) * numNodes, 0ull);
-        simulate_word(words, &piWord);
-        ++words;
+        sim.resize(static_cast<std::size_t>(words + 1) * numNodes, 0ull);
+
+        const uint32_t done = simulate_word(words, &piWord);
+
         st.sim_seconds +=
             std::chrono::duration<double>(std::chrono::steady_clock::now() - s0).count();
+
+        if (done < numNodes) {
+            // ★ 覆蓋不全 → 整個 word 丟掉,不要讓它進入 signature 與
+            //   provably_different 的比對範圍。
+            sim.resize(static_cast<std::size_t>(words) * numNodes);
+            truncated = true;
+            return false;
+        }
+
+        ++words;
         ++st.sim_rounds;
         return true;
     }
@@ -251,8 +297,17 @@ struct Fraig::Impl {
         const auto s0 = std::chrono::steady_clock::now();
         const uint32_t old = words;
         sim.resize(static_cast<std::size_t>(old + extra) * numNodes, 0ull);
-        for (uint32_t w = old; w < old + extra; ++w) simulate_word(w, nullptr, 0);
-        words = old + extra;
+
+        uint32_t w = old;
+        for (; w < old + extra; ++w) {
+            if (simulate_word(w, nullptr, 0) < numNodes) break;   // ★ 同上
+        }
+
+        // w = 第一個沒完成的 word。只保留 [old, w) 這幾個完整的。
+        sim.resize(static_cast<std::size_t>(w) * numNodes);
+        if (w < old + extra) truncated = true;
+        words = w;
+
         st.sim_seconds +=
             std::chrono::duration<double>(std::chrono::steady_clock::now() - s0).count();
         ++st.sim_rounds;
@@ -315,7 +370,17 @@ struct Fraig::Impl {
         std::unordered_map<uint64_t, std::vector<uint32_t>> buckets;
         buckets.reserve(numNodes / 2 + 16);
 
-        for (uint32_t i = 0; i < numNodes; ++i) {
+        // 只有 index < sweptNodeCount 的節點有可信的模擬資料。
+        //
+        // 中途停止是安全的:沒進 buckets 的節點會變成單元素類,
+        // same_class 對它們回 false,而 provably_different 讀的是 sim、
+        // 不看分類,所以「模擬證明不同」的能力完全保留。
+        constexpr uint32_t kCheckStride = 4096;
+        for (uint32_t i = 0; i < sweptNodeCount; ++i) {
+            if ((i & (kCheckStride - 1)) == 0 && i > 0 && out_of_budget()) {
+                truncated = true;
+                break;
+            }
             if (i == 0 && !cfg.use_constant_class) continue;
             if (i != 0 && !isLeaf[i] && state[i] != kOpen) continue;
             buckets[sig_hash(i)].push_back(i);
@@ -352,6 +417,7 @@ struct Fraig::Impl {
         for (auto& c : classes) {
             std::unordered_map<uint64_t, std::vector<uint32_t>> split;
             for (uint32_t n : c) {
+                if (n >= sweptNodeCount) continue;
                 if (!isLeaf[n] && n != 0 && state[n] != kOpen) continue;
                 uint64_t v = base[n];
                 if (simPhase[n]) v = ~v;
@@ -426,10 +492,44 @@ struct Fraig::Impl {
     // ---------------------------------------------------------------------
     void run() {
         t0 = std::chrono::steady_clock::now();
-        st.completed = false;
+        st.completed   = false;
+        truncated      = false;
+        sweptNodeCount = 0;
 
-        build_topology();
-        if (numNodes == 0) { st.completed = true; swept = true; return; }
+        // ---------------------------------------------------------------
+        // 兩個 RAII 必須放在**最前面**。
+        //   run() 有五條離開路徑:build_topology 失敗、numNodes==0、
+        //   simulate_only 的 return、SAT 迴圈的 goto done、正常結束。
+        //   放在中間任何位置都會漏掉前面那幾條。
+        // ---------------------------------------------------------------
+        struct DeadlineClearer {
+            Config& c;
+            ~DeadlineClearer() { c.deadline = nullptr; }
+        } deadlineClearer{cfg};
+
+        struct StatsFlusher {
+            Impl& im;
+            ~StatsFlusher() {
+                im.st.total_node_count = im.numNodes;
+                im.st.swept_node_count = im.sweptNodeCount;
+                im.st.sweep_truncated  = im.truncated;
+            }
+        } statsFlusher{*this};
+
+        if (!build_topology()) {
+            // topology 沒建完 → 模擬一次都沒跑、repr/state 也還沒配置。
+            // sweptNodeCount 必須是 0,否則 is_swept_node() 會對前面幾千個
+            // 節點回 true,而 representative() 會去讀空的 repr。
+            sweptNodeCount = 0;
+            truncated      = true;
+            swept          = true;
+            return;                       // 統計由 StatsFlusher 寫
+        }
+        if (numNodes == 0) {
+            st.completed = true;
+            swept        = true;
+            return;
+        }
 
         // 記憶體預算反推字數。sim 是 words * numNodes 個 uint64,
         // 100 萬 gate(約 1.3M 節點)照預設的 32 word 會吃掉 333MB。
@@ -459,8 +559,8 @@ struct Fraig::Impl {
         //     32 字(2048 向量) → 12790 候選,SAT 13.5s
         //    128 字(8192 向量) →  1938 候選,SAT  1.04s
         // 四倍向量換到十三倍的 SAT 加速 —— 但那個 128 是手調出來的,
-        // 換一顆電路就不一定對。這裡改成從 sim_words_init 起跳、
-        // 依實際候選數倍增,讓小電路不必付大電路的代價。
+        // 換一顆電路就不一定對。所以從 sim_words_init 起跳、依實際候選數倍增,
+        // 讓小電路不必付大電路的代價。
         //
         // 兩個停止條件:
         //   1. 候選已經夠少(相對節點數)
@@ -469,12 +569,12 @@ struct Fraig::Impl {
         //
         // 上限是 maxWords/2,另一半留給反例回收。用光的話 append_word 會失敗,
         // 所有反例無處可去,直接變成 gave_up。
-        // simulate_only 模式不做自適應。
-        //   自適應是為了減少候選、進而減少 SAT 呼叫 —— 而那個模式根本不跑 SAT。
-        //   多出來的向量只讓 provably_different 多幾個命中(實測 396/400 → 400/400),
-        //   卻要付 2.5 倍的模擬與分類成本(0.20s → 0.51s)。
-        //   那 4 個 miss 退回 SAT 只要 24ms,遠比 0.31s 便宜。
-        if (cfg.adaptive_sim && !cfg.simulate_only) {
+        //
+        // simulate_only 不做自適應:那個模式根本不跑 SAT,減少候選毫無意義,
+        // 卻要付 2.5 倍的模擬與分類成本(實測 0.20s → 0.51s)。
+        //
+        // truncated 時也不做:候選集合本來就不完整,多花模擬時間沒有意義。
+        if (cfg.adaptive_sim && !cfg.simulate_only && !truncated) {
             const uint64_t target  = std::max<uint64_t>(64ull, numNodes / 50ull);
             const uint32_t growCap = std::max(initWords, maxWords / 2u);
 
@@ -484,7 +584,10 @@ struct Fraig::Impl {
 
                 const uint32_t add = std::min(words, growCap - words);
                 if (add == 0) break;
+
+                const uint32_t beforeWords = words;
                 grow_simulation(add);
+                if (words == beforeWords) break;   // 一個字都沒加成(被截斷),停手
                 build_classes();
 
                 // 下降不到三成 → 收斂了,停手。
@@ -492,19 +595,8 @@ struct Fraig::Impl {
             }
         }
 
-        // ---- simulate_only:只做模擬與分類,跳過整段 SAT 驗證 ----
-        //
-        // 依據:signature 不同 ⇒ 存在一組模擬向量使兩者取值不同 ⇒ 必定不等價。
-        // 那是一個實實在在的反例,與 sweep 有沒有跑完全無關。
-        // 而真實 workload 裡「不等價」是絕大多數查詢的答案,
-        // 所以這個模式用約 1/30 的成本換到近乎全部的查詢加速。
-        //
-        // completed 必須維持 false:相同 signature 的候選**沒有**被驗證過,
-        //   fraig_complete() 一旦為 true,Primitives 會把「同類但未合併」
-        //   誤讀成不等價 —— 那是靜默的錯誤答案。
-        //   否定結論一律走 provably_different(),不走 completed 那條路。
+        // ---- simulate_only ----(以下完全不動)
         if (cfg.simulate_only) {
-            st.sat_seconds += 0.0;
             st.completed = false;
             swept = true;
             return;
@@ -522,7 +614,7 @@ struct Fraig::Impl {
             bool refined = false;   // 本輪是否因反例而需要重新分類
 
             // 由小到大掃:低層節點先合併,其永久子句能讓上層的 SAT 更省力。
-            for (uint32_t i = 0; i < numNodes && !refined; ++i) {
+            for (uint32_t i = 0; i < sweptNodeCount && !refined; ++i) {
                 if (isLeaf[i]) continue;          // leaf 永遠是代表,不會被併掉
                 if (state[i] != kOpen) continue;
                 const uint32_t cid = classOf[i];
@@ -652,8 +744,14 @@ bool Fraig::is_swept() const { return impl_->swept; }
 uint64_t Fraig::sweep_watermark() const { return impl_->numNodes; }
 
 bool Fraig::is_swept_node(Node n) const {
-    return impl_->swept && impl_->aig.node_to_index(n) < impl_->numNodes;
+    // 只有前置階段實際完成的節點才算掃過。numNodes 是 AIG 大小，
+    // 不是實際完成範圍 —— 用它會讓截斷後的節點被誤認為有模擬資料。
+    return impl_->swept &&
+           impl_->aig.node_to_index(n) < impl_->sweptNodeCount;
 }
+
+bool Fraig::sweep_truncated() const { return impl_->truncated; }
+uint64_t Fraig::swept_node_count() const { return impl_->sweptNodeCount; }
 
 // canonical(s) = repr[node(s)] ^ is_complemented(s)
 //
@@ -664,7 +762,7 @@ Sig Fraig::representative(Sig s) const {
     const Impl& im = *impl_;
     if (!im.swept) return s;
     const uint32_t i = im.aig.node_to_index(im.aig.get_node(s));
-    if (i >= im.numNodes) return s;
+    if (i >= im.sweptNodeCount) return s;
     const Sig r = im.repr[i];
     return im.aig.is_complemented(s) ? !r : r;
 }
@@ -686,7 +784,7 @@ bool Fraig::provably_different(Sig a, Sig b) const {
 
     const uint32_t ia = im.aig.node_to_index(im.aig.get_node(a));
     const uint32_t ib = im.aig.node_to_index(im.aig.get_node(b));
-    if (ia >= im.numNodes || ib >= im.numNodes) return false;   // sweep 之後才長出來的節點
+    if (ia >= im.sweptNodeCount || ib >= im.sweptNodeCount) return false;   // sweep 之後才長出來的節點
 
     const bool ca = im.aig.is_complemented(a);
     const bool cb = im.aig.is_complemented(b);
@@ -724,7 +822,7 @@ std::vector<EquivClass> Fraig::classes(int min_size) const {
     // get_constant(false) 與 get_constant(true)),這是正確的 —— 它們是
     // 兩個不同的等價類。
     std::unordered_map<uint64_t, size_t> where;
-    for (uint32_t i = 0; i < im.numNodes; ++i) {
+    for (uint32_t i = 0; i < im.sweptNodeCount; ++i) {
         const Sig self = im.sig_of(i);
         const Sig r    = im.repr[i];
         if (r == self) continue;                 // 自己就是代表,不算成員
