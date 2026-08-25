@@ -55,7 +55,7 @@ NetlistEditReport report = netlist.runOptApply(request);
 | `allowedTypes` | vector | empty | 白名單；empty 表示不限制 |
 | `bannedTypes` | vector | empty | 黑名單優先，且不得與白名單重疊 |
 | `targetDepth` | int | `-1` | `-1` best effort；`0+` 為 hard acceptance target |
-| `timeLimitSeconds` | double | `290.0` | 必須為有限且大於 0；前置、optimizer、mapping 與 final SAT 共用同一 deadline |
+| `timeLimitSeconds` | double | `290.0` | 必須為有限且大於 0；前置、optimizer、mapping、validation 與 report 收尾共用同一 deadline |
 | `requireDepthImprovement` | bool | true | baseline 合規而無改善時保留 original |
 | `verbose` | bool | false | 輸出 optimizer debug log |
 
@@ -63,9 +63,11 @@ NetlistEditReport report = netlist.runOptApply(request);
 
 ```text
 validateEquivalence=false
-  CriticalPathDepth 仍會進入等價驗證流程；graph identity 使用 StructuralIdentity，
-  其餘 changed candidate 必定嘗試 whole-design SAT。SAT attempt 不保證一定得到 proof；
-  UNKNOWN/inconclusive 的接受例外見第 4 節。
+  graph identity 使用 StructuralIdentity；changed candidate 使用 CertifiedRewrite。
+  CriticalPathDepth 本身不執行 whole-design SAT。
+
+validateEquivalence=true
+  保留相容但不改變上述行為；report 會提醒需要使用 dedicated equivalence command。
 
 rollbackOnFailure=false
   CriticalPathDepth 仍會保留 original，並在 warnings 說明此值被忽略。
@@ -113,39 +115,31 @@ report.depthOptimization->resolvedThroughDffDataPin
 report.depthOptimization->baselineConstraintsSatisfied
 report.depthOptimization->finalConstraintsSatisfied
 report.depthOptimization->candidateAccepted
-report.depthOptimization->wholeDesignTimedOut
-report.depthOptimization->comparedOutputCount
-report.depthOptimization->comparedDffDCount
+report.depthOptimization->wholeDesignEquivalenceChecked
 ```
 
-目前已知例外：whole-design SAT 若回 UNKNOWN/inconclusive，contest scoring policy
-可能仍接受候選。此時 warning 會包含 `This has not been proven by SAT`；在 report
-redesign 完成前，不得只依 `equivalenceChecked=true`、`functionallyEquivalent=true`、
-`wholeDesignEquivalent=true` 或 `equivalenceMethod=WholeDesignSat` 宣稱已有 SAT proof。
-
-現行結果必須分成三類判讀：
+現行結果分成三類判讀：
 
 | 類別 | 判讀依據 | 可以宣稱的內容 |
 |---|---|---|
 | Structural identity | `changed=false` 且 `equivalenceMethod=StructuralIdentity` | design 未改變，因此功能自然相同；未執行 SAT |
-| SAT-proven | changed candidate、method 為 `WholeDesignSat`、等價欄位為 true，且沒有 `This has not been proven by SAT` warning | whole-design checker 已證明所比較的 PO/DFF.D 等價 |
-| Trusted but unproven | candidate 已接受，且 warning 包含 `This has not been proven by SAT` | candidate 依 mockturtle function-preserving 假設接受；不可稱為 SAT-proven |
+| Qualified rewrite certificate | `changed=true` 且 `equivalenceMethod=CertifiedRewrite` | qualified function-preserving optimization/lowering pipeline 已認證候選；不可稱為 SAT-proven |
+| Independent SAT proof | 另行執行 `WholeDesignEquivalence` 並得到完整 equivalent result | checker 已證明所比較的 PO/DFF.D 等價 |
 
-若外部 prompt 明確要求「證明」等價，而 OptApply 回 trusted-but-unproven，應再呼叫
-`WholeDesignEquivalence`／tools `equiv_query previous_edit`；若獨立 checker 仍為
-UNKNOWN，只能如實回報尚未取得 proof。
+若外部 prompt 明確要求獨立 SAT proof，OptApply 後應再呼叫
+`WholeDesignEquivalence`／tools `equiv_query previous_edit`；若獨立 checker未完整完成，
+不得把 `CertifiedRewrite` 改寫成 SAT proof。
 
-若 optimizer 執行後 graph 完全不變，不會啟動 whole-design SAT。此時
+若 optimizer 執行後 graph 完全不變，此時
 `equivalenceMethod=StructuralIdentity`、`wholeDesignEquivalenceChecked=false`，且
 `candidateGenerated=false`、`candidateAccepted=false`；這是已由結構同一性證明的
-no-op，不是 SAT UNKNOWN。
+no-op。
 
 判讀規則：
 
 ```text
 success=true, changed=true:
-  新候選已依現行 acceptance policy 提交；仍須依 warnings 區分 SAT-proven 與
-  trusted-but-unproven。
+  新候選已依 qualified pipeline 提交；equivalenceMethod 應為 CertifiedRewrite。
 
 success=true, changed=false:
   找不到可接受的改善，或命中可證明的 lower bound；current design 仍是 original。
@@ -183,8 +177,8 @@ depthChange.beforeDepth / afterDepth / improved
 validation.functionallyEquivalent
 ```
 
-`validation.functionallyEquivalent` 是現行 acceptance 相容欄位，不可單獨當成 SAT proof；
-必須搭配 `equivalenceMethod` 與 warnings。
+`validation.functionallyEquivalent` 不可單獨當成 SAT proof；必須搭配
+`equivalenceMethod`。`CertifiedRewrite` 與 `WholeDesignSat` 是不同 certificate。
 
 ### 5.2 全設計維持 AND/NOT
 
@@ -206,7 +200,8 @@ depthChange
 validation.functionallyEquivalent
 ```
 
-同樣必須搭配 warnings 判斷是否為 SAT-proven。
+同樣必須搭配 `equivalenceMethod`；CriticalPathDepth 的 changed candidate 應為
+`CertifiedRewrite`。
 
 ### 5.3 n10 cone 維持 NOR/NOT，cost 是 global depth
 
@@ -328,7 +323,7 @@ DFF.Q boundary no-op
 targetDepth acceptance
 no-improvement original retention
 structure / Problem A validation
-mandatory whole-design SAT attempt（可能得到 proof、mismatch 或 inconclusive）
+changed candidate CertifiedRewrite contract（不宣稱 whole-design SAT proof）
 rollback / detailed NetlistEditReport
 ```
 

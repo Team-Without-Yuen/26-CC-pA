@@ -11,14 +11,15 @@
 | `path_query` | endpoint path、register-to-register path、mandatory nodes、separator、PI-to-PO cut | `runPathQuery()`；必要時呼叫 Graph dominator engine |
 | `depth_query` | arrival depth、critical path、endpoint threshold | `runDepthQuery()` |
 | `func_query` | 指定 net/bus 的 equivalence、constant、dependence、symmetry、expression | `runFunctionQuery()` |
-| `func_search` | 未知 internal signal pair 的 Boolean candidate search；目前為 NAND pair | `runFunctionSearchQuery()` |
+| `func_search` | 未知 internal signal(s) 的 Boolean candidate search；支援基本 unary/binary pattern | `runFunctionSearchQuery()` |
 | `sequential_query` | DFF enable/hold/feedback-MUX pattern；目前 CLI 為 canonical fast path | `runSequentialPatternQuery()`；C++ 層另有受限 functional fallback |
 
 Edit、whole-design equivalence、report 與 optimization 維持各自 command family，不與 read-only query 合併。
 
 Optimization 的 C++ public facade 為 `runOptQuery()` / `runOptApply()`；
 `CriticalPathDepth` 已完成 transactional apply、basis/depth validation 與
-whole-design SAT。`tools.cpp` 已公開 `opt_query/opt_apply critical_path_depth`，
+qualified pipeline `CertifiedRewrite` certificate；本 pass 不執行 whole-design SAT。
+`tools.cpp` 已公開 `opt_query/opt_apply critical_path_depth`，
 並只呼叫高階 facade，不直接暴露內部 `DepthOptimizer`。LLM-facing 契約見
 `TOOLS_SPEC/OPTIMIZATION_TOOL.md`。
 

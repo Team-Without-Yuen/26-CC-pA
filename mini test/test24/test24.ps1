@@ -12,6 +12,12 @@ $commands = @(
     "func_search nand_pair missing_net"
     "func_search nand_pair target --patterns 0"
     "func_search nand_pair target --time-limit 0.000000000001"
+    "func_search pattern NOT not_a --include-boundary-signals"
+    "func_search pattern AND and_ab --include-boundary-signals"
+    "func_search pattern AND and_ab --include-boundary-signals --scope net_fanin and_ab"
+    "func_search pattern OR target --all --include-boundary-signals"
+    "func_search pattern DFF target"
+    "func_search pattern NOT not_a --allow-same"
     "help"
     "quit"
 ) -join "`n"
@@ -51,8 +57,8 @@ function Get-IntegerField {
     return [int64]$match.Groups[1].Value
 }
 
-Check-Result ($responses.Count -eq 10) "every Function Search command returns one envelope"
-if ($responses.Count -ge 10) {
+Check-Result ($responses.Count -eq 16) "every Function Search command returns one envelope"
+if ($responses.Count -ge 16) {
     $findAny = $responses[1]
     $findAll = $responses[2]
     $limited = $responses[3]
@@ -60,7 +66,13 @@ if ($responses.Count -ge 10) {
     $missing = $responses[5]
     $invalid = $responses[6]
     $timeout = $responses[7]
-    $help = $responses[8]
+    $patternNot = $responses[8]
+    $patternAnd = $responses[9]
+    $patternScoped = $responses[10]
+    $patternOrAll = $responses[11]
+    $invalidPattern = $responses[12]
+    $invalidUnaryOption = $responses[13]
+    $help = $responses[14]
     $findAllFile = Get-OutputFile $findAll
     $limitedFile = Get-OutputFile $limited
     $findAllMatchCount = Get-IntegerField $findAll "match_count"
@@ -76,6 +88,8 @@ if ($responses.Count -ge 10) {
     } else {
         -1
     }
+    $patternOrFile = Get-OutputFile $patternOrAll
+    $patternOrFileExists = [bool]($patternOrFile -and (Test-Path -LiteralPath $patternOrFile))
 
     Check-Result `
         ($findAny -match "status: ok" -and
@@ -135,7 +149,52 @@ if ($responses.Count -ge 10) {
         "time limit returns timeout instead of no-match"
 
     Check-Result `
+        ($patternNot -match "status: ok" -and
+         $patternNot -match "search_type: FUNCTIONAL_PATTERN_OPERANDS" -and
+         $patternNot -match "pattern_type: NOT" -and
+         $patternNot -match "operand_arity: 1" -and
+         $patternNot -match "operand_count: 1" -and
+         $patternNot -match "solver_status: UNSAT") `
+        "generic unary pattern search returns one proven operand"
+
+    Check-Result `
+        ($patternAnd -match "status: ok" -and
+         $patternAnd -match "pattern_type: AND" -and
+         $patternAnd -match "operand_arity: 2" -and
+         $patternAnd -match "operand_count: 2" -and
+         $patternAnd -match "solver_status: UNSAT") `
+        "generic binary pattern search returns two proven operands"
+
+    Check-Result `
+        ($patternScoped -match "status: ok" -and
+         $patternScoped -match "scope: NET_FANIN" -and
+         $patternScoped -match "scope_name: and_ab" -and
+         $patternScoped -match "found: true" -and
+         $patternScoped -match "operand_count: 2") `
+        "generic pattern scope includes valid cone-boundary operands"
+
+    Check-Result `
+        ($patternOrAll -match "status: ok" -and
+         $patternOrAll -match "pattern_type: OR" -and
+         $patternOrAll -match "complete: true" -and
+         $patternOrAll -match "wrote_matches_to_file: true" -and
+         $patternOrFileExists -and
+         (Get-Content -LiteralPath $patternOrFile -Raw) -match "pattern: OR") `
+        "generic FindAll writes a self-describing artifact"
+
+    Check-Result `
+        ($invalidPattern -match "status: error" -and
+         $invalidPattern -match "pattern gate type must be") `
+        "generic pattern parser rejects DFF"
+
+    Check-Result `
+        ($invalidUnaryOption -match "status: error" -and
+         $invalidUnaryOption -match "not meaningful for unary") `
+        "generic pattern parser rejects binary-only option for unary search"
+
+    Check-Result `
         ($help -match "func_search nand_pair <target_net>" -and
+         $help -match "func_search pattern <BUF\|NOT\|AND\|NAND\|OR\|NOR\|XOR\|XNOR>" -and
          $help -match "--all" -and
          $help -match "--time-limit") `
         "public help exposes Function Search grammar"

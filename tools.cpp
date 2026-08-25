@@ -54,8 +54,10 @@ struct ToolResponse {
     bool complete = false;
 };
 
-constexpr size_t kAutomaticListArtifactEntryThreshold = 200;
-constexpr size_t kAutomaticListArtifactCharacterThreshold = 12000;
+constexpr size_t kMaximumResponseTokenCount = 4096;
+constexpr size_t kResponseEnvelopeTokenReserve = 256;
+constexpr size_t kConservativeCharactersPerToken = 3;
+constexpr size_t kConservativeListEntryTokenOverhead = 2;
 
 size_t saturatingAdd(size_t value, size_t increment) {
     if (increment > std::numeric_limits<size_t>::max() - value) {
@@ -67,6 +69,12 @@ size_t saturatingAdd(size_t value, size_t increment) {
 struct ListArtifactSection {
     std::string title;
     std::vector<std::string> entries;
+    size_t generatedEntryCount = 0;
+    std::function<std::string(size_t)> generateEntry;
+
+    size_t size() const {
+        return generateEntry ? generatedEntryCount : entries.size();
+    }
 };
 
 struct ListArtifactContent {
@@ -76,7 +84,7 @@ struct ListArtifactContent {
     size_t entryCount() const {
         size_t count = 0;
         for (const ListArtifactSection& section : sections) {
-            count += section.entries.size();
+            count = saturatingAdd(count, section.size());
         }
         return count;
     }
@@ -91,9 +99,17 @@ struct ListArtifactContent {
         for (const ListArtifactSection& section : sections) {
             characters = saturatingAdd(characters, section.title.size());
             characters = saturatingAdd(characters, 32);
-            for (const std::string& entry : section.entries) {
-                characters = saturatingAdd(characters, entry.size());
-                characters = saturatingAdd(characters, 3);
+            if (section.generateEntry) {
+                for (size_t i = 0; i < section.generatedEntryCount; ++i) {
+                    const std::string entry = section.generateEntry(i);
+                    characters = saturatingAdd(characters, entry.size());
+                    characters = saturatingAdd(characters, 3);
+                }
+            } else {
+                for (const std::string& entry : section.entries) {
+                    characters = saturatingAdd(characters, entry.size());
+                    characters = saturatingAdd(characters, 3);
+                }
             }
         }
         return characters;
@@ -106,8 +122,9 @@ struct ListArtifactResult {
     bool wroteFile = false;
     size_t entryCount = 0;
     size_t estimatedCharacterCount = 0;
-    bool triggeredByEntryCount = false;
-    bool triggeredByCharacterCount = false;
+    size_t estimatedTokenCount = 0;
+    size_t responseTokenLimit = kMaximumResponseTokenCount;
+    bool triggeredByTokenEstimate = false;
     std::string format = "QUERY_LIST_ARTIFACT_V1";
     std::string outputFilePath;
     std::string message;
@@ -482,11 +499,37 @@ void addListSection(ListArtifactContent& content,
     if (!entries.empty()) content.sections.push_back({title, entries});
 }
 
+void addGeneratedListSection(
+    ListArtifactContent& content,
+    const std::string& title,
+    size_t entryCount,
+    std::function<std::string(size_t)> generateEntry) {
+    if (entryCount == 0) return;
+    ListArtifactSection section;
+    section.title = title;
+    section.generatedEntryCount = entryCount;
+    section.generateEntry = std::move(generateEntry);
+    content.sections.push_back(std::move(section));
+}
+
 std::vector<std::string> gateNamesFromIds(
     const Netlist& netlist,
     const std::vector<int>& gateIds);
 std::vector<std::string> fanoutReportEntries(
     const std::vector<Netlist::FanoutLoadReport>& reports);
+std::string fanoutPredicateName(Netlist::FanoutPredicate predicate);
+std::string fanoutScopeName(Netlist::FanoutScope scope);
+std::string fanoutRankModeName(Netlist::FanoutRankMode mode);
+std::vector<std::string> fanoutRankEntries(
+    const std::vector<Netlist::FanoutRankEntry>& entries);
+std::string coneRankMetricName(Netlist::ConeRankMetric metric);
+std::string coneRankModeName(Netlist::ConeRankMode mode);
+std::vector<std::string> coneRankEntries(
+    const std::vector<Netlist::ConeRankEntry>& entries);
+std::string coneMetricPredicateName(
+    Netlist::ConeMetricPredicate predicate);
+std::vector<std::string> coneFilterEntries(
+    const std::vector<Netlist::ConeFilterEntry>& entries);
 
 std::string formatPinConnection(const PinConnectionSummary& pin) {
     std::string result = pin.pinName + "=";
@@ -510,6 +553,53 @@ std::string formatGateConnection(const GateConnectionSummary& gate) {
     }
     result += "] output=" + formatPinConnection(gate.output);
     return result;
+}
+
+std::string unconnectedPinReasonName(UnconnectedPinReason reason) {
+    switch (reason) {
+    case UnconnectedPinReason::Unconnected: return "UNCONNECTED";
+    case UnconnectedPinReason::InvalidNetId: return "INVALID_NET_ID";
+    case UnconnectedPinReason::RemovedNet: return "REMOVED_NET";
+    }
+    return "UNKNOWN";
+}
+
+std::string formatUnconnectedPin(const Netlist& netlist,
+                                 const UnconnectedPinSummary& pin) {
+    const bool gateValid = netlist.isValidGateId(pin.gateId);
+    const Gate* gate = gateValid ? &netlist.getGate(pin.gateId) : nullptr;
+    const bool isInput = pin.direction == PinDirection::Input;
+
+    std::string pinName;
+    if (isInput) {
+        if (gate != nullptr && pin.pinIndex >= 0 &&
+            pin.pinIndex < static_cast<int>(gate->inputPinNames.size()) &&
+            !gate->inputPinNames[pin.pinIndex].empty()) {
+            pinName = gate->inputPinNames[pin.pinIndex];
+        } else {
+            pinName = "IN" + std::to_string(pin.pinIndex + 1);
+        }
+    } else {
+        pinName = gate != nullptr && gate->type == GateType::DFF ? "Q" : "OUT";
+    }
+
+    std::string netName = "<unconnected>";
+    if (netlist.isValidNetId(pin.netId)) {
+        netName = netlist.getNet(pin.netId).name;
+    } else if (pin.netId >= 0) {
+        netName = "<invalid-net:" + std::to_string(pin.netId) + ">";
+    }
+
+    return "gate_id=" + std::to_string(pin.gateId) +
+           " gate=" + (gate != nullptr ? gate->instName : "<invalid-gate>") +
+           " type=" + (gate != nullptr ? netlist.gateTypeToString(gate->type)
+                                         : "UNKNOWN") +
+           " direction=" + (isInput ? "input" : "output") +
+           " pin=" + pinName +
+           " pin_index=" + std::to_string(pin.pinIndex) +
+           " net_id=" + std::to_string(pin.netId) +
+           " net=" + netName +
+           " reason=" + unconnectedPinReasonName(pin.reason);
 }
 
 std::string connectivityPinRoleName(ConnectivityPinRole role) {
@@ -569,6 +659,41 @@ ListArtifactContent makeBasicListArtifactContent(
         content.fields.push_back(
             {"primary output count", std::to_string(report.primaryOutputCount)});
     }
+    if (report.hasPrimaryInputBitCount) {
+        content.fields.push_back(
+            {"primary input bit count", std::to_string(report.primaryInputBitCount)});
+    }
+    if (report.hasPrimaryOutputBitCount) {
+        content.fields.push_back(
+            {"primary output bit count", std::to_string(report.primaryOutputBitCount)});
+    }
+    if (report.netClassification.valid) {
+        const NetClassificationSummary& summary = report.netClassification;
+        content.fields.push_back(
+            {"active net count", std::to_string(summary.activeNetCount)});
+        content.fields.push_back(
+            {"primary-input net count",
+             std::to_string(summary.primaryInputNetCount)});
+        content.fields.push_back(
+            {"primary-output net count",
+             std::to_string(summary.primaryOutputNetCount)});
+        content.fields.push_back(
+            {"primary-input/output net count",
+             std::to_string(summary.primaryInputOutputNetCount)});
+        content.fields.push_back(
+            {"constant net count", std::to_string(summary.constantNetCount)});
+        content.fields.push_back(
+            {"internal net count", std::to_string(summary.internalNetCount)});
+    }
+    if (!report.objectName.empty()) {
+        content.fields.push_back({"object", report.objectName});
+        if (report.objectId >= 0) {
+            content.fields.push_back({"object id", std::to_string(report.objectId)});
+        }
+        if (!report.typeName.empty()) {
+            content.fields.push_back({"object type", report.typeName});
+        }
+    }
     if (report.gateTypeFilterApplied || report.gateTypeExclusionApplied) {
         content.fields.push_back(
             {"scope gate count", std::to_string(report.scopeGateCount)});
@@ -606,6 +731,28 @@ ListArtifactContent makeBasicListArtifactContent(
         addListSection(content, "Gate connection details", gateConnections);
     }
     addListSection(content, "Net names", report.netNames);
+    if (report.netClassification.valid) {
+        const NetClassificationSummary& summary = report.netClassification;
+        addListSection(content, "Primary-input nets",
+                       summary.primaryInputNetNames);
+        addListSection(content, "Primary-output nets",
+                       summary.primaryOutputNetNames);
+        addListSection(content, "Primary-input/output nets",
+                       summary.primaryInputOutputNetNames);
+        addListSection(content, "Constant nets", summary.constantNetNames);
+        addListSection(content, "Internal nets", summary.internalNetNames);
+    }
+    if (report.hasUnconnectedPinCounts) {
+        content.fields.push_back(
+            {"unconnected gate count",
+             std::to_string(report.unconnectedGates.size())});
+        content.fields.push_back(
+            {"unconnected input pin count",
+             std::to_string(report.unconnectedInputPinCount)});
+        content.fields.push_back(
+            {"unconnected output pin count",
+             std::to_string(report.unconnectedOutputPinCount)});
+    }
     addListSection(content, "Port names", report.portNames);
 
     std::vector<std::string> ports;
@@ -625,6 +772,13 @@ ListArtifactContent makeBasicListArtifactContent(
     addListSection(content, "No-load nets", report.noLoadNets);
     addListSection(content, "Floating nets", report.floatingNets);
     addListSection(content, "Unconnected gates", report.unconnectedGates);
+    addGeneratedListSection(
+        content,
+        "Unconnected pin details",
+        report.unconnectedPins.size(),
+        [&netlist, &report](size_t index) {
+            return formatUnconnectedPin(netlist, report.unconnectedPins[index]);
+        });
     addListSection(content, "Floating primary-input nets",
                    report.floatingPrimaryInputNets);
     addListSection(content, "Unconnected primary-output nets",
@@ -675,10 +829,57 @@ ListArtifactContent makeConnectivityListArtifactContent(
             content.fields.push_back(
                 {"satisfies limit", global.satisfiesLimit ? "yes" : "no"});
         }
+        if (global.fanoutFilterApplied) {
+            content.fields.push_back(
+                {"fanout filter scope",
+                 global.primaryInputsOnly ? "pi" : "all"});
+            content.fields.push_back(
+                {"fanout predicate", fanoutPredicateName(global.fanoutPredicate)});
+            content.fields.push_back(
+                {"fanout value", std::to_string(global.fanoutValue)});
+            if (global.fanoutPredicate ==
+                Netlist::FanoutPredicate::BetweenInclusive) {
+                content.fields.push_back(
+                    {"fanout upper value",
+                     std::to_string(global.fanoutUpperValue)});
+            }
+            content.fields.push_back(
+                {"matched net count", std::to_string(global.matchedNetCount)});
+        }
         addListSection(content, "Max-fanout nets",
                        fanoutReportEntries(global.maxFanoutReports));
         addListSection(content, "Violating nets",
                        fanoutReportEntries(global.violatingReports));
+        if (global.fanoutFilterApplied) {
+            addListSection(content, "Matched nets",
+                           fanoutReportEntries(global.matchedReports));
+        }
+    }
+    if (report.fanoutRankingReport.ok) {
+        const Netlist::FanoutRankingReport& ranking =
+            report.fanoutRankingReport;
+        content.fields.push_back(
+            {"fanout ranking scope", fanoutScopeName(ranking.scope)});
+        content.fields.push_back(
+            {"fanout ranking mode", fanoutRankModeName(ranking.mode)});
+        content.fields.push_back(
+            {"requested rank or count",
+             std::to_string(ranking.requestedRankOrCount)});
+        content.fields.push_back(
+            {"checked nets", std::to_string(ranking.checkedNetCount)});
+        content.fields.push_back(
+            {"distinct fanout levels",
+             std::to_string(ranking.distinctFanoutLevelCount)});
+        content.fields.push_back(
+            {"selected fanout levels",
+             std::to_string(ranking.selectedFanoutLevelCount)});
+        content.fields.push_back(
+            {"result net count", std::to_string(ranking.resultNetCount)});
+        content.fields.push_back(
+            {"requested rank exists",
+             ranking.requestedRankExists ? "yes" : "no"});
+        addListSection(content, "Ranked nets",
+                       fanoutRankEntries(ranking.rankedReports));
     }
     if (report.pinDetailsIncluded) {
         content.fields.push_back(
@@ -693,7 +894,9 @@ ListArtifactContent makeConnectivityListArtifactContent(
     if (!report.fanoutLoadReport.ok && !report.pinDetailsIncluded) {
         addListSection(content, "Gate names", report.gateNames);
     }
-    addListSection(content, "Net names", report.netNames);
+    if (!report.fanoutRankingReport.ok) {
+        addListSection(content, "Net names", report.netNames);
+    }
     return content;
 }
 
@@ -708,6 +911,31 @@ ListArtifactContent makeConeListArtifactContent(
             if (!appliedGateTypes.empty()) appliedGateTypes += ", ";
             appliedGateTypes += netlist.gateTypeToString(type);
         }
+    }
+    if (report.filterReport.ok) {
+        const Netlist::ConeFilterReport& filter = report.filterReport;
+        content.fields = {
+            {"message", report.message},
+            {"output cone filter metric", coneRankMetricName(filter.metric)},
+            {"output cone filter predicate",
+             coneMetricPredicateName(filter.predicate)},
+            {"filter value", std::to_string(filter.value)},
+            {"gate type filter applied",
+             report.gateTypeFilterApplied ? "yes" : "no"},
+            {"gate type filters", appliedGateTypes},
+            {"checked primary outputs",
+             std::to_string(filter.checkedOutputCount)},
+            {"matched output count",
+             std::to_string(filter.matchedOutputCount)}
+        };
+        if (filter.predicate ==
+            Netlist::ConeMetricPredicate::BetweenInclusive) {
+            content.fields.push_back(
+                {"filter upper value", std::to_string(filter.upperValue)});
+        }
+        addListSection(content, "Matched output cones",
+                       coneFilterEntries(filter.matchedOutputs));
+        return content;
     }
     content.fields = {
         {"message", report.message},
@@ -724,6 +952,31 @@ ListArtifactContent makeConeListArtifactContent(
         {"longest local path depth", std::to_string(report.longestDepth)},
         {"shortest local path depth", std::to_string(report.shortestDepth)}
     };
+
+    if (report.rankingReport.ok) {
+        const Netlist::ConeRankingReport& ranking = report.rankingReport;
+        content.fields.push_back(
+            {"output cone ranking metric", coneRankMetricName(ranking.metric)});
+        content.fields.push_back(
+            {"output cone ranking mode", coneRankModeName(ranking.mode)});
+        content.fields.push_back(
+            {"requested rank or count",
+             std::to_string(ranking.requestedRankOrCount)});
+        content.fields.push_back(
+            {"distinct cone metric levels",
+             std::to_string(ranking.distinctMetricLevelCount)});
+        content.fields.push_back(
+            {"selected cone metric levels",
+             std::to_string(ranking.selectedMetricLevelCount)});
+        content.fields.push_back(
+            {"result output count",
+             std::to_string(ranking.resultOutputCount)});
+        content.fields.push_back(
+            {"requested rank exists",
+             ranking.requestedRankExists ? "yes" : "no"});
+        addListSection(content, "Ranked output cones",
+                       coneRankEntries(ranking.rankedOutputs));
+    }
 
     std::vector<std::string> gateTypeCounts;
     for (const auto& item : report.gateTypeCounts) {
@@ -946,6 +1199,32 @@ void printBasicReport(const Netlist& netlist,
     if (report.hasPrimaryOutputCount) {
         std::cout << "  primary outputs: " << report.primaryOutputCount << "\n";
     }
+    if (report.hasPrimaryInputBitCount) {
+        std::cout << "  primary input bits: " << report.primaryInputBitCount << "\n";
+    }
+    if (report.hasPrimaryOutputBitCount) {
+        std::cout << "  primary output bits: " << report.primaryOutputBitCount << "\n";
+    }
+    if (report.netClassification.valid) {
+        const NetClassificationSummary& summary = report.netClassification;
+        std::cout << "  active nets: " << summary.activeNetCount << "\n";
+        std::cout << "  primary-input nets: "
+                  << summary.primaryInputNetCount << "\n";
+        std::cout << "  primary-output nets: "
+                  << summary.primaryOutputNetCount << "\n";
+        std::cout << "  primary-input/output nets: "
+                  << summary.primaryInputOutputNetCount << "\n";
+        std::cout << "  constant nets: " << summary.constantNetCount << "\n";
+        std::cout << "  internal nets: " << summary.internalNetCount << "\n";
+    }
+    if (report.hasUnconnectedPinCounts) {
+        std::cout << "  unconnected gates: "
+                  << report.unconnectedGates.size() << "\n";
+        std::cout << "  unconnected input pins: "
+                  << report.unconnectedInputPinCount << "\n";
+        std::cout << "  unconnected output pins: "
+                  << report.unconnectedOutputPinCount << "\n";
+    }
     if (report.gateTypeFilterApplied || report.gateTypeExclusionApplied) {
         std::cout << "  scope gates: " << report.scopeGateCount << "\n";
         std::cout << "  filtered gates: " << report.gateCount << "\n";
@@ -980,7 +1259,7 @@ void printBasicReport(const Netlist& netlist,
             std::cout << "  is_primary_output: "
                       << (report.isPrimaryOutput ? "true" : "false") << "\n";
         }
-        if (!report.formattedInfo.empty()) {
+        if (!report.formattedInfo.empty() && report.gateConnections.empty()) {
             std::cout << report.formattedInfo << "\n";
         }
     }
@@ -1004,6 +1283,15 @@ void printBasicReport(const Netlist& netlist,
     }
     if (!suppressLists && !report.netNames.empty()) {
         printStringList("Net names", report.netNames);
+    }
+    if (!suppressLists && report.netClassification.valid) {
+        const NetClassificationSummary& summary = report.netClassification;
+        printStringList("Primary-input nets", summary.primaryInputNetNames);
+        printStringList("Primary-output nets", summary.primaryOutputNetNames);
+        printStringList("Primary-input/output nets",
+                        summary.primaryInputOutputNetNames);
+        printStringList("Constant nets", summary.constantNetNames);
+        printStringList("Internal nets", summary.internalNetNames);
     }
     if (!suppressLists && !report.portNames.empty()) {
         printStringList("Port names", report.portNames);
@@ -1032,6 +1320,13 @@ void printBasicReport(const Netlist& netlist,
     }
     if (!suppressLists && !report.unconnectedGates.empty()) {
         printStringList("Unconnected gates", report.unconnectedGates);
+    }
+    if (!suppressLists && !report.unconnectedPins.empty()) {
+        std::cout << "Unconnected pin details ("
+                  << report.unconnectedPins.size() << "):\n";
+        for (const UnconnectedPinSummary& pin : report.unconnectedPins) {
+            std::cout << "  " << formatUnconnectedPin(netlist, pin) << "\n";
+        }
     }
     if (!suppressLists && !report.floatingPrimaryInputNets.empty()) {
         printStringList(
@@ -1086,14 +1381,29 @@ ListArtifactResult writeAutomaticListArtifact(
     ListArtifactResult result;
     result.entryCount = content.entryCount();
     result.estimatedCharacterCount = content.estimatedSerializedCharacters();
+    size_t responseCharacterOverhead = command.size();
+    responseCharacterOverhead = saturatingAdd(
+        responseCharacterOverhead, mode.size());
+    responseCharacterOverhead = saturatingAdd(
+        responseCharacterOverhead, session.loadedFilePath.size());
+    responseCharacterOverhead = saturatingAdd(responseCharacterOverhead, 128);
     result.estimatedCharacterCount = saturatingAdd(
-        result.estimatedCharacterCount,
-        command.size() + mode.size() + session.loadedFilePath.size() + 128);
-    result.triggeredByEntryCount =
-        result.entryCount > kAutomaticListArtifactEntryThreshold;
-    result.triggeredByCharacterCount =
-        result.estimatedCharacterCount > kAutomaticListArtifactCharacterThreshold;
-    if (!result.triggeredByEntryCount && !result.triggeredByCharacterCount) {
+        result.estimatedCharacterCount, responseCharacterOverhead);
+    size_t entryTokenOverhead = 0;
+    for (size_t i = 0; i < kConservativeListEntryTokenOverhead; ++i) {
+        entryTokenOverhead = saturatingAdd(
+            entryTokenOverhead, result.entryCount);
+    }
+    const size_t serializedTokenEstimate =
+        saturatingAdd(result.estimatedCharacterCount,
+                      kConservativeCharactersPerToken - 1) /
+        kConservativeCharactersPerToken;
+    result.estimatedTokenCount = saturatingAdd(
+        kResponseEnvelopeTokenReserve,
+        saturatingAdd(serializedTokenEstimate, entryTokenOverhead));
+    result.triggeredByTokenEstimate =
+        result.estimatedTokenCount >= kMaximumResponseTokenCount;
+    if (!result.triggeredByTokenEstimate) {
         return result;
     }
 
@@ -1116,10 +1426,11 @@ ListArtifactResult writeAutomaticListArtifact(
            << "  entry count: " << result.entryCount << "\n"
            << "  estimated serialized characters: "
            << result.estimatedCharacterCount << "\n"
-           << "  triggered by entry count: "
-           << (result.triggeredByEntryCount ? "yes" : "no") << "\n"
-           << "  triggered by character count: "
-           << (result.triggeredByCharacterCount ? "yes" : "no") << "\n\n"
+           << "  estimated response tokens: "
+           << result.estimatedTokenCount << "\n"
+           << "  response token limit: " << result.responseTokenLimit << "\n"
+           << "  triggered by token estimate: "
+           << (result.triggeredByTokenEstimate ? "yes" : "no") << "\n\n"
            << "Fields:\n";
     for (const auto& field : content.fields) {
         output << "  " << field.first << ": " << field.second << "\n";
@@ -1127,9 +1438,15 @@ ListArtifactResult writeAutomaticListArtifact(
 
     output << "\nLists:\n";
     for (const ListArtifactSection& section : content.sections) {
-        output << section.title << " (" << section.entries.size() << "):\n";
-        for (const std::string& entry : section.entries) {
-            output << "  " << entry << "\n";
+        output << section.title << " (" << section.size() << "):\n";
+        if (section.generateEntry) {
+            for (size_t i = 0; i < section.generatedEntryCount; ++i) {
+                output << "  " << section.generateEntry(i) << "\n";
+            }
+        } else {
+            for (const std::string& entry : section.entries) {
+                output << "  " << entry << "\n";
+            }
         }
     }
     output << "\nTotal list entries: " << result.entryCount << "\n"
@@ -1168,10 +1485,12 @@ void printListArtifactMetadata(const ListArtifactResult& artifact) {
     std::cout << "  list entry count: " << artifact.entryCount << "\n";
     std::cout << "  estimated list characters: "
               << artifact.estimatedCharacterCount << "\n";
-    std::cout << "  artifact triggered by entry count: "
-              << (artifact.triggeredByEntryCount ? "yes" : "no") << "\n";
-    std::cout << "  artifact triggered by character count: "
-              << (artifact.triggeredByCharacterCount ? "yes" : "no") << "\n";
+    std::cout << "  estimated response tokens: "
+              << artifact.estimatedTokenCount << "\n";
+    std::cout << "  response token limit: "
+              << artifact.responseTokenLimit << "\n";
+    std::cout << "  artifact triggered by token estimate: "
+              << (artifact.triggeredByTokenEstimate ? "yes" : "no") << "\n";
     std::cout << "  wrote list to file: "
               << (artifact.wroteFile ? "yes" : "no") << "\n";
     if (artifact.wroteFile) {
@@ -1201,6 +1520,230 @@ std::vector<std::string> fanoutReportEntries(
                           std::to_string(report.totalLoadCount));
     }
     return entries;
+}
+
+std::string fanoutPredicateName(Netlist::FanoutPredicate predicate) {
+    switch (predicate) {
+    case Netlist::FanoutPredicate::None: return "none";
+    case Netlist::FanoutPredicate::Equal: return "eq";
+    case Netlist::FanoutPredicate::NotEqual: return "ne";
+    case Netlist::FanoutPredicate::GreaterThan: return "gt";
+    case Netlist::FanoutPredicate::GreaterOrEqual: return "ge";
+    case Netlist::FanoutPredicate::LessThan: return "lt";
+    case Netlist::FanoutPredicate::LessOrEqual: return "le";
+    case Netlist::FanoutPredicate::BetweenInclusive: return "between";
+    }
+    return "unknown";
+}
+
+bool parseFanoutPredicate(const std::string& token,
+                          Netlist::FanoutPredicate& predicate) {
+    const std::string lowered = toLower(token);
+    if (lowered == "eq") {
+        predicate = Netlist::FanoutPredicate::Equal;
+    } else if (lowered == "ne") {
+        predicate = Netlist::FanoutPredicate::NotEqual;
+    } else if (lowered == "gt") {
+        predicate = Netlist::FanoutPredicate::GreaterThan;
+    } else if (lowered == "ge") {
+        predicate = Netlist::FanoutPredicate::GreaterOrEqual;
+    } else if (lowered == "lt") {
+        predicate = Netlist::FanoutPredicate::LessThan;
+    } else if (lowered == "le") {
+        predicate = Netlist::FanoutPredicate::LessOrEqual;
+    } else if (lowered == "between") {
+        predicate = Netlist::FanoutPredicate::BetweenInclusive;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+std::string fanoutScopeName(Netlist::FanoutScope scope) {
+    switch (scope) {
+    case Netlist::FanoutScope::All: return "all";
+    case Netlist::FanoutScope::PrimaryInputs: return "pi";
+    case Netlist::FanoutScope::PrimaryOutputs: return "po";
+    case Netlist::FanoutScope::Internal: return "internal";
+    case Netlist::FanoutScope::GateOutputs: return "gate_output";
+    case Netlist::FanoutScope::CombinationalOutputs: return "comb_output";
+    case Netlist::FanoutScope::DffOutputs: return "dff_output";
+    }
+    return "unknown";
+}
+
+bool parseFanoutScope(const std::string& token, Netlist::FanoutScope& scope) {
+    const std::string lowered = toLower(token);
+    if (lowered == "all") scope = Netlist::FanoutScope::All;
+    else if (lowered == "pi") scope = Netlist::FanoutScope::PrimaryInputs;
+    else if (lowered == "po") scope = Netlist::FanoutScope::PrimaryOutputs;
+    else if (lowered == "internal") scope = Netlist::FanoutScope::Internal;
+    else if (lowered == "gate_output") scope = Netlist::FanoutScope::GateOutputs;
+    else if (lowered == "comb_output") {
+        scope = Netlist::FanoutScope::CombinationalOutputs;
+    } else if (lowered == "dff_output") {
+        scope = Netlist::FanoutScope::DffOutputs;
+    } else return false;
+    return true;
+}
+
+std::string fanoutRankModeName(Netlist::FanoutRankMode mode) {
+    switch (mode) {
+    case Netlist::FanoutRankMode::Highest: return "highest";
+    case Netlist::FanoutRankMode::Lowest: return "lowest";
+    case Netlist::FanoutRankMode::NthHighest: return "nth_highest";
+    case Netlist::FanoutRankMode::NthLowest: return "nth_lowest";
+    case Netlist::FanoutRankMode::Top: return "top";
+    case Netlist::FanoutRankMode::Bottom: return "bottom";
+    }
+    return "unknown";
+}
+
+bool parseFanoutRankMode(const std::string& token,
+                         Netlist::FanoutRankMode& mode) {
+    const std::string lowered = toLower(token);
+    if (lowered == "highest") mode = Netlist::FanoutRankMode::Highest;
+    else if (lowered == "lowest") mode = Netlist::FanoutRankMode::Lowest;
+    else if (lowered == "nth_highest") mode = Netlist::FanoutRankMode::NthHighest;
+    else if (lowered == "nth_lowest") mode = Netlist::FanoutRankMode::NthLowest;
+    else if (lowered == "top") mode = Netlist::FanoutRankMode::Top;
+    else if (lowered == "bottom") mode = Netlist::FanoutRankMode::Bottom;
+    else return false;
+    return true;
+}
+
+std::vector<std::string> fanoutRankEntries(
+    const std::vector<Netlist::FanoutRankEntry>& entries) {
+    std::vector<std::string> result;
+    result.reserve(entries.size());
+    for (const Netlist::FanoutRankEntry& entry : entries) {
+        result.push_back("rank=" + std::to_string(entry.rank) +
+                         " net=" + entry.netName +
+                         " fanout=" + std::to_string(entry.fanout));
+    }
+    return result;
+}
+
+std::string coneRankMetricName(Netlist::ConeRankMetric metric) {
+    switch (metric) {
+    case Netlist::ConeRankMetric::ScopeGateCount: return "scope_gates";
+    case Netlist::ConeRankMetric::FilteredGateCount: return "filtered_gates";
+    case Netlist::ConeRankMetric::NetCount: return "nets";
+    }
+    return "unknown";
+}
+
+bool parseConeRankMetric(const std::string& token,
+                         Netlist::ConeRankMetric& metric) {
+    const std::string lowered = toLower(token);
+    if (lowered == "gates" || lowered == "scope_gates") {
+        metric = Netlist::ConeRankMetric::ScopeGateCount;
+    } else if (lowered == "filtered_gates") {
+        metric = Netlist::ConeRankMetric::FilteredGateCount;
+    } else if (lowered == "nets") {
+        metric = Netlist::ConeRankMetric::NetCount;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+std::string coneRankModeName(Netlist::ConeRankMode mode) {
+    switch (mode) {
+    case Netlist::ConeRankMode::Highest: return "highest";
+    case Netlist::ConeRankMode::Lowest: return "lowest";
+    case Netlist::ConeRankMode::NthHighest: return "nth_highest";
+    case Netlist::ConeRankMode::NthLowest: return "nth_lowest";
+    case Netlist::ConeRankMode::Top: return "top";
+    case Netlist::ConeRankMode::Bottom: return "bottom";
+    }
+    return "unknown";
+}
+
+bool parseConeRankMode(const std::string& token,
+                       Netlist::ConeRankMode& mode) {
+    const std::string lowered = toLower(token);
+    if (lowered == "highest") mode = Netlist::ConeRankMode::Highest;
+    else if (lowered == "lowest") mode = Netlist::ConeRankMode::Lowest;
+    else if (lowered == "nth_highest") {
+        mode = Netlist::ConeRankMode::NthHighest;
+    } else if (lowered == "nth_lowest") {
+        mode = Netlist::ConeRankMode::NthLowest;
+    } else if (lowered == "top") mode = Netlist::ConeRankMode::Top;
+    else if (lowered == "bottom") mode = Netlist::ConeRankMode::Bottom;
+    else return false;
+    return true;
+}
+
+std::vector<std::string> coneRankEntries(
+    const std::vector<Netlist::ConeRankEntry>& entries) {
+    std::vector<std::string> result;
+    result.reserve(entries.size());
+    for (const Netlist::ConeRankEntry& entry : entries) {
+        result.push_back(
+            "rank=" + std::to_string(entry.rank) +
+            " output=" + entry.outputNetName +
+            " metric=" + std::to_string(entry.metricValue) +
+            " scope_gates=" + std::to_string(entry.scopeGateCount) +
+            " filtered_gates=" + std::to_string(entry.filteredGateCount) +
+            " nets=" + std::to_string(entry.netCount));
+    }
+    return result;
+}
+
+std::string coneMetricPredicateName(
+    Netlist::ConeMetricPredicate predicate) {
+    switch (predicate) {
+    case Netlist::ConeMetricPredicate::Equal: return "equal";
+    case Netlist::ConeMetricPredicate::NotEqual: return "not_equal";
+    case Netlist::ConeMetricPredicate::GreaterThan: return "greater_than";
+    case Netlist::ConeMetricPredicate::GreaterOrEqual:
+        return "greater_or_equal";
+    case Netlist::ConeMetricPredicate::LessThan: return "less_than";
+    case Netlist::ConeMetricPredicate::LessOrEqual: return "less_or_equal";
+    case Netlist::ConeMetricPredicate::BetweenInclusive:
+        return "between_inclusive";
+    }
+    return "unknown";
+}
+
+bool parseConeMetricPredicate(
+    const std::string& token,
+    Netlist::ConeMetricPredicate& predicate) {
+    const std::string lowered = toLower(token);
+    if (lowered == "eq") {
+        predicate = Netlist::ConeMetricPredicate::Equal;
+    } else if (lowered == "ne") {
+        predicate = Netlist::ConeMetricPredicate::NotEqual;
+    } else if (lowered == "gt") {
+        predicate = Netlist::ConeMetricPredicate::GreaterThan;
+    } else if (lowered == "ge") {
+        predicate = Netlist::ConeMetricPredicate::GreaterOrEqual;
+    } else if (lowered == "lt") {
+        predicate = Netlist::ConeMetricPredicate::LessThan;
+    } else if (lowered == "le") {
+        predicate = Netlist::ConeMetricPredicate::LessOrEqual;
+    } else if (lowered == "between") {
+        predicate = Netlist::ConeMetricPredicate::BetweenInclusive;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+std::vector<std::string> coneFilterEntries(
+    const std::vector<Netlist::ConeFilterEntry>& entries) {
+    std::vector<std::string> result;
+    result.reserve(entries.size());
+    for (const Netlist::ConeFilterEntry& entry : entries) {
+        result.push_back(
+            "output=" + entry.outputNetName +
+            " metric=" + std::to_string(entry.metricValue) +
+            " scope_gates=" + std::to_string(entry.scopeGateCount) +
+            " filtered_gates=" + std::to_string(entry.filteredGateCount) +
+            " nets=" + std::to_string(entry.netCount));
+    }
+    return result;
 }
 
 // 建立不覆寫既有檔案的 Boolean equation artifact 名稱。
@@ -1277,11 +1820,50 @@ void printConnectivityReport(const Netlist& netlist,
             std::cout << "  satisfies limit: "
                       << (global.satisfiesLimit ? "yes" : "no") << "\n";
         }
+        if (global.fanoutFilterApplied) {
+            std::cout << "  fanout filter scope: "
+                      << (global.primaryInputsOnly ? "pi" : "all") << "\n";
+            std::cout << "  fanout predicate: "
+                      << fanoutPredicateName(global.fanoutPredicate) << "\n";
+            std::cout << "  fanout value: " << global.fanoutValue << "\n";
+            if (global.fanoutPredicate ==
+                Netlist::FanoutPredicate::BetweenInclusive) {
+                std::cout << "  fanout upper value: "
+                          << global.fanoutUpperValue << "\n";
+            }
+            std::cout << "  matched net count: "
+                      << global.matchedNetCount << "\n";
+        }
         if (!suppressLists) {
             printFanoutNetList("Max-fanout nets", global.maxFanoutReports);
             if (!global.violatingReports.empty()) {
                 printFanoutNetList("Violating nets", global.violatingReports);
             }
+            if (global.fanoutFilterApplied) {
+                printFanoutNetList("Matched nets", global.matchedReports);
+            }
+        }
+    }
+    if (report.fanoutRankingReport.ok) {
+        const Netlist::FanoutRankingReport& ranking =
+            report.fanoutRankingReport;
+        std::cout << "  fanout ranking scope: "
+                  << fanoutScopeName(ranking.scope) << "\n";
+        std::cout << "  fanout ranking mode: "
+                  << fanoutRankModeName(ranking.mode) << "\n";
+        std::cout << "  requested rank or count: "
+                  << ranking.requestedRankOrCount << "\n";
+        std::cout << "  checked nets: " << ranking.checkedNetCount << "\n";
+        std::cout << "  distinct fanout levels: "
+                  << ranking.distinctFanoutLevelCount << "\n";
+        std::cout << "  selected fanout levels: "
+                  << ranking.selectedFanoutLevelCount << "\n";
+        std::cout << "  result net count: " << ranking.resultNetCount << "\n";
+        std::cout << "  requested rank exists: "
+                  << (ranking.requestedRankExists ? "yes" : "no") << "\n";
+        if (!suppressLists) {
+            printStringList("Ranked nets",
+                            fanoutRankEntries(ranking.rankedReports));
         }
     }
     if (!suppressLists && report.pinDetailsIncluded &&
@@ -1297,7 +1879,8 @@ void printConnectivityReport(const Netlist& netlist,
         !report.gateNames.empty()) {
         printStringList("Gate names", report.gateNames);
     }
-    if (!suppressLists && !report.netNames.empty()) {
+    if (!suppressLists && !report.fanoutRankingReport.ok &&
+        !report.netNames.empty()) {
         printStringList("Net names", report.netNames);
     }
 }
@@ -1308,6 +1891,43 @@ void printConeReport(const Netlist& netlist,
                      bool suppressLists = false) {
     if (!report.ok) {
         std::cout << "Error: " << report.message << "\n";
+        return;
+    }
+
+    if (report.filterReport.ok) {
+        const Netlist::ConeFilterReport& filter = report.filterReport;
+        std::cout << "OK: " << report.message << "\n";
+        std::cout << "  output cone filter metric: "
+                  << coneRankMetricName(filter.metric) << "\n";
+        std::cout << "  output cone filter predicate: "
+                  << coneMetricPredicateName(filter.predicate) << "\n";
+        std::cout << "  filter value: " << filter.value << "\n";
+        if (filter.predicate ==
+            Netlist::ConeMetricPredicate::BetweenInclusive) {
+            std::cout << "  filter upper value: "
+                      << filter.upperValue << "\n";
+        }
+        std::cout << "  gate type filter applied: "
+                  << (report.gateTypeFilterApplied ? "yes" : "no") << "\n";
+        std::cout << "  gate type filters: ";
+        if (report.appliedGateTypeFilters.empty()) {
+            std::cout << "all\n";
+        } else {
+            for (size_t i = 0; i < report.appliedGateTypeFilters.size(); ++i) {
+                if (i != 0) std::cout << ", ";
+                std::cout << netlist.gateTypeToString(
+                    report.appliedGateTypeFilters[i]);
+            }
+            std::cout << "\n";
+        }
+        std::cout << "  checked primary outputs: "
+                  << filter.checkedOutputCount << "\n";
+        std::cout << "  matched output count: "
+                  << filter.matchedOutputCount << "\n";
+        if (!suppressLists && !filter.matchedOutputs.empty()) {
+            printStringList("Matched output cones",
+                            coneFilterEntries(filter.matchedOutputs));
+        }
         return;
     }
 
@@ -1342,8 +1962,29 @@ void printConeReport(const Netlist& netlist,
                       << " : " << item.second << "\n";
         }
     }
-    if (report.checkedOutputCount > 0) {
+    if (report.checkedOutputCount > 0 || report.rankingReport.ok) {
         std::cout << "  checked primary outputs: " << report.checkedOutputCount << "\n";
+    }
+    if (report.rankingReport.ok) {
+        const Netlist::ConeRankingReport& ranking = report.rankingReport;
+        std::cout << "  output cone ranking metric: "
+                  << coneRankMetricName(ranking.metric) << "\n";
+        std::cout << "  output cone ranking mode: "
+                  << coneRankModeName(ranking.mode) << "\n";
+        std::cout << "  requested rank or count: "
+                  << ranking.requestedRankOrCount << "\n";
+        std::cout << "  distinct cone metric levels: "
+                  << ranking.distinctMetricLevelCount << "\n";
+        std::cout << "  selected cone metric levels: "
+                  << ranking.selectedMetricLevelCount << "\n";
+        std::cout << "  result output count: "
+                  << ranking.resultOutputCount << "\n";
+        std::cout << "  requested rank exists: "
+                  << (ranking.requestedRankExists ? "yes" : "no") << "\n";
+        if (!suppressLists && !ranking.rankedOutputs.empty()) {
+            printStringList("Ranked output cones",
+                            coneRankEntries(ranking.rankedOutputs));
+        }
     }
     if (!suppressLists && !report.rootNetNames.empty()) {
         printStringList("Root nets", report.rootNetNames);
@@ -1755,9 +2396,15 @@ void printFunctionReport(const Netlist::FunctionReport& report,
 void printFunctionSearchReport(const Netlist& netlist,
                                const Netlist::FunctionSearchReport& report) {
     auto queryTypeName = [](Netlist::FunctionSearchQueryType type) {
-        return type == Netlist::FunctionSearchQueryType::EquivalentGatePairs
-            ? "EQUIVALENT_GATE_PAIRS"
-            : "NAND_EQUIVALENT_INPUT_PAIRS";
+        switch (type) {
+        case Netlist::FunctionSearchQueryType::NandEquivalentInputPairs:
+            return "NAND_EQUIVALENT_INPUT_PAIRS";
+        case Netlist::FunctionSearchQueryType::FunctionalPatternOperands:
+            return "FUNCTIONAL_PATTERN_OPERANDS";
+        case Netlist::FunctionSearchQueryType::EquivalentGatePairs:
+            return "EQUIVALENT_GATE_PAIRS";
+        }
+        return "UNKNOWN";
     };
     auto scopeName = [](Netlist::FunctionSearchScope scope) {
         switch (scope) {
@@ -1781,6 +2428,10 @@ void printFunctionSearchReport(const Netlist& netlist,
                       ? "ANY"
                       : netlist.gateTypeToString(report.gateTypeFilter))
               << "\n";
+    std::cout << "  pattern_type: "
+              << (report.patternTypeName.empty() ? "NONE" : report.patternTypeName)
+              << "\n";
+    std::cout << "  operand_arity: " << report.operandArity << "\n";
     std::cout << "  found: " << (report.found ? "true" : "false") << "\n";
     std::cout << "  complete: " << (report.complete ? "true" : "false") << "\n";
     std::cout << "  all_candidates_examined: "
@@ -1834,6 +2485,13 @@ void printFunctionSearchReport(const Netlist& netlist,
         std::cout << "      net_a_id: " << match.netIdA << "\n";
         std::cout << "      net_b: " << match.netNameB << "\n";
         std::cout << "      net_b_id: " << match.netIdB << "\n";
+        std::cout << "      operand_count: " << match.operandNetIds.size() << "\n";
+        for (size_t operand = 0; operand < match.operandNetIds.size(); ++operand) {
+            std::cout << "      operand_" << (operand + 1) << ": "
+                      << match.operandNetNames[operand] << "\n";
+            std::cout << "      operand_" << (operand + 1) << "_id: "
+                      << match.operandNetIds[operand] << "\n";
+        }
         std::cout << "      proven_equivalent: "
                   << (match.provenEquivalent ? "true" : "false") << "\n";
         std::cout << "      proof_method: " << match.proofMethod << "\n";
@@ -3010,6 +3668,9 @@ bool buildBasicQuery(const Netlist& netlist,
     } else if (m == "list_nets") {
         query.type = Netlist::BasicQueryType::ListNets;
         return requireNoBasicArguments(iss, m, error);
+    } else if (m == "net_classes") {
+        query.type = Netlist::BasicQueryType::NetClassification;
+        return requireNoBasicArguments(iss, m, error);
     } else if (m == "list_pi") {
         query.type = Netlist::BasicQueryType::ListPrimaryInputs;
         return requireNoBasicArguments(iss, m, error);
@@ -3160,6 +3821,99 @@ bool buildConnectivityQuery(std::istringstream& iss,
             error = "Unexpected structure_query argument: " + trailing;
             return false;
         }
+    } else if (m == "fanout_filter") {
+        query.type = Netlist::DirectConnectivityQueryType::GlobalFanoutReport;
+
+        std::string scopeToken;
+        std::string predicateToken;
+        std::string valueToken;
+        if (!(iss >> scopeToken >> predicateToken >> valueToken)) {
+            error = "fanout_filter requires <all|pi> "
+                    "<eq|ne|gt|ge|lt|le|between> <value> [upper]";
+            return false;
+        }
+
+        const std::string scope = toLower(scopeToken);
+        if (scope == "all") {
+            query.primaryInputsOnly = false;
+        } else if (scope == "pi") {
+            query.primaryInputsOnly = true;
+        } else {
+            error = "fanout_filter scope must be all or pi";
+            return false;
+        }
+
+        if (!parseFanoutPredicate(predicateToken, query.fanoutPredicate)) {
+            error = "fanout_filter predicate must be "
+                    "eq, ne, gt, ge, lt, le, or between";
+            return false;
+        }
+        if (!parseNonNegativeSize(valueToken, query.fanoutValue)) {
+            error = "fanout_filter value must be a non-negative integer";
+            return false;
+        }
+
+        std::string trailing;
+        if (query.fanoutPredicate ==
+            Netlist::FanoutPredicate::BetweenInclusive) {
+            if (!(iss >> valueToken) ||
+                !parseNonNegativeSize(valueToken, query.fanoutUpperValue)) {
+                error = "fanout_filter between requires a non-negative integer <upper>";
+                return false;
+            }
+            if (query.fanoutValue > query.fanoutUpperValue) {
+                error = "fanout_filter lower bound must not exceed upper bound";
+                return false;
+            }
+            if (iss >> trailing) {
+                error = "Unexpected structure_query argument: " + trailing;
+                return false;
+            }
+        } else if (iss >> trailing) {
+            error = "Unexpected structure_query argument: " + trailing;
+            return false;
+        }
+    } else if (m == "fanout_rank") {
+        query.type = Netlist::DirectConnectivityQueryType::FanoutRankingReport;
+
+        std::string scopeToken;
+        std::string modeToken;
+        if (!(iss >> scopeToken >> modeToken)) {
+            error = "fanout_rank requires <scope> <mode> [k]";
+            return false;
+        }
+        if (!parseFanoutScope(scopeToken, query.fanoutScope)) {
+            error = "fanout_rank scope must be all, pi, po, internal, "
+                    "gate_output, comb_output, or dff_output";
+            return false;
+        }
+        if (!parseFanoutRankMode(modeToken, query.fanoutRankMode)) {
+            error = "fanout_rank mode must be highest, lowest, nth_highest, "
+                    "nth_lowest, top, or bottom";
+            return false;
+        }
+
+        const bool requiresValue =
+            query.fanoutRankMode == Netlist::FanoutRankMode::NthHighest ||
+            query.fanoutRankMode == Netlist::FanoutRankMode::NthLowest ||
+            query.fanoutRankMode == Netlist::FanoutRankMode::Top ||
+            query.fanoutRankMode == Netlist::FanoutRankMode::Bottom;
+        std::string token;
+        if (requiresValue) {
+            if (!(iss >> token) ||
+                !parseNonNegativeSize(token, query.fanoutRankValue) ||
+                query.fanoutRankValue == 0) {
+                error = "fanout_rank " + toLower(modeToken) +
+                        " requires a positive integer <k>";
+                return false;
+            }
+        } else {
+            query.fanoutRankValue = 1;
+        }
+        if (iss >> token) {
+            error = "Unexpected structure_query argument: " + token;
+            return false;
+        }
     } else if (m == "gate_inputs") {
         query.type = Netlist::DirectConnectivityQueryType::GateInputs;
         return requireOneName("gate", query.gateName);
@@ -3199,33 +3953,115 @@ bool buildConeQuery(const Netlist& netlist,
     const std::string m = toLower(mode);
     if (m == "net_fanin") {
         query.type = Netlist::ConeQueryType::NetTransitiveFanin;
-        if (!(iss >> query.netName)) {
+        if (!(iss >> query.netName) || isOptionToken(query.netName)) {
             errorMessage = "net_fanin requires <net>";
             return false;
         }
     } else if (m == "net_fanout") {
         query.type = Netlist::ConeQueryType::NetTransitiveFanout;
-        if (!(iss >> query.netName)) {
+        if (!(iss >> query.netName) || isOptionToken(query.netName)) {
             errorMessage = "net_fanout requires <net>";
             return false;
         }
     } else if (m == "gate_fanin") {
         query.type = Netlist::ConeQueryType::GateTransitiveFanin;
-        if (!(iss >> query.gateName)) {
+        if (!(iss >> query.gateName) || isOptionToken(query.gateName)) {
             errorMessage = "gate_fanin requires <gate>";
             return false;
         }
     } else if (m == "gate_fanout") {
         query.type = Netlist::ConeQueryType::GateTransitiveFanout;
-        if (!(iss >> query.gateName)) {
+        if (!(iss >> query.gateName) || isOptionToken(query.gateName)) {
             errorMessage = "gate_fanout requires <gate>";
             return false;
         }
     } else if (m == "largest_output") {
         query.type = Netlist::ConeQueryType::LargestOutputCone;
+    } else if (m == "output_rank") {
+        query.type = Netlist::ConeQueryType::OutputConeRanking;
+
+        std::string metricToken;
+        std::string modeToken;
+        if (!(iss >> metricToken >> modeToken)) {
+            errorMessage =
+                "output_rank requires <metric> <mode> [k]";
+            return false;
+        }
+        if (!parseConeRankMetric(metricToken, query.rankMetric)) {
+            errorMessage =
+                "output_rank metric must be gates, filtered_gates, or nets";
+            return false;
+        }
+        if (!parseConeRankMode(modeToken, query.rankMode)) {
+            errorMessage = "output_rank mode must be highest, lowest, "
+                           "nth_highest, nth_lowest, top, or bottom";
+            return false;
+        }
+
+        const bool requiresValue =
+            query.rankMode == Netlist::ConeRankMode::NthHighest ||
+            query.rankMode == Netlist::ConeRankMode::NthLowest ||
+            query.rankMode == Netlist::ConeRankMode::Top ||
+            query.rankMode == Netlist::ConeRankMode::Bottom;
+        if (requiresValue) {
+            std::string valueToken;
+            if (!(iss >> valueToken) ||
+                !parseNonNegativeSize(valueToken, query.rankValue) ||
+                query.rankValue == 0) {
+                errorMessage = "output_rank " + toLower(modeToken) +
+                               " requires a positive integer <k>";
+                return false;
+            }
+        } else {
+            query.rankValue = 1;
+        }
+    } else if (m == "output_filter") {
+        query.type = Netlist::ConeQueryType::OutputConeFilter;
+
+        std::string metricToken;
+        std::string predicateToken;
+        std::string valueToken;
+        if (!(iss >> metricToken >> predicateToken >> valueToken)) {
+            errorMessage =
+                "output_filter requires <metric> <predicate> <value> [upper]";
+            return false;
+        }
+        if (!parseConeRankMetric(metricToken, query.rankMetric)) {
+            errorMessage =
+                "output_filter metric must be gates, filtered_gates, or nets";
+            return false;
+        }
+        if (!parseConeMetricPredicate(predicateToken,
+                                      query.metricPredicate)) {
+            errorMessage = "output_filter predicate must be "
+                           "eq, ne, gt, ge, lt, le, or between";
+            return false;
+        }
+        if (!parseNonNegativeSize(valueToken, query.metricValue)) {
+            errorMessage =
+                "output_filter value must be a non-negative integer";
+            return false;
+        }
+        if (query.metricPredicate ==
+            Netlist::ConeMetricPredicate::BetweenInclusive) {
+            if (!(iss >> valueToken) ||
+                !parseNonNegativeSize(valueToken,
+                                      query.metricUpperValue)) {
+                errorMessage = "output_filter between requires a "
+                               "non-negative integer <upper>";
+                return false;
+            }
+            if (query.metricValue > query.metricUpperValue) {
+                errorMessage = "output_filter lower bound must not exceed "
+                               "upper bound";
+                return false;
+            }
+        }
     } else if (m == "shared_fanin") {
         query.type = Netlist::ConeQueryType::SharedFaninGates;
-        if (!(iss >> query.netName >> query.secondNetName)) {
+        if (!(iss >> query.netName) || isOptionToken(query.netName) ||
+            !(iss >> query.secondNetName) ||
+            isOptionToken(query.secondNetName)) {
             errorMessage = "shared_fanin requires <net_a> <net_b>";
             return false;
         }
@@ -3290,6 +4126,12 @@ bool buildConeQuery(const Netlist& netlist,
             continue;
         }
         errorMessage = "Unknown cone_query option: " + tokens[i];
+        return false;
+    }
+    if (query.type == Netlist::ConeQueryType::OutputConeFilter &&
+        (query.includeLocalPaths || query.includeGateDetails)) {
+        errorMessage = "output_filter is summary-only and does not support "
+                       "--with-paths or --with-pins";
         return false;
     }
     return true;
@@ -3480,9 +4322,11 @@ bool buildFunctionSearchQuery(const Netlist& netlist,
     const std::string loweredMode = toLower(mode);
     const bool nandSearch =
         loweredMode == "nand_pair" || loweredMode == "nand_equivalent_pairs";
+    const bool patternSearch =
+        loweredMode == "pattern" || loweredMode == "pattern_operands";
     const bool equivalentPairSearch =
         loweredMode == "equivalent_pairs" || loweredMode == "equivalent_gate_pairs";
-    if (!nandSearch && !equivalentPairSearch) {
+    if (!nandSearch && !patternSearch && !equivalentPairSearch) {
         error = "Unknown func_search mode: " + mode;
         return false;
     }
@@ -3491,6 +4335,19 @@ bool buildFunctionSearchQuery(const Netlist& netlist,
         query.type = Netlist::FunctionSearchQueryType::NandEquivalentInputPairs;
         if (!(iss >> query.targetNetName)) {
             error = "nand_pair requires a scalar target net.";
+            return false;
+        }
+    } else if (patternSearch) {
+        std::string patternTypeToken;
+        if (!(iss >> patternTypeToken >> query.targetNetName)) {
+            error = "pattern requires a gate type and scalar target net.";
+            return false;
+        }
+        query.type = Netlist::FunctionSearchQueryType::FunctionalPatternOperands;
+        query.patternGateType = netlist.stringToGateType(patternTypeToken);
+        if (query.patternGateType == GateType::UNKNOWN ||
+            query.patternGateType == GateType::DFF) {
+            error = "pattern gate type must be BUF, NOT, AND, NAND, OR, NOR, XOR, or XNOR.";
             return false;
         }
     } else {
@@ -3530,18 +4387,54 @@ bool buildFunctionSearchQuery(const Netlist& netlist,
         } else if (lowered == "--find-any" || lowered == "-find_any") {
             query.mode = Netlist::FunctionSearchMode::FindAny;
         } else if (lowered == "--allow-same" || lowered == "-allow_same") {
-            if (!nandSearch) {
+            if (equivalentPairSearch) {
                 error = "--allow-same is only valid for nand_pair.";
+                return false;
+            }
+            if (patternSearch &&
+                (query.patternGateType == GateType::BUF ||
+                 query.patternGateType == GateType::NOT)) {
+                error = "--allow-same is not meaningful for unary BUF/NOT patterns.";
                 return false;
             }
             query.allowSameSignalPair = true;
         } else if (lowered == "--include-boundary-signals" ||
                    lowered == "-include_boundary_signals") {
-            if (!nandSearch) {
+            if (equivalentPairSearch) {
                 error = "--include-boundary-signals is only valid for nand_pair.";
                 return false;
             }
             query.internalSignalsOnly = false;
+        } else if (lowered == "--scope" || lowered == "-scope") {
+            if (!nandSearch && !patternSearch) {
+                error = "--scope is only valid for operand-pattern search.";
+                return false;
+            }
+            std::string scopeToken;
+            if (!(iss >> scopeToken)) {
+                error = "--scope requires whole, net_fanin, net_fanout, gate_fanin, or gate_fanout.";
+                return false;
+            }
+            const std::string loweredScope = toLower(scopeToken);
+            if (loweredScope == "whole" || loweredScope == "whole_design") {
+                query.scope = Netlist::FunctionSearchScope::WholeDesign;
+            } else if (loweredScope == "net_fanin") {
+                query.scope = Netlist::FunctionSearchScope::NetFanin;
+            } else if (loweredScope == "net_fanout") {
+                query.scope = Netlist::FunctionSearchScope::NetFanout;
+            } else if (loweredScope == "gate_fanin") {
+                query.scope = Netlist::FunctionSearchScope::GateFanin;
+            } else if (loweredScope == "gate_fanout") {
+                query.scope = Netlist::FunctionSearchScope::GateFanout;
+            } else {
+                error = "Unknown operand-pattern scope: " + scopeToken;
+                return false;
+            }
+            if (query.scope != Netlist::FunctionSearchScope::WholeDesign &&
+                !(iss >> query.scopeName)) {
+                error = "The selected operand-pattern scope requires a net or gate name.";
+                return false;
+            }
         } else if (lowered == "--gate-type" || lowered == "-gate_type") {
             if (!equivalentPairSearch) {
                 error = "--gate-type is only valid for equivalent_pairs.";
@@ -4330,7 +5223,7 @@ void printHelp() {
         << "  quit\n"
         << "\nStructural query\n"
         << "  structure_query <mode> [args]\n"
-        << "  mode: summary | list_gates | list_nets | list_pi | list_po\n"
+        << "  mode: summary | list_gates | list_nets | net_classes | list_pi | list_po\n"
         << "        list_dffs | list_comb | gate_info <gate> | net_info <net>\n"
         << "        port_info <port> | count_by_type [type] [gate-type filters]\n"
         << "        gates_by_type [type] [gate-type filters] [--with-pins]\n"
@@ -4341,11 +5234,17 @@ void printHelp() {
         << "        net_loads <net> [--with-pins] | gate_inputs <gate>\n"
         << "        fanout_load <net> | fanout_report <net>\n"
         << "        global_fanout [limit] | pi_fanout [limit] | fanout_violations <limit>\n"
+        << "        fanout_filter <all|pi> <eq|ne|gt|ge|lt|le|between> <value> [upper]\n"
+        << "        fanout_rank <scope> <highest|lowest|nth_highest|nth_lowest|top|bottom> [k]\n"
         << "        gate_output <gate> | gate_fanin <gate> | gate_fanout <gate>\n"
         << "        is_connected <gate> <net>\n"
         << "\nCone query\n"
         << "  cone_query <mode> [name] [options]\n"
         << "  mode: net_fanin | net_fanout | gate_fanin | gate_fanout | largest_output\n"
+        << "        output_rank <gates|filtered_gates|nets>\n"
+        << "                    <highest|lowest|nth_highest|nth_lowest|top|bottom> [k]\n"
+        << "        output_filter <gates|filtered_gates|nets>\n"
+        << "                      <eq|ne|gt|ge|lt|le|between> <value> [upper]\n"
         << "        shared_fanin <net_a> <net_b>\n"
         << "  options: [with_paths|--with-paths] [--gate-types <type...>] [--with-pins]\n"
         << "  gate types: AND OR NOT NAND NOR XOR XNOR BUF DFF\n"
@@ -4378,6 +5277,11 @@ void printHelp() {
         << "        boolean_expression <net>\n"
         << "        simplified_expression <net> <max_depth> | support_pi <net>\n"
         << "\nFunction search\n"
+        << "  func_search pattern <BUF|NOT|AND|NAND|OR|NOR|XOR|XNOR> <target_net>\n"
+        << "              [--all] [--scope <scope> [scope_name]]\n"
+        << "              [--max-results n] [--patterns 1..4096]\n"
+        << "              [--time-limit seconds] [--allow-same]\n"
+        << "              [--include-boundary-signals]\n"
         << "  func_search nand_pair <target_net> [--all] [--max-results n]\n"
         << "              [--patterns 1..4096] [--time-limit seconds]\n"
         << "              [--allow-same] [--include-boundary-signals]\n"
@@ -5181,7 +6085,8 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
                 session,
                 command,
                 "",
-                "Usage: func_search nand_pair <target_net> [options] | "
+                "Usage: func_search pattern <gate_type> <target_net> [options] | "
+                "func_search nand_pair <target_net> [options] | "
                 "func_search equivalent_pairs <scope> [scope_name] [options]");
             return true;
         }

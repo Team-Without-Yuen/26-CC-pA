@@ -25,6 +25,14 @@ const Port* findPortByName(const std::vector<Port>& inputs,
     return nullptr;
 }
 
+size_t countPortBits(const std::vector<Port>& ports) {
+    size_t count = 0;
+    for (const Port& port : ports) {
+        count += port.netIds.size();
+    }
+    return count;
+}
+
 // 將 gate ID 陣列轉成 gate instance name 陣列；無效 ID 會被略過。
 std::vector<std::string> gateIdsToNames(const Netlist& netlist,
                                          const std::vector<int>& gateIds) {
@@ -160,6 +168,75 @@ PinConnectionSummary makePinConnectionSummary(
     summary.isPrimaryInput = net.isPI;
     summary.isPrimaryOutput = net.isPO;
     return summary;
+}
+
+bool classifyUnconnectedPin(const Netlist& netlist,
+                            int netId,
+                            UnconnectedPinReason& reason) {
+    if (netId < 0) {
+        reason = UnconnectedPinReason::Unconnected;
+        return true;
+    }
+    if (!netlist.isValidNetId(netId)) {
+        reason = UnconnectedPinReason::InvalidNetId;
+        return true;
+    }
+    if (netlist.getNet(netId).isRemoved) {
+        reason = UnconnectedPinReason::RemovedNet;
+        return true;
+    }
+    return false;
+}
+
+template <typename Visitor>
+void visitUnconnectedPins(const Netlist& netlist, Visitor&& visitor) {
+    for (size_t gateIndex = 0; gateIndex < netlist.getGateCount(); ++gateIndex) {
+        const int gateId = static_cast<int>(gateIndex);
+        if (!isActiveGate(netlist, gateId)) {
+            continue;
+        }
+
+        const Gate& gate = netlist.getGate(gateId);
+        for (size_t pinIndex = 0; pinIndex < gate.inputNetIds.size(); ++pinIndex) {
+            UnconnectedPinReason reason;
+            const int netId = gate.inputNetIds[pinIndex];
+            if (classifyUnconnectedPin(netlist, netId, reason)) {
+                visitor(UnconnectedPinSummary{
+                    gateId, static_cast<int>(pinIndex), netId,
+                    PinDirection::Input, reason});
+            }
+        }
+
+        UnconnectedPinReason reason;
+        if (classifyUnconnectedPin(netlist, gate.outputNetId, reason)) {
+            visitor(UnconnectedPinSummary{
+                gateId, 0, gate.outputNetId, PinDirection::Output, reason});
+        }
+    }
+}
+
+std::vector<UnconnectedPinSummary> collectUnconnectedPins(
+    const Netlist& netlist) {
+    std::vector<UnconnectedPinSummary> records;
+    visitUnconnectedPins(netlist, [&](const UnconnectedPinSummary& pin) {
+        records.push_back(pin);
+    });
+    return records;
+}
+
+std::vector<std::string> unconnectedGateNamesFromPins(
+    const Netlist& netlist,
+    const std::vector<UnconnectedPinSummary>& pins) {
+    std::vector<std::string> names;
+    int previousGateId = -1;
+    for (const UnconnectedPinSummary& pin : pins) {
+        if (pin.gateId == previousGateId || !isActiveGate(netlist, pin.gateId)) {
+            continue;
+        }
+        names.push_back(netlist.getGate(pin.gateId).instName);
+        previousGateId = pin.gateId;
+    }
+    return names;
 }
 
 } // namespace
@@ -367,21 +444,13 @@ std::vector<std::string> Netlist::getFloatingNetNames() const {
 // 列出 input 或 output 存在無效 / unconnected net ID 的 gate instance names。
 std::vector<std::string> Netlist::getUnconnectedGateNames() const {
     std::vector<std::string> names;
-    for (const Gate& gate : gates) {
-        if (gate.type == GateType::UNKNOWN) {
-            continue;
+    int previousGateId = -1;
+    visitUnconnectedPins(*this, [&](const UnconnectedPinSummary& pin) {
+        if (pin.gateId != previousGateId) {
+            names.push_back(getGate(pin.gateId).instName);
+            previousGateId = pin.gateId;
         }
-        bool hasUnconnectedPin = !isActiveNet(*this, gate.outputNetId);
-        for (int inputNetId : gate.inputNetIds) {
-            if (!isActiveNet(*this, inputNetId)) {
-                hasUnconnectedPin = true;
-                break;
-            }
-        }
-        if (hasUnconnectedPin) {
-            names.push_back(gate.instName);
-        }
-    }
+    });
     return names;
 }
 
@@ -508,6 +577,8 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
         report.hasLogicalWireCount = true;
         report.hasPrimaryInputCount = true;
         report.hasPrimaryOutputCount = true;
+        report.hasPrimaryInputBitCount = true;
+        report.hasPrimaryOutputBitCount = true;
         // [Perf #4] Merged two separate gate scans into one pass.
         // Before: getActiveGateCount() + countGatesByType() each iterated gates once.
         size_t activeGates = 0;
@@ -529,6 +600,8 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
         report.logicalWireCount = getLogicalWireCount();
         report.primaryInputCount = getPrimaryInputs().size();
         report.primaryOutputCount = getPrimaryOutputs().size();
+        report.primaryInputBitCount = countPortBits(getPrimaryInputs());
+        report.primaryOutputBitCount = countPortBits(getPrimaryOutputs());
         if (query.includeNames) {
             report.gateNames = getAllGateNames();
             report.netNames = getAllNetNames();
@@ -573,11 +646,71 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
         }
         return report;
 
+    case BasicQueryType::NetClassification: {
+        report.ok = true;
+        report.message = "Net classification summary";
+        report.hasNetCount = true;
+        NetClassificationSummary& summary = report.netClassification;
+        summary.valid = true;
+
+        const auto addNet = [&](int netId,
+                                std::vector<int>& ids,
+                                std::vector<std::string>& names) {
+            if (query.includeIds) {
+                ids.push_back(netId);
+            }
+            if (query.includeNames) {
+                names.push_back(nets[netId].name);
+            }
+        };
+
+        for (size_t i = 0; i < getNetCount(); ++i) {
+            const int netId = static_cast<int>(i);
+            if (!isActiveNet(*this, netId)) {
+                continue;
+            }
+
+            const Net& net = nets[netId];
+            ++summary.activeNetCount;
+
+            if (net.isPI) {
+                ++summary.primaryInputNetCount;
+                addNet(netId, summary.primaryInputNetIds,
+                       summary.primaryInputNetNames);
+            }
+            if (net.isPO) {
+                ++summary.primaryOutputNetCount;
+                addNet(netId, summary.primaryOutputNetIds,
+                       summary.primaryOutputNetNames);
+            }
+            if (net.isPI && net.isPO) {
+                ++summary.primaryInputOutputNetCount;
+                addNet(netId, summary.primaryInputOutputNetIds,
+                       summary.primaryInputOutputNetNames);
+            }
+            if (net.isConst) {
+                ++summary.constantNetCount;
+                addNet(netId, summary.constantNetIds,
+                       summary.constantNetNames);
+            }
+            if (!net.isPI && !net.isPO && !net.isConst) {
+                ++summary.internalNetCount;
+                addNet(netId, summary.internalNetIds,
+                       summary.internalNetNames);
+            }
+        }
+
+        report.netCount = summary.activeNetCount;
+        return report;
+    }
+
     case BasicQueryType::ListPrimaryInputs:
         report.ok = true;
         report.message = "List primary inputs";
         report.hasPrimaryInputCount = true;
+        report.hasPrimaryInputBitCount = true;
         report.primaryInputCount = getPrimaryInputs().size();
+        report.primaryInputBitCount = countPortBits(getPrimaryInputs());
         if (query.includeNames) {
             report.portNames = getPrimaryInputNames();
         }
@@ -597,7 +730,9 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
         report.ok = true;
         report.message = "List primary outputs";
         report.hasPrimaryOutputCount = true;
+        report.hasPrimaryOutputBitCount = true;
         report.primaryOutputCount = getPrimaryOutputs().size();
+        report.primaryOutputBitCount = countPortBits(getPrimaryOutputs());
         if (query.includeNames) {
             report.portNames = getPrimaryOutputNames();
         }
@@ -668,6 +803,8 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
         report.isDff = isDffGate(gateId);
         report.isCombinational = isCombinationalGate(gateId);
         report.formattedInfo = getGateInfo(query.name);
+        report.gateDetailsIncluded = true;
+        report.gateConnections.push_back(buildGateConnectionSummary(gateId));
         if (query.includeIds) {
             report.gateIds.push_back(gateId);
         }
@@ -742,6 +879,15 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
         report.portWidth = static_cast<int>(port->netIds.size());
         report.isBus = port->isBus();
         report.typeName = report.isBus ? "BUS_PORT" : "SCALAR_PORT";
+        PortSummary summary;
+        summary.name = port->name;
+        summary.width = report.portWidth;
+        summary.msb = port->msb;
+        summary.lsb = port->lsb;
+        summary.isBus = report.isBus;
+        summary.isInput = report.isPrimaryInput;
+        summary.isOutput = report.isPrimaryOutput;
+        report.ports.push_back(summary);
         if (query.includeNames) {
             report.portNames.push_back(query.name);
         }
@@ -883,7 +1029,17 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
         report.undrivenNets = getUndrivenNetNames();
         report.noLoadNets = getNoLoadNetNames();
         report.floatingNets = getFloatingNetNames();
-        report.unconnectedGates = getUnconnectedGateNames();
+        report.hasUnconnectedPinCounts = true;
+        report.unconnectedPins = collectUnconnectedPins(*this);
+        report.unconnectedGates =
+            unconnectedGateNamesFromPins(*this, report.unconnectedPins);
+        for (const UnconnectedPinSummary& pin : report.unconnectedPins) {
+            if (pin.direction == PinDirection::Input) {
+                ++report.unconnectedInputPinCount;
+            } else {
+                ++report.unconnectedOutputPinCount;
+            }
+        }
         for (const std::string& netName : report.noLoadNets) {
             const int netId = getNetId(netName);
             if (isActiveNet(*this, netId) && isPrimaryInputNet(netId)) {
