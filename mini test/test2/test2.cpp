@@ -763,6 +763,42 @@ void testInsertBuffersForFanout(TestReport& report, const Netlist& original) {
                  "test2 edit_apply insert_buffers_for_fanout");
 }
 
+void testConstantFanoutExcludedFromEditConstraint(TestReport& report) {
+    Netlist netlist;
+    netlist.addPrimaryInput("a");
+    const int a = netlist.getNetId("a");
+    const int constOne = netlist.addNet("1'b1");
+
+    for (int i = 0; i < 5; ++i) {
+        const std::string outputName = "y" + std::to_string(i);
+        netlist.addPrimaryOutput(outputName);
+        const int outputNet = netlist.getNetId(outputName);
+        const int gateId = netlist.addGate("g" + std::to_string(i), GateType::AND);
+        netlist.connectGateInput(gateId, a);
+        netlist.connectGateInput(gateId, constOne);
+        netlist.connectGateOutput(gateId, outputNet);
+    }
+
+    Netlist::EditApplyRequest request;
+    request.kind = Netlist::EditCommandKind::InsertBuffersForFanout;
+    request.maxFanout = 2;
+    const Netlist::NetlistEditReport editReport = netlist.runEditApply(request);
+
+    const Netlist::GlobalFanoutReport genericFanout =
+        netlist.getGlobalFanoutReport(2);
+    report.check(editReport.success &&
+                 editReport.changed &&
+                 editReport.fanoutChange.has_value() &&
+                 editReport.fanoutChange->beforeMaxFanout == 5 &&
+                 editReport.fanoutChange->afterMaxFanout <= 2 &&
+                 editReport.fanoutChange->meetsConstraint &&
+                 editReport.fanoutChange->violatingNetNames.empty() &&
+                 netlist.getFanoutLoadReport("1'b1").totalLoadCount == 5 &&
+                 !genericFanout.satisfiesLimit &&
+                 netlist.validateAfterMutation(),
+                 "test2 edit fanout constraint excludes constant literal");
+}
+
 void testInsertBuffersOnEachLoad(TestReport& report, const Netlist& original) {
     Netlist netlist = original.cloneForRollback();
     const int srcNetId = netlist.getNetId("src");
@@ -1279,6 +1315,7 @@ int main() {
     testSafeCleanupFixpointNoop(report);
     testInsertBuffersForSpecificNet(report, fanoutCircuit);
     testInsertBuffersForFanout(report, fanoutCircuit);
+    testConstantFanoutExcludedFromEditConstraint(report);
     testInsertBuffersOnEachLoad(report, fanoutCircuit);
     testFanoutInsertionWithTiedInputs(report);
     testReplaceAllLoadsPreservesPinMultiplicity(report);

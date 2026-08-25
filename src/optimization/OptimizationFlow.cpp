@@ -1042,6 +1042,14 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                 return candidate;
             };
 
+            auto markCandidateRejected = [&](NetlistEditReport& candidate) {
+                // The candidate report intentionally retains its cost and graph
+                // differences for diagnostics, but the current design was not changed.
+                candidate.changed = false;
+                candidate.rolledBack = core.changed;
+                summary.candidateAccepted = false;
+            };
+
             if (core.status == OptimizationStatus::ERROR_NOT_EQUIVALENT) {
                 report = buildCandidateReport();
                 report.success = false;
@@ -1064,7 +1072,7 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                 core.status != OptimizationStatus::NO_IMPROVEMENT) {
                 report = buildCandidateReport();
                 report.success = false;
-                report.rolledBack = core.changed;
+                markCandidateRejected(report);
                 report.message = std::string(goalLabel) +
                                  " did not produce a usable candidate: " + core.message;
                 return finishReport(std::move(report));
@@ -1072,14 +1080,14 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
 
             report = buildCandidateReport();
             if (!report.success) {
-                report.rolledBack = core.changed;
+                markCandidateRejected(report);
                 report.message = std::string(goalLabel) +
                                  " candidate failed structural validation and was discarded.";
                 return finishReport(std::move(report));
             }
             if (!summary.finalConstraintsSatisfied) {
                 report.success = false;
-                report.rolledBack = core.changed;
+                markCandidateRejected(report);
                 report.message = std::string(goalLabel) +
                                  " candidate violated the requested gate constraints and was discarded.";
                 return finishReport(std::move(report));
@@ -1092,7 +1100,7 @@ NetlistEditReport Netlist::runOptApply(const OptApplyRequest& request) {
                 (report.costChange.has_value() && report.costChange->meetsTarget);
             if (!targetMet) {
                 report.success = false;
-                report.rolledBack = core.changed;
+                markCandidateRejected(report);
                 report.message = std::string(goalLabel) + " candidate did not meet " +
                                  targetLabel + " and was discarded.";
                 return finishReport(std::move(report));

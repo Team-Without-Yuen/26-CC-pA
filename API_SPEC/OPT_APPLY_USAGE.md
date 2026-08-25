@@ -148,8 +148,12 @@ success=false, rolledBack=false:
   request/scope 在產生候選前即無效。
 
 success=false, rolledBack=true:
-  候選已產生，但未達 target、basis 違規、timeout 或不等價。
+  候選已產生，但未達 target、basis 違規、timeout 或不等價；changed 必須為 false。
 ```
+
+rollback report 仍可保留候選的 before/after cost、graph diff 與
+`candidateGenerated=true`，供回答「嘗試後得到什麼候選、為何未採用」；這些欄位不代表
+current design 已被修改。
 
 不要只讀 `coreStatus` 判斷是否成功提交；最終以 top-level report 與
 `candidateAccepted` 為準。

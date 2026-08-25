@@ -150,8 +150,8 @@ arbitrary functional-equivalent merge:
 
 | Prompt 類型 | 出現 testcase | 對應 command | 目前狀態 |
 |---|---|---|---|
-| `Insert buffers wherever needed so that no gate drives more than 4 loads.` | test21 | `InsertBuffersForFanout(maxFanout=4)` | API + tools CLI covered |
-| `Insert buffers wherever needed so that no signal drives more than 16 loads.` | test36 | `InsertBuffersForFanout(maxFanout=16)` | API + tools CLI covered |
+| `Insert buffers wherever needed so that no gate drives more than 4 loads.` | test21 | `InsertBuffersForFanout(maxFanout=4)` | API + tools CLI covered；constant literal 排除於 bufferable constraint universe |
+| `Insert buffers wherever needed so that no signal drives more than 16 loads.` | test72 | `InsertBuffersForFanout(maxFanout=16)` | API + tools CLI covered；constant literal 排除於 bufferable constraint universe |
 | `Try to insert buffers on the reset signal n1 ... at most 4 loads per driver.` | test38 | `InsertBuffersForSpecificNet(netName=n1,maxFanout=4)` | API + tools CLI covered |
 | `Insert a BUF gate on signal n2 so that each load ... dedicated buffer.` | test31, test39 | `InsertBuffersOnEachLoad(netName=n2)` | API + tools CLI covered |
 

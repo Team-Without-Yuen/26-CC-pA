@@ -63,6 +63,8 @@ prompt 指名具體 net（例如 "insert buffers on the reset signal n1"）時�
 
 `insert_buffers_for_fanout` 使用 cascaded buffer 結構，在滿足 fanout 限制的前提下 BUF 數量已是最小值。prompt 若同時要求 fanout 限制與「the cost function is the total gate count; smaller is better」，直接使用本 command 即可，不需要改用 `opt_apply`，也不需要額外的最佳化步驟；回答時可說明 cascaded 插入已使 BUF 數最小化。
 
+此 mode 的 constraint universe 是 active non-constant nets，包含 PI、gate output 與 DFF.Q。`1'b0` / `1'b1` 是 literal source，不是 gate-driven signal，不會為它建立 buffer tree，也不會使 `fanout_change.meets_constraint` 變成 false。若 prompt 單純詢問 constant literal 的 load 數，仍使用 connectivity query。
+
 ## 3. Command Grammar
 
 ```text
@@ -251,9 +253,14 @@ prompt 說 "the cone of X"、"the logic cone of output X" 而未指明方向時�
 
 **`cleanup_fixpoint`**：`timed_out:true` 代表 fixpoint 未收斂就因時間限制退出，已套用的改動仍然有效且功能等價，但設計中可能還有未清除的機會。此時不可回答「已完全化簡」或「已清乾淨」，只能說明在時間預算內完成的部分。
 
-**`fanout_change`**：`insert_buffers_for_net` 的 scope 是指定 net/bus 與本次建立的 buffer tree；全設計是否都低於限制只能由 `insert_buffers_for_fanout` 判斷。若 `insert_buffers_for_net` 的目標 net 不存在，回報 `report_success:false` 與明確訊息，不會產生 `fanout_change`；此時不可回答已完成 buffer 插入。
+**`fanout_change`**：`insert_buffers_for_net` 的 scope 是指定 net/bus 與本次建立的 buffer tree；全設計 active non-constant nets 是否都低於限制只能由 `insert_buffers_for_fanout` 判斷。Constant literal 不屬於可 buffer constraint universe。若 `insert_buffers_for_net` 的目標 net 不存在，回報 `report_success:false` 與明確訊息，不會產生 `fanout_change`；此時不可回答已完成 buffer 插入。
 
 **`mapping_delta`**：`replace_type` 若未能清除 scope 內全部目標 gate，回報失敗並 rollback，不會出現「部分完成」的成功狀態。
+
+二輸入 XOR 的 NAND-only replacement 使用固定的標準 4-NAND DAG。prompt 明確寫
+`equivalent 4-NAND circuit` 時，呼叫 `edit_apply replace_type <scope> XOR -allow NAND`；
+`removed_count_by_type[XOR]` 是替換組數，`added_count_by_type[NAND]` 應為其四倍。
+這項保證只適用此標準 XOR 規則，不可推廣成任意 gate 的 `exact K` 合成能力。
 
 ## 8. Prompt Examples
 
