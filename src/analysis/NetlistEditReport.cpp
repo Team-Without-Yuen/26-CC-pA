@@ -1,4 +1,5 @@
 #include "include/core/Netlist.h"
+#include "include/core/OptimizerRequest.h"
 
 #include <set>
 
@@ -87,9 +88,40 @@ NetlistDiff Netlist::diffStats(const NetlistStats& before, const NetlistStats& a
 
 EditValidationResult Netlist::validateEditResult(const Netlist& before, const Netlist& after) {
     EditValidationResult result;
-    result.structureChecked = true;
-    result.structureValid = after.validateStructure();
 
+    // ---- 結構驗證 ----
+    // 只驗 after 會把「載入時就存在的問題」算到這次 edit 頭上。
+    // 有些 benchmark 的來源檔案本身就有 multi-driver（同一條 net 被兩顆
+    // gate 驅動），那會讓每一次 edit 都被 rollback。
+    // 因此改成比較 before/after：edit 沒讓情況變糟就算通過。
+    result.structureChecked = true;
+
+    const StructureViolations beforeStructure =
+        before.collectStructureViolations(false);   // baseline 不印訊息
+    const StructureViolations afterStructure =
+        after.collectStructureViolations(true);
+
+    result.structureBaselineValid = beforeStructure.clean();
+    result.structureValid         = afterStructure.clean();
+    result.structureRegressed     = afterStructure.total() > beforeStructure.total();
+    result.structureViolationCount         = afterStructure.total();
+    result.baselineStructureViolationCount = beforeStructure.total();
+
+    if (!result.structureBaselineValid && !result.structureRegressed) {
+        result.messages.push_back(
+            "The loaded design already had " +
+            std::to_string(beforeStructure.total()) +
+            " structural violation(s) (typically multi-driver nets in the source "
+            "file); this edit introduced none.");
+    }
+    if (result.structureRegressed) {
+        result.messages.push_back(
+            "Structural violations increased from " +
+            std::to_string(beforeStructure.total()) + " to " +
+            std::to_string(afterStructure.total()) + ".");
+    }
+
+    // ---- Problem A 約束 ----
     result.problemAConstraintsChecked = true;
     auto collectProblemAViolations = [](const Netlist& netlist) {
         std::set<std::string> violations;
@@ -107,63 +139,68 @@ EditValidationResult Netlist::validateEditResult(const Netlist& before, const Ne
         return violations;
     };
 
-    const std::set<std::string> beforeViolations = collectProblemAViolations(before);
-    const std::set<std::string> afterViolations = collectProblemAViolations(after);
-    result.problemAConstraintsBaselineValid = beforeViolations.empty();
-    result.problemAConstraintsValid = afterViolations.empty();
-    for (const std::string& violation : afterViolations) {
-        if (beforeViolations.count(violation) == 0) {
+    const std::set<std::string> beforeProblemA = collectProblemAViolations(before);
+    const std::set<std::string> afterProblemA  = collectProblemAViolations(after);
+
+    result.problemAConstraintsBaselineValid = beforeProblemA.empty();
+    result.problemAConstraintsValid         = afterProblemA.empty();
+    for (const std::string& violation : afterProblemA) {
+        if (beforeProblemA.count(violation) == 0) {
             result.newProblemAConstraintViolations.push_back(violation);
         }
     }
     result.problemAConstraintsRegressed =
         !result.newProblemAConstraintViolations.empty();
+
     if (!result.problemAConstraintsBaselineValid &&
         !result.problemAConstraintsRegressed) {
         result.messages.push_back(
-            "The loaded baseline already violates Problem A structural constraints; this edit introduced no new violations.");
+            "The loaded baseline already violates Problem A structural constraints; "
+            "this edit introduced no new violations.");
     }
 
+    // ---- 等價 ----
     result.equivalenceChecked = false;
     result.functionallyEquivalent = false;
     result.equivalenceMethod = EquivalenceCheckMethod::NotChecked;
-    result.messages.push_back("Whole-design equivalence is not checked by validateEditResult() yet.");
+    result.messages.push_back(
+        "Whole-design equivalence is not checked by validateEditResult() yet.");
 
     return result;
 }
 
-DepthChange Netlist::buildDepthChangeReport(
+CostChange Netlist::buildDepthCostChange(
     const Netlist& before,
     const Netlist& after,
     const std::string& endpointName,
     int targetDepth)
 {
-    DepthChange change;
-    change.endpointName = endpointName;
-    change.targetDepth = targetDepth;
+    CostChange change;
+    change.metricName  = opt::toString(opt::CostMetric::GlobalMaxDepth);
+    change.targetName  = endpointName;
+    change.targetValue = targetDepth;
 
     if (!endpointName.empty()) {
-        change.beforeDepth = before.getMaxDepthToNet(endpointName);
-        change.afterDepth = after.getMaxDepthToNet(endpointName);
+        change.beforeValue = before.getMaxDepthToNet(endpointName);
+        change.afterValue  = after.getMaxDepthToNet(endpointName);
     } else {
         const DepthReport beforeWorst = before.findGlobalCriticalPath();
-        const DepthReport afterWorst = after.findGlobalCriticalPath();
-        change.endpointName = beforeWorst.endpointName;
-        if (change.endpointName.empty()) {
-            change.endpointName = afterWorst.endpointName;
-        }
-        change.beforeDepth = beforeWorst.depth;
-        change.afterDepth = afterWorst.depth;
+        const DepthReport afterWorst  = after.findGlobalCriticalPath();
+        change.targetName = beforeWorst.endpointName.empty()
+            ? afterWorst.endpointName
+            : beforeWorst.endpointName;
+        change.beforeValue = beforeWorst.depth;
+        change.afterValue  = afterWorst.depth;
     }
 
     change.improved =
-        change.beforeDepth >= 0 &&
-        change.afterDepth >= 0 &&
-        change.afterDepth < change.beforeDepth;
+        change.beforeValue >= 0 &&
+        change.afterValue  >= 0 &&
+        change.afterValue  <  change.beforeValue;
     change.meetsTarget =
         targetDepth >= 0 &&
-        change.afterDepth >= 0 &&
-        change.afterDepth <= targetDepth;
+        change.afterValue >= 0 &&
+        change.afterValue <= targetDepth;
 
     return change;
 }
@@ -185,7 +222,7 @@ NetlistEditReport Netlist::buildEditReport(
 
     report.validation = validateEditResult(before, after);
     report.success =
-        report.validation.structureValid &&
+        !report.validation.structureRegressed &&
         !report.validation.problemAConstraintsRegressed;
 
     if (report.success) {

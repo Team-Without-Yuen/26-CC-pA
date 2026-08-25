@@ -1,10 +1,10 @@
-#include "include/core/DepthOptimizerRequest.h"
+#include "include/core/OptimizerRequest.h"
 
 #include <algorithm>
 #include <unordered_map>
 #include <utility>
 
-namespace depth_opt {
+namespace opt {
 namespace {
 
 // ConeQueryType -> TargetScope。
@@ -86,6 +86,12 @@ int longestPathInGateSet(Netlist& netlist, const std::unordered_set<int>& gateSe
     return best;
 }
 
+// 在 gate 子集合上算組合閘數量。longestPathInGateSet 已經有了，
+// 這個更簡單——集合本身就只含組合閘（resolveConeGates 已濾掉 DFF/UNKNOWN）。
+int gateCountInSet(const std::unordered_set<int>& gateSet) {
+    return static_cast<int>(gateSet.size());
+}
+
 } // namespace
 
 // -------------------------------------------------------------------------
@@ -93,15 +99,36 @@ int longestPathInGateSet(Netlist& netlist, const std::unordered_set<int>& gateSe
 RequestValidation validateRequest(const OptimizationRequest& request) {
     RequestValidation v;
 
-    if (request.basisConstraints.size() > 1) {
-        v.message = "multiple basis scopes are not supported yet (got "
-                  + std::to_string(request.basisConstraints.size()) + ").";
-        return v;
+    // basisConstraints 的形狀約束：
+    //   最多一組沒有 scope（= cone 外，無 cone 時就是整張 netlist）
+    //   最多一組有 scope（= 該 cone 內）
+    //
+    // 兩組全域無法決定誰蓋誰；兩個 cone 各自不同 basis 也不支援 ——
+    // GenericLowering 的 per-node basisId 只有 default / cone 兩種值。
+    {
+        int unscopedCount = 0;
+        int scopedCount   = 0;
+        for (const auto& basis : request.basisConstraints) {
+            if (basis.isWholeNetlist()) ++unscopedCount;
+            else                        ++scopedCount;
+        }
+        if (unscopedCount > 1) {
+            v.message = "at most one whole-netlist basis constraint is supported (got "
+                      + std::to_string(unscopedCount) + ").";
+            return v;
+        }
+        if (scopedCount > 1) {
+            v.message = "at most one cone-scoped basis constraint is supported (got "
+                      + std::to_string(scopedCount)
+                      + "); heterogeneous constraints across multiple cones are not "
+                        "implemented.";
+            return v;
+        }
     }
 
-    if (request.cost.metric == CostMetric::ConeDepth) {
+    if (isConeMetric(request.cost.metric)) {
         if (!request.cost.cone.has_value() || !request.cost.cone->valid()) {
-            v.message = "cost metric is ConeDepth but no cone was specified.";
+            v.message = "a cone-scoped cost metric requires a cone reference.";
             return v;
         }
         if (!toTargetScope(request.cost.cone->type).has_value()) {
@@ -109,7 +136,7 @@ RequestValidation validateRequest(const OptimizationRequest& request) {
             return v;
         }
     } else if (request.cost.cone.has_value()) {
-        v.message = "cost metric is GlobalMaxDepth but a cost cone was specified; "
+        v.message = "a global cost metric was requested but a cost cone was specified; "
                     "did you mean to set the basis scope instead?";
         return v;
     }
@@ -123,6 +150,13 @@ RequestValidation validateRequest(const OptimizationRequest& request) {
             if (!toTargetScope(basis.scope->type).has_value()) {
                 v.message = "basis scope uses a query type that cannot be resolved "
                             "to a rewrite scope.";
+                return v;
+            }
+            // 指定了 cone 卻沒給任何約束 = 這組什麼都不做，而且會讓
+            // hasLocalBasisScope 誤判為真、走進 lowering 的 cone 分支。
+            if (!basis.constrains()) {
+                v.message = "a cone-scoped basis constraint must list at least one "
+                            "allowed or banned gate type.";
                 return v;
             }
         }
@@ -139,10 +173,13 @@ RequestValidation validateRequest(const OptimizationRequest& request) {
 }
 
 std::string describeCost(const CostTarget& cost) {
-    if (cost.metric == CostMetric::ConeDepth && cost.cone.has_value()) {
-        return "depth of cone '" + cost.cone->sourceName + "'";
+    const bool depth = isDepthMetric(cost.metric);
+    if (isConeMetric(cost.metric) && cost.cone.has_value()) {
+        return std::string(depth ? "depth" : "gate count")
+             + " of cone '" + cost.cone->sourceName + "'";
     }
-    return "global maximum combinational depth";
+    return depth ? "global maximum combinational depth"
+                 : "total combinational gate count";
 }
 
 std::string describeBasis(const BasisConstraint& basis) {
@@ -196,39 +233,48 @@ bool CostMeasurement::betterThan(const CostMeasurement& other, CostMetric metric
     if (!ok) return false;
     if (!other.ok) return true;
 
-    const bool coneComparable = (coneDepth >= 0 && other.coneDepth >= 0);
+    const int a = primary(metric);
+    const int b = other.primary(metric);
+    // 主要指標量不出來（-1）時不可比，退回全域深度避免亂挑。
+    if (a >= 0 && b >= 0 && a != b) return a < b;
 
-    if (metric == CostMetric::ConeDepth && coneComparable) {
-        if (coneDepth   != other.coneDepth)   return coneDepth   < other.coneDepth;
+    if (isDepthMetric(metric)) {
+        if (gateCount >= 0 && other.gateCount >= 0 && gateCount != other.gateCount)
+            return gateCount < other.gateCount;
         if (globalDepth != other.globalDepth) return globalDepth < other.globalDepth;
-        return gateCount < other.gateCount;
+    } else {
+        if (globalDepth != other.globalDepth) return globalDepth < other.globalDepth;
+        if (gateCount >= 0 && other.gateCount >= 0 && gateCount != other.gateCount)
+            return gateCount < other.gateCount;
     }
-
-    if (globalDepth != other.globalDepth) return globalDepth < other.globalDepth;
-    if (coneComparable && coneDepth != other.coneDepth) return coneDepth < other.coneDepth;
-    return gateCount < other.gateCount;
+    return false;
 }
 
 CostMeasurement measureCost(Netlist& netlist, const CostTarget& cost) {
     CostMeasurement m;
     m.globalDepth = netlist.findGlobalCriticalPath().depth;
 
+    // 面積一律只算組合閘：DFF 數量在最佳化前後不變，計進去只會稀釋差異。
     int total = 0;
-    for (const auto& p : netlist.countGatesByType()) total += p.second;
+    for (const auto& p : netlist.countGatesByType()) {
+        if (p.first == GateType::UNKNOWN) continue;
+        total += p.second;
+    }
     m.gateCount = total;
 
     if (cost.cone.has_value()) {
         const ConeResolution cone = resolveConeGates(netlist, *cost.cone);
         if (!cone.ok) {
-            if (cost.metric == CostMetric::ConeDepth) {
-                m.message = "cannot measure cone depth: " + cone.message;
-                return m;   // ok = false：主要指標算不出來，視為失敗
+            if (isConeMetric(cost.metric)) {
+                m.message = "cannot measure the cost cone: " + cone.message;
+                return m;   // ok = false：主要指標算不出來
             }
-            // 只是 tie-break 用的話，量不到就算了，不影響主要指標
             m.coneDepth = -1;
+            m.coneGateCount = -1;
         } else {
-            // cone 被完全化簡掉（塌成常數或直接接線）—— 深度 0 是合法答案
-            m.coneDepth = cone.gateIds.empty() ? 0 : longestPathInGateSet(netlist, cone.gateIds);
+            m.coneDepth     = cone.gateIds.empty()
+                            ? 0 : longestPathInGateSet(netlist, cone.gateIds);
+            m.coneGateCount = gateCountInSet(cone.gateIds);
         }
     }
 
@@ -259,4 +305,4 @@ OptimizationRequest makeLegacyRequest(const ConeReport& coneReport,
     return req;
 }
 
-} // namespace depth_opt
+} // namespace opt

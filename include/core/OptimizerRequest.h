@@ -6,8 +6,9 @@
 #include <vector>
 #include "include/core/Netlist.h"
 #include "include/core/NetlistQueries.h"
+#include "include/core/TechMapper.h"
 
-namespace depth_opt {
+namespace opt {
 
 // =========================================================================
 // 「哪一個 cone」的可重新解析參照。
@@ -30,7 +31,12 @@ struct ConeRef {
 //   (2) 迭代什麼時候該停（"Report original if already optimal" 的判準）
 //   (3) OptimizationResult 主要回報哪個數字
 // =========================================================================
-enum class CostMetric { GlobalMaxDepth, ConeDepth };
+enum class CostMetric {
+    GlobalMaxDepth,
+    ConeDepth,
+    GlobalGateCount,
+    ConeGateCount
+};
 
 struct CostTarget {
     CostMetric metric = CostMetric::GlobalMaxDepth;
@@ -88,27 +94,32 @@ ConeResolution resolveConeGates(Netlist& netlist, const ConeRef& ref);
 
 // -------------------------------------------------------------------------
 // 成本量測。
-// 一律把三個數字都量出來（cone 深度只是在 cone 上跑一次 DFS，很便宜），
-// 由 betterThan() 依 metric 決定字典序。
+// 四個數字全部量出來（cone 的兩個只是在 cone 上跑一次 DFS 與一次計數，
+// 很便宜），由 betterThan() 依 metric 決定字典序。
 // -------------------------------------------------------------------------
 struct CostMeasurement {
     bool ok = false;
-    int  globalDepth = -1;
-    int  coneDepth   = -1;   // request 沒指定 cost cone 時為 -1
-    int  gateCount   = -1;
+    int  globalDepth   = -1;
+    int  coneDepth     = -1;   // request 沒指定 cost cone 時為 -1
+    int  gateCount     = -1;   // 全域組合閘數（不含 DFF）
+    int  coneGateCount = -1;   // request 沒指定 cost cone 時為 -1
     std::string message;
 
-    // 依 metric 的字典序比較。
-    //   ConeDepth      : (cone, global, area)
-    //   GlobalMaxDepth : (global, cone, area)
-    // 注意 GlobalMaxDepth 也把 cone 放進 tie-break：全域打平時，
-    // 沒理由白白讓某個 cone 變深。
-    bool betterThan(const CostMeasurement& other, CostMetric metric) const;
-
-    // 給 log / message 用
-    int primary(CostMetric metric) const {
-        return (metric == CostMetric::ConeDepth && coneDepth >= 0) ? coneDepth : globalDepth;
+    int primary(CostMetric m) const {
+        switch (m) {
+            case CostMetric::GlobalMaxDepth:  return globalDepth;
+            case CostMetric::ConeDepth:       return coneDepth;
+            case CostMetric::GlobalGateCount: return gateCount;
+            case CostMetric::ConeGateCount:   return coneGateCount;
+        }
+        return globalDepth;
     }
+
+    // 主要指標優先；打平時用「另一個維度」當 tie-break。
+    //   深度目標：(primary, gates, globalDepth)
+    //   面積目標：(primary, globalDepth, gates)
+    // 兩者對稱——都不會為了 tie-break 而犧牲主要指標。
+    bool betterThan(const CostMeasurement& other, CostMetric metric) const;
 };
 
 CostMeasurement measureCost(Netlist& netlist, const CostTarget& cost);
@@ -179,4 +190,24 @@ private:
     int             stagnant_ = 0;
 };
 
-} // namespace depth_opt
+inline bool isDepthMetric(CostMetric m) {
+    return m == CostMetric::GlobalMaxDepth || m == CostMetric::ConeDepth;
+}
+inline bool isConeMetric(CostMetric m) {
+    return m == CostMetric::ConeDepth || m == CostMetric::ConeGateCount;
+}
+inline const char* toString(CostMetric m) {
+    switch (m) {
+        case CostMetric::GlobalMaxDepth:  return "global_maximum_depth";
+        case CostMetric::ConeDepth:       return "scoped_fanin_cone_depth";
+        case CostMetric::GlobalGateCount: return "global_gate_count";
+        case CostMetric::ConeGateCount:   return "scoped_fanin_cone_gate_count";
+    }
+    return "unknown";
+}
+
+inline OptimizationGoal goalOf(CostMetric m) {
+    return isDepthMetric(m) ? OptimizationGoal::DEPTH : OptimizationGoal::AREA;
+}
+
+} // namespace opt

@@ -15,6 +15,10 @@ FunctionSearchScope toFunctionSearchScope(TargetScope scope) {
     case TargetScope::NET_FANOUT: return FunctionSearchScope::NetFanout;
     case TargetScope::GATE_FANIN: return FunctionSearchScope::GateFanin;
     case TargetScope::GATE_FANOUT: return FunctionSearchScope::GateFanout;
+    case TargetScope::SINGLE_GATE:
+        // 不應該走到這裡：validateEditApplyRequest 已經拒絕 SINGLE_GATE。
+        // 保守回 GateFanin（範圍最小），避免靜默擴張成全設計搜尋。
+        return FunctionSearchScope::GateFanin;
     }
     return FunctionSearchScope::WholeDesign;
 }
@@ -26,6 +30,7 @@ std::string targetScopeName(TargetScope scope) {
     case TargetScope::NET_FANOUT: return "NET_FANOUT";
     case TargetScope::GATE_FANIN: return "GATE_FANIN";
     case TargetScope::GATE_FANOUT: return "GATE_FANOUT";
+    case TargetScope::SINGLE_GATE: return "SINGLE_GATE";
     }
     return "UNKNOWN";
 }

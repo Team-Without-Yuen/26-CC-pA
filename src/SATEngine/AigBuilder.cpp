@@ -403,9 +403,9 @@ void AigModel::do_build(const Options& opt) {
             }
         }
         stats_.num_topo_dropped = static_cast<uint32_t>(dropped);
-        if (dropped > 0)
+        /*if (dropped > 0)
             std::cerr << "[AigBuilder][WARN] " << dropped
-                      << " combinational gate(s) unresolved (combinational loop?)\n";
+                      << " combinational gate(s) unresolved (combinational loop?)\n";*/
     }
 
     // ---- 6. 真實 PO ----

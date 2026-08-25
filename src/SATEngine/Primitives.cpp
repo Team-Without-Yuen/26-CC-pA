@@ -129,6 +129,7 @@ bool Primitives::ensure_fraig(bool needVerified) {
     fcfg.sat_time_limit          = fraigSatTimeLimit_;
     fcfg.sat_conflict_limit      = fraigSatConflicts_;
     fcfg.sim_memory_budget_bytes = fraigSimMemory_;
+    fcfg.deadline                = fraigDeadline_;
 
     fraig_.reset();                                  // 先拆舊的,再建新的
     fraig_ = std::make_unique<Fraig>(model_->aig(), *sat_, fcfg);
@@ -238,6 +239,15 @@ void Primitives::set_fraig_budget(double total_seconds,
     fraigSatConflicts_ = per_query_conflicts;
     if (sim_memory_bytes > 0) fraigSimMemory_ = sim_memory_bytes;
     if (max_rounds > 0) fraigMaxRounds_ = max_rounds;
+}
+
+void Primitives::set_fraig_deadline(
+    const request_time_budget::RequestDeadline* deadline) {
+    fraigDeadline_ = deadline;
+}
+
+bool Primitives::fraig_sweep_truncated() const {
+    return fraig_ != nullptr && fraig_->sweep_truncated();
 }
 
 // =============================================================================
@@ -1099,14 +1109,14 @@ void Primitives::check_cut(const Cut& cut) {
         case StaleSigPolicy::Ignore:
             return;
         case StaleSigPolicy::RebuildAndWarn:
-            std::cerr << "[Primitives][WARN] stale Cut (gen " << cut.generation
+            /*std::cerr << "[Primitives][WARN] stale Cut (gen " << cut.generation
                       << " vs current " << generation_
-                      << ") -- results are meaningless; re-enumerate cuts\n";
+                      << ") -- results are meaningless; re-enumerate cuts\n";*/
             return;
         default:
-            std::cerr << "[Primitives] stale Cut: generation " << cut.generation
+            /*std::cerr << "[Primitives] stale Cut: generation " << cut.generation
                       << ", current " << generation_
-                      << ". Re-run enumerate_cuts() after any netlist edit.\n";
+                      << ". Re-run enumerate_cuts() after any netlist edit.\n";*/
             throw StaleSignal{};
     }
 }

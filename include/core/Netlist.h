@@ -36,6 +36,10 @@ private:
     std::vector<Port> primaryInputs;
     std::vector<Port> primaryOutputs;
 
+    // 從來源檔案保留的 top module 名稱。writer 用它寫回同一個名字，
+    // 未指定時沿用預設值。
+    std::string topModuleName_ = "top";
+
     // Bulk rewrite passes may defer pin-level load-list maintenance and rebuild
     // it once at the end. This avoids repeated O(fanout) vector erases while
     // remaining invisible outside a single synchronous mutation call.
@@ -80,6 +84,11 @@ public:
 
     // 只有「AIG 已重建完成」時才可呼叫。除了 Primitives 不該有人碰。
     void clearDirty() const { dirty_ = false; }
+
+    const std::string& getTopModuleName() const { return topModuleName_; }
+    void setTopModuleName(const std::string& name) {
+        if (!name.empty()) topModuleName_ = name;
+    }
 
     // =========================================================================
     // Netlist.h API 分類索引
@@ -991,6 +1000,34 @@ public:
     // 之後若導入 NetlistEditReport / accept-rollback flow，會依賴這一層。
     // =========================================================================
  
+    // 結構驗證結果。計數而非布林，讓呼叫端能比較 before/after ——
+    // 載入時就存在的問題（例如來源檔案的 multi-driver）不該被算到 edit 頭上。
+    struct StructureViolations {
+        size_t gateIdMismatch        = 0;
+        size_t gateMissingOutput     = 0;
+        size_t gateOutputOutOfRange  = 0;
+        size_t gateOutputNotDriver   = 0;   // gate 說它驅動這條 net，net 說不是（multi-driver）
+        size_t gateInputOutOfRange   = 0;
+        size_t gateInputRemoved      = 0;
+        size_t netInvalidDriver      = 0;
+        size_t netDriverRemoved      = 0;
+        size_t netDriverOutputMismatch = 0;
+        size_t netInvalidLoad        = 0;
+        size_t netLoadMissingInput   = 0;
+        size_t netLoadMultiplicity   = 0;
+
+        size_t total() const {
+            return gateIdMismatch + gateMissingOutput + gateOutputOutOfRange +
+                gateOutputNotDriver + gateInputOutOfRange + gateInputRemoved +
+                netInvalidDriver + netDriverRemoved + netDriverOutputMismatch +
+                netInvalidLoad + netLoadMissingInput + netLoadMultiplicity;
+        }
+        bool clean() const { return total() == 0; }
+    };
+
+    // verbose = true 才輸出訊息到 stderr（上限 kMaxReported 條）。
+    StructureViolations collectStructureViolations(bool verbose = true) const;
+
     // 檢查 gate/net graph 的雙向指標是否一致。
     bool validateStructure() const;
  
@@ -1010,7 +1047,7 @@ public:
     static EditValidationResult validateEditResult(const Netlist& before, const Netlist& after);
 
     // 建立修改前後的 global critical depth comparison；targetDepth < 0 表示不檢查 target。
-    static DepthChange buildDepthChangeReport(
+    static CostChange buildDepthCostChange(
         const Netlist& before,
         const Netlist& after,
         const std::string& endpointName = "",
@@ -1109,6 +1146,13 @@ public:
     // 找出所有兩個 input 相同的 gate（and(a,a) / xor(a,a) 等）
     std::vector<int> findSameInputGates() const;
  
+    //----------------------------------------------------------------------------
+    // 非高階API
+    void detachGateInputs(int gateId);
+    bool rewriteInPlace(int gateId, GateType newType, const std::vector<int>& newInputs);
+
+    //-----------------------------------------------------------------------------
+
     // 套用 same-input 化簡規則到單一 gate；回傳 true 若有簡化
     bool simplifySameInputGate(int gateId);
  
@@ -1137,13 +1181,13 @@ public:
     // =========================================================================
  
     // 為 gate 產生 structural hash key（commutative gate 的 input 先排序）
-    std::string makeStructuralKey(int gateId) const;
+    std::uint64_t makeStructuralKey(int gateId) const;
  
     // 回傳所有結構等價的 gate 群組（每個 group 至少 2 個，group[0] 是 canonical）
     std::vector<std::vector<int>> findStructurallyEquivalentGateGroups() const;
  
     // 合併所有結構等價的 gate 群組，回傳合併數量
-    int mergeStructurallyEquivalentGates();
+    StructuralMergeSummary mergeStructurallyEquivalentGates();
     NetlistEditReport mergeStructurallyEquivalentGatesWithReport();
 
     // 以 FunctionSearch SAT 等價類合併跨結構但 output function 相同的 gates。
@@ -1154,6 +1198,10 @@ public:
         size_t simulationPatternCount = 256,
         double timeLimitSeconds =
             request_time_budget::kGeneralToolBudgetSeconds);
+
+    DffMergeSummary mergeDuplicateDffs();
+    DffMergeSummary mergeDuplicateDffsToFixpoint();
+    NetlistEditReport mergeDuplicateDffsWithReport();
 
     // =========================================================================
     // B-5: Unique name generator
@@ -1262,9 +1310,9 @@ public:
         int inputCount = -1);
     int simplifyAllSameInputGates();
     NetlistEditReport simplifyAllSameInputGatesWithReport();
-    int runLocalSimplificationFixpoint(const request_time_budget::RequestDeadline* deadline);
+    FixpointResult runLocalSimplificationFixpoint(const request_time_budget::RequestDeadline* deadline = nullptr);
+    FixpointResult runSafeCleanupFixpoint(const request_time_budget::RequestDeadline* deadline = nullptr);
     NetlistEditReport runLocalSimplificationFixpointWithReport(const request_time_budget::RequestDeadline* deadline);
-    int runSafeCleanupFixpoint(const request_time_budget::RequestDeadline* deadline);
     NetlistEditReport runSafeCleanupFixpointWithReport(const request_time_budget::RequestDeadline* deadline);
 
     // =========================================================================

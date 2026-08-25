@@ -4,6 +4,7 @@
 #include <memory>
 #include <vector>
 #include "Types.h"
+#include "include/core/RequestTimeBudget.h"
 
 namespace eqeng {
 
@@ -44,6 +45,8 @@ public:
         double   sat_time_limit;
         int64_t  sat_conflict_limit;
         double   total_time_budget;
+        // 因為 sweep 只是 request 的一個階段，用自己的碼表會超出整體預算。
+        const request_time_budget::RequestDeadline* deadline;
         bool     use_constant_class;
         // 只做模擬與分類,跳過整段 SAT 驗證。
         bool simulate_only;
@@ -55,11 +58,12 @@ public:
         Config()
         : sim_words_init(32)
         , sim_words_max(512)
-        , sim_memory_budget_bytes(8ull * 1024 * 1024 * 1024) // 8GB
+        , sim_memory_budget_bytes(8ull * 1024 * 1024 * 1024)
         , max_rounds(64)
         , sat_time_limit(1.0)
         , sat_conflict_limit(10000)
         , total_time_budget(0.0)
+        , deadline(nullptr)
         , use_constant_class(true)
         , simulate_only(false)
         , adaptive_sim(true) {}
@@ -76,6 +80,12 @@ public:
         double   sim_seconds     = 0.0;
         double   sat_seconds     = 0.0;
         bool     completed       = false;  // false = 預算耗盡，結果不完整但仍安全
+        // 前置階段（topology / simulate / classify）實際完成到哪個 node index。
+        // 時間預算在這些階段耗盡時 < total_node_count；此時 index 大於等於
+        // 這個值的節點沒有可信的模擬資料，所有查表一律退回 SAT。
+        uint64_t swept_node_count = 0;
+        uint64_t total_node_count = 0;
+        bool     sweep_truncated  = false;
     };
 
     Fraig(Ntk& aig, SatEngine& sat, Config cfg = Config());
@@ -83,6 +93,11 @@ public:
 
     Fraig(const Fraig&)            = delete;
     Fraig& operator=(const Fraig&) = delete;
+
+    // 前置階段是否被時間預算截斷。true 代表部分節點沒有模擬資料，
+    // 查表會 miss 但不會給錯誤答案。
+    bool sweep_truncated() const;
+    uint64_t swept_node_count() const;
 
     // 執行 sweep。可重複呼叫（例如追加預算再跑一輪）。
     void sweep();

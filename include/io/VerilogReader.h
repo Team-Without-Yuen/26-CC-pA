@@ -10,7 +10,13 @@ public:
     // Reads the Verilog file and populates the provided Netlist object
     bool read(const std::string& filepath, Netlist& netlist);
 
+    size_t multiDriverCount() const { return multiDriverCount_; }
+
 private:
+    size_t multiDriverCount_ = 0;
+
+    // 從 "module top(a, b, out);" 取出 "top"。
+    std::string parseModuleName(const std::string& line) const;
     // Parses the top-level module declaration (e.g., "module top(n0, n1, n2);")
     std::vector<std::string> parseTopModule(const std::string& line);
     // Parses input port declarations 
