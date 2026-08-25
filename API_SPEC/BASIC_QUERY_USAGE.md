@@ -59,16 +59,17 @@ if (report.ok) {
 
 | Query type | 問題類型 | 需要設定 | 主要讀取欄位 |
 |---|---|---|---|
-| `Summary` | current active design 規模與統計 | 無 | `gateCount`, `netCount`, `logicalWireCount`, `primaryInputCount`, `primaryOutputCount`, `gateTypeCounts` |
+| `Summary` | current active design 規模與統計 | 無 | gate/net/wire counts、PI/PO port/bit counts、`gateTypeCounts` |
 | `ListGates` | 列出所有 active gate | 無 | `gateIds`, `gateNames`, `gateCount` |
 | `ListNets` | 列出所有 active net | 無 | `netIds`, `netNames`, `netCount` |
-| `ListPrimaryInputs` | 列出所有 PI ports 與 width/range | 無 | `portNames`, `ports`, `primaryInputCount` |
-| `ListPrimaryOutputs` | 列出所有 PO ports 與 width/range | 無 | `portNames`, `ports`, `primaryOutputCount` |
+| `NetClassification` | 批次統計/列出 PI、PO、PI+PO、constant、internal nets | 無 | `netCount`, `netClassification` |
+| `ListPrimaryInputs` | 列出所有 PI ports 與 width/range | 無 | `portNames`, `ports`, `primaryInputCount`, `primaryInputBitCount` |
+| `ListPrimaryOutputs` | 列出所有 PO ports 與 width/range | 無 | `portNames`, `ports`, `primaryOutputCount`, `primaryOutputBitCount` |
 | `ListDffs` | 列出所有 DFF | 無 | `gateIds`, `gateNames`, `gateCount` |
 | `ListCombinationalGates` | 列出所有組合邏輯 gate | 無 | `gateIds`, `gateNames`, `gateCount` |
-| `GateInfo` | 查單一 gate 基本資訊 | `name` = gate instance name | `exists`, `objectId`, `objectName`, `typeName`, `isDff`, `isCombinational`, `formattedInfo` |
+| `GateInfo` | 查單一 gate 與 pin/net snapshot | `name` = gate instance name | `exists`, `objectId`, `objectName`, `typeName`, `isDff`, `isCombinational`, `gateConnections[0]`；`formattedInfo` 保留相容 |
 | `NetInfo` | 查單一 net 基本資訊 | `name` = net name | `exists`, `objectId`, `objectName`, `typeName`, `isPrimaryInput`, `isPrimaryOutput`, `isConstant` |
-| `PortInfo` | 查單一 PI/PO port | `name` = port name | `exists`, `objectName`, `portWidth`, `isBus`, `isPrimaryInput`, `isPrimaryOutput`, `netNames`, `netIds` |
+| `PortInfo` | 查單一 PI/PO port、range 與 ordered bits | `name` = port name | object/direction fields、`ports[0]`、`netNames`, `netIds` |
 | `CountByGateType` | 統計一或多種 gate type，可選排除型別 | gate-type filters 可選 | `gateTypeCounts`, `gateCount`, filter metadata |
 | `GatesByType` | 列出 include-minus-exclude gate 集合，可選 pin/net detail | gate-type filters、optional `includeConnectionDetails` | `gateIds`, `gateNames`, `gateConnections`, `gateCount`, filter metadata |
 | `GatesWithConstantInput` | 找 constant input gates，再套用 include/exclude type | gate-type filters、`constValue`、`inputCount`、`includeConnectionDetails` 可選 | `gateIds`, `gateNames`, `gateConnections`, `gateCount`, filter metadata |
@@ -91,7 +92,7 @@ if (report.ok) {
 | `inputCount` | `int` | `-1` | `GatesWithConstantInput` 使用；`-1` 不限制，非負數限制 gate input 數量 |
 | `includeIds` | `bool` | `true` | 是否填入 `gateIds` / `netIds` |
 | `includeNames` | `bool` | `true` | 是否填入 `gateNames` / `netNames` / `portNames`；不控制 structured `ports` |
-| `includeConnectionDetails` | `bool` | `false` | `GatesByType` / `GatesWithConstantInput` 是否填入每顆 gate 的 structured input/output pin-net records |
+| `includeConnectionDetails` | `bool` | `false` | `GatesByType` / `GatesWithConstantInput` 是否填入每顆 gate 的 structured input/output pin-net records；`GateInfo` 不受此 flag 影響，固定回一筆 snapshot |
 
 `gateType` 的常見值：
 
@@ -131,10 +132,13 @@ if (report.ok) {
 | `logicalWireCount` | Verilog declaration 層級的 wire 數量 |
 | `primaryInputCount` | PI port 數量 |
 | `primaryOutputCount` | PO port 數量 |
+| `primaryInputBitCount` | 所有 PI declaration width 的總和 |
+| `primaryOutputBitCount` | 所有 PO declaration width 的總和 |
 | `gateTypeCounts` | 各 gate type 統計 |
 
 每個 count 都有對應 validity flag：`hasGateCount`、`hasNetCount`、`hasLogicalWireCount`、
-`hasPrimaryInputCount`、`hasPrimaryOutputCount`。flag 為 `true` 時 count 即使是 `0` 也是完整、有效
+`hasPrimaryInputCount`、`hasPrimaryOutputCount`、`hasPrimaryInputBitCount`、
+`hasPrimaryOutputBitCount`。flag 為 `true` 時 count 即使是 `0` 也是完整、有效
 答案；flag 為 `false` 則代表該 mode 不提供此 metric，不能把預設零值當成答案。
 
 ### 4.3 單一物件資訊
@@ -144,7 +148,7 @@ if (report.ok) {
 | `objectId` | `GateInfo` / `NetInfo` 的 gate ID 或 net ID |
 | `objectName` | 查詢到的 gate/net/port 名稱 |
 | `typeName` | gate type 或 net/port 類型描述 |
-| `formattedInfo` | 人類可讀的格式化資訊，目前主要由 `GateInfo` 使用 |
+| `formattedInfo` | `GateInfo` 的 legacy 人類可讀相容欄位；新 caller 應讀 `gateConnections[0]` |
 | `isDff` | gate 是否 DFF |
 | `isCombinational` | gate 是否 combinational gate |
 | `isPrimaryInput` | `NetInfo` 的 net 是否 PI，或 `PortInfo` 的 port 是否 input |
@@ -152,7 +156,7 @@ if (report.ok) {
 | `isConstant` | net 是否 constant |
 | `isBus` | port 是否 bus |
 | `portWidth` | port bit width |
-| `ports` | batch PI/PO summaries；每筆含 name、width、msb/lsb、bus 與 direction flags |
+| `ports` | PI/PO structured summaries；batch list 回多筆，`PortInfo` 固定回一筆；每筆含 name、width、msb/lsb、bus 與 direction flags |
 
 ### 4.4 List 類欄位
 
@@ -164,10 +168,15 @@ if (report.ok) {
 | `netNames` | 查詢結果中的 net names |
 | `portNames` | 查詢結果中的 port names |
 | `gateConnections` | `GatesByType` 的 optional structured details；每筆含 gate ID/name/type、ordered input pins 與 output pin |
+| `netClassification` | `NetClassification` 的 structured counts 與分類 names/IDs；先確認 `valid=true` |
 
 `GateConnectionSummary.inputs` 依 netlist pin order 排列。每個 `PinConnectionSummary` 都包含
 `pinName`、`netId`、`netName`、`connected`、constant value 與 PI/PO flags；DFF output pin 使用 `Q`，
 一般 combinational output 使用 `OUT`。
+
+`NetClassificationSummary` 的 count 不受 `includeNames/includeIds` 影響；兩個 flags 只控制對應
+name/ID vectors。PI 與 PO 可重疊，交集另存在 `primaryInputOutputNet*`；`internalNet*` 是排除
+PI、PO、constant 後的 exclusive remainder。
 
 ### 4.5 Structural issue 欄位
 
@@ -177,6 +186,10 @@ if (report.ok) {
 | `noLoadNets` | 非 PO、非 constant，且沒有 load gate 的 nets |
 | `floatingNets` | `undrivenNets` 和 `noLoadNets` 的 union |
 | `unconnectedGates` | input 或 output 有無效 / unconnected net ID 的 gates |
+| `hasUnconnectedPinCounts` | true 時 input/output pin counts 為有效結果，包括合法的 0 |
+| `unconnectedInputPinCount` | 有問題的 existing input pin slots 數量 |
+| `unconnectedOutputPinCount` | 有問題的 output pin slots 數量 |
+| `unconnectedPins` | compact pin-level records：gate/pin/net ID、方向與原因 |
 | `floatingPrimaryInputNets` | 沒有雙向一致 active load 的 PI bit nets |
 | `unconnectedPrimaryOutputNets` | 沒有雙向一致 active driver 的 PO bit nets |
 
@@ -208,9 +221,14 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 | logical wire 數量 | `report.logicalWireCount` |
 | PI port 數量 | `report.primaryInputCount` |
 | PO port 數量 | `report.primaryOutputCount` |
+| PI bit 總數 | `report.primaryInputBitCount` |
+| PO bit 總數 | `report.primaryOutputBitCount` |
 | 各 gate type 數量 | `report.gateTypeCounts` |
 
 `gateCount` / `netCount` 是 current design 的 active object 數，不包含 edit 留下的 `UNKNOWN` gate 或 `isRemoved` net slot。底層 `getGateCount()` / `getNetCount()` 則保留 physical slot count，不應由 LLM 直接當作題目答案。
+
+`primaryInputCount` / `primaryOutputCount` 永遠是 port count，不是展開後的 signal/bit count；
+bit count 由每個 `Port.netIds.size()` 加總 declaration width。不要再由 caller 自行加總 `ports.width`。
 
 ---
 
@@ -241,7 +259,9 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 std::vector<std::string> dffNames = report.gateNames;
 ```
 
-`ListPrimaryInputs` / `ListPrimaryOutputs` 的 `ports` 一律包含 declaration-order metadata。若設定 `includeNames=false`，只有重複的 `portNames` 會省略，`ports` 仍可用來取得各 port 的 name、width、range 與 direction。
+`ListPrimaryInputs` / `ListPrimaryOutputs` 的 `ports` 一律包含 declaration-order metadata，並直接回傳
+該方向的 aggregate bit count。若設定 `includeNames=false`，只有重複的 `portNames` 會省略，
+`ports` 與 port/bit counts 仍然有效。
 
 ---
 
@@ -250,7 +270,7 @@ std::vector<std::string> dffNames = report.gateNames;
 用途：
 
 ```text
-查單一 gate 是否存在、ID、type、是否 DFF、是否 combinational。
+查單一 gate 是否存在、ID、type、是否 DFF/組合 gate，以及 ordered input/output pin-net snapshot。
 ```
 
 寫法：
@@ -279,7 +299,14 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 | gate type | `report.typeName` |
 | 是否 DFF | `report.isDff` |
 | 是否 combinational | `report.isCombinational` |
-| 格式化文字 | `report.formattedInfo` |
+| structured gate/pin/net record | `report.gateConnections[0]` |
+| input pin names/nets/constant/PI flags | `report.gateConnections[0].inputs` |
+| output pin/net/PO flag | `report.gateConnections[0].output` |
+| legacy 格式化文字 | `report.formattedInfo` |
+
+成功的 `GateInfo` 固定回傳一筆 `gateConnections`，不需要設定
+`includeConnectionDetails`。`formattedInfo` 只供舊 caller 相容；tools printer 在 structured
+record 存在時不重複輸出這段文字。
 
 ---
 
@@ -329,12 +356,56 @@ constant net 可能是 parser 內部建立的 net。
 
 ---
 
+## 8.1 NetClassification
+
+用途：
+
+```text
+一次統計並列出 current active named netlist 中的 PI、PO、PI+PO、constant 與 internal nets。
+```
+
+寫法：
+
+```cpp
+Netlist::BasicQuery query;
+query.type = Netlist::BasicQueryType::NetClassification;
+
+Netlist::BasicReport report = netlist.runBasicQuery(query);
+const Netlist::NetClassificationSummary& classes = report.netClassification;
+```
+
+讀取：
+
+| 想知道 | 讀取欄位 |
+|---|---|
+| 結果是否有效 | `classes.valid` |
+| 全部 active net 數 | `classes.activeNetCount` 或 `report.netCount` |
+| PI/PO bit-net 數 | `primaryInputNetCount`, `primaryOutputNetCount` |
+| 同時為 PI 與 PO 的 net 數 | `primaryInputOutputNetCount` |
+| parser 標記的 constant net 數 | `constantNetCount` |
+| 排除 PI/PO/constant 後的 internal net 數 | `internalNetCount` |
+| 各分類完整名稱/ID | 對應 `*NetNames` / `*NetIds` vectors |
+
+PI、PO、constant 採獨立 flag 判斷；PI+PO 會同時出現在 PI、PO 與交集 vectors，因此不能把
+所有 count 相加。`internal` 才是 exclusive remainder。這裡的 constant 是結構標記，不是
+Boolean functional constant；例如 `n = a & !a` 的 `n` 在此仍是 internal net。
+
+對外 CLI：
+
+```text
+structure_query net_classes
+```
+
+大型名稱結果由 tools 自動完整寫入 artifact，caller 不設定截斷數量或輸出檔名。
+
+---
+
 ## 9. PortInfo
 
 用途：
 
 ```text
-查 PI/PO port 是否存在、方向、是否 bus、bit width，以及展開後的 bit net names/IDs。
+查 PI/PO port 是否存在、方向、是否 bus、bit width、declaration range，以及展開後的 bit net names/IDs。
 ```
 
 寫法：
@@ -356,10 +427,19 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 | port 是否 input/output | `report.isPrimaryInput`, `report.isPrimaryOutput` |
 | 是否 bus | `report.isBus` |
 | bit width | `report.portWidth` |
+| structured port snapshot | `report.ports[0]` |
+| declaration left bound（歷史欄位名 msb） | `report.ports[0].msb` |
+| declaration right bound（歷史欄位名 lsb） | `report.ports[0].lsb` |
 | bit net names | `report.netNames` |
 | bit net IDs | `report.netIds` |
 
-`netNames` 與 `netIds` 都依 Verilog port declaration order 排列，且相同 index 對應同一個 bit。例如 `input [3:0] data_in` 會依序回傳 `data_in[3]` 到 `data_in[0]`。關閉 `includeIds` 或 `includeNames` 只會讓對應 vector 保持空白，不會改變另一個 vector 的順序。
+成功的 `PortInfo` 固定回傳一筆 `ports`，不受 `includeNames` 影響。`netNames` 與 `netIds` 都依
+Verilog port declaration order 排列，且相同 index 對應同一個 bit。例如 `[3:0] data_in` 依序
+回 `data_in[3]` 到 `data_in[0]`，`[0:2] ascending_in` 則回 `[0]`、`[1]`、`[2]`。
+
+`PortSummary.msb/lsb` 沿用既有名稱，但代表 declaration left/right bounds，不會正規化成
+數值最大/最小值。因此 `[0:31]` 必須讀成 `msb=0, lsb=31`。scalar 使用 `-1/-1`。
+關閉 `includeIds` 或 `includeNames` 只會讓對應 flat vector 保持空白，不會移除 `ports[0]`。
 
 ---
 
@@ -500,6 +580,8 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 | 無 load nets | `report.noLoadNets` |
 | floating nets | `report.floatingNets` |
 | 有 unconnected pin 的 gates | `report.unconnectedGates` |
+| unconnected input/output pin 數量 | `report.unconnectedInputPinCount` / `report.unconnectedOutputPinCount`；先檢查 validity |
+| 每個有問題的 pin | `report.unconnectedPins` |
 | floating primary-input bit nets | `report.floatingPrimaryInputNets` |
 | unconnected primary-output bit nets | `report.unconnectedPrimaryOutputNets` |
 
@@ -511,6 +593,11 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 | no-load net | 非 PO、非 constant，且沒有雙向一致 active load |
 | floating net | undriven 與 no-load 的 union |
 | unconnected gate | input 或 output 存在無效 / unconnected net ID |
+
+`unconnectedPins` 的 reason 分為 `Unconnected`（負 net ID）、`InvalidNetId`（超出 storage
+範圍）與 `RemovedNet`（指向 tombstone net）。只掃描 gate 已儲存的 slots；省略的 optional DFF
+control 不會憑空產生紀錄，明確 `.RN()` 會保留 pin 名稱並回報。pin-level record 是結構診斷，
+不等同於宣稱該 DFF 在功能上非法。
 
 PI/PO 專用欄位回傳 bit-net names。例如未驅動的 `output [1:0] y` 會回傳 `y[1]`、`y[0]`，不會只回傳 base port name `y`；因此可直接用 vector size 回答 signal 數量。
 
@@ -555,14 +642,17 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 | Count all NAND gates. | `CountByGateType` | `gateType = NAND` | `gateCount` |
 | List all gates. | `ListGates` | 無 | `gateNames` |
 | List all nets. | `ListNets` | 無 | `netNames` |
+| Count/list internal, PI, PO or structural constant nets. | `NetClassification` | 無 | `netClassification` |
 | List all primary inputs with their bit widths. | `ListPrimaryInputs` | 無 | `ports` |
 | List all primary outputs with their bit widths. | `ListPrimaryOutputs` | 無 | `ports` |
+| Report PI/PO port counts and total bit counts. | `Summary` | 無 | four PI/PO port/bit count fields |
 | List all DFFs. | `ListDffs` | 無 | `gateNames` |
 | List all combinational gates. | `ListCombinationalGates` | 無 | `gateNames` |
-| Report gate g1. | `GateInfo` | `name = "g1"` | `formattedInfo`, `typeName` |
+| Report gate g1 with its type and pin connections. | `GateInfo` | `name = "g1"` | `typeName`, `gateConnections[0]` |
 | Is gate g1 a DFF? | `GateInfo` | `name = "g1"` | `isDff` |
 | Is net n1 a PI? | `NetInfo` | `name = "n1"` | `isPrimaryInput` |
 | Is output y a bus? | `PortInfo` | `name = "y"` | `isBus`, `portWidth` |
+| Is port data declared `[31:0]` or `[0:31]`? | `PortInfo` | `name = "data"` | `ports[0].msb`, `ports[0].lsb` |
 | Find gates with constant input. | `GatesWithConstantInput` | 可選 `gateType`, `constValue` | `gateNames`, `gateCount` |
 | List constant-input gates with their input/output signals. | `GatesWithConstantInput` | `includeConnectionDetails = true` | `gateConnections`, `gateCount` |
 | Find floating nets. | `StructuralIssues` | 無 | `floatingNets` |
@@ -595,17 +685,18 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 | `Summary` | 以 `getGateCount()` / `getNetCount()` 作為掃描邊界，過濾 tombstone，並使用 `getLogicalWireCount()` / `countGatesByType()` |
 | `ListGates` | `getAllGateNames()` |
 | `ListNets` | `getAllNetNames()` |
+| `NetClassification` | 單次 active-net scan；直接讀 `Net.isPI/isPO/isConst/isRemoved` |
 | `ListPrimaryInputs` | `getPrimaryInputNames()` |
 | `ListPrimaryOutputs` | `getPrimaryOutputNames()` |
 | `ListDffs` | `getDffNames()`, `getGatesByType(DFF)` |
 | `ListCombinationalGates` | `getCombinationalGateNames()`, `isCombinationalGate()` |
-| `GateInfo` | `getGateId()`, `getGateInfo()`, `isDffGate()`, `isCombinationalGate()` |
+| `GateInfo` | `getGateId()`, `buildGateConnectionSummary()`, `getGateInfo()` legacy fallback、`isDffGate()`, `isCombinationalGate()` |
 | `NetInfo` | `getNetId()`, `isPrimaryInputNet()`, `isPrimaryOutputNet()`, `isConstantNet()` |
-| `PortInfo` | `getPortWidth()`, `isBusPort()`, `getPortBitNames()`, `expandNetToBits()` |
+| `PortInfo` | stored `Port` metadata、`getPortWidth()`、`getPortBitNames()`、`expandNetToBits()` |
 | `CountByGateType` | `countGatesByType()`, `getGateCountByType()` |
 | `GatesByType` | `getGatesByType()` |
 | `GatesWithConstantInput` | `findGatesWithConstInput()`, `getGateNamesWithConstInput()`, `countGatesWithConstInput()` |
-| `StructuralIssues` | `getUndrivenNetNames()`, `getNoLoadNetNames()`, `getFloatingNetNames()`, `getUnconnectedGateNames()` |
+| `StructuralIssues` | net issue helpers + 共用 O(active gates + stored pin slots) unconnected-pin collector |
 
 ---
 
@@ -614,6 +705,11 @@ Netlist::BasicReport report = netlist.runBasicQuery(query);
 ```text
 實作檔案：src/analysis/BasicAnalysis.cpp
 型別檔案：include/core/NetlistQueries.h
-tester：mini test/tester.cpp
-CLI integration regression test9-test16：142 passed, 0 failed.
+focused regression：mini test/test50/test50.ps1
+port-width/range regression：mini test/test15/test15.ps1，17 passed / 0 failed。
+GateInfo、PI/PO port/bit counts、net classification、constant、DFF named pins、tombstone 與
+pin-level structural diagnostics 全數通過；150 筆 pin issue 會完整寫入 artifact。
+official smoke：test76 為 PI 4/4、PO 3/10，且 `port_info n4` 回 range `2/0`；
+test91 為 PI 9/109、PO 7/134（ports/bits），`net_classes` 回 active 26,106、PI 109、
+PO 134、PI+PO 0、constant 1、internal 25,862，完整 artifact footer 為 `Complete: yes`。
 ```

@@ -51,15 +51,18 @@ structure_query fanout_report <net>
 structure_query global_fanout [non_negative_limit]
 structure_query pi_fanout [non_negative_limit]
 structure_query fanout_violations <non_negative_limit>
+structure_query fanout_filter <all|pi> <eq|ne|gt|ge|lt|le|between> <value> [upper]
+structure_query fanout_rank <scope> <highest|lowest|nth_highest|nth_lowest|top|bottom> [k]
 structure_query gate_inputs <gate>
 structure_query gate_output <gate>
 structure_query gate_fanin <gate>
 structure_query gate_fanout <gate>
-structure_query is_connected <gate> <net>
+structure_query is_connected <gate> <net-or-bus>
 ```
 
 名稱數量必須完全相符；fanout limit 只接受 `0..INT_MAX` 整數。缺值、未知 option、
 非法數字或 trailing token 都回 `status:error, complete:false`，不會用預設欄位繼續查詢。
+`fanout_filter` 的 value/upper 則使用 `size_t` 非負十進位整數，不套 `INT_MAX` 人工上限。
 這是 CLI adapter 契約；直接建立 C++ `DirectConnectivityQuery` 時，必要欄位仍由 backend 的
 `report.ok/message` 驗證。
 
@@ -72,12 +75,13 @@ structure_query is_connected <gate> <net>
 | `NetDriverGates` | 誰 drive 這條 net / bus；可選 output-pin detail | `netName`, optional `includePinDetails` | `gateIds`, `gateNames`, `count`, `pinConnections` |
 | `NetLoadGates` | 這條 net / bus load 到哪些 gates；可選逐 input-pin detail | `netName`, optional `includePinDetails` | `gateIds`, `gateNames`, `count`, `pinConnections` |
 | `FanoutLoadReport` | 依 Problem A QA 定義統計 pin-level fanout loads | `netName` | `fanoutLoadReport`, `count` |
-| `GlobalFanoutReport` | 全設計或 PI-only fanout max / violations | `fanoutLimit`, `primaryInputsOnly` | `globalFanoutReport` |
+| `GlobalFanoutReport` | 全設計或 PI-only fanout max / violations / predicate matches | `fanoutLimit`, `primaryInputsOnly`, optional predicate/bounds | `globalFanoutReport` |
+| `FanoutRankingReport` | scoped distinct-level fanout ranking | `fanoutScope`, `fanoutRankMode`, optional positive rank/count | `fanoutRankingReport`, `count` |
 | `GateInputs` | 這顆 gate 的 input nets | `gateName` | `netIds`, `netNames`, `count` |
 | `GateOutput` | 這顆 gate 的 output net | `gateName` | `netId`, `netName`, `netIds`, `netNames` |
 | `GateFanin` | 哪些 gates 直接餵進這顆 gate | `gateName` | `gateIds`, `gateNames`, `count` |
 | `GateFanout` | 這顆 gate output 直接接到哪些 gates | `gateName` | `gateIds`, `gateNames`, `count` |
-| `DirectlyConnected` | gate 和 net 是否直接相連 | `gateName`, `netName` | `connected`, `count` |
+| `DirectlyConnected` | gate 和 scalar net / bus 是否直接相連 | `gateName`, `netName` | `connected`, `count`, `netIds`, `netNames` |
 
 ---
 
@@ -90,7 +94,13 @@ structure_query is_connected <gate> <net>
 | `netName` | `std::string` | `""` | net 相關 query 使用 |
 | `fanoutLimit` | `int` | `-1` | `GlobalFanoutReport` 的 violation threshold；-1 表示未指定 |
 | `primaryInputsOnly` | `bool` | `false` | `GlobalFanoutReport` 是否只掃 PI bit nets |
-| `includeZeroFanout` | `bool` | `false` | `GlobalFanoutReport` 是否保留 0-fanout nets |
+| `includeZeroFanout` | `bool` | `false` | 是否在完整 `netReports` 明細保留 0-fanout nets；不影響 extrema candidates |
+| `fanoutPredicate` | `FanoutPredicate` | `None` | optional fanout 比較條件；不取代 limit/extrema |
+| `fanoutValue` | `size_t` | `0` | 單值條件，或 `BetweenInclusive` 下界 |
+| `fanoutUpperValue` | `size_t` | `0` | `BetweenInclusive` 的 inclusive 上界 |
+| `fanoutScope` | `FanoutScope` | `All` | ranking candidate scope |
+| `fanoutRankMode` | `FanoutRankMode` | `Highest` | ranking 方向與 single/multi-level 選取方式 |
+| `fanoutRankValue` | `size_t` | `1` | nth rank 或 top/bottom distinct-level count；必須大於 0 |
 | `includeIds` | `bool` | `true` | 是否填 `gateIds` / `netIds` |
 | `includeNames` | `bool` | `true` | 是否填 `gateNames` / `netNames` |
 | `includePinDetails` | `bool` | `false` | `NetDriverGates` / `NetLoadGates` 是否填逐 pin records |
@@ -116,7 +126,7 @@ includeIds / includeNames 只控制 payload 是否填入，不改變 count。
 | `netName` | 查詢指定或解析出的 net name |
 | `gateId` | 單一 gate ID 結果，沒有唯一 gate 時為 -1 |
 | `netId` | 單一 net ID 結果，沒有唯一 net 時為 -1 |
-| `count` | 結果數量 |
+| `count` | 結果數量；`DirectlyConnected` 時為實際相連的 active scalar/bit nets 數量 |
 | `gateIds` | 查詢結果中的 gate IDs |
 | `netIds` | 查詢結果中的 net IDs |
 | `gateNames` | 查詢結果中的 gate names |
@@ -126,6 +136,7 @@ includeIds / includeNames 只控制 payload 是否填入，不改變 count。
 | `pinConnections` | 完整 `ConnectivityPinRecord` records |
 | `fanoutLoadReport` | `FanoutLoadReport` 查詢的分類結果 |
 | `globalFanoutReport` | `GlobalFanoutReport` 查詢的全域彙整結果 |
+| `fanoutRankingReport` | `FanoutRankingReport` 的 scope/rank/result 與 compact ranked entries |
 
 通用錯誤與 tombstone 語意：
 
@@ -315,11 +326,52 @@ Netlist::DirectConnectivityReport report =
 | 最大 fanout 的 nets | `report.globalFanoutReport.maxFanoutReports` |
 | 是否符合 limit | `report.globalFanoutReport.satisfiesLimit` |
 | 違反 limit 的 nets | `report.globalFanoutReport.violatingReports` |
-| 實際檢查 net 數 | `report.globalFanoutReport.checkedNetCount` |
+| 實際參與 extrema/limit 的 active candidate 數 | `report.globalFanoutReport.checkedNetCount` |
+| predicate 命中數 | `report.globalFanoutReport.matchedNetCount` |
+| predicate 命中 nets 與各自 fanout | `report.globalFanoutReport.matchedReports` |
+
+所有 scope candidates 都會參與 maximum 計算，即使 `includeZeroFanout=false`。因此當所有 PI
+fanout 都是 0 時，`maxFanout=0`，且 `maxFanoutReports` 仍完整保留所有並列的 PI；
+`includeZeroFanout` 只決定這些零值是否也出現在完整 `netReports` 明細。
+
+Predicate 範例：
+
+```cpp
+query.primaryInputsOnly = true;
+query.fanoutPredicate = Netlist::FanoutPredicate::BetweenInclusive;
+query.fanoutValue = 4;
+query.fanoutUpperValue = 8;
+```
+
+`matchedNetCount` 是 filter matches；外層 `DirectConnectivityReport.count` 仍是完整 scope 的
+`checkedNetCount`。`between 4 8` 包含 4 與 8。若無命中，query 仍成功且 matched count 為 0。
 
 ---
 
-## 9. GateInputs
+## 9. FanoutRankingReport
+
+```cpp
+Netlist::DirectConnectivityQuery query;
+query.type = Netlist::DirectConnectivityQueryType::FanoutRankingReport;
+query.fanoutScope = Netlist::FanoutScope::PrimaryInputs;
+query.fanoutRankMode = Netlist::FanoutRankMode::NthHighest;
+query.fanoutRankValue = 2;
+
+const auto report = netlist.runDirectConnectivityQuery(query);
+```
+
+主要欄位：`checkedNetCount`、`distinctFanoutLevelCount`、`selectedFanoutLevelCount`、
+`resultNetCount`、`requestedRankExists` 與 `rankedReports`。每個 `FanoutRankEntry` 含
+`netId/netName/fanout/rank`。rank 是 distinct fanout value 的名次；ties 全部保留並穩定排序。
+`Top/Bottom K` 回前 K 個 levels，因此結果 net 數可大於 K。若要求的第 K level 不存在，
+single-rank mode 回成功空清單；top/bottom 回現有 levels 並令 `requestedRankExists=false`。
+
+scope：`All` 包含所有 active nets；`Internal` 排除 PI/PO/constant；三種 output scope 要求有效且
+一致的 active gate driver，再依任意 gate、非 DFF gate或 DFF 分類。
+
+---
+
+## 10. GateInputs
 
 用途：
 
@@ -348,7 +400,7 @@ Netlist::DirectConnectivityReport report =
 
 ---
 
-## 10. GateOutput
+## 11. GateOutput
 
 用途：
 
@@ -376,7 +428,7 @@ Netlist::DirectConnectivityReport report =
 
 ---
 
-## 11. GateFanin
+## 12. GateFanin
 
 用途：
 
@@ -404,7 +456,7 @@ PI 或 constant input 沒有 driver gate，會被略過。
 
 ---
 
-## 12. GateFanout
+## 13. GateFanout
 
 用途：
 
@@ -431,12 +483,12 @@ Report every gate connected to the output of g0.
 
 ---
 
-## 13. DirectlyConnected
+## 14. DirectlyConnected
 
 用途：
 
 ```text
-判斷指定 gate 和指定 net 是否直接相連。
+判斷指定 gate 和指定 scalar net，或 bus 的任一 active bit，是否直接相連。
 ```
 
 寫法：
@@ -456,17 +508,22 @@ Netlist::DirectConnectivityReport report =
 | 想知道 | 讀取欄位 |
 |---|---|
 | 是否直接相連 | `report.connected` |
+| 實際相連的 bit 數量 | `report.count` |
+| 實際相連的 scalar/bit nets | `report.netIds`, `report.netNames` |
 | 查詢是否成功 | `report.ok` |
 
 語意：
 
 ```text
-若 net 是 gate 的任一 input 或 output，connected=true。
+scalar net 是 gate 的任一 input 或 output 時，connected=true、count=1。
+bus base name 會依 declaration order 展開所有 active bits；`connected` 表示至少一個 bit 相連，
+`count/netIds/netNames` 只包含實際相連的 bits。bus 存在但沒有相連 bit 是成功的零結果；
+只有 scalar 與所有 bus bits 都不存在時才是 `ok=false`。
 ```
 
 ---
 
-## 14. Prompt 對應表
+## 15. Prompt 對應表
 
 | Prompt | 建議 Query type | 需要設定 | 主要讀取 |
 |---|---|---|---|
@@ -477,15 +534,20 @@ Netlist::DirectConnectivityReport report =
 | Does n1 directly drive a primary output? | `FanoutLoadReport` | `netName = "n1"` | `drivesPrimaryOutput` |
 | Which primary input has the highest fanout? | `GlobalFanoutReport` | `primaryInputsOnly = true` | `maxFanoutReports` |
 | Does every signal satisfy max fanout 16? | `GlobalFanoutReport` | `fanoutLimit = 16` | `satisfiesLimit`, `violatingReports` |
+| How many inputs have fanout exactly 4? | `GlobalFanoutReport` | PI scope + `Equal`, value 4 | `matchedNetCount`, `matchedReports` |
+| List signals with fanout from 4 through 8. | `GlobalFanoutReport` | all scope + inclusive range 4..8 | `matchedNetCount`, `matchedReports` |
+| Which signals have the second-highest fanout? | `FanoutRankingReport` | all + `NthHighest`, value 2 | `requestedRankExists`, `rankedReports` |
+| List the bottom 3 internal fanout levels. | `FanoutRankingReport` | internal + `Bottom`, value 3 | `selectedFanoutLevelCount`, `rankedReports` |
 | What are the input nets of g1? | `GateInputs` | `gateName = "g1"` | `netNames` |
 | What is the output net of g1? | `GateOutput` | `gateName = "g1"` | `netName` |
 | Which gates feed g1? | `GateFanin` | `gateName = "g1"` | `gateNames` |
 | Report every gate connected to the output of g0. | `GateFanout` | `gateName = "g0"` | `gateNames` |
 | Is g1 directly connected to n2? | `DirectlyConnected` | `gateName = "g1"`, `netName = "n2"` | `connected` |
+| Is g1 connected to any bit of bus data? | `DirectlyConnected` | `gateName = "g1"`, `netName = "data"` | `connected`, `count`, `netNames` |
 
 ---
 
-## 15. 何時不要用 DirectConnectivityQuery
+## 16. 何時不要用 DirectConnectivityQuery
 
 | 問題 | 應改用 |
 |---|---|
@@ -497,7 +559,7 @@ Netlist::DirectConnectivityReport report =
 
 ---
 
-## 16. 低階 Helper 對照
+## 17. 低階 Helper 對照
 
 | Query type | 底層 helper |
 |---|---|
@@ -505,6 +567,7 @@ Netlist::DirectConnectivityReport report =
 | `NetLoadGates` | `getNetLoadGateIds()`, `getNetLoadGateNames()`, `getNetLoadGateCount()` |
 | `FanoutLoadReport` | `getFanoutLoadReport()`, `getFanoutLoadCount()` |
 | `GlobalFanoutReport` | `getGlobalFanoutReport()`, `satisfiesFanoutLimit()` |
+| `FanoutRankingReport` | `getFanoutRankingReport()` |
 | `GateInputs` | `getGateInputNetIds()`, `getGateInputNetNames()` |
 | `GateOutput` | `getGateOutputNetId()`, `getGateOutputNetName()` |
 | `GateFanin` | `getGateFaninGateIds()`, `getGateFaninGateNames()`, `getGateFaninGateCount()` |
@@ -513,11 +576,12 @@ Netlist::DirectConnectivityReport report =
 
 ---
 
-## 17. 目前實作與測試狀態
+## 18. 目前實作與測試狀態
 
 ```text
 實作檔案：src/analysis/ConnectivityAnalysis.cpp
 型別檔案：include/core/NetlistQueries.h
 tester：mini test/tester.cpp
 目前 regression：Summary: 57 passed, 0 failed.
+fanout ranking：test55 focused matrix 與 test47 official large artifact regression 已建立，待手動編譯驗證。
 ```

@@ -21,6 +21,7 @@ const Netlist::FunctionSearchReport report =
 
 ```text
 func_search nand_pair ...
+func_search pattern ...
 func_search equivalent_pairs ...
 ```
 
@@ -33,6 +34,7 @@ func_search equivalent_pairs ...
 | Mode | 必要輸入 | 主要輸出 | 語意 |
 |---|---|---|---|
 | `nand_pair` | scalar target net | `found`, `matches` | 搜尋 `NAND(a,b)==target` |
+| `pattern` | gate type、scalar target net | `found`, `matches` | 搜尋指定基本 Boolean pattern 的一元/二元 operands |
 | `equivalent_pairs` | scope，必要時 scope name | `equivalenceClasses`, `matches` | 搜尋 gate output function 等價類 |
 
 `FindAny` 找到一組 SAT-proven witness 即停止。`FindAll` 預設不設數量上限；公開 CLI 會把完整 records 自動寫檔，只在 terminal 回 summary 與路徑。只有題目明確要求前 N 筆時才傳 `--max-results N`。
@@ -66,7 +68,7 @@ func_search equivalent_pairs ...
 
 `gateTypeFilter = GateType::UNKNOWN` 表示不限制 type；可設定 AND、OR、NAND、NOR、NOT、BUF、XOR 或 XNOR。
 
-NAND candidate 規則：
+Pattern/NAND candidate 規則：
 
 | 設定 | 候選集合 |
 |---|---|
@@ -74,6 +76,9 @@ NAND candidate 規則：
 | `internalSignalsOnly=false` | 另納入 PI 與有有效 driver 的 PO；仍排除 constant、target 與非 PI undriven nets |
 | `allowSameSignalPair=false` | unordered distinct pairs，不重複 `(a,b)` / `(b,a)` |
 | `allowSameSignalPair=true` | 在上述 pairs 之外加入 `(a,a)` |
+
+`patternGateType` 支援 BUF、NOT、AND、NAND、OR、NOR、XOR、XNOR。BUF/NOT 只回一個
+operand，其他類型回 unordered pair。MUX 需獨立 decomposition，不屬本命令。
 
 ---
 
@@ -156,7 +161,26 @@ func_search nand_pair n25 --all
 為 `AIG_LITERAL_EQUALITY` 或 `AIG_INCREMENTAL_SAT`；FindAll 目前為
 `SAT_UNSAT_MITER`。caller 不應根據 proof method 選擇 backend。
 
-### 5.2 搜尋 whole-design equivalent gate pairs
+### 5.2 搜尋通用 Boolean pattern operands
+
+```cpp
+Netlist::FunctionSearchQuery query;
+query.type = Netlist::FunctionSearchQueryType::FunctionalPatternOperands;
+query.patternGateType = GateType::OR;
+query.targetNetName = "n15";
+query.mode = Netlist::FunctionSearchMode::FindAny;
+const auto report = netlist.runFunctionSearchQuery(query);
+```
+
+```text
+func_search pattern OR n15
+func_search pattern NOT n5
+func_search pattern XOR y --all --include-boundary-signals
+```
+
+成功時讀取 `pattern_type`、`operand_arity`、`operand_count`、`operand_1/2` 與 proof 欄位。
+
+### 5.3 搜尋 whole-design equivalent gate pairs
 
 ```cpp
 Netlist::FunctionSearchQuery query;
@@ -183,7 +207,7 @@ func_search equivalent_pairs whole --all
 FindAny 使用共用 `FunctionalPatternEngine`/Phase B proof，FindAll 保留 legacy SAT；
 兩者都遵守同一個 `timeLimitSeconds` 與 partial-report 契約。
 
-### 5.3 限制在 cone
+### 5.4 限制在 cone
 
 ```cpp
 query.scope = Netlist::FunctionSearchScope::NetFanin;
@@ -195,7 +219,7 @@ func_search equivalent_pairs net_fanin n10 --all
 func_search equivalent_pairs gate_fanout U15 --all
 ```
 
-### 5.4 限制 gate type
+### 5.5 限制 gate type
 
 ```cpp
 query.gateTypeFilter = GateType::AND;
@@ -220,6 +244,15 @@ func_search nand_pair <target_net>
     [--allow-same]
     [--include-boundary-signals]
 
+func_search pattern <BUF|NOT|AND|NAND|OR|NOR|XOR|XNOR> <target_net>
+    [--find-any | --all]
+    [--scope <scope> [scope_name]]
+    [--max-results N]
+    [--patterns 1..4096]
+    [--time-limit seconds]
+    [--allow-same]
+    [--include-boundary-signals]
+
 func_search equivalent_pairs <scope> [scope_name]
     [--find-any | --all]
     [--gate-type type]
@@ -235,7 +268,8 @@ scope:
     gate_fanout <gate>
 ```
 
-`--allow-same` 與 `--include-boundary-signals` 只屬於 `nand_pair`；`--gate-type` 只屬於 `equivalent_pairs`。錯用時 parser 直接回 error。
+`--allow-same` 屬二元 `pattern`/`nand_pair`，`--include-boundary-signals` 與 `--scope` 屬
+`pattern`/`nand_pair`；`--gate-type` 只屬於 `equivalent_pairs`。錯用時 parser 直接回 error。
 
 `--all` 會自動建立 `<design>_function_search_<sequence>.txt`，且不覆寫既有檔案。不要為了避免大輸出自行加 `--max-results`；完整大型結果本來就應留在 artifact，回答只需給總數與檔案路徑。
 
@@ -246,6 +280,9 @@ scope:
 | Prompt 語意 | Command | 主要讀取 |
 |---|---|---|
 | 是否存在 signals 使 `NAND(a,b)==n25` | `func_search nand_pair n25` | `found`, 第一筆 match |
+| 哪條 signal 的 NOT 等價於 n5 | `func_search pattern NOT n5` | `found`, `operand_1` |
+| 找任意 OR operands 產生 n15 | `func_search pattern OR n15` | `found`, `operand_1/2` |
+| 列出所有 XOR operands | `func_search pattern XOR y --all` | `complete`, `match_count`, `output_file` |
 | 列出所有這類 NAND pairs | `func_search nand_pair n25 --all` | `complete`, `match_count`, `output_file` |
 | 找任意兩顆功能等價 gates | `func_search equivalent_pairs whole` | 第一筆 gate pair 與 proof |
 | 列出所有 equivalent gate groups | `func_search equivalent_pairs whole --all` | `equivalence_class_count`, `match_count`, `output_file` |
@@ -271,12 +308,12 @@ scope:
 ## 9. 實作與測試狀態
 
 ```text
-NAND C++ API：mini test/test23
-NAND CLI：mini test/test24
+通用 pattern 與 legacy NAND C++ API：mini test/test23（26/26）
+通用 pattern 與 legacy NAND CLI：mini test/test24（15/15）
 Equivalent gate-pair search + functional merge C++ API / CLI：mini test/test26
 ```
 
-目前兩種 public modes 均只回 SAT-proven matches；simulation-only 結果不會出現在 `matches`、artifact 或 `equivalenceClasses`。沒有有效 driver 的 net 目前視為 unconstrained Boolean leaf。官方 netlist 只包含題目規定的 gate types；prompt 中的 MUX 等語意屬合法 gates 所形成的 Boolean pattern，不以 direct MUX primitive 處理。
+目前三種 public modes 均只回 SAT-proven matches；simulation-only 結果不會出現在 `matches`、artifact 或 `equivalenceClasses`。沒有有效 driver 的 net 目前視為 unconstrained Boolean leaf。官方 netlist 只包含題目規定的 gate types；prompt 中的 MUX 等語意屬合法 gates 所形成的 Boolean pattern，不以 direct MUX primitive 處理。
 
 `test24` 為 9/9 通過，`test26` 為 18/18 通過；NewTestCase test29/test30 原始設計的 FindAll artifact 分別為 7/7 與 1/1 records，test70 FindAny 回完整 AIG/SAT witness。test70 differential 證明 FindAny 結果一致且約由 7.16 秒降至 2.21 秒；FindAll 保留約快 2.05 倍的 legacy backend。`mini test/test45` 另驗證官方前序 edit session 後的 oracle 與 functional merge，test29/test30 分別完整移除 361/494 顆，且 report、gate delta、CEC 與 write/readback 一致。
 

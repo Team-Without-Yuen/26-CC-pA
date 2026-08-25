@@ -34,19 +34,19 @@ function Get-OutputFiles([string] $Text) {
 try {
     $verilog = [System.Text.StringBuilder]::new()
     [void]$verilog.AppendLine('module function_large_support (')
-    [void]$verilog.AppendLine('    input [219:0] p,')
+    [void]$verilog.AppendLine('    input [999:0] p,')
     [void]$verilog.AppendLine('    output y')
     [void]$verilog.AppendLine(');')
-    for ($i = 3; $i -le 219; $i++) {
+    for ($i = 3; $i -le 999; $i++) {
         [void]$verilog.AppendLine("    wire n$i;")
     }
     [void]$verilog.AppendLine('    wire a_term;')
     [void]$verilog.AppendLine('    or g_or_3 (n3, p[2], p[3]);')
-    for ($i = 4; $i -le 219; $i++) {
+    for ($i = 4; $i -le 999; $i++) {
         $previous = $i - 1
         [void]$verilog.AppendLine("    or g_or_$i (n$i, n$previous, p[$i]);")
     }
-    [void]$verilog.AppendLine('    and g_and (a_term, p[0], n219);')
+    [void]$verilog.AppendLine('    and g_and (a_term, p[0], n999);')
     [void]$verilog.AppendLine('    or g_out (y, a_term, p[1]);')
     [void]$verilog.AppendLine('endmodule')
     Set-Content -LiteralPath $circuit -Value $verilog.ToString() -Encoding ascii
@@ -58,17 +58,16 @@ try {
     $createdArtifacts += $supportFiles
     Assert-Contains $support 'status: ok' 'support query succeeds'
     Assert-Contains $support 'complete: true' 'support query is complete'
-    Assert-Contains $support 'support leaf count: 220' 'support count remains inline'
+    Assert-Contains $support 'support leaf count: 1000' 'support count remains inline'
     Assert-Contains $support 'list artifact complete: yes' 'support list artifact is complete'
-    Assert-Contains $support 'wrote list to file: yes' 'support list is written'
-    Assert-NotContains $support 'Support leaves (220):' 'large support list is omitted from terminal'
+    Assert-Contains $support 'response token limit: 4096' 'support query uses the official token limit'
+    Assert-NotContains $support 'Support leaves (1000):' 'large support list is omitted from terminal'
     if ($supportFiles.Count -ne 1 -or -not (Test-Path -LiteralPath $supportFiles[0])) {
         throw '[support artifact] Expected exactly one existing output file.'
     }
     $supportArtifact = Get-Content -LiteralPath $supportFiles[0] -Raw
-    Assert-Contains $supportArtifact 'Format: QUERY_LIST_ARTIFACT_V1' 'support artifact format'
-    Assert-Contains $supportArtifact 'Support leaves (220):' 'support artifact has complete union'
-    Assert-Contains $supportArtifact 'Real primary inputs (220):' 'support artifact has PI classification'
+    Assert-Contains $supportArtifact 'Support leaves (1000):' 'support artifact has complete union'
+    Assert-Contains $supportArtifact 'Real primary inputs (1000):' 'support artifact has PI classification'
     Assert-Contains $supportArtifact 'Complete: yes' 'support artifact footer is complete'
 
     $symmetry = Invoke-Tools @($read, 'func_query symmetry y p[0] p[1]')
@@ -79,12 +78,13 @@ try {
     Assert-Contains $symmetry 'symmetric: no' 'fixture is not symmetric'
     Assert-Contains $symmetry 'counterexample found: yes' 'symmetry witness exists'
     Assert-Contains $symmetry 'list artifact complete: yes' 'symmetry detail artifact is complete'
+    Assert-Contains $symmetry 'response token limit: 4096' 'symmetry query uses the official token limit'
     Assert-NotContains $symmetry 'Counterexample assignments (' 'large witness is omitted from terminal'
     if ($symmetryFiles.Count -ne 1 -or -not (Test-Path -LiteralPath $symmetryFiles[0])) {
         throw '[symmetry artifact] Expected exactly one existing output file.'
     }
     $symmetryArtifact = Get-Content -LiteralPath $symmetryFiles[0] -Raw
-    Assert-Contains $symmetryArtifact 'Counterexample assignments (' 'symmetry artifact has assignments'
+    Assert-Contains $symmetryArtifact 'Counterexample assignments (1000):' 'symmetry artifact has assignments'
     Assert-Contains $symmetryArtifact 'Target values before swap (A=0, B=1)' 'symmetry artifact has before values'
     Assert-Contains $symmetryArtifact 'Target values after swap (A=1, B=0)' 'symmetry artifact has after values'
     Assert-Contains $symmetryArtifact 'Complete: yes' 'symmetry artifact footer is complete'

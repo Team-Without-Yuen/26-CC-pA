@@ -30,6 +30,27 @@ function Get-OutputFile {
     return ""
 }
 
+function Get-ArtifactSectionCount {
+    param([string]$Text, [string]$Title)
+    $lines = ($Text -replace "`r", "") -split "`n"
+    $escapedTitle = [regex]::Escape($Title)
+    for ($index = 0; $index -lt $lines.Count; $index++) {
+        $match = [regex]::Match($lines[$index], "^$escapedTitle \(([0-9]+)\):$")
+        if (-not $match.Success) { continue }
+
+        $actual = 0
+        for ($entry = $index + 1; $entry -lt $lines.Count; $entry++) {
+            if (-not $lines[$entry].StartsWith('  ')) { break }
+            $actual++
+        }
+        return [PSCustomObject]@{
+            Declared = [int]$match.Groups[1].Value
+            Actual = $actual
+        }
+    }
+    return $null
+}
+
 try {
     $fanoutOutput = Invoke-ToolBatch @(
         "read NewTestCase/test65/test65.v",
@@ -72,6 +93,107 @@ try {
     Check-Result ($coneArtifact.Contains("Cone gates (2342):") -and
                   $coneArtifact.Contains("Complete: yes")) `
         "cone artifact contains the complete official-test gate list"
+
+    $boundaryConeOutput = Invoke-ToolBatch @(
+        "read NewTestCase/test16/test16.v",
+        "cone_query net_fanin n33[0]",
+        "exit"
+    )
+    $boundaryConePath = Get-OutputFile $boundaryConeOutput
+    if ($boundaryConePath) { $createdArtifacts += $boundaryConePath }
+    $boundaryConeArtifact = if ($boundaryConePath -and
+        (Test-Path -LiteralPath $boundaryConePath)) {
+        Get-Content -LiteralPath $boundaryConePath -Raw
+    } else { "" }
+    $boundaryGateSection = Get-ArtifactSectionCount `
+        $boundaryConeArtifact "Cone gates"
+    $boundaryNetSection = Get-ArtifactSectionCount `
+        $boundaryConeArtifact "Cone nets"
+
+    Check-Result ($boundaryConeOutput.Contains("scope gates: 388") -and
+                  $boundaryConeOutput.Contains("nets: 411")) `
+        "boundary cone preserves official gate and net counts"
+    Check-Result ($boundaryConeOutput.Contains("list artifact complete: yes") -and
+                  $boundaryConeOutput.Contains("wrote list to file: yes")) `
+        "boundary cone triggers a complete artifact"
+    Check-Result (-not $boundaryConeOutput.Contains("Cone gates (388):") -and
+                  -not $boundaryConeOutput.Contains("Cone nets (411):")) `
+        "boundary cone lists are omitted from terminal"
+    Check-Result ($null -ne $boundaryGateSection -and
+                  $boundaryGateSection.Declared -eq 388 -and
+                  $boundaryGateSection.Actual -eq 388) `
+        "boundary cone artifact contains all 388 gates"
+    Check-Result ($null -ne $boundaryNetSection -and
+                  $boundaryNetSection.Declared -eq 411 -and
+                  $boundaryNetSection.Actual -eq 411 -and
+                  $boundaryConeArtifact.Contains("Complete: yes")) `
+        "boundary cone artifact contains all 411 nets and is complete"
+
+    $fanoutFilterOutput = Invoke-ToolBatch @(
+        "read NewTestCase/test84/test84.v",
+        "structure_query fanout_filter all ge 0",
+        "exit"
+    )
+    $fanoutFilterPath = Get-OutputFile $fanoutFilterOutput
+    if ($fanoutFilterPath) { $createdArtifacts += $fanoutFilterPath }
+    $fanoutFilterArtifact = if ($fanoutFilterPath -and
+        (Test-Path -LiteralPath $fanoutFilterPath)) {
+        Get-Content -LiteralPath $fanoutFilterPath -Raw
+    } else { "" }
+    $matchedCountMatch = [regex]::Match(
+        ($fanoutFilterOutput -replace "`r", ""),
+        '(?m)^  matched net count: ([0-9]+)$')
+    $matchedCount = if ($matchedCountMatch.Success) {
+        $matchedCountMatch.Groups[1].Value
+    } else { "" }
+
+    Check-Result ($fanoutFilterOutput.Contains("list artifact complete: yes") -and
+                  $fanoutFilterOutput.Contains("wrote list to file: yes")) `
+        "large fanout filter reports a complete artifact"
+    Check-Result ($matchedCount -ne "" -and
+                  -not $fanoutFilterOutput.Contains("Matched nets ($matchedCount):")) `
+        "large fanout filter keeps the complete matched list out of the terminal"
+    Check-Result ($matchedCount -ne "" -and
+                  $fanoutFilterArtifact.Contains("fanout filter scope: all") -and
+                  $fanoutFilterArtifact.Contains("fanout predicate: ge") -and
+                  $fanoutFilterArtifact.Contains("fanout value: 0") -and
+                  $fanoutFilterArtifact.Contains("matched net count: $matchedCount") -and
+                  $fanoutFilterArtifact.Contains("Matched nets ($matchedCount):") -and
+                  $fanoutFilterArtifact.Contains("Complete: yes")) `
+        "fanout filter artifact is complete and self-contained"
+
+    $fanoutRankOutput = Invoke-ToolBatch @(
+        "read NewTestCase/test84/test84.v",
+        "structure_query fanout_rank all top 999999",
+        "exit"
+    )
+    $fanoutRankPath = Get-OutputFile $fanoutRankOutput
+    if ($fanoutRankPath) { $createdArtifacts += $fanoutRankPath }
+    $fanoutRankArtifact = if ($fanoutRankPath -and
+        (Test-Path -LiteralPath $fanoutRankPath)) {
+        Get-Content -LiteralPath $fanoutRankPath -Raw
+    } else { "" }
+    $rankedCountMatch = [regex]::Match(
+        ($fanoutRankOutput -replace "`r", ""),
+        '(?m)^  result net count: ([0-9]+)$')
+    $rankedCount = if ($rankedCountMatch.Success) {
+        $rankedCountMatch.Groups[1].Value
+    } else { "" }
+
+    Check-Result ($fanoutRankOutput.Contains("list artifact complete: yes") -and
+                  $fanoutRankOutput.Contains("wrote list to file: yes")) `
+        "large fanout ranking reports a complete artifact"
+    Check-Result ($rankedCount -ne "" -and
+                  -not $fanoutRankOutput.Contains("Ranked nets ($rankedCount):")) `
+        "large fanout ranking keeps the complete ranked list out of the terminal"
+    Check-Result ($rankedCount -ne "" -and
+                  $fanoutRankArtifact.Contains("fanout ranking scope: all") -and
+                  $fanoutRankArtifact.Contains("fanout ranking mode: top") -and
+                  $fanoutRankArtifact.Contains("result net count: $rankedCount") -and
+                  $fanoutRankArtifact.Contains("Ranked nets ($rankedCount):") -and
+                  $fanoutRankArtifact.Contains("rank=1 net=") -and
+                  $fanoutRankArtifact.Contains("Complete: yes")) `
+        "fanout ranking artifact is complete and self-contained"
 
     $smallOutput = Invoke-ToolBatch @(
         "read NewTestCase/test58/test58.v",

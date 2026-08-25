@@ -167,6 +167,273 @@ void testNoPrimaryOutputs(TestReport& report) {
                  result.checkedOutputCount == 0 &&
                  result.message.find("No primary outputs") != std::string::npos,
                  "cone_query largest_output_cone no_outputs");
+
+    query = Netlist::ConeQuery();
+    query.type = Netlist::ConeQueryType::OutputConeRanking;
+    const Netlist::ConeReport ranking = netlist.runConeQuery(query);
+    report.check(ranking.ok && ranking.exists &&
+                     ranking.rankingReport.ok &&
+                     ranking.rankingReport.checkedOutputCount == 0 &&
+                     ranking.rankingReport.resultOutputCount == 0 &&
+                     !ranking.rankingReport.requestedRankExists,
+                 "cone_query output ranking empty scope is valid zero");
+
+    query = Netlist::ConeQuery();
+    query.type = Netlist::ConeQueryType::OutputConeFilter;
+    query.metricPredicate = Netlist::ConeMetricPredicate::GreaterThan;
+    const Netlist::ConeReport filter = netlist.runConeQuery(query);
+    report.check(filter.ok && filter.exists && filter.filterReport.ok &&
+                     filter.filterReport.checkedOutputCount == 0 &&
+                     filter.filterReport.matchedOutputCount == 0 &&
+                     filter.filterReport.matchedOutputs.empty(),
+                 "cone_query output filter empty scope is valid zero");
+}
+
+void testOutputConeRanking(TestReport& report) {
+    Netlist netlist;
+    netlist.addPrimaryInput("a");
+    netlist.addPrimaryInput("b");
+    netlist.addPrimaryInput("c");
+    netlist.addNet("n_deep");
+    netlist.addPrimaryOutput("y_a");
+    netlist.addPrimaryOutput("y_b");
+    netlist.addPrimaryOutput("y_deep");
+    netlist.addPrimaryOutput("y_zero");
+
+    const int gateA = netlist.addGate("g_a", GateType::AND);
+    netlist.connectGateInput(gateA, netlist.getNetId("a"));
+    netlist.connectGateInput(gateA, netlist.getNetId("b"));
+    netlist.connectGateOutput(gateA, netlist.getNetId("y_a"));
+
+    const int gateB = netlist.addGate("g_b", GateType::OR);
+    netlist.connectGateInput(gateB, netlist.getNetId("a"));
+    netlist.connectGateInput(gateB, netlist.getNetId("c"));
+    netlist.connectGateOutput(gateB, netlist.getNetId("y_b"));
+
+    const int deepAnd = netlist.addGate("g_deep_and", GateType::AND);
+    netlist.connectGateInput(deepAnd, netlist.getNetId("a"));
+    netlist.connectGateInput(deepAnd, netlist.getNetId("b"));
+    netlist.connectGateOutput(deepAnd, netlist.getNetId("n_deep"));
+    const int deepNot = netlist.addGate("g_deep_not", GateType::NOT);
+    netlist.connectGateInput(deepNot, netlist.getNetId("n_deep"));
+    netlist.connectGateOutput(deepNot, netlist.getNetId("y_deep"));
+
+    Netlist::ConeQuery query;
+    query.type = Netlist::ConeQueryType::OutputConeRanking;
+    query.rankMetric = Netlist::ConeRankMetric::ScopeGateCount;
+    query.rankMode = Netlist::ConeRankMode::Highest;
+    const Netlist::ConeReport highest = netlist.runConeQuery(query);
+    report.check(highest.ok && highest.exists &&
+                     highest.sourceName == "y_deep" &&
+                     highest.rankingReport.ok &&
+                     highest.rankingReport.checkedOutputCount == 4 &&
+                     highest.rankingReport.distinctMetricLevelCount == 3 &&
+                     highest.rankingReport.selectedMetricLevelCount == 1 &&
+                     highest.rankingReport.resultOutputCount == 1 &&
+                     highest.rankingReport.requestedRankExists &&
+                     highest.rankingReport.rankedOutputs.front().metricValue == 2 &&
+                     highest.scopeGateCount == 2,
+                 "cone_query output ranking highest scope gate count");
+
+    query.rankMode = Netlist::ConeRankMode::NthHighest;
+    query.rankValue = 2;
+    const Netlist::ConeReport tied = netlist.runConeQuery(query);
+    report.check(tied.ok && tied.sourceName == "y_a" &&
+                     tied.rankingReport.resultOutputCount == 2 &&
+                     tied.rankingReport.rankedOutputs[0].outputNetName == "y_a" &&
+                     tied.rankingReport.rankedOutputs[1].outputNetName == "y_b" &&
+                     tied.rankingReport.rankedOutputs[0].rank == 2 &&
+                     tied.rankingReport.rankedOutputs[1].rank == 2,
+                 "cone_query output ranking preserves nth-level ties");
+
+    query.rankMode = Netlist::ConeRankMode::Top;
+    query.rankValue = 2;
+    const Netlist::ConeReport top = netlist.runConeQuery(query);
+    report.check(top.ok && top.rankingReport.selectedMetricLevelCount == 2 &&
+                     top.rankingReport.resultOutputCount == 3 &&
+                     top.rankingReport.rankedOutputs[0].outputNetName == "y_deep" &&
+                     top.rankingReport.rankedOutputs[1].outputNetName == "y_a" &&
+                     top.rankingReport.rankedOutputs[2].outputNetName == "y_b",
+                 "cone_query output ranking top counts distinct levels");
+
+    query.rankMode = Netlist::ConeRankMode::Lowest;
+    query.rankValue = 1;
+    const Netlist::ConeReport lowest = netlist.runConeQuery(query);
+    report.check(lowest.ok && lowest.sourceName == "y_zero" &&
+                     lowest.rankingReport.resultOutputCount == 1 &&
+                     lowest.rankingReport.rankedOutputs.front().metricValue == 0 &&
+                     lowest.scopeGateCount == 0 && lowest.netCount == 1,
+                 "cone_query output ranking lowest includes zero-gate cone");
+
+    query.rankMode = Netlist::ConeRankMode::NthLowest;
+    query.rankValue = 2;
+    const Netlist::ConeReport nthLowest = netlist.runConeQuery(query);
+    report.check(nthLowest.ok && nthLowest.sourceName == "y_a" &&
+                     nthLowest.rankingReport.resultOutputCount == 2 &&
+                     nthLowest.rankingReport.rankedOutputs[0].outputNetName == "y_a" &&
+                     nthLowest.rankingReport.rankedOutputs[1].outputNetName == "y_b" &&
+                     nthLowest.rankingReport.rankedOutputs[0].rank == 2,
+                 "cone_query output ranking nth-lowest preserves ties");
+
+    query.rankMode = Netlist::ConeRankMode::Bottom;
+    query.rankValue = 2;
+    const Netlist::ConeReport bottom = netlist.runConeQuery(query);
+    report.check(bottom.ok && bottom.sourceName == "y_zero" &&
+                     bottom.rankingReport.selectedMetricLevelCount == 2 &&
+                     bottom.rankingReport.resultOutputCount == 3 &&
+                     bottom.rankingReport.rankedOutputs[0].outputNetName == "y_zero" &&
+                     bottom.rankingReport.rankedOutputs[1].outputNetName == "y_a" &&
+                     bottom.rankingReport.rankedOutputs[2].outputNetName == "y_b",
+                 "cone_query output ranking bottom counts distinct levels");
+
+    query.rankMetric = Netlist::ConeRankMetric::FilteredGateCount;
+    query.rankMode = Netlist::ConeRankMode::Highest;
+    query.rankValue = 1;
+    query.gateTypeFilters = {GateType::OR, GateType::OR};
+    const Netlist::ConeReport filtered = netlist.runConeQuery(query);
+    report.check(filtered.ok && filtered.sourceName == "y_b" &&
+                     filtered.rankingReport.resultOutputCount == 1 &&
+                     filtered.rankingReport.rankedOutputs.front().metricValue == 1 &&
+                     filtered.rankingReport.rankedOutputs.front().scopeGateCount == 1 &&
+                     filtered.rankingReport.rankedOutputs.front().filteredGateCount == 1 &&
+                     filtered.gateCount == 1,
+                 "cone_query output ranking supports filtered gate metric");
+
+    query.gateTypeFilters.clear();
+    query.rankMetric = Netlist::ConeRankMetric::NetCount;
+    const Netlist::ConeReport nets = netlist.runConeQuery(query);
+    report.check(nets.ok && nets.sourceName == "y_deep" &&
+                     nets.rankingReport.rankedOutputs.front().netCount == 4 &&
+                     nets.rankingReport.rankedOutputs.front().metricValue == 4,
+                 "cone_query output ranking supports net count metric");
+
+    query.rankMetric = Netlist::ConeRankMetric::ScopeGateCount;
+    query.rankMode = Netlist::ConeRankMode::NthHighest;
+    query.rankValue = 4;
+    const Netlist::ConeReport missingRank = netlist.runConeQuery(query);
+    report.check(missingRank.ok && missingRank.exists &&
+                     missingRank.sourceName.empty() &&
+                     missingRank.rankingReport.resultOutputCount == 0 &&
+                     !missingRank.rankingReport.requestedRankExists,
+                 "cone_query output ranking missing distinct rank is valid zero");
+
+    query.rankValue = 0;
+    const Netlist::ConeReport invalid = netlist.runConeQuery(query);
+    report.check(!invalid.ok && !invalid.exists &&
+                     invalid.message.find("greater than zero") != std::string::npos,
+                 "cone_query output ranking rejects zero rank");
+
+    Netlist::ConeQuery filterQuery;
+    filterQuery.type = Netlist::ConeQueryType::OutputConeFilter;
+    filterQuery.rankMetric = Netlist::ConeRankMetric::ScopeGateCount;
+    filterQuery.metricPredicate = Netlist::ConeMetricPredicate::GreaterThan;
+    filterQuery.metricValue = 0;
+    const Netlist::ConeReport greater = netlist.runConeQuery(filterQuery);
+    report.check(greater.ok && greater.exists && greater.filterReport.ok &&
+                     greater.filterReport.checkedOutputCount == 4 &&
+                     greater.filterReport.matchedOutputCount == 3 &&
+                     greater.filterReport.matchedOutputs[0].outputNetName == "y_a" &&
+                     greater.filterReport.matchedOutputs[1].outputNetName == "y_b" &&
+                     greater.filterReport.matchedOutputs[2].outputNetName == "y_deep",
+                 "cone_query output filter greater-than is complete and stable");
+
+    filterQuery.metricPredicate = Netlist::ConeMetricPredicate::Equal;
+    filterQuery.metricValue = 1;
+    const Netlist::ConeReport equal = netlist.runConeQuery(filterQuery);
+    report.check(equal.ok && equal.filterReport.matchedOutputCount == 2 &&
+                     equal.filterReport.matchedOutputs[0].metricValue == 1 &&
+                     equal.filterReport.matchedOutputs[1].metricValue == 1,
+                 "cone_query output filter equal preserves all matches");
+
+    filterQuery.metricPredicate = Netlist::ConeMetricPredicate::NotEqual;
+    const Netlist::ConeReport notEqual = netlist.runConeQuery(filterQuery);
+    report.check(notEqual.ok && notEqual.filterReport.matchedOutputCount == 2 &&
+                     notEqual.filterReport.matchedOutputs[0].outputNetName == "y_deep" &&
+                     notEqual.filterReport.matchedOutputs[1].outputNetName == "y_zero",
+                 "cone_query output filter not-equal preserves all matches");
+
+    filterQuery.metricPredicate = Netlist::ConeMetricPredicate::LessThan;
+    const Netlist::ConeReport less = netlist.runConeQuery(filterQuery);
+    report.check(less.ok && less.filterReport.matchedOutputCount == 1 &&
+                     less.filterReport.matchedOutputs.front().outputNetName == "y_zero",
+                 "cone_query output filter less-than includes zero cone");
+
+    filterQuery.metricPredicate = Netlist::ConeMetricPredicate::LessOrEqual;
+    filterQuery.metricValue = 0;
+    const Netlist::ConeReport lessOrEqual = netlist.runConeQuery(filterQuery);
+    report.check(lessOrEqual.ok &&
+                     lessOrEqual.filterReport.matchedOutputCount == 1 &&
+                     lessOrEqual.filterReport.matchedOutputs.front().outputNetName == "y_zero",
+                 "cone_query output filter less-or-equal includes boundary");
+
+    filterQuery.metricPredicate = Netlist::ConeMetricPredicate::GreaterOrEqual;
+    filterQuery.metricValue = 2;
+    const Netlist::ConeReport greaterOrEqual = netlist.runConeQuery(filterQuery);
+    report.check(greaterOrEqual.ok &&
+                     greaterOrEqual.filterReport.matchedOutputCount == 1 &&
+                     greaterOrEqual.filterReport.matchedOutputs.front().outputNetName == "y_deep",
+                 "cone_query output filter greater-or-equal includes boundary");
+
+    filterQuery.metricPredicate = Netlist::ConeMetricPredicate::BetweenInclusive;
+    filterQuery.metricValue = 1;
+    filterQuery.metricUpperValue = 2;
+    const Netlist::ConeReport between = netlist.runConeQuery(filterQuery);
+    report.check(between.ok && between.filterReport.matchedOutputCount == 3,
+                 "cone_query output filter between is inclusive");
+
+    filterQuery.rankMetric = Netlist::ConeRankMetric::FilteredGateCount;
+    filterQuery.metricPredicate = Netlist::ConeMetricPredicate::GreaterOrEqual;
+    filterQuery.metricValue = 1;
+    filterQuery.gateTypeFilters = {GateType::OR, GateType::OR};
+    const Netlist::ConeReport filteredMatches = netlist.runConeQuery(filterQuery);
+    report.check(filteredMatches.ok &&
+                     filteredMatches.filterReport.matchedOutputCount == 1 &&
+                     filteredMatches.filterReport.matchedOutputs.front().outputNetName == "y_b" &&
+                     filteredMatches.filterReport.matchedOutputs.front().filteredGateCount == 1,
+                 "cone_query output filter supports filtered gate metric");
+
+    filterQuery.gateTypeFilters.clear();
+    filterQuery.rankMetric = Netlist::ConeRankMetric::NetCount;
+    filterQuery.metricPredicate = Netlist::ConeMetricPredicate::BetweenInclusive;
+    filterQuery.metricValue = 3;
+    filterQuery.metricUpperValue = 3;
+    const Netlist::ConeReport netMatches = netlist.runConeQuery(filterQuery);
+    report.check(netMatches.ok && netMatches.filterReport.matchedOutputCount == 2 &&
+                     netMatches.filterReport.matchedOutputs[0].outputNetName == "y_a" &&
+                     netMatches.filterReport.matchedOutputs[1].outputNetName == "y_b",
+                 "cone_query output filter supports net count metric");
+
+    filterQuery.rankMetric = Netlist::ConeRankMetric::ScopeGateCount;
+    filterQuery.metricPredicate = Netlist::ConeMetricPredicate::GreaterThan;
+    filterQuery.metricValue = 99;
+    const Netlist::ConeReport noMatch = netlist.runConeQuery(filterQuery);
+    report.check(noMatch.ok && noMatch.exists && noMatch.filterReport.ok &&
+                     noMatch.filterReport.matchedOutputCount == 0 &&
+                     noMatch.filterReport.matchedOutputs.empty(),
+                 "cone_query output filter zero match is valid zero");
+
+    filterQuery.metricPredicate = Netlist::ConeMetricPredicate::BetweenInclusive;
+    filterQuery.metricValue = 3;
+    filterQuery.metricUpperValue = 2;
+    const Netlist::ConeReport invalidRange = netlist.runConeQuery(filterQuery);
+    report.check(!invalidRange.ok && !invalidRange.exists &&
+                     invalidRange.message.find("lower bound") != std::string::npos,
+                 "cone_query output filter rejects inverted range");
+
+    filterQuery.metricPredicate =
+        static_cast<Netlist::ConeMetricPredicate>(999);
+    const Netlist::ConeReport invalidPredicate = netlist.runConeQuery(filterQuery);
+    report.check(!invalidPredicate.ok && !invalidPredicate.exists &&
+                     invalidPredicate.message.find("predicate") != std::string::npos,
+                 "cone_query output filter rejects unsupported predicate");
+
+    filterQuery.metricPredicate = Netlist::ConeMetricPredicate::Equal;
+    filterQuery.metricValue = 1;
+    filterQuery.includeLocalPaths = true;
+    const Netlist::ConeReport unsupportedDetails = netlist.runConeQuery(filterQuery);
+    report.check(!unsupportedDetails.ok && !unsupportedDetails.exists &&
+                     unsupportedDetails.message.find("summary-only") != std::string::npos,
+                 "cone_query output filter rejects per-cone detail options");
 }
 
 void testRemovedObjectsAndBusRoots(TestReport& report) {
@@ -443,6 +710,7 @@ int main() {
         testGateTransitiveFanout(report, netlist);
         testGateTypeFiltersAndDetails(report, netlist);
         testNoPrimaryOutputs(report);
+        testOutputConeRanking(report);
         testRemovedObjectsAndBusRoots(report);
         testConsistentEdges(report);
         testSharedFaninReportSemantics(report);

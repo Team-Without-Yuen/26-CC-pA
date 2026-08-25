@@ -103,7 +103,7 @@ Path 0: a -> g0(BUF) -> n0 -> g2(AND) -> n2 -> g7(BUF) -> y
 
 只有 header count、`Written paths`、`Complete: yes` 與 envelope 完整性一致時，才能宣稱已列出全部 paths。
 
-`direct_pi_po` 的小型結果直接完整顯示；record 數或預估字元量過大的結果由工具自動寫入 self-contained artifact，
+`direct_pi_po` 的小型結果直接完整顯示；保守估算超過 4096 response tokens 時由工具自動寫入 self-contained artifact，
 response 回傳總數、完整性、格式與 `output_file`，不需要先取得總數後重跑。
 
 ## 6. Prompt Examples

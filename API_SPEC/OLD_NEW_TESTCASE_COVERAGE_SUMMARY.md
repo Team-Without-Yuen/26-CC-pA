@@ -1,4 +1,9 @@
-# NewTestCase Current API Coverage Summary
+# Old NewTestCase API Coverage Summary
+
+> Status: Reference (historical test01-test40 snapshot)
+>
+> 本文件只記錄早期 `NewTestCase/test01` 到 `test40` 的 coverage 狀態，不代表目前
+> test01-test91 的完整 coverage，也不可作為現行功能完成度的唯一依據。
 
 這份文件整理目前高階 API 對 `NewTestCase/test01` 到 `test40` prompt 的覆蓋狀態。重點不是重複列出每題原文，而是判斷哪些題目已能由現有 API 回答，哪些需要補 wrapper / 文件，哪些仍缺核心演算法。
 

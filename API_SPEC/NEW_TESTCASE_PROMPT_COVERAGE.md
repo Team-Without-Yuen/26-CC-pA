@@ -2011,12 +2011,14 @@ OptApply::CriticalPathDepth 已完成：
 - global/scoped depth objective
 - whole-netlist allowed/banned basis enforcement
 - no-improvement / target / invalid candidate rollback
-- mandatory PO + DFF.D whole-design SAT
+- accepted rewrite uses StructuralIdentity or CertifiedRewrite certificate
+- whole-design SAT is not executed inside this pass
 - NetlistEditReport.depthChange / depthOptimization
 
 test22 實測 global depth 41 -> 20。
 tools.cpp 已 expose `opt_query/opt_apply critical_path_depth`，並輸出完整
-depth change、constraint、candidate、whole-design SAT 與 rollback 狀態。
+depth change、constraint、candidate、certificate 與 rollback 狀態。若 prompt 明確要求
+whole-design SAT proof，需另呼叫 `equiv_query`。
 LLM-facing 契約見 `TOOLS_SPEC/OPTIMIZATION_TOOL.md`。
 ```
 
@@ -2090,7 +2092,8 @@ Public command covered；large scoped-cone runtime remains partial
 ```text
 NET_FANIN 若指定 DFF.Q/register output，會停在 sequential boundary。
 只有 GATE_FANIN 明確指定 DFF instance 時，才可解析到 D-pin data cone。
-local allowed/banned basis、scope validation、whole-design SAT 與 rollback 已整合。
+local allowed/banned basis、scope validation、CertifiedRewrite certificate 與 rollback 已整合；
+本 optimization pass 不內建 whole-design SAT。
 
 test26 實測：
 - requested scope n10
@@ -2100,7 +2103,7 @@ test26 實測：
 - opt_apply critical_path_depth --scope net_fanin n10 --objective cone --allowed NOR NOT -> already optimal, depth 0
 
 mini test/test30/test31 已覆蓋 malformed scope、DFF.Q scope、basis compliance、
-target rollback 與 whole-design SAT；mini test/test32 另覆蓋 tools help/parser、
+target rollback 與 certificate/report；mini test/test32 另覆蓋 tools help/parser、
 全域改善、scoped hard constraint、report cache、timeout envelope、rollback 與
 保守 lower-bound proof。
 
@@ -2172,7 +2175,8 @@ Official bounded smoke：
 10. DepthOptimizationApply
     - C++ OptApply::CriticalPathDepth 已完成
     - global/scoped depth + whole/local basis 已完成
-    - NetlistEditReport、whole-design SAT、accept/rollback 已完成
+    - NetlistEditReport、CertifiedRewrite certificate、accept/rollback 已完成
+    - whole-design SAT proof 由獨立 `equiv_query` 負責
     - tools.cpp / TOOL_SPEC / mini test32 已完成
     - test40 official bounded smoke PASS
     - test33 仍需 cone-isolated resynthesis 或 cooperative timeout

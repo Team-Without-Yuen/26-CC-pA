@@ -1681,28 +1681,6 @@ SimulationResult simulateNetlist(const Netlist& netlist, size_t patternCount) {
     return result;
 }
 
-bool signatureContainsRequiredOnes(const SimulationSignature& candidate,
-                                   const SimulationSignature& requiredOnes) {
-    if (candidate.size() != requiredOnes.size()) return false;
-    for (size_t word = 0; word < candidate.size(); ++word) {
-        if ((candidate[word] & requiredOnes[word]) != requiredOnes[word]) return false;
-    }
-    return true;
-}
-
-bool nandSignatureMatches(const SimulationSignature& a,
-                          const SimulationSignature& b,
-                          const SimulationSignature& target,
-                          std::uint64_t lastWordMask) {
-    if (a.size() != b.size() || a.size() != target.size()) return false;
-    for (size_t word = 0; word < a.size(); ++word) {
-        std::uint64_t value = ~(a[word] & b[word]);
-        if (word + 1 == a.size()) value &= lastWordMask;
-        if (value != target[word]) return false;
-    }
-    return true;
-}
-
 DetailedSatResult solveNandPairEquivalenceDetailed(const Netlist& netlist,
                                                    int targetNetId,
                                                    int netIdA,
@@ -1789,15 +1767,104 @@ DetailedSatResult solveNandPairEquivalenceDetailed(const Netlist& netlist,
     return makeSolveResult(solverResult, terminator);
 }
 
+std::optional<FunctionalPatternKind> functionalPatternKindForGateType(
+    GateType gateType) {
+    switch (gateType) {
+    case GateType::BUF: return FunctionalPatternKind::Buffer;
+    case GateType::NOT: return FunctionalPatternKind::Inverter;
+    case GateType::AND: return FunctionalPatternKind::And;
+    case GateType::NAND: return FunctionalPatternKind::Nand;
+    case GateType::OR: return FunctionalPatternKind::Or;
+    case GateType::NOR: return FunctionalPatternKind::Nor;
+    case GateType::XOR: return FunctionalPatternKind::Xor;
+    case GateType::XNOR: return FunctionalPatternKind::Xnor;
+    default: return std::nullopt;
+    }
+}
+
+size_t functionalPatternArity(GateType gateType) {
+    return gateType == GateType::BUF || gateType == GateType::NOT ? 1U : 2U;
+}
+
+bool functionalPatternSignatureMatches(
+    GateType gateType,
+    const SimulationSignature& a,
+    const SimulationSignature* b,
+    const SimulationSignature& target,
+    std::uint64_t lastWordMask) {
+    if (a.size() != target.size() ||
+        (b != nullptr && b->size() != target.size())) {
+        return false;
+    }
+    for (size_t word = 0; word < target.size(); ++word) {
+        std::uint64_t value = 0;
+        switch (gateType) {
+        case GateType::BUF: value = a[word]; break;
+        case GateType::NOT: value = ~a[word]; break;
+        case GateType::AND: value = a[word] & (*b)[word]; break;
+        case GateType::NAND: value = ~(a[word] & (*b)[word]); break;
+        case GateType::OR: value = a[word] | (*b)[word]; break;
+        case GateType::NOR: value = ~(a[word] | (*b)[word]); break;
+        case GateType::XOR: value = a[word] ^ (*b)[word]; break;
+        case GateType::XNOR: value = ~(a[word] ^ (*b)[word]); break;
+        default: return false;
+        }
+        if (word + 1 == target.size()) value &= lastWordMask;
+        if (value != target[word]) return false;
+    }
+    return true;
+}
+
+bool functionalPatternCandidateCanMatch(
+    GateType gateType,
+    const SimulationSignature& candidate,
+    const SimulationSignature& target,
+    std::uint64_t lastWordMask) {
+    if (candidate.size() != target.size()) return false;
+    for (size_t word = 0; word < target.size(); ++word) {
+        const std::uint64_t mask = word + 1 == target.size()
+            ? lastWordMask
+            : ~std::uint64_t{0};
+        const std::uint64_t candidateWord = candidate[word] & mask;
+        const std::uint64_t targetWord = target[word] & mask;
+        switch (gateType) {
+        case GateType::AND:
+            if ((candidateWord & targetWord) != targetWord) return false;
+            break;
+        case GateType::NAND: {
+            const std::uint64_t requiredOnes = (~targetWord) & mask;
+            if ((candidateWord & requiredOnes) != requiredOnes) return false;
+            break;
+        }
+        case GateType::OR:
+            if ((candidateWord & ((~targetWord) & mask)) != 0) return false;
+            break;
+        case GateType::NOR:
+            if ((candidateWord & targetWord) != 0) return false;
+            break;
+        default:
+            break;
+        }
+    }
+    return true;
+}
+
 bool collectFunctionSearchScopeGates(
     const Netlist& netlist,
     const FunctionSearchQuery& query,
     std::vector<int>& gateIds,
-    std::string& error) {
+    std::string& error,
+    std::vector<int>* netIds = nullptr) {
     if (query.scope == FunctionSearchScope::WholeDesign) {
         gateIds.reserve(netlist.getGateCount());
         for (size_t index = 0; index < netlist.getGateCount(); ++index) {
             gateIds.push_back(static_cast<int>(index));
+        }
+        if (netIds != nullptr) {
+            netIds->reserve(netlist.getNetCount());
+            for (size_t index = 0; index < netlist.getNetCount(); ++index) {
+                netIds->push_back(static_cast<int>(index));
+            }
         }
         return true;
     }
@@ -1836,6 +1903,11 @@ bool collectFunctionSearchScopeGates(
     gateIds = cone.gateIds;
     std::sort(gateIds.begin(), gateIds.end());
     gateIds.erase(std::unique(gateIds.begin(), gateIds.end()), gateIds.end());
+    if (netIds != nullptr) {
+        *netIds = cone.netIds;
+        std::sort(netIds->begin(), netIds->end());
+        netIds->erase(std::unique(netIds->begin(), netIds->end()), netIds->end());
+    }
     return true;
 }
 
@@ -1896,7 +1968,13 @@ bool openFunctionSearchOutput(const FunctionSearchQuery& query,
         return false;
     }
     report.wroteMatchesToFile = true;
-    output << "Function search matches\n\n";
+    output << "Function search matches\n";
+    output << "  target: " << report.targetNetName << "\n";
+    if (!report.patternTypeName.empty()) {
+        output << "  pattern: " << report.patternTypeName << "\n";
+        output << "  operand_arity: " << report.operandArity << "\n";
+    }
+    output << "\n";
     return true;
 }
 
@@ -1910,10 +1988,21 @@ bool writeFunctionSearchMatchRecord(std::ostream& output,
         output << "  gate_b: " << match.gateNameB
                << " (id=" << match.gateIdB << ")\n";
     }
-    output << "  net_a: " << match.netNameA
-           << " (id=" << match.netIdA << ")\n";
-    output << "  net_b: " << match.netNameB
-           << " (id=" << match.netIdB << ")\n";
+    if (match.operandNetIds.size() == 1) {
+        output << "  operand_1: " << match.operandNetNames.front()
+               << " (id=" << match.operandNetIds.front() << ")\n";
+    } else if (!match.operandNetIds.empty()) {
+        output << "  operand_count: " << match.operandNetIds.size() << "\n";
+        output << "  net_a: " << match.netNameA
+               << " (id=" << match.netIdA << ")\n";
+        output << "  net_b: " << match.netNameB
+               << " (id=" << match.netIdB << ")\n";
+    } else {
+        output << "  net_a: " << match.netNameA
+               << " (id=" << match.netIdA << ")\n";
+        output << "  net_b: " << match.netNameB
+               << " (id=" << match.netIdB << ")\n";
+    }
     output << "  proof_method: " << match.proofMethod << "\n";
     output << "  solver_status: " << match.solverStatus << "\n\n";
     return static_cast<bool>(output);
@@ -2281,6 +2370,9 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
     report.scope = query.scope;
     report.scopeName = query.scopeName;
     report.gateTypeFilter = query.gateTypeFilter;
+    report.patternGateType = query.type == FunctionSearchQueryType::NandEquivalentInputPairs
+        ? GateType::NAND
+        : query.patternGateType;
     report.targetNetName = query.targetNetName;
     report.simulationPatternCount = query.simulationPatternCount;
     const auto startedAt = std::chrono::steady_clock::now();
@@ -2303,12 +2395,24 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
             query,
             [this]() -> eqeng::Primitives& { return booleanPrimitives(); });
     }
-    if (query.type != FunctionSearchQueryType::NandEquivalentInputPairs) {
+    if (query.type != FunctionSearchQueryType::NandEquivalentInputPairs &&
+        query.type != FunctionSearchQueryType::FunctionalPatternOperands) {
         report.status = "UNSUPPORTED_QUERY_TYPE";
         report.message = "Unsupported FunctionSearchQueryType";
         report.unsupported = true;
         return finish();
     }
+    const std::optional<FunctionalPatternKind> patternKind =
+        functionalPatternKindForGateType(report.patternGateType);
+    if (!patternKind.has_value()) {
+        report.status = "UNSUPPORTED_PATTERN_TYPE";
+        report.message = "Functional pattern search supports BUF, NOT, AND, NAND, OR, NOR, XOR, and XNOR.";
+        report.unsupported = true;
+        return finish();
+    }
+    report.operandArity = functionalPatternArity(report.patternGateType);
+    report.patternTypeName = gateTypeToString(report.patternGateType);
+
     if (query.targetNetName.empty() || query.simulationPatternCount == 0 ||
         query.simulationPatternCount > 4096 ||
         !std::isfinite(query.timeLimitSeconds) || query.timeLimitSeconds <= 0.0) {
@@ -2326,7 +2430,7 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
     }
     if (targetBits.size() != 1) {
         report.status = "SCALAR_TARGET_REQUIRED";
-        report.message = "NAND pair search requires an existing scalar target net.";
+        report.message = "Functional pattern search requires an existing scalar target net.";
         return finish();
     }
     report.targetNetId = targetBits.front();
@@ -2337,6 +2441,22 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
     }
     if (!openFunctionSearchOutput(query, report, matchOutput)) {
         return finish();
+    }
+
+    std::unordered_set<int> scopedCandidateNetIds;
+    if (query.scope != FunctionSearchScope::WholeDesign) {
+        std::vector<int> scopeGateIds;
+        std::vector<int> scopeNetIds;
+        std::string scopeError;
+        if (!collectFunctionSearchScopeGates(
+                *this, query, scopeGateIds, scopeError, &scopeNetIds)) {
+            report.status = "SCOPE_NOT_FOUND";
+            report.message = scopeError;
+            return finish();
+        }
+        for (int netId : scopeNetIds) {
+            if (isValidNetId(netId)) scopedCandidateNetIds.insert(netId);
+        }
     }
 
     const SimulationResult simulation = simulateNetlist(*this, query.simulationPatternCount);
@@ -2356,19 +2476,18 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
     std::vector<int> candidateNetIds;
     std::vector<int> eligibleNetIds;
     const SimulationSignature& targetSignature = simulation.signatures[report.targetNetId];
-    SimulationSignature requiredOnes(targetSignature.size(), 0);
-    for (size_t word = 0; word < targetSignature.size(); ++word) {
-        requiredOnes[word] = ~targetSignature[word];
-    }
     const size_t remainingBits = query.simulationPatternCount % 64;
     const std::uint64_t lastWordMask = remainingBits == 0
         ? ~std::uint64_t{0}
         : ((std::uint64_t{1} << remainingBits) - 1);
-    requiredOnes.back() &= lastWordMask;
 
     for (size_t index = 0; index < getNetCount(); ++index) {
         const int netId = static_cast<int>(index);
         const Net& net = getNet(netId);
+        if (query.scope != FunctionSearchScope::WholeDesign &&
+            scopedCandidateNetIds.count(netId) == 0) {
+            continue;
+        }
         if (netId == report.targetNetId || net.isRemoved || net.isConst || net.name.empty()) {
             continue;
         }
@@ -2385,19 +2504,52 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
             ++report.unsupportedSignalCount;
             continue;
         }
-        if (signatureContainsRequiredOnes(simulation.signatures[netId], requiredOnes)) {
+        if (functionalPatternCandidateCanMatch(
+                report.patternGateType,
+                simulation.signatures[netId],
+                targetSignature,
+                lastWordMask)) {
             eligibleNetIds.push_back(netId);
         }
     }
     report.candidateSignalCount = candidateNetIds.size();
     report.simulationEligibleSignalCount = eligibleNetIds.size();
 
+    // Canonical target-driver operands are high-value witnesses for FindAny.
+    // Keep every eligible candidate, but examine these names first so large
+    // designs do not scan a quadratic prefix before proving an obvious match.
+    if (query.mode == FunctionSearchMode::FindAny) {
+        const Net& targetNet = getNet(report.targetNetId);
+        if (isValidGateId(targetNet.driverGateId)) {
+            const Gate& targetDriver = getGate(targetNet.driverGateId);
+            std::vector<int> prioritized;
+            prioritized.reserve(eligibleNetIds.size());
+            std::unordered_set<int> added;
+            for (int inputNetId : targetDriver.inputNetIds) {
+                if (std::find(eligibleNetIds.begin(), eligibleNetIds.end(), inputNetId) !=
+                        eligibleNetIds.end() &&
+                    added.insert(inputNetId).second) {
+                    prioritized.push_back(inputNetId);
+                }
+            }
+            for (int netId : eligibleNetIds) {
+                if (added.insert(netId).second) prioritized.push_back(netId);
+            }
+            eligibleNetIds = std::move(prioritized);
+        }
+    }
+
     FunctionalPatternEngine functionalPatternEngine;
     eqeng::Primitives* functionalPatternPrimitives = nullptr;
     bool stopped = false;
     for (size_t i = 0; i < eligibleNetIds.size() && !stopped; ++i) {
-        const size_t firstJ = query.allowSameSignalPair ? i : i + 1;
-        for (size_t j = firstJ; j < eligibleNetIds.size(); ++j) {
+        const size_t firstJ = report.operandArity == 1
+            ? i
+            : (query.allowSameSignalPair ? i : i + 1);
+        const size_t endJ = report.operandArity == 1
+            ? i + 1
+            : eligibleNetIds.size();
+        for (size_t j = firstJ; j < endJ; ++j) {
             if ((report.candidatePairsConsidered & 0xfffU) == 0 &&
                 elapsedSeconds() >= query.timeLimitSeconds) {
                 report.timedOut = true;
@@ -2408,10 +2560,15 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
             const int netIdA = eligibleNetIds[i];
             const int netIdB = eligibleNetIds[j];
             ++report.candidatePairsConsidered;
-            if (!nandSignatureMatches(simulation.signatures[netIdA],
-                                      simulation.signatures[netIdB],
-                                      targetSignature,
-                                      lastWordMask)) {
+            const SimulationSignature* signatureB = report.operandArity == 1
+                ? nullptr
+                : &simulation.signatures[netIdB];
+            if (!functionalPatternSignatureMatches(
+                    report.patternGateType,
+                    simulation.signatures[netIdA],
+                    signatureB,
+                    targetSignature,
+                    lastWordMask)) {
                 ++report.candidatePairsRejectedBySimulation;
                 continue;
             }
@@ -2420,14 +2577,19 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
             bool provenEquivalent = false;
             std::string proofMethod;
             std::string solverStatus;
-            if (query.mode == FunctionSearchMode::FindAny) {
+            const bool useLegacyNandFindAll =
+                report.patternGateType == GateType::NAND &&
+                query.mode == FunctionSearchMode::FindAll;
+            if (!useLegacyNandFindAll) {
                 if (functionalPatternPrimitives == nullptr) {
                     functionalPatternPrimitives = &booleanPrimitives();
                 }
                 FunctionalPatternProofRequest proofRequest;
-                proofRequest.kind = FunctionalPatternKind::Nand;
+                proofRequest.kind = *patternKind;
                 proofRequest.targetNetId = report.targetNetId;
-                proofRequest.operandNetIds = {netIdA, netIdB};
+                proofRequest.operandNetIds = report.operandArity == 1
+                    ? std::vector<int>{netIdA}
+                    : std::vector<int>{netIdA, netIdB};
                 const FunctionalPatternEvaluation proof =
                     functionalPatternEngine.proveSpecifiedOperands(
                         *this,
@@ -2489,9 +2651,17 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
 
             FunctionSearchMatch match;
             match.netIdA = netIdA;
-            match.netIdB = netIdB;
+            match.netIdB = report.operandArity == 2 ? netIdB : -1;
             match.netNameA = getNet(netIdA).name;
-            match.netNameB = getNet(netIdB).name;
+            if (report.operandArity == 2) {
+                match.netNameB = getNet(netIdB).name;
+            }
+            match.operandNetIds = report.operandArity == 1
+                ? std::vector<int>{netIdA}
+                : std::vector<int>{netIdA, netIdB};
+            match.operandNetNames = report.operandArity == 1
+                ? std::vector<std::string>{match.netNameA}
+                : std::vector<std::string>{match.netNameA, match.netNameB};
             match.provenEquivalent = true;
             match.proofMethod = proofMethod;
             match.solverStatus = solverStatus;
@@ -2543,6 +2713,6 @@ Netlist::FunctionSearchReport Netlist::runFunctionSearchQuery(
     report.status = report.found ? "MATCHES_FOUND" : "NO_MATCH";
     report.message = report.found
         ? "All candidate pairs were searched and SAT-proven matches were collected."
-        : "No internal signal pair satisfies the requested NAND equivalence.";
+        : "No eligible signal operands satisfy the requested Boolean pattern equivalence.";
     return finish();
 }

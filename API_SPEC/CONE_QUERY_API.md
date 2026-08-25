@@ -24,6 +24,7 @@ Count gates reachable from g0.
 Find the transitive fanout cone of net n3.
 Find the transitive fanin cone of gate g1.
 Which output has the largest fanin cone?
+How many outputs have more than 100 gates in their fanin cones?
 ```
 
 這一層不做：
@@ -220,6 +221,8 @@ ConeReport runConeQuery(const ConeQuery& query) const;
 | `GateTransitiveFanout` | 從指定 gate output net 往 fanout 方向追 |
 | `LargestOutputCone` | 掃描所有 primary output bit，找 fanin cone gateCount 最大者 |
 | `SharedFaninGates` | 直接計算兩個 net fanin cones 的 shared gate intersection |
+| `OutputConeRanking` | 依完整 gate、filter 後 gate 或 net 數量排名所有 primary output bits |
+| `OutputConeFilter` | 依完整 gate、filter 後 gate 或 net 數量的 predicate 篩選所有 primary output bits |
 
 核心資料結構：
 
@@ -230,6 +233,12 @@ struct ConeQuery {
     std::string secondNetName;
     std::string gateName;
     std::vector<GateType> gateTypeFilters;
+    ConeRankMetric rankMetric = ConeRankMetric::ScopeGateCount;
+    ConeRankMode rankMode = ConeRankMode::Highest;
+    size_t rankValue = 1;
+    ConeMetricPredicate metricPredicate = ConeMetricPredicate::Equal;
+    size_t metricValue = 0;
+    size_t metricUpperValue = 0;
     bool includeIds = true;
     bool includeNames = true;
     bool includeGateDetails = false;
@@ -263,6 +272,8 @@ struct ConeReport {
     std::vector<std::string> netNames;
     std::vector<std::string> gateNames;
     std::vector<GateConnectionSummary> gateConnections;
+    ConeRankingReport rankingReport;
+    ConeFilterReport filterReport;
 
     int longestDepth = -1;
     int shortestDepth = -1;
@@ -297,6 +308,39 @@ Gate-type filter 契約：
 6. 若多個 output 完整 cone gate count 相同，會以 netCount 較大者優先；仍相同時保留先遇到的 output。
 ```
 
+`OutputConeRanking` 契約：
+
+```text
+1. rankMetric 支援 ScopeGateCount、FilteredGateCount、NetCount。
+2. rankMode 支援 Highest、Lowest、NthHighest、NthLowest、Top、Bottom。
+3. rankValue 必須大於 0；Highest/Lowest 固定使用 1。
+4. rank 採 distinct metric level。Top/Bottom K 指 K 個 distinct levels，不是 K 筆 output。
+5. 同一 level 的 outputs 全部保留，依 output name、net ID 穩定排序。
+6. rankedOutputs 每筆只保存 output、rank 與三種 count 摘要，不複製完整 cone。
+7. ConeReport 的 source/cone payload 對應 selected entries 的第一筆，方便後續查看代表 cone；
+   完整排名必須讀 rankingReport.rankedOutputs。
+8. 沒有 active PO 或要求的 Nth level 不存在，仍是 ok=true 的 valid-zero ranking，
+   requestedRankExists=false；這不改變 LargestOutputCone 原本的 no-output error。
+```
+
+`OutputConeFilter` 契約：
+
+```text
+1. rankMetric 沿用 ScopeGateCount、FilteredGateCount、NetCount 三種 output cone metric。
+2. metricPredicate 支援 Equal、NotEqual、GreaterThan、GreaterOrEqual、LessThan、
+   LessOrEqual、BetweenInclusive。
+3. BetweenInclusive 使用 metricValue/metricUpperValue，且 lower 不得大於 upper；其他
+   predicate 只使用 metricValue，0 是合法值。
+4. filter 會掃描全部 active primary output bits，matchedOutputs 完整保留所有 matches，
+   並依 output name、net ID 穩定排序。
+5. ConeFilterEntry 保存 output identity、metricValue 與三種 count 摘要，不複製完整 cone。
+6. 這是 summary-only batch query；不支援 includeGateDetails/includeLocalPaths，也不填代表性
+   source/cone payload。完整答案讀 filterReport.matchedOutputs。
+7. 沒有 active PO 或沒有 match 都是 ok=true、exists=true、matchedOutputCount=0 的 valid-zero。
+8. gateTypeFilters 只影響 FilteredGateCount；ScopeGateCount/NetCount 的 metric 不受 filter 影響。
+9. OutputConeFilter 不是單一 rewrite scope，不得直接交給 edit/optimization engine。
+```
+
 `SharedFaninGates` 會分別建立兩個 transitive fanin cones，對排序後的 gate IDs 做 intersection，並回傳 shared `gateIds/gateNames/gateTypeCounts`。兩個名稱都合法但沒有交集時回 `ok=true`、`exists=true`、`gateCount=0`，不是來源不存在。`includeIds/includeNames` 只控制對應 payload，不影響成功狀態與 count。
 
 ---
@@ -319,6 +363,8 @@ Cone gate names/count wrapper
 Cone local longest/shortest path wrapper（longest 使用 iterative post-order，避免深鏈 call-stack overflow）
 ConeQuery / ConeReport 高階 API
 LargestOutputCone
+OutputConeRanking distinct-level ranking（含 ties、filter metric 與 valid-zero）
+OutputConeFilter threshold/range selection（含完整 matches 與 valid-zero）
 Cone gateTypeCounts
 SharedFaninGates
 Gate-type OR filter 與 scope/filter count 分離
@@ -329,11 +375,12 @@ GateConnectionSummary structured gate details
 
 ```text
 mini test/tester.cpp 已覆蓋 runConeQuery() 的 NetTransitiveFanin / NetTransitiveFanout / GateTransitiveFanin。
-mini test/test6/test6.cpp 已覆蓋 GateTransitiveFanout、LargestOutputCone、tombstone/bus/stale driver、
+mini test/test6/test6.cpp 已覆蓋 GateTransitiveFanout、LargestOutputCone、OutputConeRanking、OutputConeFilter、tombstone/bus/stale driver、
 none/one/many/duplicate/UNKNOWN gate-type filters、valid zero、structured details、SharedFanin filter、
 empty/reconvergent/multi-root/cycle local path、100000-level iterative longest-path chain，並讀取
-NewTestCase/test70 驗證大型 cone filter/detail consistency；目前 24/24 PASS。
+NewTestCase/test70 驗證大型 cone filter/detail consistency；目前 49/49 PASS。
 ```
 
-CLI parser/help/printer 尚未同步 gate-type filters 與 structured details；追蹤於
-`API_SPEC/TOOLS待更新表.md`。
+CLI parser/help/printer 已同步 gate-type filters、structured details、output ranking 與 strict
+required-operand 檢查；option 不得冒充 net/gate 名稱。`mini test/test49` 另驗證 parser、
+299-output ranking/filter artifact、strict predicate grammar 與官方 test76 的 legacy/ranking/filter semantics。

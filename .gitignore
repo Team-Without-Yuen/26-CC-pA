@@ -66,6 +66,7 @@ vcpkg_installed/
 Testing/
 .cache/
 AGENTS.md
+/PROJECT_SPEC/DOCUMENTATION_MAP.md
 cadical/
 
 # Local review and isolated-test workspaces

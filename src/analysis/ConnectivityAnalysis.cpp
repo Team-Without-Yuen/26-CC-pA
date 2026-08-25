@@ -122,6 +122,24 @@ std::vector<int> loadGateIdsForNetIds(const Netlist& netlist,
     return uniqueValidGateIds(netlist, loadGateIds);
 }
 
+std::vector<int> directlyConnectedNetIds(const Netlist& netlist,
+                                         int gateId,
+                                         const std::vector<int>& candidateNetIds) {
+    std::vector<int> connectedNetIds;
+    if (!isActiveGate(netlist, gateId)) {
+        return connectedNetIds;
+    }
+
+    connectedNetIds.reserve(candidateNetIds.size());
+    for (int netId : candidateNetIds) {
+        if (hasConsistentActiveDriver(netlist, netId, gateId) ||
+            isConsistentActiveLoad(netlist, netId, gateId)) {
+            connectedNetIds.push_back(netId);
+        }
+    }
+    return connectedNetIds;
+}
+
 // 將 pin name 正規化成大寫，方便辨識 DFF 的 D/CK/RN/SN。
 std::string uppercasePinName(std::string pinName) {
     std::transform(pinName.begin(), pinName.end(), pinName.begin(),
@@ -234,6 +252,101 @@ void mergeFanoutLoadReport(FanoutLoadReport& lhs, const FanoutLoadReport& rhs) {
     lhs.allGateLoadIds.insert(lhs.allGateLoadIds.end(),
                               rhs.allGateLoadIds.begin(),
                               rhs.allGateLoadIds.end());
+}
+
+bool isValidFanoutFilter(FanoutPredicate predicate,
+                         size_t lowerValue,
+                         size_t upperValue) {
+    switch (predicate) {
+    case FanoutPredicate::None:
+    case FanoutPredicate::Equal:
+    case FanoutPredicate::NotEqual:
+    case FanoutPredicate::GreaterThan:
+    case FanoutPredicate::GreaterOrEqual:
+    case FanoutPredicate::LessThan:
+    case FanoutPredicate::LessOrEqual:
+        return true;
+    case FanoutPredicate::BetweenInclusive:
+        return lowerValue <= upperValue;
+    }
+    return false;
+}
+
+bool matchesFanoutFilter(size_t fanout,
+                         FanoutPredicate predicate,
+                         size_t lowerValue,
+                         size_t upperValue) {
+    switch (predicate) {
+    case FanoutPredicate::None: return false;
+    case FanoutPredicate::Equal: return fanout == lowerValue;
+    case FanoutPredicate::NotEqual: return fanout != lowerValue;
+    case FanoutPredicate::GreaterThan: return fanout > lowerValue;
+    case FanoutPredicate::GreaterOrEqual: return fanout >= lowerValue;
+    case FanoutPredicate::LessThan: return fanout < lowerValue;
+    case FanoutPredicate::LessOrEqual: return fanout <= lowerValue;
+    case FanoutPredicate::BetweenInclusive:
+        return fanout >= lowerValue && fanout <= upperValue;
+    }
+    return false;
+}
+
+bool isValidFanoutScope(FanoutScope scope) {
+    switch (scope) {
+    case FanoutScope::All:
+    case FanoutScope::PrimaryInputs:
+    case FanoutScope::PrimaryOutputs:
+    case FanoutScope::Internal:
+    case FanoutScope::GateOutputs:
+    case FanoutScope::CombinationalOutputs:
+    case FanoutScope::DffOutputs:
+        return true;
+    }
+    return false;
+}
+
+bool isValidFanoutRankMode(FanoutRankMode mode) {
+    switch (mode) {
+    case FanoutRankMode::Highest:
+    case FanoutRankMode::Lowest:
+    case FanoutRankMode::NthHighest:
+    case FanoutRankMode::NthLowest:
+    case FanoutRankMode::Top:
+    case FanoutRankMode::Bottom:
+        return true;
+    }
+    return false;
+}
+
+bool isDescendingFanoutRank(FanoutRankMode mode) {
+    return mode == FanoutRankMode::Highest ||
+           mode == FanoutRankMode::NthHighest ||
+           mode == FanoutRankMode::Top;
+}
+
+bool netMatchesFanoutScope(const Netlist& netlist,
+                           const Net& net,
+                           FanoutScope scope) {
+    if (net.isRemoved) return false;
+
+    if (scope == FanoutScope::All) return true;
+    if (scope == FanoutScope::PrimaryInputs) return net.isPI;
+    if (scope == FanoutScope::PrimaryOutputs) return net.isPO;
+    if (scope == FanoutScope::Internal) {
+        return !net.isPI && !net.isPO && !net.isConst;
+    }
+
+    const int driverGateId = net.driverGateId;
+    if (!hasConsistentActiveDriver(netlist, net.id, driverGateId)) {
+        return false;
+    }
+    if (scope == FanoutScope::GateOutputs) return true;
+
+    const GateType driverType = netlist.getGate(driverGateId).type;
+    if (scope == FanoutScope::DffOutputs) return driverType == GateType::DFF;
+    if (scope == FanoutScope::CombinationalOutputs) {
+        return driverType != GateType::DFF;
+    }
+    return false;
 }
 
 } // namespace
@@ -390,14 +503,32 @@ size_t Netlist::getFanoutLoadCount(const std::string& netName) const {
 // 依照 Problem A QA 的 fanout load 定義掃描全設計或所有 primary inputs。
 GlobalFanoutReport Netlist::getGlobalFanoutReport(int maxFanoutLimit,
                                                   bool primaryInputsOnly,
-                                                  bool includeZeroFanout) const {
+                                                  bool includeZeroFanout,
+                                                  FanoutPredicate fanoutPredicate,
+                                                  size_t fanoutValue,
+                                                  size_t fanoutUpperValue) const {
     GlobalFanoutReport report;
-    report.ok = true;
-    report.message = primaryInputsOnly ? "Primary-input fanout report"
-                                       : "Global fanout report";
     report.fanoutLimit = maxFanoutLimit;
     report.primaryInputsOnly = primaryInputsOnly;
     report.includeZeroFanout = includeZeroFanout;
+    report.fanoutPredicate = fanoutPredicate;
+    report.fanoutValue = fanoutValue;
+    report.fanoutUpperValue = fanoutUpperValue;
+    report.fanoutFilterApplied = fanoutPredicate != FanoutPredicate::None;
+
+    if (!isValidFanoutFilter(fanoutPredicate, fanoutValue, fanoutUpperValue)) {
+        report.message = fanoutPredicate == FanoutPredicate::BetweenInclusive
+            ? "Fanout filter lower bound exceeds upper bound"
+            : "Unsupported fanout predicate";
+        return report;
+    }
+
+    report.ok = true;
+    report.message = report.fanoutFilterApplied
+        ? (primaryInputsOnly ? "Primary-input fanout filter report"
+                             : "Global fanout filter report")
+        : (primaryInputsOnly ? "Primary-input fanout report"
+                             : "Global fanout report");
 
     for (const Net& net : nets) {
         if (primaryInputsOnly && !net.isPI) {
@@ -408,19 +539,32 @@ GlobalFanoutReport Netlist::getGlobalFanoutReport(int maxFanoutLimit,
         if (!netReport.ok) {
             continue;
         }
-        if (!includeZeroFanout && netReport.totalLoadCount == 0) {
-            continue;
-        }
 
-        report.netReports.push_back(netReport);
+        // Every active in-scope net participates in extrema.  The zero-fanout
+        // option only controls the full-detail netReports collection; filtering
+        // zeroes before comparison would make an all-zero scope report no
+        // maximum candidates even though every net ties at fanout zero.
         ++report.checkedNetCount;
 
-        if (netReport.totalLoadCount > report.maxFanout) {
+        if (report.maxFanoutReports.empty() ||
+            netReport.totalLoadCount > report.maxFanout) {
             report.maxFanout = netReport.totalLoadCount;
             report.maxFanoutReports.clear();
             report.maxFanoutReports.push_back(netReport);
         } else if (netReport.totalLoadCount == report.maxFanout) {
             report.maxFanoutReports.push_back(netReport);
+        }
+
+        if (includeZeroFanout || netReport.totalLoadCount != 0) {
+            report.netReports.push_back(netReport);
+        }
+
+        if (report.fanoutFilterApplied &&
+            matchesFanoutFilter(netReport.totalLoadCount,
+                                fanoutPredicate,
+                                fanoutValue,
+                                fanoutUpperValue)) {
+            report.matchedReports.push_back(netReport);
         }
 
         if (maxFanoutLimit >= 0 &&
@@ -429,7 +573,100 @@ GlobalFanoutReport Netlist::getGlobalFanoutReport(int maxFanoutLimit,
         }
     }
 
+    report.matchedNetCount = report.matchedReports.size();
     report.satisfiesLimit = report.violatingReports.empty();
+    return report;
+}
+
+FanoutRankingReport Netlist::getFanoutRankingReport(
+    FanoutScope scope,
+    FanoutRankMode mode,
+    size_t rankOrCount) const {
+    FanoutRankingReport report;
+    report.scope = scope;
+    report.mode = mode;
+    report.requestedRankOrCount = rankOrCount;
+
+    if (!isValidFanoutScope(scope)) {
+        report.message = "Unsupported fanout ranking scope";
+        return report;
+    }
+    if (!isValidFanoutRankMode(mode)) {
+        report.message = "Unsupported fanout ranking mode";
+        return report;
+    }
+    if (rankOrCount == 0) {
+        report.message = "Fanout rank/count must be greater than zero";
+        return report;
+    }
+    if ((mode == FanoutRankMode::Highest ||
+         mode == FanoutRankMode::Lowest) && rankOrCount != 1) {
+        report.message = "Highest/lowest fanout ranking uses rank value 1";
+        return report;
+    }
+
+    std::vector<FanoutRankEntry> candidates;
+    candidates.reserve(nets.size());
+    for (const Net& net : nets) {
+        if (!netMatchesFanoutScope(*this, net, scope)) continue;
+
+        const FanoutLoadReport fanout = getFanoutLoadReport(net.id);
+        if (!fanout.ok) continue;
+
+        FanoutRankEntry entry;
+        entry.netId = net.id;
+        entry.netName = net.name;
+        entry.fanout = fanout.totalLoadCount;
+        candidates.push_back(std::move(entry));
+    }
+
+    report.checkedNetCount = candidates.size();
+    const bool descending = isDescendingFanoutRank(mode);
+    std::sort(candidates.begin(), candidates.end(),
+              [descending](const FanoutRankEntry& lhs,
+                           const FanoutRankEntry& rhs) {
+        if (lhs.fanout != rhs.fanout) {
+            return descending ? lhs.fanout > rhs.fanout
+                              : lhs.fanout < rhs.fanout;
+        }
+        if (lhs.netName != rhs.netName) return lhs.netName < rhs.netName;
+        return lhs.netId < rhs.netId;
+    });
+
+    size_t currentRank = 0;
+    size_t previousFanout = 0;
+    bool havePrevious = false;
+    for (FanoutRankEntry& entry : candidates) {
+        if (!havePrevious || entry.fanout != previousFanout) {
+            ++currentRank;
+            previousFanout = entry.fanout;
+            havePrevious = true;
+        }
+        entry.rank = currentRank;
+    }
+    report.distinctFanoutLevelCount = currentRank;
+
+    const bool multiLevel = mode == FanoutRankMode::Top ||
+                            mode == FanoutRankMode::Bottom;
+    const size_t selectedLevelLimit = multiLevel ? rankOrCount : 1;
+    const size_t selectedRank =
+        (mode == FanoutRankMode::NthHighest ||
+         mode == FanoutRankMode::NthLowest) ? rankOrCount : 1;
+
+    for (const FanoutRankEntry& entry : candidates) {
+        const bool selected = multiLevel
+            ? entry.rank <= selectedLevelLimit
+            : entry.rank == selectedRank;
+        if (selected) report.rankedReports.push_back(entry);
+    }
+
+    report.selectedFanoutLevelCount = multiLevel
+        ? std::min(rankOrCount, report.distinctFanoutLevelCount)
+        : (selectedRank <= report.distinctFanoutLevelCount ? 1 : 0);
+    report.resultNetCount = report.rankedReports.size();
+    report.requestedRankExists = rankOrCount <= report.distinctFanoutLevelCount;
+    report.ok = true;
+    report.message = "Fanout ranking report";
     return report;
 }
 
@@ -508,27 +745,15 @@ size_t Netlist::getGateFaninGateCount(const std::string& gateInstName) const {
     return getGateFaninGateIds(gateInstName).size();
 }
 
-// 判斷指定 gate 的 input 或 output 是否直接連到指定 net。
+// 判斷指定 gate 是否直接連到 scalar net 或 bus 的任一 active bit。
 bool Netlist::isGateDirectlyConnectedToNet(const std::string& gateInstName,
                                            const std::string& netName) const {
     const int gateId = getGateId(gateInstName);
-    const int netId = getNetId(netName);
-    if (!isValidGateId(gateId) || !isValidNetId(netId)) {
-        return false;
-    }
-    if (gates[gateId].type == GateType::UNKNOWN || nets[netId].isRemoved) {
-        return false;
-    }
-
-    const Gate& gate = gates[gateId];
-    if (hasConsistentActiveDriver(*this, netId, gateId)) {
-        return true;
-    }
-
-    return isConsistentActiveLoad(*this, netId, gateId);
+    const std::vector<int> candidateNetIds = activeNetIdsForName(*this, netName);
+    return !directlyConnectedNetIds(*this, gateId, candidateNetIds).empty();
 }
 
-// 判斷指定 net 是否直接連到指定 gate；與 isGateDirectlyConnectedToNet 同語意。
+// 判斷指定 scalar net / bus 是否直接連到指定 gate；與上式同語意。
 bool Netlist::isNetDirectlyConnectedToGate(const std::string& netName,
                                            const std::string& gateInstName) const {
     return isGateDirectlyConnectedToNet(gateInstName, netName);
@@ -648,7 +873,10 @@ Netlist::DirectConnectivityReport Netlist::runDirectConnectivityQuery(
     case DirectConnectivityQueryType::GlobalFanoutReport:
         report.globalFanoutReport = getGlobalFanoutReport(query.fanoutLimit,
                                                           query.primaryInputsOnly,
-                                                          query.includeZeroFanout);
+                                                          query.includeZeroFanout,
+                                                          query.fanoutPredicate,
+                                                          query.fanoutValue,
+                                                          query.fanoutUpperValue);
         report.ok = report.globalFanoutReport.ok;
         report.exists = report.globalFanoutReport.ok;
         report.message = report.globalFanoutReport.message;
@@ -665,6 +893,29 @@ Netlist::DirectConnectivityReport Netlist::runDirectConnectivityQuery(
         if (query.includeNames) {
             for (const FanoutLoadReport& maxReport : report.globalFanoutReport.maxFanoutReports) {
                 report.netNames.push_back(maxReport.netName);
+            }
+        }
+        return report;
+
+    case DirectConnectivityQueryType::FanoutRankingReport:
+        report.fanoutRankingReport = getFanoutRankingReport(
+            query.fanoutScope, query.fanoutRankMode, query.fanoutRankValue);
+        report.ok = report.fanoutRankingReport.ok;
+        report.exists = report.fanoutRankingReport.ok;
+        report.message = report.fanoutRankingReport.message;
+        report.count = report.fanoutRankingReport.resultNetCount;
+        if (query.includeIds) {
+            report.netIds.reserve(report.fanoutRankingReport.rankedReports.size());
+            for (const FanoutRankEntry& entry :
+                 report.fanoutRankingReport.rankedReports) {
+                report.netIds.push_back(entry.netId);
+            }
+        }
+        if (query.includeNames) {
+            report.netNames.reserve(report.fanoutRankingReport.rankedReports.size());
+            for (const FanoutRankEntry& entry :
+                 report.fanoutRankingReport.rankedReports) {
+                report.netNames.push_back(entry.netName);
             }
         }
         return report;
@@ -771,38 +1022,47 @@ Netlist::DirectConnectivityReport Netlist::runDirectConnectivityQuery(
         report.count = getGateFanoutCount(query.gateName);
         return report;
 
-    case DirectConnectivityQueryType::DirectlyConnected:
+    case DirectConnectivityQueryType::DirectlyConnected: {
         if (query.gateName.empty() || query.netName.empty()) {
             report.message = "DirectlyConnected requires gateName and netName";
             return report;
         }
         report.gateId = getGateId(query.gateName);
-        report.netId = getNetId(query.netName);
         if (!isActiveGate(*this, report.gateId)) {
             report.message = "Gate not found: " + query.gateName;
             return report;
         }
-        if (!isActiveNet(*this, report.netId)) {
+        const std::vector<int> candidateNetIds =
+            activeNetIdsForName(*this, query.netName);
+        if (candidateNetIds.empty()) {
             report.message = "Net not found: " + query.netName;
             return report;
         }
+        const int scalarNetId = getNetId(query.netName);
+        report.netId = isActiveNet(*this, scalarNetId) ? scalarNetId : -1;
+        const std::vector<int> connectedNetIds =
+            directlyConnectedNetIds(*this, report.gateId, candidateNetIds);
         report.ok = true;
         report.exists = true;
-        report.connected = isGateDirectlyConnectedToNet(query.gateName, query.netName);
+        report.connected = !connectedNetIds.empty();
         report.message = report.connected ? "Gate and net are directly connected"
-                                          : "Gate and net are not directly connected";
-        report.count = report.connected ? 1 : 0;
+                                           : "Gate and net are not directly connected";
+        report.count = connectedNetIds.size();
         if (report.connected) {
             if (query.includeIds) {
                 report.gateIds.push_back(report.gateId);
-                report.netIds.push_back(report.netId);
+                report.netIds = connectedNetIds;
             }
             if (query.includeNames) {
                 report.gateNames.push_back(query.gateName);
-                report.netNames.push_back(query.netName);
+                report.netNames.reserve(connectedNetIds.size());
+                for (int netId : connectedNetIds) {
+                    report.netNames.push_back(nets[netId].name);
+                }
             }
         }
         return report;
+    }
     }
 
     report.message = "Unsupported DirectConnectivityQueryType";

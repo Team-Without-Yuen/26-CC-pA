@@ -15,11 +15,14 @@ API_SPEC/FUNCTION_SEARCH_USAGE.md
 `FunctionSearchQuery` 處理「候選名稱未知，必須掃描設計才能找到答案」的 Boolean search。目前公開支援：
 
 ```text
-NandEquivalentInputPairs
+FunctionalPatternOperands
+NandEquivalentInputPairs (compatibility alias)
 EquivalentGatePairs
 ```
 
-前者搜尋使 `NAND(a,b) == target` 的既有 signal pair；後者搜尋 output function 完全相同的 active combinational gate pairs，並整理成等價類。
+`FunctionalPatternOperands` 搜尋使指定 BUF/NOT/AND/NAND/OR/NOR/XOR/XNOR
+function 等價於 target 的既有 signals；`NandEquivalentInputPairs` 保留原有 NAND 呼叫相容性。
+`EquivalentGatePairs` 搜尋 output function 完全相同的 active combinational gate pairs，並整理成等價類。
 
 本 API 是 read-only analysis，不會 merge gate、rewire 或修改 netlist。修改必須交給 `EditApply`，並依題意執行修改後等價驗證。
 
@@ -57,6 +60,7 @@ scope 的 gate 集合沿用 `ConeQuery` 語意；fanin 包含驅動 root net 的
 ```cpp
 enum class FunctionSearchQueryType {
     NandEquivalentInputPairs,
+    FunctionalPatternOperands,
     EquivalentGatePairs
 };
 
@@ -87,17 +91,22 @@ enum class FunctionSearchScope {
 | `writeMatchesToFile` | `false` | 是否以 streaming 將 pair records 寫到檔案 |
 | `outputFilePath` | 空字串 | 指定 artifact 路徑；公開 CLI 會自動提供不覆寫的檔名 |
 
-`NandEquivalentInputPairs` 使用：
+`FunctionalPatternOperands` 與 `NandEquivalentInputPairs` 使用：
 
 | 欄位 | 語意 |
 |---|---|
 | `targetNetName` | existing scalar target |
+| `patternGateType` | 通用 mode 必填；支援 BUF/NOT/AND/NAND/OR/NOR/XOR/XNOR；legacy NAND mode 固定為 NAND |
 | `internalSignalsOnly` | true 時排除 PI、PO、constant、undriven 與 target；保留有有效 driver 的 internal nets，包含 DFF.Q |
 | `allowSameSignalPair` | 是否允許 `(a,a)` |
+| `scope`, `scopeName` | 可限制 operand 候選於 whole design 或指定 fanin/fanout cone |
 
 `internalSignalsOnly=false` 時會納入 PI，以及有有效 driver 的 PO/internal nets；constant、target
 本身與非 PI undriven nets 仍排除。Pair 為 unordered，不會同時回 `(a,b)` 與 `(b,a)`；只有
 `allowSameSignalPair=true` 才加入 `(a,a)`。
+
+BUF/NOT 為一元搜尋，`operandArity=1`，match 只填 `operandNetIds[0]`；AND/NAND/OR/NOR/
+XOR/XNOR 為二元搜尋，`operandArity=2`。MUX 不走本 mode，避免 O(n^3) 枚舉。
 
 `EquivalentGatePairs` 使用：
 
@@ -132,6 +141,8 @@ enum class FunctionSearchScope {
 | `matches` | 最多 `maxStoredMatches` 筆記憶體 sample，不代表完整總數 |
 | `wroteMatchesToFile` | 是否成功建立 streaming artifact |
 | `outputFilePath` | 完整或受明確 `maxResults` 限制的 records 檔案路徑 |
+| `patternGateType`, `patternTypeName` | 實際要求的 Boolean pattern |
+| `operandArity` | 一元為 1，二元為 2；equivalent-gate mode 為 0 |
 
 `EquivalentGatePairs` 主要統計：
 
@@ -187,8 +198,8 @@ FunctionSearchReport runFunctionSearchQuery(
 不同 simulation bucket 的 outputs 已有 concrete simulation assignment 證明不同，因此不需 SAT。相同 bucket 仍逐步做 SAT，避免把 simulation collision 當成 proof。
 
 Phase B 替換 `EquivalentGatePairs` 的 class proof backend，並用於 NAND pair
-`FindAny` 的 surviving-candidate proof。NAND pair `FindAll` 仍使用 legacy cone-miter
-SAT，避免大量臨時 pattern 擴張常駐 AIG/SAT state。scope、candidate 順序、
+`FindAny` 與通用 pattern surviving-candidate proof。NAND `FindAll` 仍使用 legacy cone-miter
+SAT，其他 pattern 使用共用 engine。scope、candidate 順序、
 simulation、timeout 與 report assembly 均沿用原本流程；同一個 `Netlist`
 使用 private lazy `Primitives` owner，caller 不提供 backend 選項。
 
@@ -201,6 +212,7 @@ simulation、timeout 與 report assembly 均沿用原本流程；同一個 `Netl
 | 已知 `n1`、`n2`，判斷是否等價 | `FunctionQuery::Equivalence` |
 | 已知 condition，判斷兩 net 是否條件等價 | `FunctionQuery::ConditionalEquivalence` |
 | 搜尋 `NAND(a,b)==target` 的未知 pair | `FunctionSearchQuery::NandEquivalentInputPairs` |
+| 搜尋 BUF/NOT/AND/NAND/OR/NOR/XOR/XNOR 的未知 operands | `FunctionSearchQuery::FunctionalPatternOperands` |
 | 搜尋任意 output function 相同的 gate pairs | `FunctionSearchQuery::EquivalentGatePairs` |
 | 找結構完全相同的 duplicate gates | `EditApply::MergeStructurallyEquivalentGates` |
 | 實際合併、rewire、清理 gate | `EditApply` |
@@ -234,8 +246,8 @@ gate output 等價不等於該 gate 在 observability 上 redundant；本 API �
 | Public aliases / entry | `include/core/Netlist.h` |
 | simulation、SAT、分類 | `src/analysis/FunctionAnalysis.cpp` |
 | public CLI | `tools.cpp` |
-| NAND API regression | `mini test/test23` |
-| NAND CLI regression | `mini test/test24` |
+| 通用 pattern 與 legacy NAND API regression（26/26） | `mini test/test23` |
+| 通用 pattern 與 legacy NAND CLI regression（15/15） | `mini test/test24` |
 | equivalent-gate API/CLI regression | `mini test/test26` |
 | reference/Phase B differential 與大型 random DAG | `mini test/test44` |
 
@@ -248,7 +260,11 @@ NewTestCase production differential 實測（2026-08-20）：
 | test29 原始設計 | `func_search equivalent_pairs whole --all` | 7/7 records；complete；約 6.27x | 約 0.44 秒 |
 | test30 原始設計 | `func_search equivalent_pairs whole --all` | 1/1 record；complete；約 6.07x | 約 0.04 秒 |
 | test70 | `func_search nand_pair n25` | 1 SAT-proven witness；complete；FindAny 使用 AIG incremental SAT | 約 0.99 秒（搜尋） |
+| test70 | `func_search pattern OR n25` | direct target operands 優先後第一組即證明；AIG literal equality | 約 0.55 秒（含 read/query session） |
 
 test29/test30 的 artifact record 數與 `match_count` 完全一致；test70 是存在性問題，FindAny 直接在 envelope 回 witness。test70 differential 的 legacy/AIG 結果同為 1 組、complete、Unknown=0，時間約 7.16/2.21 秒。FindAll 則同為 512 組、complete、Unknown=0，legacy/AIG 約 59.29/121.49 秒，因此保留 legacy。
+
+通用 FindAny 會先檢查 target 直接 driver 的 eligible inputs，再保留原始完整候選順序作 fallback。
+此排序不刪除候選、不影響 FindAll；test70 OR probe 的 simulation pair 數由 257,412,964 降為 1。
 
 `mini test/test45` 另重播 test29/test30 在 functional merge 前的官方順序：AND/NOT basis conversion、dead/dangling cleanup、double-inverter collapse，再建立只讀 oracle 並呼叫 `EditApply::MergeFunctionallyEquivalentGates`。此時分別完整合併 361/494 顆；oracle class size、merge records、`mergedGateCount` 與 active-gate delta 完全一致，mandatory CEC、獨立 CEC、write/readback CEC 皆通過。
