@@ -40,11 +40,11 @@ structure_query <mode> [args]
 | `list_comb` | 無 | 列 active combinational gates | `Gate names` |
 | `gate_info` | `<gate>` | gate type、ID 與 ordered input/output pin-net snapshot | `object`, `id`, `type`, `Gate connection details` |
 | `net_info` | `<net>` | net 類型、ID 與基本資訊 | `object`, `id`, `type` |
-| `port_info` | `<port>` | port direction、width、declaration bounds 與 ordered bit nets | object fields、`Net names`、唯一一筆 `Port summaries`；不輸出無意義的負 ID |
+| `port_info` | `<port>` | port direction、width、declaration bounds 與 ordered bit nets | object fields、固定 scalar `declaration_left_bound/right_bound`、`Net names`、唯一一筆 `Port summaries`；不輸出無意義的負 ID |
 | `count_by_type` | `[type] [--gate-types <type...>] [--exclude-gate-types <type...>]` | 統計 include-minus-exclude type；省略 filters 時列全部 | `gates`, `Gate type counts`, filter metadata |
 | `gates_by_type` | `[type] [--gate-types <type...>] [--exclude-gate-types <type...>] [--with-pins]` | 列 include-minus-exclude gates；旗標要求 pin/net 明細 | names-only：`Gate names`；detail：`Gate connection details` artifact |
 | `const_input_gates` | `[type\|all] [0\|1\|any] [--gate-types <type...>] [--exclude-gate-types <type...>] [--const <0\|1\|any>] [--with-pins]` | 先找直接接 constant 的 gates，再套 type filters | names-only：`Gate names`；detail：`Gate connection details` artifact |
-| `structural_issues` | 無 | 結構問題摘要與 exact unconnected pins | 一般 issue lists、unconnected gate/input/output counts、`Unconnected pin details`，以及 PI/PO 精確分類 |
+| `structural_issues` | 無 | 結構問題摘要與 exact unconnected pins | 六類 semantic object counts、input/output pin counts、完整 issue lists / artifact 與 pin details |
 
 gate 數量皆指 current active objects，不應使用底層 raw storage count 回答修改後的 gate 數量。
 
@@ -62,7 +62,7 @@ Gate-type filter 規則：`--gate-types` 內多個 type 採 OR；未指定 inclu
 |---|---|---|---|
 | `net_driver` | `<net> [--with-pins]` | 直接 driver gates；可選 output-pin detail | names-only：`count`, `Gate names`；detail：`pin connection count`, `Pin connection details` |
 | `net_loads` | `<net> [--with-pins]` | 直接 load gates；可選逐 input-pin detail | names-only：`count`, `Gate names`；detail：`pin connection count`, `Pin connection details` |
-| `fanout_load` / `fanout_report` | `<net>` | QA 定義的 pin-level fanout 分類 | `fanout load count`, 各 load 分類 |
+| `fanout_load` / `fanout_report` | `<net>` | QA pin-level fanout，並列出不重複的直接 load gates | `fanout load count`, `distinct direct-load gate count`, `Direct load gates`, 各 pin 分類 |
 | `global_fanout` | `[limit]` | 全設計最大 fanout；有 limit 時也檢查 violations | `max fanout`, `Max-fanout nets`, `Violating nets` |
 | `pi_fanout` | `[limit]` | 只掃 PI nets 的最大 fanout | 同上 |
 | `fanout_violations` | `<limit>` | 列超過 fanout limit 的 nets | `satisfies limit`, `Violating nets` |
@@ -92,6 +92,15 @@ inclusive range；其他 predicate 不可多給 upper。值採非負十進位整
 自動寫入 artifact，回答讀 `result net count` 並提供 `output_file`。
 
 `fanout_load` 的 `totalLoadCount` 包含 combinational input pins、DFF D/clock/reset/other input pins及 PO connections。同一 gate 多個 input pins 接同一 net 時會按 pin 計數。
+工具固定在 envelope 輸出 `combinational gate input load count`、`DFF D-pin load count`、
+`DFF clock-pin load count`、`DFF reset/set-pin load count` 與 `DFF other-pin load count`。
+同時固定輸出 `distinct direct-load gate count`，並以 `Direct load gates` 回傳去重後的 gate
+instance names。即使完整名稱清單寫入 artifact，所有數量仍直接留在 envelope；只有列舉名稱時
+才提供 `output_file`。
+
+prompt 同時問 `fanout` 與 `every gate driven directly` 時，只呼叫一次 `fanout_load`：fanout
+讀 QA pin-level count，gate 名單讀 `Direct load gates`。不得以 distinct gate count 代替
+pin-level fanout，也不需要再呼叫 `net_loads`。
 
 `global_fanout` / `pi_fanout` 的 maximum 會比較 scope 內所有 active candidates，包括 fanout=0
 的 nets。若所有 PI 都未被使用，`max fanout` 為 0，`Max-fanout nets` 仍會列出全部並列 PI，
@@ -124,10 +133,12 @@ count query 或 list/filter query 即使沒有 matching object，也會明確輸
 | driver/load gate 數量 | `net_driver` / `net_loads` 的 count 與 `Gate names` |
 | 某 net 的 exact driver/load pins | `net_driver <net> --with-pins` / `net_loads <net> --with-pins` 的 `Pin connection details` |
 | pin-level fanout load | `fanout_load` / `fanout_report` 的 total load 與分類 |
+| pin-level fanout 並列出所有直接 load gates | 單次 `fanout_load`：讀 total load、distinct direct-load gate count 與 `Direct load gates` / artifact |
 | 一或多種 type 的 gates 及其 input/output signals | `gates_by_type --gate-types <type...> --with-pins` 的 `Gate connection details` |
 | constant-input gates 及 constant 所在 pin、其他 inputs、output | `const_input_gates [type\|all] [0\|1\|any] --with-pins` 的 `Gate connection details` |
-| floating/unconnected 結構問題 | `structural_issues` 的精確分類 lists |
-| exact unconnected input/output pins | `structural_issues` 的三個 counts 與 `Unconnected pin details` / artifact |
+| floating/unconnected 結構問題數量 | `structural_issues` 的 `undriven nets`、`no-load nets`、`floating nets`、`unconnected gates`、`floating primary-input nets`、`unconnected primary-output nets` |
+| floating/unconnected 結構問題名稱 | `structural_issues` 的精確分類 lists / artifact |
+| exact unconnected input/output pins | `structural_issues` 的 input/output pin counts 與 `Unconnected pin details` / artifact |
 
 修改後的 gate count 必須使用 active fields；tombstone storage 中的 removed gate/net 不得計入。
 `const_input_gates` 只證明 input pin 直接連到 constant，不代表 output Boolean function 為常數。
@@ -144,8 +155,9 @@ wrote list to file
 output_file
 ```
 
-只有 envelope `complete:true`、`list artifact complete:yes`，且 artifact footer 為
-`Complete: yes` 時，檔案才是完整答案。artifact 建立失敗時工具會回退成 terminal 全量輸出。
+LLM 只有在 envelope `complete:true` 且 `list artifact complete:yes` 時，才把 `output_file`
+描述為完整答案，不開檔檢查 footer。Producer 仍寫入 `Complete: yes` footer 供檔案接收端驗證；
+artifact 建立失敗時工具會回退成 terminal 全量輸出。
 
 `gates_by_type [type filters]` 維持 names-only；只有 prompt 明確要求 pins、input/output signals 或
 connections 時才加 `--with-pins`。detail artifact 每筆格式為：
@@ -180,8 +192,12 @@ net=n8 direction=driver gate=g7 type=NOR pin=OUT role=output
 
 `port_info` 的 `msb/lsb` 是歷史欄位名稱，輸出保存 Verilog declaration left/right bounds，
 不依數值大小重排。因此 `[31:0]` 為 `31/0`，`[0:31]` 為 `0/31`；`Net names` 也依該方向排列。
+同一組值會固定出現在 envelope 的 `declaration_left_bound` / `declaration_right_bound`；大型
+bit list 寫入 artifact 時，LLM 仍直接讀這兩欄回答宣告方向，不需要也不應開啟 artifact。
 
-`structural_issues` 即使沒有問題也會明確輸出三個 0 counts。pin record 格式為：
+`structural_issues` 即使沒有問題也會明確輸出每個 semantic category 與 input/output pin 的 0
+count。大型 lists 寫入 artifact 時，這些 counts 仍保留在 `TOOL_RESULT`，因此純數量題與兩個
+design/object 結果的數值比較不需要讀取完整 artifact。pin record 格式為：
 
 ```text
 gate_id=7 gate=ff0 type=DFF direction=input pin=RN pin_index=2 net_id=-1 net=<unconnected> reason=UNCONNECTED
@@ -214,25 +230,38 @@ Read: primary inputs, primary input bits, primary outputs, primary output bits
 ```text
 Prompt: How many internal nets are in the current design? List all constant nets.
 Command: structure_query net_classes
-Read: internal nets、constant nets；大型清單讀 list artifact complete 與 output_file
+Read: internal nets、constant nets；大型清單從 envelope 讀 list artifact complete 並回報 output_file
 ```
 
 ```text
 Prompt: Is port data declared [31:0] or [0:31]? List its bits in declaration order.
 Command: structure_query port_info data
-Read: 唯一一筆 Port summaries 的 msb/lsb，以及 Net names 順序
+Read: declaration_left_bound/right_bound；小型 Net names inline，大型完整 bit list 回報 output_file
 ```
 
 ```text
 Prompt: List all flip-flops driven by clock n0.
 Command: structure_query fanout_load n0
-Read: DFF clock-pin loads
+Read: 名稱讀 DFF clock-pin loads；若清單大型化則回報 output_file
+```
+
+```text
+Prompt: What is the fanout of primary input n0? List every gate that n0 drives directly.
+Command: structure_query fanout_load n0
+Read: fanout load count (QA definition), distinct direct-load gate count；小型 Direct load gates inline，
+大型完整 gate list 以 output_file 交付
+```
+
+```text
+Prompt: How many flip-flops are driven by clock n0?
+Command: structure_query fanout_load n0
+Read: DFF clock-pin load count；不需要讀取 artifact
 ```
 
 ```text
 Prompt: List every gate pin connected to n10, including gate type and pin role.
 Command: structure_query net_loads n10 --with-pins
-Read: count, pin connection count；完整 records 在 `Pin connection details` 或 artifact
+Read: count, pin connection count；小型 records inline，大型 records 以 output_file 交付
 ```
 
 ```text
@@ -244,7 +273,7 @@ Read: Gate names 的列表長度
 ```text
 Prompt: List all NAND gates with a constant-1 input and show where the constant is connected, the other input, and the output signal.
 Command: structure_query const_input_gates NAND 1 --with-pins
-Read: gate count, list artifact complete, output_file；完整 records 在 artifact
+Read: gate count, list artifact complete, output_file；LLM 不開啟 artifact
 ```
 
 ```text
@@ -256,7 +285,7 @@ Read: max fanout, Max-fanout nets
 ```text
 Prompt: How many primary-input signals have fanout between 4 and 8, inclusive?
 Command: structure_query fanout_filter pi between 4 8
-Read: matched net count；若產生 artifact，完整 Matched nets 由 output_file 讀取
+Read: matched net count；若產生 artifact，回報 output_file 交付完整 Matched nets
 ```
 
 ```text
@@ -274,7 +303,7 @@ Read: selected fanout levels, result net count, Ranked nets/output_file
 ```text
 Prompt: List all NAND gates with their input and output signals.
 Command: structure_query gates_by_type NAND --with-pins
-Read: gate count, list artifact complete, output_file；完整 records 在 artifact
+Read: gate count, list artifact complete, output_file；LLM 不開啟 artifact
 ```
 
 ```text

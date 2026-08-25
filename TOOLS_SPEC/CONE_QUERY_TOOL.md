@@ -91,8 +91,9 @@ PI/PO/constant 標記。只有 prompt 明確要求 connection、pin 或每顆 ga
 | cone metric 位於 inclusive range | `output_filter <metric> between <lower> <upper>` |
 | 兩 cone 共用哪些 gates | `Cone gates` 或 filter 後 details |
 
-大型 cone 改讀 `list artifact complete`、`list entry count` 與 `output_file`；只有 envelope
-`complete:true`、artifact complete 為 `yes`，且檔案 footer 為 `Complete: yes` 時才是完整名單。
+大型 cone 由 envelope 讀 `list artifact complete`、semantic counts 與 `output_file`；只有
+envelope `complete:true` 且 artifact complete 為 `yes` 時，才可把該路徑描述為完整名單。
+LLM 不開啟 artifact，也不使用 `list entry count` 代替 cone gate/net count。
 
 ## 6. Prompt Examples
 
@@ -105,7 +106,7 @@ Read: filtered gates
 ```text
 Prompt: List every NAND or NOT gate in n8's fanin cone with its pin connections.
 Command: cone_query net_fanin n8 --gate-types NAND NOT --with-pins
-Read: Gate connection details；大型結果讀 output_file
+Read: Gate connection details；大型結果回報 semantic count、complete 與 output_file
 ```
 
 ```text
@@ -141,7 +142,7 @@ Read: matched output count
 ```text
 Prompt: List outputs whose fanin cones contain between 5 and 10 NOR gates.
 Command: cone_query output_filter filtered_gates between 5 10 --gate-types NOR
-Read: Matched output cones；大型結果讀 output_file
+Read: matched output count；大型完整 records 交付於 output_file
 ```
 
 ## 7. 限制

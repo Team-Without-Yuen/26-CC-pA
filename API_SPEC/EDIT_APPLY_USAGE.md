@@ -169,7 +169,7 @@ if (report.success) {
 | `fanoutChange` | fanout buffer insertion 類 command |
 | `mappingDelta` | technology mapping 類結果，包含 removed / added / final gate count |
 | `constantSimplification` | constant propagation 的 filter、candidate、simplified、skipped 與 target gate eliminated count |
-| `functionalMerge` | functional search/class 統計、merged/skipped 數量、whole-design SAT 狀態與逐筆 representative/removed records |
+| `functionalMerge` | functional search/class 統計、apply timeout、merged/skipped 數量與逐筆 representative/removed records；legacy whole-design 欄位維持 false |
 | `changedGateIds`, `changedGateNames` | 新增、移除、修改的 gates |
 | `changedNetIds`, `changedNetNames` | 新增、移除、修改的 nets |
 
@@ -627,7 +627,7 @@ optimizer 內部新增的 gate-set conversion 與 inverter absorption 不會改�
 
 ## 15. MergeFunctionallyEquivalentGates
 
-用途：搜尋指定 scope 內 output function 相同的 combinational gates，將每個 SAT-proven equivalence class 合併成一個 cycle-safe representative，最後對全部 PO 與 DFF.D endpoints 執行 whole-design SAT。
+用途：搜尋指定 scope 內 output function 相同的 combinational gates，將每個 SAT-proven equivalence class 合併成一個 cycle-safe representative，並以結構驗證與 `CertifiedRewrite` 提交。正式流程不執行 final whole-design SAT。
 
 ```cpp
 Netlist::EditApplyRequest request;
@@ -658,9 +658,9 @@ edit_apply merge_functionally_equivalent_gates net_fanin n10 --gate-type AND
 | 實際移除多少 gates | `mergedGateCount` 或 `-diff.activeGateCountDelta` |
 | 每顆保留/移除對象 | `functionalMerge.records` |
 | 是否有安全問題而跳過 | `skippedGateCount`, `skippedGateNames` |
-| 最終功能是否保持 | `validation.equivalenceMethod == WholeDesignSat` 且 `functionallyEquivalent=true` |
+| rewrite certificate | `validation.equivalenceMethod == CertifiedRewrite` 且 `functionallyEquivalent=true` |
 
-搜尋不完整、任何 class 無法 cycle-safe 合併、structure validation 失敗、whole-design SAT timeout 或不等價時，整批 edit 不會留下部分修改。搜尋階段 timeout 發生在 mutation 前；修改後驗證失敗則 `rolledBack=true`。
+搜尋不完整、apply timeout、任何 class 無法 cycle-safe 合併或 structure validation 失敗時，整批 edit 不會留下部分修改。搜尋 timeout 發生在 mutation 前；apply timeout 或修改後結構驗證失敗則 `rolledBack=true`。`wholeDesignEquivalenceChecked/Equivalent/TimedOut` 為 legacy compatibility fields，本流程維持 false。
 
 ---
 
@@ -720,8 +720,8 @@ edit_apply merge_functionally_equivalent_gates net_fanin n10 --gate-type AND
 | `NotChecked` | 目前沒有等價性證明 | 不應出現在成功的 public `runEditApply()` edit |
 | `StructuralIdentity` | 名稱改變、unused/dangling/dead logic removal、structural merge | `RenameNet`, `RemoveDanglingLogic`, `TrimDeadLogic` |
 | `LocalRewriteRule` | 可由局部 Boolean identity 或安全 cleanup 組合證明 | `CleanupBuffers`, `CollapseDoubleInverter`, `SafeCleanupFixpoint`, `SimplifyConstants`, buffer insertion, `ConvertToBasis`, `ReplaceGateType` |
-| `CertifiedRewrite` | 由已 qualification 的 function-preserving transformation pipeline 認證；不是 SAT proof | `opt_apply critical_path_depth` 的 accepted changed candidate |
-| `WholeDesignSat` | current 與 original/previous-edit 的 whole-design SAT equivalence | `MergeFunctionallyEquivalentGates`、tools `equiv_query` |
+| `CertifiedRewrite` | 由已 qualification 的 function-preserving transformation pipeline 認證；functional merge 的候選 gate 有 SAT proof，但此值不是 whole-design SAT proof | `MergeFunctionallyEquivalentGates`、`opt_apply critical_path_depth` 的 accepted changed candidate |
+| `WholeDesignSat` | current 與 original/previous-edit 的 whole-design SAT equivalence | tools `equiv_query` |
 
 ---
 
@@ -741,7 +741,7 @@ runEditApply convert_basis whole allowed AND NOT
 runEditApply convert_basis net_fanin n10 allowed NOR NOT
 runEditApply replace_type XOR using NAND
 runEditApply functional merge whole/cone scope, class-only search, cycle-safe representative
-runEditApply functional merge whole-design SAT, no-change, detailed records, timeout-before-mutation
+runEditApply functional merge CertifiedRewrite, no-change, detailed records, timeout-before-or-during-mutation
 runEditApply unsupported command
 ```
 
@@ -773,4 +773,4 @@ public `CollapseDoubleInverter`：約 0.741 秒 collapse 500,000 pairs、無 rol
 command suite 為 test2 39/39，通用 wrapper/report/validation suite 為 test1 142/142。
 Boolean functional merge、DFF initial-state 與 sequential proof 維持 Deferred。
 
-`mini test/test26` 另有 28 個 C++ API assertions 與 18 個 CLI assertions，涵蓋 functional search/merge、直接 timeout、timeout-before-mutation 與 verification-failure rollback。NewTestCase test29/test30 的原始設計單獨 merge 為 7/1 顆；`mini test/test45` 重播官方前序 edit 後為 361/494 顆，並通過 oracle/report/delta 核對、mandatory/independent CEC 及 write/readback CEC。
+`mini test/test26` 的 C++ API 與 CLI assertions 涵蓋 functional search/merge、直接 timeout、apply rollback 與 `CertifiedRewrite` report。NewTestCase test29/test30 的原始設計單獨 merge 為 7/1 顆；`mini test/test45` 重播官方前序 edit，並以開發期 independent CEC 及 write/readback CEC 抽查結果。正式 edit flow 不執行 final whole-design SAT。

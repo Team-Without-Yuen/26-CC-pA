@@ -118,9 +118,11 @@ void testBasicQuery(TestReport& report, const Netlist& netlist) {
     portInfoQuery.name = "bus";
     const Netlist::BasicReport portInfo = netlist.runBasicQuery(portInfoQuery);
     report.check(portInfo.ok && portInfo.exists && portInfo.isBus &&
-                     portInfo.isPrimaryInput && !portInfo.isPrimaryOutput &&
-                     portInfo.portWidth == 2 &&
-                     portInfo.netNames == expectedBusBits &&
+                      portInfo.isPrimaryInput && !portInfo.isPrimaryOutput &&
+                      portInfo.portWidth == 2 &&
+                      portInfo.portLeftBound == 1 &&
+                      portInfo.portRightBound == 0 &&
+                      portInfo.netNames == expectedBusBits &&
                      netIdsToNames(netlist, portInfo.netIds) == expectedBusBits,
                  "runBasicQuery PortInfo preserves declaration-order name/id alignment");
 
@@ -140,15 +142,19 @@ void testBasicQuery(TestReport& report, const Netlist& netlist) {
     portInfoQuery.includeIds = false;
     const Netlist::BasicReport portMetadataOnly = netlist.runBasicQuery(portInfoQuery);
     report.check(portMetadataOnly.ok && portMetadataOnly.netIds.empty() &&
-                     portMetadataOnly.netNames.empty() &&
-                     portMetadataOnly.portNames.empty() &&
-                     portMetadataOnly.isPrimaryInput,
+                      portMetadataOnly.netNames.empty() &&
+                      portMetadataOnly.portNames.empty() &&
+                      portMetadataOnly.portLeftBound == 1 &&
+                      portMetadataOnly.portRightBound == 0 &&
+                      portMetadataOnly.isPrimaryInput,
                  "runBasicQuery PortInfo metadata-only query");
 
     portInfoQuery.name = "missing_port";
     const Netlist::BasicReport missingPort = netlist.runBasicQuery(portInfoQuery);
     report.check(!missingPort.ok && !missingPort.exists &&
-                     missingPort.portWidth == -1,
+                      missingPort.portWidth == -1 &&
+                      missingPort.portLeftBound == -1 &&
+                      missingPort.portRightBound == -1,
                  "runBasicQuery PortInfo missing port");
 
     Netlist::BasicQuery listPortsQuery;

@@ -1226,7 +1226,7 @@ PathQueryResult validation fields
 已完成：NAND function pair search high-level API/report/mini test23
 已完成：`func_search nand_pair` CLI/report/help 與 mini test24
 已完成：`func_search equivalent_pairs` whole/cone scope、gate filter、equivalence-class report 與 mini test26
-已完成：equivalent-pair class-only search、cycle-safe merge、whole-design SAT/rollback 與 test29/test30 實測
+已完成：equivalent-pair class-only search、cycle-safe merge、CertifiedRewrite/failure rollback 與 test29/test30 實測；正式 edit flow 不執行 final whole-design SAT
 已完成：test38 structural redundancy removal、累積 edit flow 與 whole-design SAT 驗證
 待完成：general observability-aware redundancy search/removal（hidden-case hardening）
 ```

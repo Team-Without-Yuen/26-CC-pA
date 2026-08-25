@@ -28,9 +28,9 @@
 | `StructureQuery`（公開 tool facade） | gate/net/port 基本資訊、統計、structural issue，以及一層 driver/load/fanout/pin connectivity | transitive cone、多層路徑、Boolean function、修改 |
 | `ConeQuery` | transitive fanin/fanout 的 net/gate 集合、output cone ranking 與 metric threshold/range | 指定 A-to-B path、全域 critical path、功能證明 |
 | `PathQuery` | endpoint path、DFF.Q-to-DFF.D path、mandatory nodes、separator 與 PI-to-PO cut | 全設計 timing endpoint 掃描、Boolean function |
-| `DepthQuery / DepthAnalysis` | timing arrival depth、PO/DFF.D depth、global critical path、depth threshold | arbitrary through/avoid path、Boolean function |
+| `DepthQuery / DepthAnalysis` | timing arrival depth、PO/DFF.D depth、global critical path、depth comparison/range filter 與 critical-gate union | arbitrary through/avoid path、Boolean function |
 | `FunctionQuery` | 已指定 net/bus 的 Boolean 性質：equivalence、constant、dependence、symmetry、expression | 未知候選搜尋、cross-design equivalence、修改 |
-| `FunctionSearchQuery` | 未知 internal signal 候選搜尋；支援 SAT-proven BUF/NOT/AND/NAND/OR/NOR/XOR/XNOR operands 與 equivalent-gate classes | 修改 netlist、MUX decomposition、observability redundancy removal |
+| `FunctionSearchQuery` | 未知 signal/gate 候選搜尋；支援 proven BUF/NOT/AND/NAND/OR/NOR/XOR/XNOR operands、equivalent/complementary classes 與 functionally constant 0/1 signals | 修改 netlist、MUX decomposition、observability redundancy removal |
 | `SequentialPatternQuery` | 從 DFF D-input logic 推導 canonical 或 SAT-proven functional enable/hold 等 register-control pattern | 一般 DFF 列表、clock/reset 直接連線、修改 |
 | `WholeDesignEquivalence` | current 與 original/previous snapshot 的 PO+DFF.D 等價證明 | 同一 design 中兩條 internal nets 的比較 |
 | `EditApply` | 執行使用者指定且已有安全規則/certificate 的 transformation | cost-driven 最佳化搜尋、未知功能候選搜尋 |
@@ -40,6 +40,14 @@
 它不修改 netlist。`FunctionalPatternOperands` 已覆蓋八種基本一元/二元 function，
 `NandEquivalentInputPairs` 保留相容；MUX decomposition 與 observability redundancy 仍不得用
 `FunctionQuery` 或 structural merge 假裝覆蓋。
+
+`FunctionalConstantSignals` 是 unknown-candidate batch search；若 prompt 已指定 net 名稱並只問
+always-0/always-1，仍由 `FunctionQuery` 負責。它排除 literal constants 與 floating nets，
+positive result 必須通過 AIG literal equality 或 incremental SAT proof。
+
+`ComplementaryPairs` 是 unknown-candidate relation search；signals 與 combinational gate outputs
+使用分離 domain，並以 phase-aware simulation buckets 加 AIG/SAT proof 建立正負 classes。已知兩條
+nets 只要判斷是否互補時仍屬 `FunctionQuery`，不應先掃描全設計。
 
 `StructureQuery` 是 tools/LLM-facing facade，內部依 mode dispatch 到 `BasicQuery` 或 `DirectConnectivityQuery`。`PathQuery` 對外統一 endpoint connectivity；register path endpoint 展開及 Graph dominator 演算法仍保留為內部元件。
 
@@ -497,7 +505,8 @@ DepthReportSet runDepthQuery(const DepthQuery& query) const;
 基本使用流程：
 
 ```text
-DepthQuery.type + optional netName / threshold / includeCriticalPath
+DepthQuery.type + optional netName / threshold / upperThreshold /
+filterScope / predicate / includeCriticalPath
   -> runDepthQuery()
   -> DepthReportSet
 ```
@@ -530,6 +539,9 @@ getMaximumLogicDepthFromPiToDffD()
 | `GlobalCriticalPath` | 全設計最深 timing endpoint | 無 | `worst`, `worst.criticalPath` |
 | `EndpointsExceedingDepth` | 找 depth 大於 threshold 的 endpoints | `threshold` | `reports`, `count`, `worst` |
 | `PrimaryOutputsExceedingDepth` | 只找 depth 大於 threshold 的 PO bits | `threshold` | `reports`, `count`, `worst` |
+| `GateOnCriticalPath` | gate 是否在任一 global maximum-depth path | `gateName` | `gateOnCriticalPath`, `exists`, `worst` |
+| `DeepestOutputCone` | 找 fanin depth 最深的 PO bit | 無 | `worst`, `reports`, `count` |
+| `EndpointDepthFilter` | 依 scope 與 predicate 篩選 endpoints | `filterScope`, `predicate`, `threshold`，between 另設 `upperThreshold` | `checkedEndpointCount`, `matchedEndpointCount`, `unavailableEndpointCount`, `reports`, `complete` |
 
 `DepthQuery` 輸入欄位：
 
@@ -538,6 +550,9 @@ getMaximumLogicDepthFromPiToDffD()
 | `type` | 決定執行哪一種 depth query |
 | `netName` | `SpecificNet` 使用，指定要分析的 net/output |
 | `threshold` | exceeding 類 query 使用，指定 depth 門檻 |
+| `upperThreshold` | inclusive between filter 的上界 |
+| `filterScope` | all timing endpoints、PO 或 DFF.D |
+| `predicate` | eq/ne/gt/ge/lt/le/between inclusive |
 | `includeCriticalPath` | 是否回傳完整 critical path；只問數量時可設為 `false` |
 
 `DepthReportSet` 回傳欄位：
@@ -545,11 +560,19 @@ getMaximumLogicDepthFromPiToDffD()
 | 欄位 | 意思 |
 |---|---|
 | `ok` | query 是否成功 |
+| `complete` | 是否沒有 graph inconsistency 或 backend analysis failure；no-timing-path 仍可完整 |
 | `message` | debug / LLM response 用的簡短訊息 |
 | `reports` | 一個或多個 endpoint 的 depth report |
 | `worst` | `reports` 中 depth 最大的 endpoint |
 | `threshold` | query 使用的 depth 門檻 |
 | `count` | `reports.size()`，常用於回答「幾個 endpoint 超標」 |
+| `checkedEndpointCount` | filter scope 內的 active endpoint candidates |
+| `matchedEndpointCount` | predicate matches；等於 `count` 與 `reports.size()` |
+| `definedDepthEndpointCount` | 具有可比較 depth 的 endpoints |
+| `noTimingPathEndpointCount` | 合法但沒有 timing path 的 endpoints |
+| `graphInconsistentEndpointCount` | named graph 不一致的 endpoints |
+| `analysisFailureEndpointCount` | graph 合法但 backend 未算出的 endpoints |
+| `unavailableEndpointCount` | 三種非 Available 狀態的相容總和 |
 
 `DepthReport` 主要欄位：
 
@@ -559,6 +582,7 @@ getMaximumLogicDepthFromPiToDffD()
 | `endpointName` | endpoint 名稱，例如 output net 或 DFF.D |
 | `endpointNetId` | 實際被分析的 net ID |
 | `depth` | 到該 endpoint 的最大 combinational depth |
+| `depthStatus` | depth 的 `Available / NoTimingPath / GraphInconsistent / AnalysisFailure` 狀態 |
 | `criticalPath` | 到該 endpoint 的一條 critical path |
 
 典型問題：
@@ -566,7 +590,10 @@ getMaximumLogicDepthFromPiToDffD()
 ```text
 What is the maximum logic depth to output y?
 What is the global critical path?
+List every gate that lies on at least one maximum-depth path.
 Which outputs have depth greater than 4?
+Which DFF D-pins have depth between 2 and 5 inclusive?
+How many outputs have depth at most 4?
 What is the maximum logic depth from any primary input to any DFF D-pin?
 Find endpoints exceeding target depth 4.
 ```
@@ -582,6 +609,8 @@ Prompt 對應：
 | 所有 DFF D-pin depth | `DepthQuery::DffD` | `reports`, `worst` |
 | 全設計 global critical path | `DepthQuery::GlobalCriticalPath` | `worst`, `worst.criticalPath` |
 | 找出 depth 超過 target 的 timing endpoints | `DepthQuery::EndpointsExceedingDepth` | `reports`, `count`, `worst` |
+| 篩選 exact/at-least/at-most/less-than/range endpoints | `DepthQuery::EndpointDepthFilter` | `checkedEndpointCount`, `matchedEndpointCount`, `reports`, `complete` |
+| 列出/計數任一 global maximum-depth path 上的 gates | `DepthQuery::CriticalGateBatch` | `criticalGates`, `criticalGateCount`, `worst`, `complete` |
 
 應使用 `DepthAnalysis` 的情況：
 
@@ -594,6 +623,8 @@ Prompt 對應：
 | 全設計 critical path | `DepthQuery::GlobalCriticalPath` 或 `findGlobalCriticalPath()` |
 | depth 超標 endpoints | `DepthQuery::EndpointsExceedingDepth` 或 `findEndpointsExceedingDepth()` |
 | depth 超標 primary outputs | `DepthQuery::PrimaryOutputsExceedingDepth` 或 `getPrimaryOutputsWithDepthGreaterThan()` |
+| 通用 endpoint depth 比較/範圍 | `DepthQuery::EndpointDepthFilter` |
+| 所有 global critical gates 的聯集 | `DepthQuery::CriticalGateBatch` |
 
 邊界：
 
@@ -711,6 +742,14 @@ API_SPEC/CLEANUP_SIMPLIFICATION_NOTES.md
 | `PathQuery::MaxDepth` | 指定 startpoints 到 endpoints 之間的最長 path |
 | `DepthAnalysis` | timing startpoints 到 timing endpoints 的 arrival depth / critical path |
 
+指定 endpoints 間「depth exactly/at least/at most/between N」不是 extrema query。使用
+`PathQuery::EnumerateAll` 的 `minimumAcceptedDepth/maximumAcceptedDepth`；只問數量或存在性時
+使用 count-only。`MinDepth/MaxDepth` 的單一 witness 語意不變。
+
+指定 endpoints 間的 Top-K/Nth shortest/longest 使用 `PathQuery::RankedPaths`。它以 DAG K-best
+backend 直接取得 rank window，不先完整列舉再排序；多 endpoint 採 global population，並可套用
+相同 depth bounds。全設計 timing critical path 仍屬 `DepthAnalysis`。
+
 ---
 
 ### 10.3 ConeQuery includeLocalPaths vs PathQuery / DepthAnalysis
@@ -821,7 +860,9 @@ prompt 出現 `current/original/previous/transformed design` 時必須使用 who
   -> FunctionSearchQuery
 ```
 
-例如 `Are n1 and n2 equivalent?` 屬 FunctionQuery；`Does any pair (a,b) satisfy NAND(a,b)==n25?` 屬 FunctionSearchQuery。搜尋 report 必須有 `complete/timedOut/candidateCount`，不能只沿用 FunctionReport 的單一 `exists`。
+例如 `Are n1 and n2 equivalent/complementary?` 屬 FunctionQuery；`Does any unknown pair compute
+complementary functions?` 或 `Does any pair (a,b) satisfy NAND(a,b)==n25?` 屬 FunctionSearchQuery。
+搜尋 report 必須有 `complete/timedOut/candidateCount`，不能只沿用 FunctionReport 的單一 `exists`。
 
 ---
 

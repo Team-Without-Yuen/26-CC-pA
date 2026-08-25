@@ -63,6 +63,12 @@ private:
     // tombstone handling, constants, and bus-bit names.
     GateConnectionSummary buildGateConnectionSummary(int gateId) const;
 
+    // EnumerateAll creates one request deadline in the public facade. Recursive
+    // pre-count work reuses it through this private entry point.
+    PathQueryResult runPathQueryWithDeadline(
+        const PathQuery& query,
+        const request_time_budget::RequestDeadline* deadline) const;
+
 public:
     Netlist();
     ~Netlist();
@@ -528,6 +534,8 @@ public:
     using PathEndpointType = ::PathEndpointType;
     using PathEndpoint = ::PathEndpoint;
     using PathQueryMode = ::PathQueryMode;
+    using PathRankingOrder = ::PathRankingOrder;
+    using RankedPathDepthRange = ::RankedPathDepthRange;
     using PathQuery = ::PathQuery;
     using PathQueryResult = ::PathQueryResult;
     using RegisterPathQueryMode = ::RegisterPathQueryMode;
@@ -846,7 +854,11 @@ public:
 
     // 型別定義已拆到 PathTypes.h；using alias 保留 Netlist::DepthReport 既有寫法。
     using DepthEndpointType = ::DepthEndpointType;
+    using DepthFilterScope = ::DepthFilterScope;
+    using DepthPredicate = ::DepthPredicate;
+    using DepthStatus = ::DepthStatus;
     using DepthReport = ::DepthReport;
+    using CriticalGateReport = ::CriticalGateReport;
 
     // 計算每個 net 的 combinational level；vector index 對應 net ID。
     std::vector<int> computeNetLevels() const;
@@ -1608,9 +1620,14 @@ public:
     using FunctionSearchQueryType = ::FunctionSearchQueryType;
     using FunctionSearchMode = ::FunctionSearchMode;
     using FunctionSearchScope = ::FunctionSearchScope;
+    using FunctionSearchConstantFilter = ::FunctionSearchConstantFilter;
+    using FunctionSearchCandidateDomain = ::FunctionSearchCandidateDomain;
     using FunctionSearchQuery = ::FunctionSearchQuery;
     using FunctionSearchMatch = ::FunctionSearchMatch;
     using FunctionSearchEquivalenceClass = ::FunctionSearchEquivalenceClass;
+    using FunctionSearchConstantRecord = ::FunctionSearchConstantRecord;
+    using FunctionSearchComplementaryMember = ::FunctionSearchComplementaryMember;
+    using FunctionSearchComplementaryClass = ::FunctionSearchComplementaryClass;
     using FunctionSearchReport = ::FunctionSearchReport;
 
     FunctionSearchReport runFunctionSearchQuery(const FunctionSearchQuery& query) const;

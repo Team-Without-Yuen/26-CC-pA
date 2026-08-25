@@ -95,7 +95,7 @@ Batch 5 已直接 expose `gate_on_critical`、`every_through`、`deepest_output`
 | --- | --- | --- |
 | reduce / optimize / minimize critical path depth through restructuring | `test22` 到 `test30`, `test33`, `test40` | public command/report/rollback/SAT 已串接；大型 mockturtle primitive 尚不可 cooperative cancel |
 | optimize cone depth while maintaining NAND/NOT, NOR/NOT, AND/OR/NOT | `test25` 到 `test28`, `test33`, `test40` | DFF.Q target 已改為 boundary depth 0；非 DFF.Q 大型 cone 仍需要 optimizer core hardening |
-| all gate pairs functionally equivalent | `test29`, `test30`, `test35` | 已支援 SAT class search、cycle-safe functional merge、whole-design SAT 與 rollback；test29/test30 已實測 |
+| all gate pairs functionally equivalent | `test29`, `test30`, `test35` | 已支援 SAT class search、cycle-safe functional merge、CertifiedRewrite 與 failure rollback；正式流程無 final whole-design SAT，test29/test30 已實測 |
 | redundant gates removable without changing functionality | `test38` | 已確認是 structural duplicates；`MergeStructurallyEquivalentGates` 實測移除 14 gates，whole-design SAT 通過 |
 
 ## 5. 下一步建議

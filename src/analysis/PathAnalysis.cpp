@@ -34,10 +34,13 @@ class LiteralPathArtifactWriter;
 
 struct PathEnumerationOptions {
     double timeLimitSeconds = 0.0;
+    const request_time_budget::RequestDeadline* deadline = nullptr;
     bool countOnly = false;
     bool storePaths = true;
     size_t maxStoredPaths = 0;
     LiteralPathArtifactWriter* pathWriter = nullptr;
+    int minimumAcceptedDepth = -1;
+    int maximumAcceptedDepth = -1;
 };
 
 struct PathEnumerationState {
@@ -57,6 +60,36 @@ struct PathCountMemo {
     bool cycleDetected = false;
 };
 
+struct DepthPathCountState {
+    int netId = -1;
+    int minimumRemainingDepth = -1;
+    int maximumRemainingDepth = -1;
+
+    bool operator==(const DepthPathCountState& other) const {
+        return netId == other.netId &&
+               minimumRemainingDepth == other.minimumRemainingDepth &&
+               maximumRemainingDepth == other.maximumRemainingDepth;
+    }
+};
+
+struct DepthPathCountStateHash {
+    size_t operator()(const DepthPathCountState& state) const {
+        size_t hash = std::hash<int>{}(state.netId);
+        hash ^= std::hash<int>{}(state.minimumRemainingDepth) +
+                0x9e3779b9U + (hash << 6U) + (hash >> 2U);
+        hash ^= std::hash<int>{}(state.maximumRemainingDepth) +
+                0x9e3779b9U + (hash << 6U) + (hash >> 2U);
+        return hash;
+    }
+};
+
+struct DepthPathCountMemo {
+    std::unordered_map<DepthPathCountState, size_t,
+                       DepthPathCountStateHash> counts;
+    std::vector<unsigned char> visitingNets;
+    bool cycleDetected = false;
+};
+
 struct LongestPathMemo {
     std::vector<int> depths;
     std::vector<Netlist::CombinationalPath> paths;
@@ -65,13 +98,47 @@ struct LongestPathMemo {
     bool cycleDetected = false;
 };
 
+struct RankedPathLink {
+    int gateId = -1;
+    int nextNetId = -1;
+    std::shared_ptr<const RankedPathLink> next;
+};
+
+struct RankedPathCandidate {
+    size_t depth = 0;
+    int endNetId = -1;
+    std::shared_ptr<const RankedPathLink> firstLink;
+};
+
+struct RankedPathMemoEntry {
+    std::vector<RankedPathCandidate> candidates;
+    bool truncated = false;
+};
+
+struct RankedPathSearchState {
+    std::unordered_map<std::string, RankedPathMemoEntry> memo;
+    std::vector<unsigned char> visitingNets;
+    bool cycleDetected = false;
+};
+
+struct GlobalRankedPathCandidate {
+    int startNetId = -1;
+    RankedPathCandidate suffix;
+};
+
 bool shouldStopEnumeration(const PathEnumerationOptions& options,
                            PathEnumerationState& state) {
     if (state.outputFailed) {
         state.complete = false;
         return true;
     }
-    if (options.timeLimitSeconds > 0.0) {
+    if (options.deadline != nullptr) {
+        if (options.deadline->expired()) {
+            state.complete = false;
+            state.timedOut = true;
+            return true;
+        }
+    } else if (options.timeLimitSeconds > 0.0) {
         const auto now = std::chrono::steady_clock::now();
         const std::chrono::duration<double> elapsed = now - state.startTime;
         if (elapsed.count() >= options.timeLimitSeconds) {
@@ -97,6 +164,28 @@ bool shouldStopEnumerationPeriodically(const PathEnumerationOptions& options,
     return shouldStopEnumeration(options, state);
 }
 
+bool hasDepthPredicate(const PathEnumerationOptions& options) {
+    return options.minimumAcceptedDepth >= 0 ||
+           options.maximumAcceptedDepth >= 0;
+}
+
+bool pathDepthMatches(const PathEnumerationOptions& options, size_t depth) {
+    if (options.minimumAcceptedDepth >= 0 &&
+        depth < static_cast<size_t>(options.minimumAcceptedDepth)) {
+        return false;
+    }
+    if (options.maximumAcceptedDepth >= 0 &&
+        depth > static_cast<size_t>(options.maximumAcceptedDepth)) {
+        return false;
+    }
+    return true;
+}
+
+bool pathCanExtend(const PathEnumerationOptions& options, size_t currentDepth) {
+    return options.maximumAcceptedDepth < 0 ||
+           currentDepth < static_cast<size_t>(options.maximumAcceptedDepth);
+}
+
 constexpr std::streamoff kPathCountHeaderOffset =
     static_cast<std::streamoff>(sizeof("Total paths: ") - 1);
 constexpr int kPathCountHeaderWidth = 20;
@@ -119,7 +208,9 @@ public:
     LiteralPathArtifactWriter(std::ostream& output,
                               const Netlist& netlist,
                               bool expectedCountKnown,
-                              size_t expectedPathCount)
+                              size_t expectedPathCount,
+                              int minimumAcceptedDepth,
+                              int maximumAcceptedDepth)
         : output_(output), netlist_(netlist), expectedCountKnown_(expectedCountKnown) {
         buffer_.reserve(kBufferCapacity);
         appendText("Total paths: ");
@@ -130,6 +221,27 @@ public:
             appendText("0");
         }
         appendText("\nFormat: LITERAL_PATH_V1\n");
+        if (minimumAcceptedDepth >= 0 || maximumAcceptedDepth >= 0) {
+            appendText("Depth predicate: ");
+            if (minimumAcceptedDepth >= 0 &&
+                minimumAcceptedDepth == maximumAcceptedDepth) {
+                appendText("exactly ");
+                appendUnsigned(static_cast<size_t>(minimumAcceptedDepth));
+            } else if (minimumAcceptedDepth >= 0 && maximumAcceptedDepth >= 0) {
+                appendText("between ");
+                appendUnsigned(static_cast<size_t>(minimumAcceptedDepth));
+                appendText(" and ");
+                appendUnsigned(static_cast<size_t>(maximumAcceptedDepth));
+                appendText(" inclusive");
+            } else if (minimumAcceptedDepth >= 0) {
+                appendText("at least ");
+                appendUnsigned(static_cast<size_t>(minimumAcceptedDepth));
+            } else {
+                appendText("at most ");
+                appendUnsigned(static_cast<size_t>(maximumAcceptedDepth));
+            }
+            appendText("\n");
+        }
         appendText("Each record is a complete start-to-end sequence.\n");
         appendText("Record syntax: Path <index>: <net> -> <gate>(<type>) -> <net> ...\n");
         if (expectedCountKnown_) {
@@ -247,7 +359,21 @@ private:
     bool failed_ = false;
 };
 
-// 將一組 PathNode 名稱轉成 ID；任一名稱不存在代表查詢條件無效。
+bool isActivePathNet(const Netlist& netlist, int netId) {
+    return netlist.isValidNetId(netId) && !netlist.getNet(netId).isRemoved;
+}
+
+bool isActivePathGate(const Netlist& netlist, int gateId) {
+    return netlist.isValidGateId(gateId) &&
+           netlist.getGate(gateId).type != GateType::UNKNOWN;
+}
+
+bool isActivePathDff(const Netlist& netlist, int gateId) {
+    return isActivePathGate(netlist, gateId) &&
+           netlist.getGate(gateId).type == GateType::DFF;
+}
+
+// 將一組 PathNode 名稱轉成 active ID；任一名稱不存在或已被移除代表查詢條件無效。
 bool resolvePathNodes(const Netlist& netlist,
                       const std::vector<Netlist::PathNode>& nodes,
                       std::vector<ResolvedPathNode>& resolvedNodes) {
@@ -259,7 +385,10 @@ bool resolvePathNodes(const Netlist& netlist,
         } else {
             resolved.id = netlist.getGateId(node.name);
         }
-        if (resolved.id < 0) {
+        const bool active = node.type == Netlist::PathNodeType::Net
+            ? isActivePathNet(netlist, resolved.id)
+            : isActivePathGate(netlist, resolved.id);
+        if (!active) {
             return false;
         }
         resolvedNodes.push_back(resolved);
@@ -400,9 +529,12 @@ bool allRequiredPassed(const std::vector<unsigned char>& passedRequired) {
 std::vector<unsigned char> computeReverseReachableNets(
     const Netlist& netlist,
     int endNetId,
-    const std::vector<ResolvedPathNode>& avoidedNodes) {
+    const std::vector<ResolvedPathNode>& avoidedNodes,
+    const PathEnumerationOptions& options,
+    PathEnumerationState& state) {
     std::vector<unsigned char> canReach(netlist.getNetCount(), 0);
-    if (!netlist.isValidNetId(endNetId) || containsNet(avoidedNodes, endNetId)) {
+    if (shouldStopEnumeration(options, state) ||
+        !netlist.isValidNetId(endNetId) || containsNet(avoidedNodes, endNetId)) {
         return canReach;
     }
 
@@ -411,6 +543,9 @@ std::vector<unsigned char> computeReverseReachableNets(
     pending.push(endNetId);
 
     while (!pending.empty()) {
+        if (shouldStopEnumerationPeriodically(options, state)) {
+            return canReach;
+        }
         const int currentNetId = pending.front();
         pending.pop();
 
@@ -439,12 +574,315 @@ std::vector<unsigned char> computeReverseReachableNets(
     return canReach;
 }
 
+std::vector<unsigned char> computeReverseReachableNets(
+    const Netlist& netlist,
+    const std::vector<int>& endNetIds,
+    const std::vector<ResolvedPathNode>& avoidedNodes,
+    const PathEnumerationOptions& options,
+    PathEnumerationState& state) {
+    std::vector<unsigned char> canReach(netlist.getNetCount(), 0);
+    std::queue<int> pending;
+    for (int endNetId : endNetIds) {
+        if (!netlist.isValidNetId(endNetId) ||
+            containsNet(avoidedNodes, endNetId) ||
+            canReach[static_cast<size_t>(endNetId)] != 0) {
+            continue;
+        }
+        canReach[static_cast<size_t>(endNetId)] = 1;
+        pending.push(endNetId);
+    }
+
+    while (!pending.empty()) {
+        if (shouldStopEnumerationPeriodically(options, state)) {
+            return canReach;
+        }
+        const int currentNetId = pending.front();
+        pending.pop();
+
+        const Net& currentNet = netlist.getNet(currentNetId);
+        const int driverGateId = currentNet.driverGateId;
+        if (driverGateId < 0 || containsGate(avoidedNodes, driverGateId)) {
+            continue;
+        }
+
+        const Gate& driverGate = netlist.getGate(driverGateId);
+        if (driverGate.type == GateType::DFF) {
+            continue;
+        }
+        for (int inputNetId : driverGate.inputNetIds) {
+            if (!netlist.isValidNetId(inputNetId) ||
+                containsNet(avoidedNodes, inputNetId) ||
+                canReach[static_cast<size_t>(inputNetId)] != 0) {
+                continue;
+            }
+            canReach[static_cast<size_t>(inputNetId)] = 1;
+            pending.push(inputNetId);
+        }
+    }
+    return canReach;
+}
+
 size_t saturatingAdd(size_t lhs, size_t rhs) {
     const size_t maxValue = std::numeric_limits<size_t>::max();
     if (maxValue - lhs < rhs) {
         return maxValue;
     }
     return lhs + rhs;
+}
+
+// loadGateIds records one entry per input pin. A gate that consumes the same
+// net on multiple pins still contributes only one structural net-to-gate edge.
+bool shouldTraverseStructuralLoadEdge(
+    const Gate& gate,
+    int sourceNetId,
+    int gateId,
+    std::unordered_set<int>& seenMultiPinLoadGateIds) {
+    bool alreadyUsesSourceNet = false;
+    for (int inputNetId : gate.inputNetIds) {
+        if (inputNetId != sourceNetId) {
+            continue;
+        }
+        if (alreadyUsesSourceNet) {
+            return seenMultiPinLoadGateIds.insert(gateId).second;
+        }
+        alreadyUsesSourceNet = true;
+    }
+    return true;
+}
+
+std::string makeRankedPathStateKey(
+    int netId,
+    int minimumRemainingDepth,
+    int maximumRemainingDepth,
+    const std::vector<unsigned char>& passedRequired) {
+    std::string key = std::to_string(netId) + ":" +
+                      std::to_string(minimumRemainingDepth) + ":" +
+                      std::to_string(maximumRemainingDepth) + ":";
+    key.reserve(key.size() + passedRequired.size());
+    for (unsigned char passed : passedRequired) {
+        key.push_back(passed == 0 ? '0' : '1');
+    }
+    return key;
+}
+
+int compareRankedPathSuffix(const Netlist& netlist,
+                            const RankedPathCandidate& lhs,
+                            const RankedPathCandidate& rhs) {
+    const std::string& lhsEnd = netlist.getNet(lhs.endNetId).name;
+    const std::string& rhsEnd = netlist.getNet(rhs.endNetId).name;
+    if (lhsEnd < rhsEnd) return -1;
+    if (rhsEnd < lhsEnd) return 1;
+
+    auto lhsLink = lhs.firstLink;
+    auto rhsLink = rhs.firstLink;
+    while (lhsLink != nullptr && rhsLink != nullptr) {
+        const std::string& lhsGate = netlist.getGate(lhsLink->gateId).instName;
+        const std::string& rhsGate = netlist.getGate(rhsLink->gateId).instName;
+        if (lhsGate < rhsGate) return -1;
+        if (rhsGate < lhsGate) return 1;
+        lhsLink = lhsLink->next;
+        rhsLink = rhsLink->next;
+    }
+    if (lhsLink == nullptr && rhsLink != nullptr) return -1;
+    if (lhsLink != nullptr && rhsLink == nullptr) return 1;
+
+    lhsLink = lhs.firstLink;
+    rhsLink = rhs.firstLink;
+    while (lhsLink != nullptr && rhsLink != nullptr) {
+        const std::string& lhsNet = netlist.getNet(lhsLink->nextNetId).name;
+        const std::string& rhsNet = netlist.getNet(rhsLink->nextNetId).name;
+        if (lhsNet < rhsNet) return -1;
+        if (rhsNet < lhsNet) return 1;
+        lhsLink = lhsLink->next;
+        rhsLink = rhsLink->next;
+    }
+    return 0;
+}
+
+bool rankedPathLess(const Netlist& netlist,
+                    Netlist::PathRankingOrder order,
+                    const RankedPathCandidate& lhs,
+                    const RankedPathCandidate& rhs) {
+    if (lhs.depth != rhs.depth) {
+        return order == Netlist::PathRankingOrder::ShortestFirst
+            ? lhs.depth < rhs.depth
+            : lhs.depth > rhs.depth;
+    }
+    return compareRankedPathSuffix(netlist, lhs, rhs) < 0;
+}
+
+void limitRankedCandidates(const Netlist& netlist,
+                           Netlist::PathRankingOrder order,
+                           size_t candidateLimit,
+                           std::vector<RankedPathCandidate>& candidates,
+                           bool& truncated) {
+    std::sort(candidates.begin(), candidates.end(),
+              [&](const RankedPathCandidate& lhs,
+                  const RankedPathCandidate& rhs) {
+                  return rankedPathLess(netlist, order, lhs, rhs);
+              });
+    if (candidates.size() > candidateLimit) {
+        candidates.resize(candidateLimit);
+        truncated = true;
+    }
+}
+
+RankedPathMemoEntry findRankedPathSuffixes(
+    const Netlist& netlist,
+    int currentNetId,
+    const std::vector<unsigned char>& isEndNet,
+    const std::vector<ResolvedPathNode>& requiredNodes,
+    const std::vector<ResolvedPathNode>& avoidedNodes,
+    const std::vector<unsigned char>& passedRequired,
+    int minimumRemainingDepth,
+    int maximumRemainingDepth,
+    const std::vector<unsigned char>& canReachAnyEnd,
+    Netlist::PathRankingOrder order,
+    size_t candidateLimit,
+    const PathEnumerationOptions& options,
+    PathEnumerationState& enumerationState,
+    RankedPathSearchState& searchState) {
+    RankedPathMemoEntry empty;
+    if (shouldStopEnumeration(options, enumerationState) ||
+        searchState.cycleDetected ||
+        !netlist.isValidNetId(currentNetId) ||
+        static_cast<size_t>(currentNetId) >= canReachAnyEnd.size() ||
+        canReachAnyEnd[static_cast<size_t>(currentNetId)] == 0) {
+        return empty;
+    }
+
+    const std::string memoKey = makeRankedPathStateKey(
+        currentNetId, minimumRemainingDepth, maximumRemainingDepth,
+        passedRequired);
+    const auto memoIt = searchState.memo.find(memoKey);
+    if (memoIt != searchState.memo.end()) {
+        return memoIt->second;
+    }
+
+    const size_t currentIndex = static_cast<size_t>(currentNetId);
+    if (currentIndex >= searchState.visitingNets.size()) {
+        return empty;
+    }
+    if (searchState.visitingNets[currentIndex] != 0) {
+        searchState.cycleDetected = true;
+        return empty;
+    }
+    searchState.visitingNets[currentIndex] = 1;
+
+    RankedPathMemoEntry entry;
+    if (currentIndex < isEndNet.size() && isEndNet[currentIndex] != 0) {
+        if (minimumRemainingDepth <= 0 && allRequiredPassed(passedRequired)) {
+            RankedPathCandidate candidate;
+            candidate.endNetId = currentNetId;
+            entry.candidates.push_back(std::move(candidate));
+        }
+    }
+    // A selected endpoint may be upstream of another selected endpoint. Keep
+    // the zero-length suffix above, but also continue toward downstream ends.
+    if (maximumRemainingDepth != 0) {
+        const int nextMinimumDepth = std::max(0, minimumRemainingDepth - 1);
+        const int nextMaximumDepth = maximumRemainingDepth < 0
+            ? -1
+            : maximumRemainingDepth - 1;
+        const Net& currentNet = netlist.getNet(currentNetId);
+        std::unordered_set<int> seenMultiPinLoadGateIds;
+        for (int gateId : currentNet.loadGateIds) {
+            if (shouldStopEnumerationPeriodically(options, enumerationState) ||
+                searchState.cycleDetected) {
+                break;
+            }
+
+            const Gate& gate = netlist.getGate(gateId);
+            if (gate.type == GateType::DFF || gate.outputNetId < 0 ||
+                containsGate(avoidedNodes, gateId)) {
+                continue;
+            }
+            if (!shouldTraverseStructuralLoadEdge(
+                    gate, currentNetId, gateId, seenMultiPinLoadGateIds)) {
+                continue;
+            }
+
+            const int nextNetId = gate.outputNetId;
+            if (containsNet(avoidedNodes, nextNetId) ||
+                static_cast<size_t>(nextNetId) >= canReachAnyEnd.size() ||
+                canReachAnyEnd[static_cast<size_t>(nextNetId)] == 0) {
+                continue;
+            }
+
+            std::vector<unsigned char> nextPassedRequired = passedRequired;
+            markRequiredGate(requiredNodes, gateId, nextPassedRequired);
+            markRequiredNet(requiredNodes, nextNetId, nextPassedRequired);
+            RankedPathMemoEntry child = findRankedPathSuffixes(
+                netlist, nextNetId, isEndNet, requiredNodes, avoidedNodes,
+                nextPassedRequired, nextMinimumDepth, nextMaximumDepth,
+                canReachAnyEnd, order, candidateLimit, options,
+                enumerationState, searchState);
+            entry.truncated = entry.truncated || child.truncated;
+            for (const RankedPathCandidate& childCandidate : child.candidates) {
+                RankedPathCandidate candidate;
+                candidate.depth = childCandidate.depth + 1;
+                candidate.endNetId = childCandidate.endNetId;
+                auto link = std::make_shared<RankedPathLink>();
+                link->gateId = gateId;
+                link->nextNetId = nextNetId;
+                link->next = childCandidate.firstLink;
+                candidate.firstLink = std::move(link);
+                entry.candidates.push_back(std::move(candidate));
+            }
+            limitRankedCandidates(netlist, order, candidateLimit,
+                                  entry.candidates, entry.truncated);
+        }
+    }
+
+    searchState.visitingNets[currentIndex] = 0;
+    if (!searchState.cycleDetected && !enumerationState.timedOut) {
+        searchState.memo.emplace(memoKey, entry);
+    }
+    return entry;
+}
+
+bool globalRankedPathLess(const Netlist& netlist,
+                          Netlist::PathRankingOrder order,
+                          const GlobalRankedPathCandidate& lhs,
+                          const GlobalRankedPathCandidate& rhs) {
+    if (lhs.suffix.depth != rhs.suffix.depth) {
+        return order == Netlist::PathRankingOrder::ShortestFirst
+            ? lhs.suffix.depth < rhs.suffix.depth
+            : lhs.suffix.depth > rhs.suffix.depth;
+    }
+    const std::string& lhsStart = netlist.getNet(lhs.startNetId).name;
+    const std::string& rhsStart = netlist.getNet(rhs.startNetId).name;
+    if (lhsStart != rhsStart) return lhsStart < rhsStart;
+    return compareRankedPathSuffix(netlist, lhs.suffix, rhs.suffix) < 0;
+}
+
+void limitGlobalRankedCandidates(
+    const Netlist& netlist,
+    Netlist::PathRankingOrder order,
+    size_t candidateLimit,
+    std::vector<GlobalRankedPathCandidate>& candidates,
+    bool& truncated) {
+    std::sort(candidates.begin(), candidates.end(),
+              [&](const GlobalRankedPathCandidate& lhs,
+                  const GlobalRankedPathCandidate& rhs) {
+                  return globalRankedPathLess(netlist, order, lhs, rhs);
+              });
+    if (candidates.size() > candidateLimit) {
+        candidates.resize(candidateLimit);
+        truncated = true;
+    }
+}
+
+Netlist::CombinationalPath reconstructRankedPath(
+    int startNetId,
+    const RankedPathCandidate& candidate) {
+    Netlist::CombinationalPath path;
+    path.netIds.push_back(startNetId);
+    for (auto link = candidate.firstLink; link != nullptr; link = link->next) {
+        path.gateIds.push_back(link->gateId);
+        path.netIds.push_back(link->nextNetId);
+    }
+    return path;
 }
 
 // Count-only fast path: memoize the number of combinational paths from each net
@@ -484,6 +922,7 @@ size_t countPathsToEndDepthFirst(
     size_t count = 0;
 
     const Net& currentNet = netlist.getNet(currentNetId);
+    std::unordered_set<int> seenMultiPinLoadGateIds;
     for (int gateId : currentNet.loadGateIds) {
         if (shouldStopEnumeration(options, state) || memo.cycleDetected) {
             break;
@@ -493,6 +932,10 @@ size_t countPathsToEndDepthFirst(
         if (gate.type == GateType::DFF ||
             gate.outputNetId < 0 ||
             containsGate(avoidedNodes, gateId)) {
+            continue;
+        }
+        if (!shouldTraverseStructuralLoadEdge(
+                gate, currentNetId, gateId, seenMultiPinLoadGateIds)) {
             continue;
         }
 
@@ -514,6 +957,98 @@ size_t countPathsToEndDepthFirst(
     if (!memo.cycleDetected && !state.timedOut) {
         memo.counts[currentIndex] = count;
         memo.ready[currentIndex] = 1;
+    }
+    return count;
+}
+
+// Count paths whose remaining gate count falls inside the inclusive depth range.
+// The memo state includes the remaining bounds because the same net may be reached
+// at different depths from a selected startpoint.
+size_t countPathsToEndWithinDepthFirst(
+    const Netlist& netlist,
+    int currentNetId,
+    int endNetId,
+    int minimumRemainingDepth,
+    int maximumRemainingDepth,
+    const std::vector<ResolvedPathNode>& avoidedNodes,
+    const std::vector<unsigned char>& canReachEnd,
+    const PathEnumerationOptions& options,
+    PathEnumerationState& state,
+    DepthPathCountMemo& memo) {
+    if (shouldStopEnumeration(options, state) || memo.cycleDetected) {
+        return 0;
+    }
+    if (!netlist.isValidNetId(currentNetId) ||
+        static_cast<size_t>(currentNetId) >= canReachEnd.size() ||
+        canReachEnd[static_cast<size_t>(currentNetId)] == 0) {
+        return 0;
+    }
+    if (currentNetId == endNetId) {
+        return minimumRemainingDepth <= 0 ? 1 : 0;
+    }
+    if (maximumRemainingDepth == 0) {
+        return 0;
+    }
+
+    const DepthPathCountState memoKey{
+        currentNetId, minimumRemainingDepth, maximumRemainingDepth};
+    const auto memoIt = memo.counts.find(memoKey);
+    if (memoIt != memo.counts.end()) {
+        return memoIt->second;
+    }
+
+    const size_t currentIndex = static_cast<size_t>(currentNetId);
+    if (currentIndex >= memo.visitingNets.size()) {
+        return 0;
+    }
+    if (memo.visitingNets[currentIndex] != 0) {
+        memo.cycleDetected = true;
+        return 0;
+    }
+
+    memo.visitingNets[currentIndex] = 1;
+    size_t count = 0;
+    const int nextMinimumDepth = std::max(0, minimumRemainingDepth - 1);
+    const int nextMaximumDepth = maximumRemainingDepth < 0
+        ? -1
+        : maximumRemainingDepth - 1;
+
+    const Net& currentNet = netlist.getNet(currentNetId);
+    std::unordered_set<int> seenMultiPinLoadGateIds;
+    for (int gateId : currentNet.loadGateIds) {
+        if (shouldStopEnumeration(options, state) || memo.cycleDetected) {
+            break;
+        }
+
+        const Gate& gate = netlist.getGate(gateId);
+        if (gate.type == GateType::DFF ||
+            gate.outputNetId < 0 ||
+            containsGate(avoidedNodes, gateId)) {
+            continue;
+        }
+        if (!shouldTraverseStructuralLoadEdge(
+                gate, currentNetId, gateId, seenMultiPinLoadGateIds)) {
+            continue;
+        }
+
+        const int nextNetId = gate.outputNetId;
+        if (containsNet(avoidedNodes, nextNetId) ||
+            static_cast<size_t>(nextNetId) >= canReachEnd.size() ||
+            canReachEnd[static_cast<size_t>(nextNetId)] == 0) {
+            continue;
+        }
+
+        count = saturatingAdd(
+            count,
+            countPathsToEndWithinDepthFirst(
+                netlist, nextNetId, endNetId,
+                nextMinimumDepth, nextMaximumDepth,
+                avoidedNodes, canReachEnd, options, state, memo));
+    }
+
+    memo.visitingNets[currentIndex] = 0;
+    if (!memo.cycleDetected && !state.timedOut) {
+        memo.counts.emplace(memoKey, count);
     }
     return count;
 }
@@ -647,8 +1182,12 @@ void enumeratePathsDepthFirst(
     if (shouldStopEnumeration(options, state)) {
         return;
     }
+    if (!pathCanExtend(options, currentPath.gateIds.size())) {
+        return;
+    }
 
     const Net& currentNet = netlist.getNet(currentNetId);
+    std::unordered_set<int> seenMultiPinLoadGateIds;
     for (int gateId : currentNet.loadGateIds) {
         if (shouldStopEnumeration(options, state)) {
             return;
@@ -658,6 +1197,10 @@ void enumeratePathsDepthFirst(
         if (gate.type == GateType::DFF ||
             gate.outputNetId < 0 ||
             containsGate(avoidedNodes, gateId)) {
+            continue;
+        }
+        if (!shouldTraverseStructuralLoadEdge(
+                gate, currentNetId, gateId, seenMultiPinLoadGateIds)) {
             continue;
         }
 
@@ -678,7 +1221,8 @@ void enumeratePathsDepthFirst(
         currentPath.netIds.push_back(nextNetId);
 
         if (nextNetId == endNetId) {
-            if (allRequiredPassed(passedRequired)) {
+            if (allRequiredPassed(passedRequired) &&
+                pathDepthMatches(options, currentPath.gateIds.size())) {
                 const size_t pathIndex = state.pathCount;
                 state.pathCount++;
                 if (options.pathWriter != nullptr &&
@@ -718,7 +1262,11 @@ void enumerateUnconstrainedPathsDepthFirst(
     const PathEnumerationOptions& options,
     PathEnumerationState& state,
     const std::vector<unsigned char>& canReachEnd) {
+    if (!pathCanExtend(options, currentPath.gateIds.size())) {
+        return;
+    }
     const Net& currentNet = netlist.getNet(currentNetId);
+    std::unordered_set<int> seenMultiPinLoadGateIds;
     for (int gateId : currentNet.loadGateIds) {
         if (shouldStopEnumerationPeriodically(options, state)) {
             return;
@@ -726,6 +1274,10 @@ void enumerateUnconstrainedPathsDepthFirst(
 
         const Gate& gate = netlist.getGate(gateId);
         if (gate.type == GateType::DFF || gate.outputNetId < 0) {
+            continue;
+        }
+        if (!shouldTraverseStructuralLoadEdge(
+                gate, currentNetId, gateId, seenMultiPinLoadGateIds)) {
             continue;
         }
 
@@ -739,16 +1291,18 @@ void enumerateUnconstrainedPathsDepthFirst(
         currentPath.netIds.push_back(nextNetId);
 
         if (nextNetId == endNetId) {
-            const size_t pathIndex = state.pathCount++;
-            if (options.pathWriter != nullptr &&
-                !options.pathWriter->writePath(currentPath, pathIndex)) {
-                state.outputFailed = true;
-                state.complete = false;
-            }
-            if (!options.countOnly && options.storePaths &&
-                (options.maxStoredPaths == 0 ||
-                 results.size() < options.maxStoredPaths)) {
-                results.push_back(currentPath);
+            if (pathDepthMatches(options, currentPath.gateIds.size())) {
+                const size_t pathIndex = state.pathCount++;
+                if (options.pathWriter != nullptr &&
+                    !options.pathWriter->writePath(currentPath, pathIndex)) {
+                    state.outputFailed = true;
+                    state.complete = false;
+                }
+                if (!options.countOnly && options.storePaths &&
+                    (options.maxStoredPaths == 0 ||
+                     results.size() < options.maxStoredPaths)) {
+                    results.push_back(currentPath);
+                }
             }
         } else {
             enumerateUnconstrainedPathsDepthFirst(
@@ -786,8 +1340,12 @@ std::vector<Netlist::CombinationalPath> enumeratePathsMatching(
     std::vector<unsigned char> ownedCanReachEnd;
     const std::vector<unsigned char>* canReachEnd = precomputedCanReachEnd;
     if (canReachEnd == nullptr) {
-        ownedCanReachEnd = computeReverseReachableNets(netlist, endNetId, avoidedNodes);
+        ownedCanReachEnd = computeReverseReachableNets(
+            netlist, endNetId, avoidedNodes, options, state);
         canReachEnd = &ownedCanReachEnd;
+    }
+    if (shouldStopEnumeration(options, state)) {
+        return results;
     }
     if (static_cast<size_t>(startNetId) >= canReachEnd->size() ||
         (*canReachEnd)[static_cast<size_t>(startNetId)] == 0) {
@@ -799,7 +1357,8 @@ std::vector<Netlist::CombinationalPath> enumeratePathsMatching(
     Netlist::CombinationalPath currentPath;
     currentPath.netIds.push_back(startNetId);
     if (startNetId == endNetId) {
-        if (allRequiredPassed(passedRequired)) {
+        if (allRequiredPassed(passedRequired) &&
+            pathDepthMatches(options, 0)) {
             const size_t pathIndex = state.pathCount;
             state.pathCount++;
             if (options.pathWriter != nullptr &&
@@ -1520,8 +2079,8 @@ int Netlist::getGateInputNetId(int gateId, const std::string& pinName) const {
 std::vector<int> Netlist::resolvePathEndpoint(const PathEndpoint& endpoint) const {
     std::vector<int> netIds;
 
-    auto appendValidNet = [&](int netId) {
-        if (netId >= 0 && netId < static_cast<int>(nets.size())) {
+    auto appendActiveNet = [&](int netId) {
+        if (isActivePathNet(*this, netId)) {
             netIds.push_back(netId);
         }
     };
@@ -1532,7 +2091,7 @@ std::vector<int> Netlist::resolvePathEndpoint(const PathEndpoint& endpoint) cons
                 continue;
             }
             for (int netId : port.netIds) {
-                appendValidNet(netId);
+                appendActiveNet(netId);
             }
         }
     };
@@ -1543,7 +2102,7 @@ std::vector<int> Netlist::resolvePathEndpoint(const PathEndpoint& endpoint) cons
 
     switch (endpoint.type) {
     case PathEndpointType::SpecificNet:
-        appendValidNet(getNetId(endpoint.name));
+        appendActiveNet(getNetId(endpoint.name));
         break;
     case PathEndpointType::PrimaryInput:
         appendPortNets(primaryInputs);
@@ -1554,42 +2113,66 @@ std::vector<int> Netlist::resolvePathEndpoint(const PathEndpoint& endpoint) cons
     case PathEndpointType::DffQ:
         if (endpointRequestsAllDffs()) {
             for (int gateId : getGatesByType(GateType::DFF)) {
-                appendValidNet(getDffOutputNetId(gateId));
+                if (isActivePathDff(*this, gateId)) {
+                    appendActiveNet(getDffOutputNetId(gateId));
+                }
             }
         } else {
-            appendValidNet(getDffOutputNetId(getGateId(endpoint.name)));
+            const int gateId = getGateId(endpoint.name);
+            if (isActivePathDff(*this, gateId)) {
+                appendActiveNet(getDffOutputNetId(gateId));
+            }
         }
         break;
     case PathEndpointType::DffD:
         if (endpointRequestsAllDffs()) {
             for (int gateId : getGatesByType(GateType::DFF)) {
-                appendValidNet(getGateInputNetId(gateId, "D"));
+                if (isActivePathDff(*this, gateId)) {
+                    appendActiveNet(getGateInputNetId(gateId, "D"));
+                }
             }
         } else {
-            appendValidNet(getGateInputNetId(getGateId(endpoint.name), "D"));
+            const int gateId = getGateId(endpoint.name);
+            if (isActivePathDff(*this, gateId)) {
+                appendActiveNet(getGateInputNetId(gateId, "D"));
+            }
         }
         break;
-    case PathEndpointType::DffClock:
-        appendValidNet(getGateInputNetId(getGateId(endpoint.name),
-                                         endpoint.pinName.empty() ? "CK" : endpoint.pinName));
-        break;
-    case PathEndpointType::DffReset:
-        if (!endpoint.pinName.empty()) {
-            appendValidNet(getGateInputNetId(getGateId(endpoint.name), endpoint.pinName));
-        } else {
-            appendValidNet(getGateInputNetId(getGateId(endpoint.name), "RN"));
-            appendValidNet(getGateInputNetId(getGateId(endpoint.name), "SN"));
+    case PathEndpointType::DffClock: {
+        const int gateId = getGateId(endpoint.name);
+        if (isActivePathDff(*this, gateId)) {
+            appendActiveNet(getGateInputNetId(
+                gateId, endpoint.pinName.empty() ? "CK" : endpoint.pinName));
         }
         break;
-    case PathEndpointType::GateOutput:
-        appendValidNet(getGateOutputNetId(getGateId(endpoint.name)));
+    }
+    case PathEndpointType::DffReset: {
+        const int gateId = getGateId(endpoint.name);
+        if (isActivePathDff(*this, gateId)) {
+            if (!endpoint.pinName.empty()) {
+                appendActiveNet(getGateInputNetId(gateId, endpoint.pinName));
+            } else {
+                appendActiveNet(getGateInputNetId(gateId, "RN"));
+                appendActiveNet(getGateInputNetId(gateId, "SN"));
+            }
+        }
         break;
+    }
+    case PathEndpointType::GateOutput: {
+        const int gateId = getGateId(endpoint.name);
+        if (isActivePathGate(*this, gateId)) {
+            appendActiveNet(getGateOutputNetId(gateId));
+        }
+        break;
+    }
     case PathEndpointType::GateInput: {
         const int gateId = getGateId(endpoint.name);
-        if (!endpoint.pinName.empty()) {
-            appendValidNet(getGateInputNetId(gateId, endpoint.pinName));
-        } else {
-            appendValidNet(getGateInputNetId(gateId, endpoint.pinIndex));
+        if (isActivePathGate(*this, gateId)) {
+            if (!endpoint.pinName.empty()) {
+                appendActiveNet(getGateInputNetId(gateId, endpoint.pinName));
+            } else {
+                appendActiveNet(getGateInputNetId(gateId, endpoint.pinIndex));
+            }
         }
         break;
     }
@@ -1616,9 +2199,28 @@ std::vector<int> Netlist::resolvePathEndpoints(
     return resolvedNetIds;
 }
 
-// 執行統一 endpoint connectivity/path query。
+// 執行統一 endpoint connectivity/path query。EnumerateAll 的 public facade
+// 建立一次 deadline；recursive pre-count 只共用，不重新開始 request clock。
 Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
+    if (query.mode == PathQueryMode::EnumerateAll ||
+        query.mode == PathQueryMode::RankedPaths) {
+        const request_time_budget::RequestDeadline deadline(
+            query.enumerationTimeLimitSeconds);
+        return runPathQueryWithDeadline(query, &deadline);
+    }
+    return runPathQueryWithDeadline(query, nullptr);
+}
+
+Netlist::PathQueryResult Netlist::runPathQueryWithDeadline(
+    const PathQuery& query,
+    const request_time_budget::RequestDeadline* deadline) const {
     PathQueryResult result;
+    result.minimumAcceptedDepth = query.minimumAcceptedDepth;
+    result.maximumAcceptedDepth = query.maximumAcceptedDepth;
+    result.rankingOrder = query.rankingOrder;
+    result.requestedFirstRank = query.firstRank;
+    result.requestedResultCount =
+        query.mode == PathQueryMode::RankedPaths ? query.resultCount : 0;
     auto importGraphReport = [&result](const GraphReport& graphReport) {
         result.ok = graphReport.ok;
         result.unsupported = graphReport.unsupported;
@@ -1638,13 +2240,54 @@ Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
         result.checkedEndpointCount = graphReport.checkedPrimaryOutputCount;
     };
 
-    if (query.mode == PathQueryMode::EnumerateAll &&
+    if (query.minimumAcceptedDepth < -1 || query.maximumAcceptedDepth < -1) {
+        result.status = "INVALID_ARGUMENT";
+        result.message = "Path depth bounds must be -1 or non-negative integers.";
+        return result;
+    }
+    if (query.minimumAcceptedDepth >= 0 &&
+        query.maximumAcceptedDepth >= 0 &&
+        query.minimumAcceptedDepth > query.maximumAcceptedDepth) {
+        result.status = "INVALID_ARGUMENT";
+        result.message = "Path minimum depth cannot exceed maximum depth.";
+        return result;
+    }
+    if ((query.minimumAcceptedDepth >= 0 || query.maximumAcceptedDepth >= 0) &&
+        query.mode != PathQueryMode::EnumerateAll &&
+        query.mode != PathQueryMode::RankedPaths) {
+        result.status = "INVALID_ARGUMENT";
+        result.message =
+            "Path depth predicates are supported by EnumerateAll and RankedPaths only.";
+        return result;
+    }
+
+    if ((query.mode == PathQueryMode::EnumerateAll ||
+         query.mode == PathQueryMode::RankedPaths) &&
         (!std::isfinite(query.enumerationTimeLimitSeconds) ||
          query.enumerationTimeLimitSeconds <= 0.0)) {
         result.status = "INVALID_ARGUMENT";
         result.message =
-            "EnumerateAll requires a finite, positive enumerationTimeLimitSeconds.";
+            "EnumerateAll and RankedPaths require a finite, positive time limit.";
         return result;
+    }
+
+    if (query.mode == PathQueryMode::RankedPaths) {
+        if (query.firstRank == 0 || query.resultCount == 0) {
+            result.status = "INVALID_ARGUMENT";
+            result.message = "RankedPaths requires positive firstRank and resultCount.";
+            return result;
+        }
+        if (query.resultCount - 1 >
+            std::numeric_limits<size_t>::max() - query.firstRank) {
+            result.status = "INVALID_ARGUMENT";
+            result.message = "RankedPaths rank window overflows size_t.";
+            return result;
+        }
+        if (query.countOnly) {
+            result.status = "INVALID_ARGUMENT";
+            result.message = "RankedPaths does not accept countOnly.";
+            return result;
+        }
     }
 
     if (!query.combinationalOnly) {
@@ -1682,7 +2325,7 @@ Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
                                                    primaryOutputNetIds.end());
         std::unordered_set<int> seenNetIds;
         for (int netId : primaryInputNetIds) {
-            if (!isValidNetId(netId) || outputNetSet.count(netId) == 0 ||
+            if (!isActivePathNet(*this, netId) || outputNetSet.count(netId) == 0 ||
                 !seenNetIds.insert(netId).second) {
                 continue;
             }
@@ -1859,9 +2502,12 @@ Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
 
         PathEnumerationOptions options;
         options.timeLimitSeconds = query.enumerationTimeLimitSeconds;
+        options.deadline = deadline;
         options.countOnly = query.countOnly;
         options.storePaths = !query.countOnly;
         options.maxStoredPaths = 0;
+        options.minimumAcceptedDepth = query.minimumAcceptedDepth;
+        options.maximumAcceptedDepth = query.maximumAcceptedDepth;
         PathEnumerationState state;
         std::fstream pathOutput;
         std::unique_ptr<LiteralPathArtifactWriter> pathWriter;
@@ -1876,7 +2522,8 @@ Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
             countQuery.writePathsToFile = false;
             countQuery.outputFilePath.clear();
             countQuery.maxPrintedPaths = 0;
-            const PathQueryResult countResult = runPathQuery(countQuery);
+            const PathQueryResult countResult =
+                runPathQueryWithDeadline(countQuery, deadline);
             if (countResult.ok && countResult.completeEnumeration &&
                 !countResult.enumerationTimedOut) {
                 expectedPathCountKnown = true;
@@ -1897,7 +2544,8 @@ Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
                 return result;
             }
             pathWriter = std::make_unique<LiteralPathArtifactWriter>(
-                pathOutput, *this, expectedPathCountKnown, expectedPathCount);
+                pathOutput, *this, expectedPathCountKnown, expectedPathCount,
+                query.minimumAcceptedDepth, query.maximumAcceptedDepth);
             options.pathWriter = pathWriter.get();
             options.storePaths = query.maxPrintedPaths > 0;
             options.maxStoredPaths = query.maxPrintedPaths;
@@ -1907,8 +2555,10 @@ Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
         bool stopEnumeration = false;
         std::unordered_map<int, std::vector<unsigned char>> reachabilityByEndNet;
         std::unordered_map<int, PathCountMemo> pathCountMemoByEndNet;
+        std::unordered_map<int, DepthPathCountMemo> depthPathCountMemoByEndNet;
         reachabilityByEndNet.reserve(endNetIds.size());
         pathCountMemoByEndNet.reserve(endNetIds.size());
+        depthPathCountMemoByEndNet.reserve(endNetIds.size());
         for (int startNetId : startNetIds) {
             if (stopEnumeration) {
                 break;
@@ -1921,10 +2571,15 @@ Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
 
                 auto reachabilityIt = reachabilityByEndNet.find(endNetId);
                 if (reachabilityIt == reachabilityByEndNet.end()) {
+                    std::vector<unsigned char> canReachEnd =
+                        computeReverseReachableNets(
+                            *this, endNetId, avoided, options, state);
+                    if (shouldStopEnumeration(options, state)) {
+                        stopEnumeration = true;
+                        break;
+                    }
                     reachabilityIt = reachabilityByEndNet
-                        .emplace(endNetId,
-                                 computeReverseReachableNets(*this, endNetId, avoided))
-                        .first;
+                        .emplace(endNetId, std::move(canReachEnd)).first;
                 }
                 const std::vector<unsigned char>& canReachEnd =
                     reachabilityIt->second;
@@ -1934,29 +2589,62 @@ Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
                 }
 
                 if (options.countOnly && required.empty()) {
-                    auto memoIt = pathCountMemoByEndNet.find(endNetId);
-                    if (memoIt == pathCountMemoByEndNet.end()) {
-                        PathCountMemo memo;
-                        memo.counts.assign(nets.size(), 0);
-                        memo.ready.assign(nets.size(), 0);
-                        memo.visiting.assign(nets.size(), 0);
-                        memoIt = pathCountMemoByEndNet.emplace(endNetId, std::move(memo)).first;
+                    if (hasDepthPredicate(options)) {
+                        auto memoIt = depthPathCountMemoByEndNet.find(endNetId);
+                        if (memoIt == depthPathCountMemoByEndNet.end()) {
+                            DepthPathCountMemo memo;
+                            memo.visitingNets.assign(nets.size(), 0);
+                            memoIt = depthPathCountMemoByEndNet
+                                .emplace(endNetId, std::move(memo)).first;
+                        }
+
+                        DepthPathCountMemo& countMemo = memoIt->second;
+                        if (!countMemo.cycleDetected) {
+                            const size_t pairPathCount =
+                                countPathsToEndWithinDepthFirst(
+                                    *this, startNetId, endNetId,
+                                    std::max(0, query.minimumAcceptedDepth),
+                                    query.maximumAcceptedDepth,
+                                    avoided, canReachEnd, options, state, countMemo);
+                            if (shouldStopEnumeration(options, state)) {
+                                stopEnumeration = true;
+                                break;
+                            }
+                            if (!countMemo.cycleDetected) {
+                                state.pathCount =
+                                    saturatingAdd(state.pathCount, pairPathCount);
+                                continue;
+                            }
+                        }
                     }
 
-                    PathCountMemo& countMemo = memoIt->second;
-                    if (!countMemo.cycleDetected) {
-                        const size_t pairPathCount =
-                            countPathsToEndDepthFirst(*this, startNetId, endNetId,
-                                                      avoided, canReachEnd,
-                                                      options, state, countMemo);
-                        if (shouldStopEnumeration(options, state)) {
-                            stopEnumeration = true;
-                            break;
+                    if (!hasDepthPredicate(options)) {
+                        auto memoIt = pathCountMemoByEndNet.find(endNetId);
+                        if (memoIt == pathCountMemoByEndNet.end()) {
+                            PathCountMemo memo;
+                            memo.counts.assign(nets.size(), 0);
+                            memo.ready.assign(nets.size(), 0);
+                            memo.visiting.assign(nets.size(), 0);
+                            memoIt = pathCountMemoByEndNet
+                                .emplace(endNetId, std::move(memo)).first;
                         }
+
+                        PathCountMemo& countMemo = memoIt->second;
                         if (!countMemo.cycleDetected) {
-                            state.pathCount =
-                                saturatingAdd(state.pathCount, pairPathCount);
-                            continue;
+                            const size_t pairPathCount =
+                                countPathsToEndDepthFirst(
+                                    *this, startNetId, endNetId,
+                                    avoided, canReachEnd,
+                                    options, state, countMemo);
+                            if (shouldStopEnumeration(options, state)) {
+                                stopEnumeration = true;
+                                break;
+                            }
+                            if (!countMemo.cycleDetected) {
+                                state.pathCount = saturatingAdd(
+                                    state.pathCount, pairPathCount);
+                                continue;
+                            }
                         }
                     }
                 }
@@ -1978,6 +2666,7 @@ Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
                 }
             }
         }
+        shouldStopEnumeration(options, state);
         result.pathCount = state.pathCount;
         result.exists = result.pathCount > 0;
         if (expectedPathCountKnown && !state.timedOut && !state.outputFailed &&
@@ -2015,6 +2704,131 @@ Netlist::PathQueryResult Netlist::runPathQuery(const PathQuery& query) const {
                 result.message = "Failed to finalize path enumeration output file: " +
                                  result.outputFilePath;
                 return result;
+            }
+        }
+        return result;
+    }
+
+    case PathQueryMode::RankedPaths:
+    {
+        std::vector<ResolvedPathNode> required;
+        std::vector<ResolvedPathNode> avoided;
+        if (!resolvePathNodes(*this, query.requiredNodes, required) ||
+            !resolvePathNodes(*this, query.avoidedNodes, avoided)) {
+            return result;
+        }
+
+        const size_t candidateLimit = query.firstRank + query.resultCount - 1;
+        PathEnumerationOptions options;
+        options.timeLimitSeconds = query.enumerationTimeLimitSeconds;
+        options.deadline = deadline;
+        options.minimumAcceptedDepth = query.minimumAcceptedDepth;
+        options.maximumAcceptedDepth = query.maximumAcceptedDepth;
+        PathEnumerationState enumerationState;
+
+        const std::vector<unsigned char> canReachAnyEnd =
+            computeReverseReachableNets(
+                *this, endNetIds, avoided, options, enumerationState);
+        std::vector<unsigned char> isEndNet(nets.size(), 0);
+        for (int endNetId : endNetIds) {
+            if (isValidNetId(endNetId) && !containsNet(avoided, endNetId)) {
+                isEndNet[static_cast<size_t>(endNetId)] = 1;
+            }
+        }
+
+        RankedPathSearchState searchState;
+        searchState.visitingNets.assign(nets.size(), 0);
+        std::vector<GlobalRankedPathCandidate> globalCandidates;
+        bool globalTruncated = false;
+
+        for (int startNetId : startNetIds) {
+            if (shouldStopEnumeration(options, enumerationState)) {
+                break;
+            }
+            if (containsNet(avoided, startNetId) ||
+                static_cast<size_t>(startNetId) >= canReachAnyEnd.size() ||
+                canReachAnyEnd[static_cast<size_t>(startNetId)] == 0) {
+                continue;
+            }
+
+            std::vector<unsigned char> passedRequired(required.size(), 0);
+            markRequiredNet(required, startNetId, passedRequired);
+            RankedPathMemoEntry startEntry = findRankedPathSuffixes(
+                *this, startNetId, isEndNet, required, avoided,
+                passedRequired, std::max(0, query.minimumAcceptedDepth),
+                query.maximumAcceptedDepth, canReachAnyEnd,
+                query.rankingOrder, candidateLimit, options,
+                enumerationState, searchState);
+            globalTruncated = globalTruncated || startEntry.truncated;
+            for (RankedPathCandidate& candidate : startEntry.candidates) {
+                GlobalRankedPathCandidate globalCandidate;
+                globalCandidate.startNetId = startNetId;
+                globalCandidate.suffix = std::move(candidate);
+                globalCandidates.push_back(std::move(globalCandidate));
+            }
+            limitGlobalRankedCandidates(
+                *this, query.rankingOrder, candidateLimit,
+                globalCandidates, globalTruncated);
+        }
+
+        shouldStopEnumeration(options, enumerationState);
+        result.rankingComplete = enumerationState.complete &&
+                                 !searchState.cycleDetected;
+        result.completeEnumeration = result.rankingComplete;
+        result.enumerationTimedOut = enumerationState.timedOut;
+        if (enumerationState.timedOut) {
+            result.status = "TIMEOUT";
+            result.message = "Ranked path search stopped by time limit.";
+            result.enumerationStopReason = result.message;
+            return result;
+        }
+        if (searchState.cycleDetected) {
+            result.ok = false;
+            result.status = "COMBINATIONAL_CYCLE";
+            result.message = "Ranked path search requires an acyclic combinational graph.";
+            return result;
+        }
+
+        result.populationExhausted = !globalTruncated;
+        result.rankExists = globalCandidates.size() >= query.firstRank;
+        if (!result.rankExists) {
+            result.status = "RANK_NOT_FOUND";
+            result.message = "Requested path rank does not exist.";
+            return result;
+        }
+
+        const size_t firstIndex = query.firstRank - 1;
+        const size_t endIndex = std::min(
+            globalCandidates.size(), firstIndex + query.resultCount);
+        result.paths.reserve(endIndex - firstIndex);
+        for (size_t index = firstIndex; index < endIndex; ++index) {
+            result.paths.push_back(reconstructRankedPath(
+                globalCandidates[index].startNetId,
+                globalCandidates[index].suffix));
+        }
+        result.returnedRankedPathCount = result.paths.size();
+        result.exists = !result.paths.empty();
+        result.status = "RANKED_PATHS";
+        result.message = "Ranked path query completed.";
+        if (result.exists) {
+            result.path = result.paths.front();
+            result.depth = result.path.depth();
+            result.firstReturnedRankDepth = result.paths.front().depth();
+            result.lastReturnedRankDepth = result.paths.back().depth();
+            result.rankedDepthRanges.reserve(result.paths.size());
+            for (size_t index = 0; index < result.paths.size(); ++index) {
+                const size_t rank = query.firstRank + index;
+                const int depth = result.paths[index].depth();
+                if (result.rankedDepthRanges.empty() ||
+                    result.rankedDepthRanges.back().depth != depth) {
+                    RankedPathDepthRange range;
+                    range.firstRank = rank;
+                    range.lastRank = rank;
+                    range.depth = depth;
+                    result.rankedDepthRanges.push_back(range);
+                } else {
+                    result.rankedDepthRanges.back().lastRank = rank;
+                }
             }
         }
         return result;

@@ -390,7 +390,7 @@ BasicReport runBasicQuery(const BasicQuery& query) const;
 | `ListCombinationalGates` | 列出所有組合邏輯 gates | `gateIds`、`gateNames` |
 | `GateInfo` | 查單一 gate 與 ordered pin/net snapshot | `objectId`、`typeName`、predicate flags、`gateConnections[0]`；`formattedInfo` 保留相容 |
 | `NetInfo` | 查單一 net | `objectId`、`typeName`、PI/PO/constant flags |
-| `PortInfo` | 查單一 port、declaration range 與 ordered bits | `portWidth`、direction flags、`ports[0]`、bit net names/IDs |
+| `PortInfo` | 查單一 port、declaration range 與 ordered bits | `portWidth`、`portLeftBound`、`portRightBound`、direction flags、`ports[0]`、bit net names/IDs |
 | `CountByGateType` | 統計 include-minus-exclude gate types | `gateTypeCounts`、`gateCount`、filter metadata |
 | `GatesByType` | 列出 include-minus-exclude gates；可選 batch pin/net detail | `gateIds`、`gateNames`、`gateConnections`、filter metadata |
 | `GatesWithConstantInput` | 找 constant input gates；可選 batch pin/net detail | `gateIds`、`gateNames`、`gateConnections`、`gateCount` |
@@ -404,13 +404,16 @@ BasicReport runBasicQuery(const BasicQuery& query) const;
 `primaryInputBitCount` / `primaryOutputBitCount` 表示各 port declaration width 的總和。
 `Summary` 同時填入四者，PI/PO list query 則只填入對應方向的 port/bit counts。
 
-`PortInfo` 固定在 `ports` 填入一筆 `PortSummary`，提供 name、direction、width、bus flag 與
-declaration bounds；不受 `includeNames` 影響。`netNames` 與 `netIds` 都依該 port 的 Verilog
+`PortInfo` 固定在 scalar report 填入 `portLeftBound` / `portRightBound`，並在 `ports` 填入一筆
+`PortSummary`，提供 name、direction、width、bus flag 與 declaration bounds；不受
+`includeNames` 影響。`netNames` 與 `netIds` 都依該 port 的 Verilog
 declaration order 回傳，且兩者使用相同的 active-net filter，因此同一個 index 必定描述同一個
 bit。`includeIds` / `includeNames` 只控制 flat vectors，不會移除 structured `ports[0]`。
 
 `PortSummary.msb/lsb` 是既有歷史欄位名，實作忠實保存 declaration 的 left/right bounds，
 不依數值大小重新排序。例如 `[31:0]` 回 `31/0`，`[0:31]` 回 `0/31`；scalar 回 `-1/-1`。
+`BasicReport.portLeftBound/portRightBound` 使用相同語意，讓大型 bit list 移入 artifact 時，caller
+仍可不展開 `ports` 或 bit names 直接回答 declaration ordering。
 
 `GateInfo` 固定在 `gateConnections` 填入一筆 structured object snapshot；
 `GatesByType` 或 `GatesWithConstantInput` 則在設定 `includeConnectionDetails=true` 時，依篩選後
@@ -491,6 +494,11 @@ struct BasicReport {
     bool gateDetailsIncluded = false;
     std::vector<GateType> appliedGateTypeFilters;
     std::vector<GateType> appliedExcludedGateTypeFilters;
+
+    bool isBus = false;
+    int portWidth = -1;
+    int portLeftBound = -1;
+    int portRightBound = -1;
 
     std::vector<int> gateIds;
     std::vector<int> netIds;

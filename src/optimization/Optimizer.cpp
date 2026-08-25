@@ -872,7 +872,7 @@ OptimizationResult Optimizer::executeOptimization(
                                    : OptimizationStatus::NO_IMPROVEMENT;
 
     if (result.changed) {
-        result.message = "Generated a depth-optimization candidate measured by "
+        result.message = "Generated an optimization candidate measured by "
                        + result.costMetricName + " using the "
                        + (loweringApplied ? "direct-lowering" : "legacy basis-enforcement")
                        + " path";

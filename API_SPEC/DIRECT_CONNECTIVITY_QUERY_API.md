@@ -173,6 +173,14 @@ size_t getFanoutLoadCount(const std::string& netName) const;
 | `dffClockLoads` | DFF `.CK` pin loads |
 | `dffResetSetLoads` | DFF `.RN` / `.SN` pin loads |
 | `dffOtherLoads` | 其他 DFF input pin loads |
+| `allGateLoadIds` | 所有 gate/DFF pin loads；同一 gate 多 pin 時可重複 |
+| `distinctGateLoadIds` | 直接 load gate instances，依首次 pin 出現順序去重 |
+| `combinationalGateLoadCount` | primitive gate input pin load 數；大型 list artifact 化後仍可直接讀取 |
+| `dffDataLoadCount` | DFF `.D` pin load 數 |
+| `dffClockLoadCount` | DFF `.CK` pin load 數 |
+| `dffResetSetLoadCount` | DFF `.RN` / `.SN` pin load 數 |
+| `dffOtherLoadCount` | 其他 DFF input pin load 數 |
+| `distinctGateLoadCount` | 不重複的直接 load gate instance 數 |
 | `drivesPrimaryOutput` | 是否直接連到 primary output |
 | `primaryOutputLoadCount` | primary output connection 數 |
 | `totalLoadCount` | 符合 QA 定義的總 fanout load 數 |
@@ -181,6 +189,10 @@ size_t getFanoutLoadCount(const std::string& netName) const;
 
 ```text
 同一顆 DFF 如果 .RN(net) 和 .SN(net) 都接同一條 net，會算成兩個 sink pin loads。
+五個 category count 是對應 vector 的完整 `size()`，不受 terminal list 或 artifact 切換影響；
+`totalLoadCount` 等於五個 category counts 加上 `primaryOutputLoadCount`。
+`distinctGateLoadCount` 與 `distinctGateLoadIds` 不包含 PO connection；它們回答直接被此 net
+驅動的 gate instances，並不改變 `totalLoadCount` 的 pin-level QA 語意。
 ```
 
 ---
@@ -330,6 +342,7 @@ struct DirectConnectivityReport {
 | Report every gate connected to net n1. | `NetLoadGates` |
 | Report every gate pin connected to net n1. | `NetLoadGates` with `includePinDetails=true` |
 | How many fanout loads does net n1 have? | `FanoutLoadReport` |
+| What is n1's fanout, and which gates does it directly drive? | `FanoutLoadReport`；同時讀 `totalLoadCount` 與 `distinctGateLoadIds` |
 | List DFF clock/reset loads driven by n1. | `FanoutLoadReport` |
 | Which primary input has the highest fanout? | `GlobalFanoutReport` with `primaryInputsOnly = true` |
 | Does every signal satisfy max fanout 16? | `GlobalFanoutReport` with `fanoutLimit = 16` |

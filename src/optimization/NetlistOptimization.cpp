@@ -2690,8 +2690,6 @@ NetlistEditReport Netlist::simplifyGatesWithConstantsWithReport(
     std::unordered_set<int> recordedSimplified;
     std::unordered_set<int> recordedSkipped;
 
-    int roundCount = 0;
-
     // 化簡會製造新的常數輸入，必須跑到 fixpoint；
     // 單輪只能清掉直接接到常數 net 的第一層。
     for (;;) {
@@ -2726,7 +2724,6 @@ NetlistEditReport Netlist::simplifyGatesWithConstantsWithReport(
             }
         }
 
-        ++roundCount;
         if (round == 0) break;
     }
 
@@ -2777,12 +2774,6 @@ NetlistEditReport Netlist::simplifyGatesWithConstantsWithReport(
         report.addWarning(
             "Some matching gates could not be simplified because their structure is unsupported.");
     }
-
-    std::cerr << "[simplifyGatesWithConstants] rounds=" << roundCount
-              << " candidates=" << summary.candidateCount
-              << " simplified=" << summary.simplifiedCount
-              << " skipped=" << summary.skippedCount
-              << " eliminated=" << summary.eliminatedTargetGateCount << "\n";
 
     return report;
 }
@@ -3769,8 +3760,9 @@ NetlistEditReport Netlist::removeRedundantLogicWithReport(
     }
 
     // ---- 階段 3：SAT-proven functional merge ----
-    // 它內部有 whole-design SAT 與自己的 rollback；失敗只會退回本階段開始時的
-    // 狀態，不影響前面已完成的縮減。成本最高，所以門檻也最高。
+    // 它以 SAT-proven equivalence classes 與 cycle-safe rewrite 提交；失敗只會
+    // 退回本階段開始時的狀態，不影響前面已完成的縮減。候選搜尋成本最高，
+    // 所以門檻也最高，但不再執行 final whole-design SAT。
     if (!summary.timedOut &&
         hasBudget(options.minFunctionalMergeFraction,
                   options.minFunctionalMergeFloorSeconds)) {

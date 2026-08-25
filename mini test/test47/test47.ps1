@@ -65,11 +65,29 @@ try {
 
     Check-Result ($fanoutOutput.Contains("list artifact complete: yes")) `
         "large fanout list reports a complete artifact"
-    Check-Result ($fanoutOutput.Contains("list entry count: 3802")) `
-        "fanout artifact reports all 3802 categorized loads"
+    Check-Result ($fanoutOutput.Contains("fanout load count (QA definition): 3802")) `
+        "fanout envelope reports all 3802 pin-level loads"
+    $directLoadSection = Get-ArtifactSectionCount $fanoutArtifact "Direct load gates"
+    Check-Result ($null -ne $directLoadSection -and
+                  $directLoadSection.Declared -eq 3802 -and
+                  $directLoadSection.Actual -eq 3802) `
+        "fanout artifact reports all 3802 distinct direct-load gates"
+    $clockLoadSection = Get-ArtifactSectionCount $fanoutArtifact "DFF clock-pin loads"
+    Check-Result ($null -ne $clockLoadSection -and
+                  $clockLoadSection.Declared -eq 3802 -and
+                  $clockLoadSection.Actual -eq 3802) `
+        "fanout artifact reports all 3802 categorized clock-pin loads"
+    Check-Result ($fanoutOutput.Contains("DFF clock-pin load count: 3802")) `
+        "large fanout envelope retains the DFF clock-load count"
+    Check-Result ($fanoutOutput.Contains("combinational gate input load count: 0") -and
+                  $fanoutOutput.Contains("DFF D-pin load count: 0") -and
+                  $fanoutOutput.Contains("DFF reset/set-pin load count: 0") -and
+                  $fanoutOutput.Contains("DFF other-pin load count: 0")) `
+        "large fanout envelope retains explicit zero category counts"
     Check-Result (-not $fanoutOutput.Contains("DFF clock-pin loads (3802):")) `
         "large fanout list is omitted from terminal"
     Check-Result ($fanoutArtifact.Contains("Format: QUERY_LIST_ARTIFACT_V1") -and
+                  $fanoutArtifact.Contains("DFF clock-pin load count: 3802") -and
                   $fanoutArtifact.Contains("DFF clock-pin loads (3802):") -and
                   $fanoutArtifact.Contains("  g90") -and
                   $fanoutArtifact.Contains("Complete: yes")) `
@@ -194,6 +212,32 @@ try {
                   $fanoutRankArtifact.Contains("rank=1 net=") -and
                   $fanoutRankArtifact.Contains("Complete: yes")) `
         "fanout ranking artifact is complete and self-contained"
+
+    $portOutput = Invoke-ToolBatch @(
+        "read mini test/test53/depth_artifact_large.v",
+        "structure_query port_info shared",
+        "exit"
+    )
+    $portPath = Get-OutputFile $portOutput
+    if ($portPath) { $createdArtifacts += $portPath }
+    $portArtifact = if ($portPath -and (Test-Path -LiteralPath $portPath)) {
+        Get-Content -LiteralPath $portPath -Raw
+    } else { "" }
+
+    Check-Result ($portOutput.Contains("list artifact complete: yes") -and
+                  $portOutput.Contains("  width: 600") -and
+                  $portOutput.Contains("  declaration_left_bound: 599") -and
+                  $portOutput.Contains("  declaration_right_bound: 0")) `
+        "large port envelope retains declaration bounds"
+    Check-Result (-not $portOutput.Contains("Net names (600):") -and
+                  -not $portOutput.Contains("Port summaries (1):")) `
+        "large port lists remain outside the terminal"
+    Check-Result ($portArtifact.Contains("port width: 600") -and
+                  $portArtifact.Contains("port declaration left bound: 599") -and
+                  $portArtifact.Contains("port declaration right bound: 0") -and
+                  $portArtifact.Contains("Net names (600):") -and
+                  $portArtifact.Contains("Complete: yes")) `
+        "large port artifact is complete and self-contained"
 
     $smallOutput = Invoke-ToolBatch @(
         "read NewTestCase/test58/test58.v",

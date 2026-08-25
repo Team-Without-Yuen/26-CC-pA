@@ -11,7 +11,7 @@ API_SPEC/DEPTH_QUERY_API.md
 
 ## 1. 基本概念
 
-`DepthQuery` 用來回答 timing/depth 類問題，例如 output depth、DFF.D depth、global critical path、depth 超標 endpoint、gate 是否在 maximum-depth path 上、以及最深 output cone。
+`DepthQuery` 用來回答 timing/depth 類問題，例如 output depth、DFF.D depth、global critical path、depth 比較/範圍篩選、gate 是否在 maximum-depth path 上、以及最深 output cone。
 
 基本形式：
 
@@ -64,7 +64,9 @@ size_t endpointCount = report.count;
 | `EndpointsExceedingDepth` | 找 depth 大於 threshold 的 endpoints | `threshold` | `reports`, `count`, `worst` |
 | `PrimaryOutputsExceedingDepth` | 只找 depth 大於 threshold 的 primary outputs | `threshold` | `reports`, `count`, `worst` |
 | `GateOnCriticalPath` | gate 是否位在任一 global maximum-depth path 上 | `gateName` | `exists`, `gateOnCriticalPath`, `worst` |
+| `CriticalGateBatch` | 列出所有位在任一 global maximum-depth path 上的 combinational gates | 無 | `criticalGates`, `criticalGateCount`, `worst`, `complete` |
 | `DeepestOutputCone` | 找出 fanin logic cone depth 最深的 primary output | 無 | `worst`, `reports`, `count` |
+| `EndpointDepthFilter` | 依 scope 與 predicate 篩選 endpoints | `filterScope`, `predicate`, `threshold`，between 另設 `upperThreshold` | `checkedEndpointCount`, `matchedEndpointCount`, `reports`, `complete` |
 
 ---
 
@@ -76,6 +78,9 @@ size_t endpointCount = report.count;
 | `netName` | `std::string` | `""` | `SpecificNet` 使用 |
 | `gateName` | `std::string` | `""` | `GateOnCriticalPath` 使用 |
 | `threshold` | `int` | `-1` | `EndpointsExceedingDepth` / `PrimaryOutputsExceedingDepth` 使用 |
+| `upperThreshold` | `int` | `-1` | `BetweenInclusive` 的 inclusive upper bound |
+| `filterScope` | `DepthFilterScope` | `AllTimingEndpoints` | `AllTimingEndpoints` / `PrimaryOutputs` / `DffD` |
+| `predicate` | `DepthPredicate` | `None` | `Equal` / `NotEqual` / `GreaterThan` / `GreaterOrEqual` / `LessThan` / `LessOrEqual` / `BetweenInclusive` |
 | `includeCriticalPath` | `bool` | `true` | 是否保留 `criticalPath` |
 
 `includeCriticalPath = false` 適合只需要數量或 endpoint metadata 的問題；backend 會略過 path reconstruction，而不只是建立後再清空。
@@ -88,15 +93,32 @@ size_t endpointCount = report.count;
 |---|---|
 | `ok` | query 是否成功 |
 | `exists` | yes/no 型 query 的主要答案；一般 list query 表示是否有結果 |
+| `complete` | query 是否沒有 graph inconsistency 或 backend analysis failure；合法 no-timing-path 不會令它變成 `false` |
 | `message` | debug / LLM response 用的簡短訊息 |
 | `type` | query type |
 | `reports` | 查詢得到的一個或多個 endpoint report |
 | `worst` | `reports` 中 depth 最大的 endpoint |
 | `threshold` | query 使用的 depth 門檻 |
-| `count` | `reports.size()` |
+| `count` | endpoint modes 為 `reports.size()`；`CriticalGateBatch` 為 `criticalGates.size()` |
+| `filterApplied` | 是否為 `EndpointDepthFilter` |
+| `checkedEndpointCount` | scope 內被納入檢查的 active endpoints |
+| `matchedEndpointCount` | predicate matches；必須等於 `count` 與 `reports.size()` |
+| `definedDepthEndpointCount` | 具有可比較 depth 的 endpoints |
+| `noTimingPathEndpointCount` | 合法存在，但沒有 timing source/path 的 endpoints |
+| `graphInconsistentEndpointCount` | driver/output 或 input/load 雙向關係不一致的 endpoints |
+| `analysisFailureEndpointCount` | graph 合法但 backend 未完成 depth 的 endpoints |
+| `unavailableEndpointCount` | 上述三種非 Available 狀態的相容總和 |
 | `gateName` | `GateOnCriticalPath` 的查詢目標 |
 | `gateId` | `GateOnCriticalPath` 的 gate ID |
 | `gateOnCriticalPath` | gate 是否在任一 global maximum-depth path 上 |
+| `criticalGateBatchApplied` | 是否為 `CriticalGateBatch` report |
+| `checkedGateCount` | 被分類的 active combinational gate 數；不含 DFF/tombstone |
+| `analyzableGateCount` | 同時具有 arrival 與 endpoint remaining depth 的 gate 數 |
+| `criticalGateCount` | 任一 global maximum-depth path gate 聯集的數量；等於 `count` |
+| `noTimingPathGateCount` | graph 合法但無法到達 PO/DFF.D endpoint 的 gate 數 |
+| `graphInconsistentGateCount` | input/load 或 output/driver 關係不一致的 gate 數 |
+| `analysisFailureGateCount` | graph 合法但 depth backend 未完成分類的 gate 數 |
+| `criticalGates` | stable gate-ID order 的完整 `CriticalGateReport` list |
 
 `DepthReport` 主要欄位：
 
@@ -106,6 +128,7 @@ size_t endpointCount = report.count;
 | `endpointName` | endpoint 名稱，例如 `n12`、`out[0]`、`ff1.D` |
 | `endpointNetId` | 實際被分析的 net ID |
 | `depth` | 到該 endpoint 的最大 combinational depth |
+| `depthStatus` | `Available` / `NoTimingPath` / `GraphInconsistent` / `AnalysisFailure` |
 | `criticalPath` | 到該 endpoint 的一條 critical path |
 
 公開 CLI 的大型 `reports` 或 `worst.criticalPath` 不會全部塞進 terminal。當 endpoint、net 與
@@ -267,6 +290,38 @@ Netlist::DepthReportSet report = netlist.runDepthQuery(query);
 
 此時 `report.count` 可直接作為 output bit 數量，不會混入 DFF.D。
 
+## 9A. EndpointDepthFilter
+
+通用 filter 使用同一個 API 回答 `eq/ne/gt/ge/lt/le/between`，並可限制 all timing
+endpoints、PO 或 DFF.D：
+
+```cpp
+Netlist::DepthQuery query;
+query.type = Netlist::DepthQueryType::EndpointDepthFilter;
+query.filterScope = Netlist::DepthFilterScope::PrimaryOutputs;
+query.predicate = Netlist::DepthPredicate::BetweenInclusive;
+query.threshold = 2;
+query.upperThreshold = 5;
+
+Netlist::DepthReportSet report = netlist.runDepthQuery(query);
+```
+
+讀取契約：
+
+| 想知道 | 讀取欄位 |
+|---|---|
+| scope 內 endpoint 數 | `checkedEndpointCount` |
+| 符合條件數量 | `matchedEndpointCount` 或相容欄位 `count` |
+| 名稱、類型與個別 depth | `reports[].endpointName / endpointType / depth` |
+| 是否完整分析 scope | `complete`、`graphInconsistentEndpointCount`、`analysisFailureEndpointCount` |
+| 沒有 timing path 的 endpoint 數 | `noTimingPathEndpointCount` |
+
+`BetweenInclusive` 是閉區間，必須滿足 `0 <= threshold <= upperThreshold`。其他 predicate
+只使用 `threshold`。filter 不建立 critical path；zero match 回 `ok=true`、`count=0`、
+`exists=false`、`complete=true`。`NoTimingPath` 不參與數值 predicate，但它是已完成的分類，
+所以仍可回 `complete=true`。只有 `GraphInconsistent` 或 `AnalysisFailure` 會令結果為 partial；
+已確認 matches 一律保留。
+
 ## 10. GateOnCriticalPath
 
 用途：
@@ -299,6 +354,42 @@ Netlist::DepthReportSet report = netlist.runDepthQuery(query);
 這個 query 不是只檢查 findGlobalCriticalPath() 回傳的一條 path。
 它會判斷 gate 是否可能出現在任一條 global maximum-depth path 上。
 ```
+
+---
+
+## 10A. CriticalGateBatch
+
+用途：
+
+```text
+一次列出或計數所有位於至少一條 global maximum-depth path 上的 combinational gates。
+```
+
+寫法：
+
+```cpp
+Netlist::DepthQuery query;
+query.type = Netlist::DepthQueryType::CriticalGateBatch;
+query.includeCriticalPath = false;
+
+Netlist::DepthReportSet report = netlist.runDepthQuery(query);
+```
+
+讀取：
+
+| 想知道 | 讀取欄位 |
+|---|---|
+| 所有 critical gates | `report.criticalGates` |
+| critical gate 數量 | `report.criticalGateCount` 或 `report.count` |
+| 各 gate type 的 critical gate 數量 | `report.criticalGateTypeCounts[type]` |
+| gate type/output/depth decomposition | `gateTypeName`, `outputNetName`, `arrivalDepth`, `remainingDepth` |
+| global maximum depth | `report.worst.depth` |
+| 分類是否完整 | `report.complete` 與 gate failure counts |
+
+`criticalGates` 是所有 tied maximum-depth paths 的 gate 聯集，依 gate ID 穩定排序且不重複。
+它不列 DFF。若 prompt 問特定 gate type，直接讀 `criticalGateTypeCounts`；即使完整 gate list
+寫入 artifact，八種 combinational type 的完整 counts 仍留在 public report。合法
+dangling/no-endpoint logic 只增加 `noTimingPathGateCount`，不使 report partial。
 
 ---
 
@@ -341,7 +432,11 @@ Netlist::DepthReportSet report = netlist.runDepthQuery(query);
 | What is the maximum logic depth from any primary input to any DFF D-pin? | `PathQuery::MaxDepth` | `all_pi -> all_dff_d` | Path Query 的 maximum depth |
 | What is the global critical path? | `GlobalCriticalPath` | 無 | `worst`, `worst.criticalPath` |
 | Find endpoints exceeding target depth 4. | `EndpointsExceedingDepth` | `threshold = 4` | `reports`, `count` |
+| List outputs whose depth is at most 4. | `EndpointDepthFilter` | PO + `LessOrEqual`, threshold 4 | `reports`, `matchedEndpointCount` |
+| How many DFF D-pins have depth between 2 and 5? | `EndpointDepthFilter` | DFF.D + `BetweenInclusive`, 2..5 | `matchedEndpointCount` |
 | Determine whether gate g0 lies on any maximum-depth path of the design. | `GateOnCriticalPath` | `gateName = "g0"` | `gateOnCriticalPath`, `exists` |
+| List every gate that lies on at least one maximum-depth path. | `CriticalGateBatch` | 無 | `criticalGates`, `criticalGateCount` |
+| How many NAND gates are part of any critical path? | `CriticalGateBatch` | 無；caller 依 `gateTypeName` 計數 | `criticalGates` |
 | Which output bit has the deepest fanin logic cone? | `DeepestOutputCone` | 無 | `worst.endpointName`, `worst.depth` |
 
 ---
@@ -371,7 +466,9 @@ DffD
 GlobalCriticalPath
 EndpointsExceedingDepth
 GateOnCriticalPath
+CriticalGateBatch
 DeepestOutputCone
+EndpointDepthFilter
 ```
 
 目前既有測試文件記錄：
@@ -379,8 +476,11 @@ DeepestOutputCone
 ```text
 mini test/tester.cpp 已覆蓋 computeNetLevels / computeGateLevels /
 findCriticalPathToNet / runDepthQuery(SpecificNet, DffD, GlobalCriticalPath)。
-mini test/test5/test5.cpp 已覆蓋 GateOnCriticalPath / DeepestOutputCone、
-includeCriticalPath=false、tombstone/stale edge 與 30000-level deep-chain regression。
+mini test/test5/test5.cpp 已覆蓋 GateOnCriticalPath / CriticalGateBatch / DeepestOutputCone、
+EndpointDepthFilter 的七種 predicates 與三種 scopes、zero match、legacy/new gt
+differential、undriven/floating no-timing-path、graph inconsistency partial、
+includeCriticalPath=false、driver/input stale edge、
+tombstone、tied input、reconvergent tied maximum-path union 與 30000-level deep-chain regression。
 ```
 
 `EndpointsExceedingDepth` 與 `PrimaryOutputsExceedingDepth` 也已納入

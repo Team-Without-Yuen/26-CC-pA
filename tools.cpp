@@ -19,6 +19,10 @@
 
 namespace {
 
+std::string formatLiteralPath(const Netlist& netlist,
+                              const Netlist::CombinationalPath& path);
+const char* pathRankingOrderName(Netlist::PathRankingOrder order);
+
 enum class ToolStatus {
     Ok,
     NoChange,
@@ -419,6 +423,38 @@ void printPath(const Netlist& netlist, const Netlist::CombinationalPath& path) {
     }
 }
 
+std::string formatRankedPathDepthRange(
+    const Netlist::RankedPathDepthRange& range) {
+    const std::string rankText = range.firstRank == range.lastRank
+        ? "rank " + std::to_string(range.firstRank)
+        : "ranks " + std::to_string(range.firstRank) + "-" +
+              std::to_string(range.lastRank);
+    return rankText + ": depth=" + std::to_string(range.depth);
+}
+
+std::vector<std::string> rankedPathDepthRangeEntries(
+    const Netlist::PathQueryResult& result) {
+    std::vector<std::string> entries;
+    entries.reserve(result.rankedDepthRanges.size());
+    for (const Netlist::RankedPathDepthRange& range : result.rankedDepthRanges) {
+        entries.push_back(formatRankedPathDepthRange(range));
+    }
+    return entries;
+}
+
+bool rankedPathDepthRangesFitInline(
+    const std::vector<std::string>& entries) {
+    size_t characters = 64;
+    for (const std::string& entry : entries) {
+        characters = saturatingAdd(characters, entry.size() + 3);
+    }
+    const size_t availableTokens =
+        kMaximumResponseTokenCount - kResponseEnvelopeTokenReserve;
+    const size_t summaryCharacterBudget =
+        availableTokens * kConservativeCharactersPerToken / 2;
+    return characters <= summaryCharacterBudget;
+}
+
 // 將 CLI node token 轉成 PathNode。
 // 語法：gate:<name>、net:<name>，沒有前綴時預設視為 net。
 Netlist::PathNode parsePathNode(const std::string& token) {
@@ -530,6 +566,10 @@ std::string coneMetricPredicateName(
     Netlist::ConeMetricPredicate predicate);
 std::vector<std::string> coneFilterEntries(
     const std::vector<Netlist::ConeFilterEntry>& entries);
+std::string depthFilterScopeName(Netlist::DepthFilterScope scope);
+std::string depthPredicateName(Netlist::DepthPredicate predicate);
+std::string depthEndpointTypeName(Netlist::DepthEndpointType type);
+std::string depthStatusName(Netlist::DepthStatus status);
 
 std::string formatPinConnection(const PinConnectionSummary& pin) {
     std::string result = pin.pinName + "=";
@@ -693,6 +733,16 @@ ListArtifactContent makeBasicListArtifactContent(
         if (!report.typeName.empty()) {
             content.fields.push_back({"object type", report.typeName});
         }
+        if (report.portWidth >= 0) {
+            content.fields.push_back(
+                {"port width", std::to_string(report.portWidth)});
+            content.fields.push_back(
+                {"port declaration left bound",
+                 std::to_string(report.portLeftBound)});
+            content.fields.push_back(
+                {"port declaration right bound",
+                 std::to_string(report.portRightBound)});
+        }
     }
     if (report.gateTypeFilterApplied || report.gateTypeExclusionApplied) {
         content.fields.push_back(
@@ -744,6 +794,12 @@ ListArtifactContent makeBasicListArtifactContent(
     }
     if (report.hasUnconnectedPinCounts) {
         content.fields.push_back(
+            {"undriven net count", std::to_string(report.undrivenNets.size())});
+        content.fields.push_back(
+            {"no-load net count", std::to_string(report.noLoadNets.size())});
+        content.fields.push_back(
+            {"floating net count", std::to_string(report.floatingNets.size())});
+        content.fields.push_back(
             {"unconnected gate count",
              std::to_string(report.unconnectedGates.size())});
         content.fields.push_back(
@@ -752,6 +808,12 @@ ListArtifactContent makeBasicListArtifactContent(
         content.fields.push_back(
             {"unconnected output pin count",
              std::to_string(report.unconnectedOutputPinCount)});
+        content.fields.push_back(
+            {"floating primary-input net count",
+             std::to_string(report.floatingPrimaryInputNets.size())});
+        content.fields.push_back(
+            {"unconnected primary-output net count",
+             std::to_string(report.unconnectedPrimaryOutputNets.size())});
     }
     addListSection(content, "Port names", report.portNames);
 
@@ -802,10 +864,27 @@ ListArtifactContent makeConnectivityListArtifactContent(
         content.fields.push_back(
             {"fanout load count", std::to_string(fanout.totalLoadCount)});
         content.fields.push_back(
+            {"combinational gate input load count",
+             std::to_string(fanout.combinationalGateLoadCount)});
+        content.fields.push_back(
+            {"DFF D-pin load count", std::to_string(fanout.dffDataLoadCount)});
+        content.fields.push_back(
+            {"DFF clock-pin load count", std::to_string(fanout.dffClockLoadCount)});
+        content.fields.push_back(
+            {"DFF reset/set-pin load count",
+             std::to_string(fanout.dffResetSetLoadCount)});
+        content.fields.push_back(
+            {"DFF other-pin load count", std::to_string(fanout.dffOtherLoadCount)});
+        content.fields.push_back(
             {"drives primary output", fanout.drivesPrimaryOutput ? "yes" : "no"});
         content.fields.push_back(
             {"primary output load count",
              std::to_string(fanout.primaryOutputLoadCount)});
+        content.fields.push_back(
+            {"distinct direct-load gate count",
+             std::to_string(fanout.distinctGateLoadCount)});
+        addListSection(content, "Direct load gates",
+                       gateNamesFromIds(netlist, fanout.distinctGateLoadIds));
         addListSection(content, "Combinational gate input loads",
                        gateNamesFromIds(netlist, fanout.combinationalGateLoads));
         addListSection(content, "DFF D-pin loads",
@@ -1042,6 +1121,75 @@ ListArtifactContent makePathListArtifactContent(
         return content;
     }
 
+    if (query.mode == Netlist::PathQueryMode::RankedPaths) {
+        content.fields.emplace_back(
+            "ranking_order", pathRankingOrderName(result.rankingOrder));
+        content.fields.emplace_back(
+            "requested_first_rank", std::to_string(result.requestedFirstRank));
+        content.fields.emplace_back(
+            "requested_result_count", std::to_string(result.requestedResultCount));
+        content.fields.emplace_back(
+            "returned_ranked_path_count",
+            std::to_string(result.returnedRankedPathCount));
+        content.fields.emplace_back(
+            "requested_rank_exists", result.rankExists ? "yes" : "no");
+        content.fields.emplace_back(
+            "ranking_complete", result.rankingComplete ? "yes" : "no");
+        content.fields.emplace_back(
+            "population_exhausted", result.populationExhausted ? "yes" : "no");
+        content.fields.emplace_back(
+            "ranked_depth_range_count",
+            std::to_string(result.rankedDepthRanges.size()));
+        if (result.firstReturnedRankDepth >= 0) {
+            content.fields.emplace_back(
+                "first_returned_rank_depth",
+                std::to_string(result.firstReturnedRankDepth));
+            content.fields.emplace_back(
+                "last_returned_rank_depth",
+                std::to_string(result.lastReturnedRankDepth));
+        }
+        if (result.requestedResultCount == 1 && result.rankExists &&
+            result.firstReturnedRankDepth >= 0) {
+            content.fields.emplace_back(
+                "requested_rank_depth",
+                std::to_string(result.firstReturnedRankDepth));
+        }
+        if (result.minimumAcceptedDepth >= 0) {
+            content.fields.emplace_back(
+                "minimum_accepted_depth",
+                std::to_string(result.minimumAcceptedDepth));
+        }
+        if (result.maximumAcceptedDepth >= 0) {
+            content.fields.emplace_back(
+                "maximum_accepted_depth",
+                std::to_string(result.maximumAcceptedDepth));
+        }
+        addListSection(content, "Ranked path depth ranges",
+                       rankedPathDepthRangeEntries(result));
+        std::vector<std::string> rankedPaths;
+        rankedPaths.reserve(result.paths.size());
+        for (size_t index = 0; index < result.paths.size(); ++index) {
+            const Netlist::CombinationalPath& path = result.paths[index];
+            rankedPaths.push_back(
+                "rank " + std::to_string(result.requestedFirstRank + index) +
+                ": depth=" + std::to_string(path.depth()) +
+                " path=" + formatLiteralPath(netlist, path));
+        }
+        addListSection(content, "Ranked paths", rankedPaths);
+        return content;
+    }
+
+    if (result.minimumAcceptedDepth >= 0) {
+        content.fields.emplace_back(
+            "minimum_accepted_depth",
+            std::to_string(result.minimumAcceptedDepth));
+    }
+    if (result.maximumAcceptedDepth >= 0) {
+        content.fields.emplace_back(
+            "maximum_accepted_depth",
+            std::to_string(result.maximumAcceptedDepth));
+    }
+
     if (result.path.exists()) {
         content.fields.emplace_back("depth", std::to_string(result.path.depth()));
         std::vector<std::string> netNames;
@@ -1069,13 +1217,70 @@ ListArtifactContent makeDepthListArtifactContent(
     const Netlist::DepthReportSet& report) {
     ListArtifactContent content;
     content.fields.emplace_back("report_count", std::to_string(report.count));
+    content.fields.emplace_back(
+        "defined_depth_endpoint_count",
+        std::to_string(report.definedDepthEndpointCount));
+    content.fields.emplace_back(
+        "no_timing_path_endpoint_count",
+        std::to_string(report.noTimingPathEndpointCount));
+    content.fields.emplace_back(
+        "graph_inconsistent_endpoint_count",
+        std::to_string(report.graphInconsistentEndpointCount));
+    content.fields.emplace_back(
+        "analysis_failure_endpoint_count",
+        std::to_string(report.analysisFailureEndpointCount));
+    content.fields.emplace_back(
+        "unavailable_endpoint_count",
+        std::to_string(report.unavailableEndpointCount));
+    content.fields.emplace_back(
+        "analysis_complete", report.complete ? "yes" : "no");
+    if (report.filterApplied) {
+        content.fields.emplace_back(
+            "filter_scope", depthFilterScopeName(report.filterScope));
+        content.fields.emplace_back(
+            "filter_predicate", depthPredicateName(report.predicate));
+        content.fields.emplace_back(
+            "checked_endpoint_count",
+            std::to_string(report.checkedEndpointCount));
+        content.fields.emplace_back(
+            "matched_endpoint_count",
+            std::to_string(report.matchedEndpointCount));
+    }
     if (report.threshold >= 0) {
         content.fields.emplace_back("threshold", std::to_string(report.threshold));
+    }
+    if (report.filterApplied &&
+        report.predicate == Netlist::DepthPredicate::BetweenInclusive) {
+        content.fields.emplace_back(
+            "upper_threshold", std::to_string(report.upperThreshold));
     }
     if (!report.gateName.empty()) {
         content.fields.emplace_back("gate", report.gateName);
         content.fields.emplace_back("gate_on_critical_path",
                                     report.gateOnCriticalPath ? "yes" : "no");
+    }
+    if (report.criticalGateBatchApplied) {
+        content.fields.emplace_back(
+            "checked_gate_count", std::to_string(report.checkedGateCount));
+        content.fields.emplace_back(
+            "analyzable_gate_count", std::to_string(report.analyzableGateCount));
+        content.fields.emplace_back(
+            "critical_gate_count", std::to_string(report.criticalGateCount));
+        content.fields.emplace_back(
+            "no_timing_path_gate_count",
+            std::to_string(report.noTimingPathGateCount));
+        content.fields.emplace_back(
+            "graph_inconsistent_gate_count",
+            std::to_string(report.graphInconsistentGateCount));
+        content.fields.emplace_back(
+            "analysis_failure_gate_count",
+            std::to_string(report.analysisFailureGateCount));
+        for (const auto& item : report.criticalGateTypeCounts) {
+            content.fields.emplace_back(
+                "critical_gate_type_count_" +
+                    netlist.gateTypeToString(item.first),
+                std::to_string(item.second));
+        }
     }
     if (report.worst.depth >= 0) {
         content.fields.emplace_back("worst_endpoint", report.worst.endpointName);
@@ -1085,9 +1290,32 @@ ListArtifactContent makeDepthListArtifactContent(
     std::vector<std::string> endpoints;
     endpoints.reserve(report.reports.size());
     for (const DepthReport& item : report.reports) {
-        endpoints.push_back(item.endpointName + " depth=" + std::to_string(item.depth));
+        std::string entry = item.endpointName;
+        if (report.filterApplied) {
+            entry += " type=" + depthEndpointTypeName(item.endpointType);
+        }
+        entry += " status=" + depthStatusName(item.depthStatus);
+        entry += " depth=" + std::to_string(item.depth);
+        endpoints.push_back(std::move(entry));
     }
     addListSection(content, "Endpoint depth reports", endpoints);
+
+    std::vector<std::string> criticalGates;
+    criticalGates.reserve(report.criticalGates.size());
+    for (const Netlist::CriticalGateReport& item : report.criticalGates) {
+        criticalGates.push_back(
+            "gate=" + item.gateName +
+            " id=" + std::to_string(item.gateId) +
+            " type=" + item.gateTypeName +
+            " output=" + item.outputNetName +
+            " output_id=" + std::to_string(item.outputNetId) +
+            " arrival_depth=" + std::to_string(item.arrivalDepth) +
+            " remaining_depth=" + std::to_string(item.remainingDepth) +
+            " path_depth=" +
+                std::to_string(item.arrivalDepth + item.remainingDepth));
+    }
+    addListSection(
+        content, "Critical gates on global maximum-depth paths", criticalGates);
 
     if (report.worst.criticalPath.exists()) {
         std::vector<std::string> netNames;
@@ -1218,12 +1446,19 @@ void printBasicReport(const Netlist& netlist,
         std::cout << "  internal nets: " << summary.internalNetCount << "\n";
     }
     if (report.hasUnconnectedPinCounts) {
+        std::cout << "  undriven nets: " << report.undrivenNets.size() << "\n";
+        std::cout << "  no-load nets: " << report.noLoadNets.size() << "\n";
+        std::cout << "  floating nets: " << report.floatingNets.size() << "\n";
         std::cout << "  unconnected gates: "
                   << report.unconnectedGates.size() << "\n";
         std::cout << "  unconnected input pins: "
                   << report.unconnectedInputPinCount << "\n";
         std::cout << "  unconnected output pins: "
                   << report.unconnectedOutputPinCount << "\n";
+        std::cout << "  floating primary-input nets: "
+                  << report.floatingPrimaryInputNets.size() << "\n";
+        std::cout << "  unconnected primary-output nets: "
+                  << report.unconnectedPrimaryOutputNets.size() << "\n";
     }
     if (report.gateTypeFilterApplied || report.gateTypeExclusionApplied) {
         std::cout << "  scope gates: " << report.scopeGateCount << "\n";
@@ -1254,6 +1489,10 @@ void printBasicReport(const Netlist& netlist,
         if (report.portWidth >= 0) {
             std::cout << "  width: " << report.portWidth << "\n";
             std::cout << "  is_bus: " << (report.isBus ? "true" : "false") << "\n";
+            std::cout << "  declaration_left_bound: "
+                      << report.portLeftBound << "\n";
+            std::cout << "  declaration_right_bound: "
+                      << report.portRightBound << "\n";
             std::cout << "  is_primary_input: "
                       << (report.isPrimaryInput ? "true" : "false") << "\n";
             std::cout << "  is_primary_output: "
@@ -1559,6 +1798,88 @@ bool parseFanoutPredicate(const std::string& token,
     return true;
 }
 
+std::string depthFilterScopeName(Netlist::DepthFilterScope scope) {
+    switch (scope) {
+    case Netlist::DepthFilterScope::AllTimingEndpoints: return "all";
+    case Netlist::DepthFilterScope::PrimaryOutputs: return "po";
+    case Netlist::DepthFilterScope::DffD: return "dff_d";
+    }
+    return "unknown";
+}
+
+bool parseDepthFilterScope(const std::string& token,
+                           Netlist::DepthFilterScope& scope) {
+    const std::string lowered = toLower(token);
+    if (lowered == "all") {
+        scope = Netlist::DepthFilterScope::AllTimingEndpoints;
+    } else if (lowered == "po") {
+        scope = Netlist::DepthFilterScope::PrimaryOutputs;
+    } else if (lowered == "dff_d") {
+        scope = Netlist::DepthFilterScope::DffD;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+std::string depthPredicateName(Netlist::DepthPredicate predicate) {
+    switch (predicate) {
+    case Netlist::DepthPredicate::None: return "none";
+    case Netlist::DepthPredicate::Equal: return "eq";
+    case Netlist::DepthPredicate::NotEqual: return "ne";
+    case Netlist::DepthPredicate::GreaterThan: return "gt";
+    case Netlist::DepthPredicate::GreaterOrEqual: return "ge";
+    case Netlist::DepthPredicate::LessThan: return "lt";
+    case Netlist::DepthPredicate::LessOrEqual: return "le";
+    case Netlist::DepthPredicate::BetweenInclusive: return "between";
+    }
+    return "unknown";
+}
+
+bool parseDepthPredicate(const std::string& token,
+                         Netlist::DepthPredicate& predicate) {
+    const std::string lowered = toLower(token);
+    if (lowered == "eq") {
+        predicate = Netlist::DepthPredicate::Equal;
+    } else if (lowered == "ne") {
+        predicate = Netlist::DepthPredicate::NotEqual;
+    } else if (lowered == "gt") {
+        predicate = Netlist::DepthPredicate::GreaterThan;
+    } else if (lowered == "ge") {
+        predicate = Netlist::DepthPredicate::GreaterOrEqual;
+    } else if (lowered == "lt") {
+        predicate = Netlist::DepthPredicate::LessThan;
+    } else if (lowered == "le") {
+        predicate = Netlist::DepthPredicate::LessOrEqual;
+    } else if (lowered == "between") {
+        predicate = Netlist::DepthPredicate::BetweenInclusive;
+    } else {
+        return false;
+    }
+    return true;
+}
+
+std::string depthEndpointTypeName(Netlist::DepthEndpointType type) {
+    switch (type) {
+    case Netlist::DepthEndpointType::Unknown: return "unknown";
+    case Netlist::DepthEndpointType::SpecificNet: return "specific_net";
+    case Netlist::DepthEndpointType::PrimaryOutput: return "primary_output";
+    case Netlist::DepthEndpointType::DffD: return "dff_d";
+    }
+    return "unknown";
+}
+
+std::string depthStatusName(Netlist::DepthStatus status) {
+    switch (status) {
+    case Netlist::DepthStatus::Unknown: return "unknown";
+    case Netlist::DepthStatus::Available: return "available";
+    case Netlist::DepthStatus::NoTimingPath: return "no_timing_path";
+    case Netlist::DepthStatus::GraphInconsistent: return "graph_inconsistent";
+    case Netlist::DepthStatus::AnalysisFailure: return "analysis_failure";
+    }
+    return "unknown";
+}
+
 std::string fanoutScopeName(Netlist::FanoutScope scope) {
     switch (scope) {
     case Netlist::FanoutScope::All: return "all";
@@ -1798,11 +2119,25 @@ void printConnectivityReport(const Netlist& netlist,
         const Netlist::FanoutLoadReport& fanout = report.fanoutLoadReport;
         std::cout << "  fanout load count (QA definition): "
                   << fanout.totalLoadCount << "\n";
+        std::cout << "  combinational gate input load count: "
+                  << fanout.combinationalGateLoadCount << "\n";
+        std::cout << "  DFF D-pin load count: "
+                  << fanout.dffDataLoadCount << "\n";
+        std::cout << "  DFF clock-pin load count: "
+                  << fanout.dffClockLoadCount << "\n";
+        std::cout << "  DFF reset/set-pin load count: "
+                  << fanout.dffResetSetLoadCount << "\n";
+        std::cout << "  DFF other-pin load count: "
+                  << fanout.dffOtherLoadCount << "\n";
         std::cout << "  drives primary output: "
                   << (fanout.drivesPrimaryOutput ? "yes" : "no") << "\n";
         std::cout << "  primary output load count: "
                   << fanout.primaryOutputLoadCount << "\n";
+        std::cout << "  distinct direct-load gate count: "
+                  << fanout.distinctGateLoadCount << "\n";
         if (!suppressLists) {
+            printGateIdList(netlist, "Direct load gates",
+                            fanout.distinctGateLoadIds);
             printGateIdList(netlist, "Combinational gate input loads",
                             fanout.combinationalGateLoads);
             printGateIdList(netlist, "DFF D-pin loads", fanout.dffDataLoads);
@@ -1883,6 +2218,36 @@ void printConnectivityReport(const Netlist& netlist,
         !report.netNames.empty()) {
         printStringList("Net names", report.netNames);
     }
+}
+
+std::string formatLiteralPath(const Netlist& netlist,
+                              const Netlist::CombinationalPath& path) {
+    if (!path.exists()) return "<no-path>";
+    std::string text;
+    for (size_t netIndex = 0; netIndex < path.netIds.size(); ++netIndex) {
+        if (netIndex != 0) text += " -> ";
+        const int netId = path.netIds[netIndex];
+        text += netlist.isValidNetId(netId)
+            ? netlist.getNet(netId).name
+            : "<invalid-net:" + std::to_string(netId) + ">";
+        if (netIndex < path.gateIds.size()) {
+            const int gateId = path.gateIds[netIndex];
+            text += " -> ";
+            if (netlist.isValidGateId(gateId)) {
+                const Gate& gate = netlist.getGate(gateId);
+                text += gate.instName + "(" + netlist.gateTypeToString(gate.type) + ")";
+            } else {
+                text += "<invalid-gate:" + std::to_string(gateId) + ">";
+            }
+        }
+    }
+    return text;
+}
+
+const char* pathRankingOrderName(Netlist::PathRankingOrder order) {
+    return order == Netlist::PathRankingOrder::ShortestFirst
+        ? "shortest_first"
+        : "longest_first";
 }
 
 // 印出 ConeQuery 的統一 report。
@@ -2085,6 +2450,21 @@ void printPathResult(const Netlist& netlist,
     }
 
     if (query.mode == Netlist::PathQueryMode::EnumerateAll) {
+        if (result.minimumAcceptedDepth >= 0 ||
+            result.maximumAcceptedDepth >= 0) {
+            std::cout << "Minimum accepted depth: ";
+            if (result.minimumAcceptedDepth >= 0) {
+                std::cout << result.minimumAcceptedDepth << "\n";
+            } else {
+                std::cout << "none\n";
+            }
+            std::cout << "Maximum accepted depth: ";
+            if (result.maximumAcceptedDepth >= 0) {
+                std::cout << result.maximumAcceptedDepth << "\n";
+            } else {
+                std::cout << "none\n";
+            }
+        }
         std::cout << "Total paths: " << result.pathCount << "\n";
         std::cout << "Complete enumeration: "
                   << (result.completeEnumeration ? "yes" : "no") << "\n";
@@ -2111,6 +2491,63 @@ void printPathResult(const Netlist& netlist,
                 std::cout << "; see " << result.outputFilePath;
             }
             std::cout << "\n";
+        }
+        return;
+    }
+
+    if (query.mode == Netlist::PathQueryMode::RankedPaths) {
+        std::cout << "Ranking order: "
+                  << pathRankingOrderName(result.rankingOrder) << "\n";
+        std::cout << "Requested first rank: "
+                  << result.requestedFirstRank << "\n";
+        std::cout << "Requested result count: "
+                  << result.requestedResultCount << "\n";
+        std::cout << "Returned ranked paths: "
+                  << result.returnedRankedPathCount << "\n";
+        std::cout << "Requested rank exists: "
+                  << (result.rankExists ? "yes" : "no") << "\n";
+        std::cout << "Ranking complete: "
+                  << (result.rankingComplete ? "yes" : "no") << "\n";
+        std::cout << "Population exhausted: "
+                  << (result.populationExhausted ? "yes" : "no") << "\n";
+        std::cout << "Ranked depth range count: "
+                  << result.rankedDepthRanges.size() << "\n";
+        if (result.firstReturnedRankDepth >= 0) {
+            std::cout << "Returned first rank depth: "
+                      << result.firstReturnedRankDepth << "\n";
+            std::cout << "Returned last rank depth: "
+                      << result.lastReturnedRankDepth << "\n";
+        }
+        if (result.requestedResultCount == 1 && result.rankExists &&
+            result.firstReturnedRankDepth >= 0) {
+            std::cout << "Requested rank depth: "
+                      << result.firstReturnedRankDepth << "\n";
+        }
+        if (result.minimumAcceptedDepth >= 0) {
+            std::cout << "Minimum accepted depth: "
+                      << result.minimumAcceptedDepth << "\n";
+        }
+        if (result.maximumAcceptedDepth >= 0) {
+            std::cout << "Maximum accepted depth: "
+                      << result.maximumAcceptedDepth << "\n";
+        }
+        if (!result.enumerationStopReason.empty()) {
+            std::cout << "Stop reason: " << result.enumerationStopReason << "\n";
+        }
+        const std::vector<std::string> depthRanges =
+            rankedPathDepthRangeEntries(result);
+        if (!depthRanges.empty() &&
+            (!suppressLargeLists || rankedPathDepthRangesFitInline(depthRanges))) {
+            printStringList("Ranked path depth ranges", depthRanges);
+        } else if (!depthRanges.empty()) {
+            std::cout << "Ranked path depth ranges inline: no\n";
+        }
+        if (!suppressLargeLists) {
+            for (size_t index = 0; index < result.paths.size(); ++index) {
+                std::cout << "Rank " << (result.requestedFirstRank + index)
+                          << ":\n";
+                printPath(netlist, result.paths[index]);
+            }
         }
         return;
     }
@@ -2210,9 +2647,71 @@ void printDepthReportSet(const Netlist& netlist,
                   << (report.gateOnCriticalPath ? "yes" : "no") << "\n";
     }
     std::cout << "Report count: " << report.count << "\n";
+    std::cout << "Defined depth endpoint count: "
+              << report.definedDepthEndpointCount << "\n";
+    std::cout << "No timing path endpoint count: "
+              << report.noTimingPathEndpointCount << "\n";
+    std::cout << "Graph inconsistent endpoint count: "
+              << report.graphInconsistentEndpointCount << "\n";
+    std::cout << "Analysis failure endpoint count: "
+              << report.analysisFailureEndpointCount << "\n";
+    std::cout << "Unavailable endpoint count: "
+              << report.unavailableEndpointCount << "\n";
+    std::cout << "Analysis complete: "
+              << (report.complete ? "yes" : "no") << "\n";
+    if (report.filterApplied) {
+        std::cout << "Filter scope: " << depthFilterScopeName(report.filterScope) << "\n";
+        std::cout << "Filter predicate: " << depthPredicateName(report.predicate) << "\n";
+        std::cout << "Threshold: " << report.threshold << "\n";
+        if (report.predicate == Netlist::DepthPredicate::BetweenInclusive) {
+            std::cout << "Upper threshold: " << report.upperThreshold << "\n";
+        }
+        std::cout << "Checked endpoint count: "
+                  << report.checkedEndpointCount << "\n";
+        std::cout << "Matched endpoint count: "
+                  << report.matchedEndpointCount << "\n";
+    }
+    if (report.criticalGateBatchApplied) {
+        std::cout << "Checked combinational gate count: "
+                  << report.checkedGateCount << "\n";
+        std::cout << "Analyzable timing-path gate count: "
+                  << report.analyzableGateCount << "\n";
+        std::cout << "Critical gate count: "
+                  << report.criticalGateCount << "\n";
+        std::cout << "No timing path gate count: "
+                  << report.noTimingPathGateCount << "\n";
+        std::cout << "Graph inconsistent gate count: "
+                  << report.graphInconsistentGateCount << "\n";
+        std::cout << "Analysis failure gate count: "
+                  << report.analysisFailureGateCount << "\n";
+        std::cout << "Critical gate type counts:\n";
+        for (const auto& item : report.criticalGateTypeCounts) {
+            std::cout << "  " << netlist.gateTypeToString(item.first)
+                      << " : " << item.second << "\n";
+        }
+        if (!suppressLargeLists) {
+            for (const Netlist::CriticalGateReport& item :
+                 report.criticalGates) {
+                std::cout << "  gate=" << item.gateName
+                          << " id=" << item.gateId
+                          << " type=" << item.gateTypeName
+                          << " output=" << item.outputNetName
+                          << " output_id=" << item.outputNetId
+                          << " arrival_depth=" << item.arrivalDepth
+                          << " remaining_depth=" << item.remainingDepth
+                          << " path_depth="
+                          << item.arrivalDepth + item.remainingDepth << "\n";
+            }
+        }
+    }
     if (!suppressLargeLists) {
         for (const DepthReport& item : report.reports) {
-            std::cout << "  " << item.endpointName << " depth=" << item.depth << "\n";
+            std::cout << "  " << item.endpointName;
+            if (report.filterApplied) {
+                std::cout << " type=" << depthEndpointTypeName(item.endpointType);
+            }
+            std::cout << " status=" << depthStatusName(item.depthStatus)
+                      << " depth=" << item.depth << "\n";
         }
     }
     if (report.worst.depth >= 0) {
@@ -2395,6 +2894,12 @@ void printFunctionReport(const Netlist::FunctionReport& report,
 // 印出 FunctionSearchQuery 的候選統計、完整性與 SAT-proven matches。
 void printFunctionSearchReport(const Netlist& netlist,
                                const Netlist::FunctionSearchReport& report) {
+    const bool constantSearch =
+        report.queryType ==
+        Netlist::FunctionSearchQueryType::FunctionalConstantSignals;
+    const bool complementarySearch =
+        report.queryType ==
+        Netlist::FunctionSearchQueryType::ComplementaryPairs;
     auto queryTypeName = [](Netlist::FunctionSearchQueryType type) {
         switch (type) {
         case Netlist::FunctionSearchQueryType::NandEquivalentInputPairs:
@@ -2403,6 +2908,18 @@ void printFunctionSearchReport(const Netlist& netlist,
             return "FUNCTIONAL_PATTERN_OPERANDS";
         case Netlist::FunctionSearchQueryType::EquivalentGatePairs:
             return "EQUIVALENT_GATE_PAIRS";
+        case Netlist::FunctionSearchQueryType::FunctionalConstantSignals:
+            return "FUNCTIONAL_CONSTANT_SIGNALS";
+        case Netlist::FunctionSearchQueryType::ComplementaryPairs:
+            return "COMPLEMENTARY_PAIRS";
+        }
+        return "UNKNOWN";
+    };
+    auto constantFilterName = [](Netlist::FunctionSearchConstantFilter filter) {
+        switch (filter) {
+        case Netlist::FunctionSearchConstantFilter::Zero: return "ZERO";
+        case Netlist::FunctionSearchConstantFilter::One: return "ONE";
+        case Netlist::FunctionSearchConstantFilter::Either: return "EITHER";
         }
         return "UNKNOWN";
     };
@@ -2419,19 +2936,43 @@ void printFunctionSearchReport(const Netlist& netlist,
 
     std::cout << "  report_status: " << report.status << "\n";
     std::cout << "  search_type: " << queryTypeName(report.queryType) << "\n";
-    std::cout << "  target_net: " << report.targetNetName << "\n";
+    std::cout << "  target_net: "
+              << ((constantSearch || complementarySearch)
+                      ? "NOT_APPLICABLE"
+                      : report.targetNetName)
+              << "\n";
     std::cout << "  target_net_id: " << report.targetNetId << "\n";
     std::cout << "  scope: " << scopeName(report.scope) << "\n";
     std::cout << "  scope_name: " << report.scopeName << "\n";
     std::cout << "  gate_type_filter: "
-              << (report.gateTypeFilter == GateType::UNKNOWN
+              << ((constantSearch ||
+                   (complementarySearch &&
+                    report.candidateDomain ==
+                        Netlist::FunctionSearchCandidateDomain::Signals))
+                      ? "NOT_APPLICABLE"
+                      : report.gateTypeFilter == GateType::UNKNOWN
                       ? "ANY"
                       : netlist.gateTypeToString(report.gateTypeFilter))
               << "\n";
+    std::cout << "  candidate_domain: ";
+    if (!complementarySearch) {
+        std::cout << "NOT_APPLICABLE\n";
+    } else if (report.candidateDomain ==
+               Netlist::FunctionSearchCandidateDomain::Signals) {
+        std::cout << "SIGNALS\n";
+    } else {
+        std::cout << "COMBINATIONAL_GATE_OUTPUTS\n";
+    }
     std::cout << "  pattern_type: "
               << (report.patternTypeName.empty() ? "NONE" : report.patternTypeName)
               << "\n";
     std::cout << "  operand_arity: " << report.operandArity << "\n";
+    std::cout << "  constant_filter: "
+              << (report.queryType ==
+                          Netlist::FunctionSearchQueryType::FunctionalConstantSignals
+                      ? constantFilterName(report.constantFilter)
+                      : "NOT_APPLICABLE")
+              << "\n";
     std::cout << "  found: " << (report.found ? "true" : "false") << "\n";
     std::cout << "  complete: " << (report.complete ? "true" : "false") << "\n";
     std::cout << "  all_candidates_examined: "
@@ -2449,6 +2990,12 @@ void printFunctionSearchReport(const Netlist& netlist,
               << report.candidatePairsConsidered << "\n";
     std::cout << "  candidate_pairs_rejected_by_simulation: "
               << report.candidatePairsRejectedBySimulation << "\n";
+    std::cout << "  candidate_signals_rejected_by_simulation: "
+              << report.candidateSignalsRejectedBySimulation << "\n";
+    std::cout << "  proven_non_constant_signal_count: "
+              << report.provenNonConstantSignalCount << "\n";
+    std::cout << "  inconclusive_signal_count: "
+              << report.inconclusiveSignalCount << "\n";
     std::cout << "  sat_checks: " << report.satChecks << "\n";
     std::cout << "  sat_unknown_count: " << report.satUnknownCount << "\n";
     std::cout << "  unsupported_signal_count: "
@@ -2457,17 +3004,27 @@ void printFunctionSearchReport(const Netlist& netlist,
               << report.equivalenceClassCount << "\n";
     std::cout << "  equivalent_pair_count: "
               << report.equivalentPairCount << "\n";
+    std::cout << "  constant_zero_count: " << report.constantZeroCount << "\n";
+    std::cout << "  constant_one_count: " << report.constantOneCount << "\n";
+    std::cout << "  complementary_class_count: "
+              << report.complementaryClassCount << "\n";
+    std::cout << "  complementary_pair_count: "
+              << report.complementaryPairCount << "\n";
+    std::cout << "  inconclusive_candidate_count: "
+              << report.inconclusiveCandidateCount << "\n";
     std::cout << "  simulation_pattern_count: "
               << report.simulationPatternCount << "\n";
     std::cout << "  elapsed_seconds: " << report.elapsedSeconds << "\n";
     std::cout << "  match_count: " << report.matchCount << "\n";
     std::cout << "  stored_match_count: " << report.matches.size() << "\n";
+    std::cout << "  stored_constant_signal_count: "
+              << report.constantSignals.size() << "\n";
     std::cout << "  wrote_matches_to_file: "
               << (report.wroteMatchesToFile ? "true" : "false") << "\n";
     if (report.wroteMatchesToFile) {
         std::cout << "  output_file: " << report.outputFilePath << "\n";
     }
-    if (!report.wroteMatchesToFile) {
+    if (!report.wroteMatchesToFile && !constantSearch) {
         std::cout << "  matches:\n";
     }
     for (size_t index = 0;
@@ -2494,10 +3051,32 @@ void printFunctionSearchReport(const Netlist& netlist,
         }
         std::cout << "      proven_equivalent: "
                   << (match.provenEquivalent ? "true" : "false") << "\n";
+        std::cout << "      proven_complementary: "
+                  << (match.provenComplementary ? "true" : "false") << "\n";
         std::cout << "      proof_method: " << match.proofMethod << "\n";
         std::cout << "      solver_status: " << match.solverStatus << "\n";
     }
-    if (!report.wroteMatchesToFile) {
+    if (!report.wroteMatchesToFile && !report.constantSignals.empty()) {
+        std::cout << "  constant_signals:\n";
+    }
+    for (size_t index = 0;
+         !report.wroteMatchesToFile && index < report.constantSignals.size();
+         ++index) {
+        const Netlist::FunctionSearchConstantRecord& record =
+            report.constantSignals[index];
+        std::cout << "    constant_signal " << (index + 1) << ":\n";
+        std::cout << "      net: " << record.netName << "\n";
+        std::cout << "      net_id: " << record.netId << "\n";
+        std::cout << "      constant_value: " << record.constantValue << "\n";
+        std::cout << "      driver_gate: " << record.driverGateName << "\n";
+        std::cout << "      driver_gate_id: " << record.driverGateId << "\n";
+        std::cout << "      driver_gate_type: " << record.driverGateTypeName << "\n";
+        std::cout << "      proven_constant: "
+                  << (record.provenConstant ? "true" : "false") << "\n";
+        std::cout << "      proof_method: " << record.proofMethod << "\n";
+        std::cout << "      solver_status: " << record.solverStatus << "\n";
+    }
+    if (!report.wroteMatchesToFile && !constantSearch) {
         std::cout << "  equivalence_classes:\n";
     }
     for (size_t index = 0;
@@ -2516,6 +3095,43 @@ void printFunctionSearchReport(const Netlist& netlist,
                       << equivalentClass.gateIds[member] << ", net="
                       << equivalentClass.netNames[member] << ", net_id="
                       << equivalentClass.netIds[member] << ")\n";
+        }
+    }
+    if (!report.wroteMatchesToFile && !report.complementaryClasses.empty()) {
+        std::cout << "  complementary_classes:\n";
+    }
+    for (size_t index = 0;
+         !report.wroteMatchesToFile &&
+         index < report.complementaryClasses.size(); ++index) {
+        const Netlist::FunctionSearchComplementaryClass& resultClass =
+            report.complementaryClasses[index];
+        std::cout << "    class " << (index + 1) << ":\n";
+        std::cout << "      relation: positive_members x negative_members\n";
+        std::cout << "      proven_complementary: "
+                  << (resultClass.provenComplementary ? "true" : "false") << "\n";
+        std::cout << "      proof_method: " << resultClass.proofMethod << "\n";
+        std::cout << "      pair_count: " << resultClass.pairCount << "\n";
+        for (size_t member = 0; member < resultClass.positiveMembers.size(); ++member) {
+            const auto& entry = resultClass.positiveMembers[member];
+            std::cout << "      positive_member_" << (member + 1) << ": "
+                      << entry.netName << " (net_id=" << entry.netId;
+            if (entry.gateId >= 0) {
+                std::cout << ", gate=" << entry.gateName
+                          << ", gate_id=" << entry.gateId
+                          << ", gate_type=" << entry.gateTypeName;
+            }
+            std::cout << ")\n";
+        }
+        for (size_t member = 0; member < resultClass.negativeMembers.size(); ++member) {
+            const auto& entry = resultClass.negativeMembers[member];
+            std::cout << "      negative_member_" << (member + 1) << ": "
+                      << entry.netName << " (net_id=" << entry.netId;
+            if (entry.gateId >= 0) {
+                std::cout << ", gate=" << entry.gateName
+                          << ", gate_id=" << entry.gateId
+                          << ", gate_type=" << entry.gateTypeName;
+            }
+            std::cout << ")\n";
         }
     }
 }
@@ -2936,7 +3552,99 @@ void printNetlistStats(const Netlist& netlist,
     printGateTypeMap(netlist, "    gate_type_counts", stats.gateTypeCounts);
 }
 
-void printEditReport(const Netlist& netlist, const Netlist::NetlistEditReport& report) {
+ListArtifactContent makeEditChangedListArtifactContent(
+    const Netlist::NetlistEditReport& report)
+{
+    ListArtifactContent content;
+    content.fields = {
+        {"operation_name", report.operationName},
+        {"report_message", report.message},
+        {"report_success", report.success ? "true" : "false"},
+        {"report_changed", report.changed ? "true" : "false"},
+        {"rolled_back", report.rolledBack ? "true" : "false"},
+        {"before_active_gate_count", std::to_string(report.beforeStats.activeGateCount)},
+        {"after_active_gate_count", std::to_string(report.afterStats.activeGateCount)},
+        {"before_active_net_count", std::to_string(report.beforeStats.activeNetCount)},
+        {"after_active_net_count", std::to_string(report.afterStats.activeNetCount)}
+    };
+    if (report.costChange) {
+        content.fields.push_back({"cost_metric", report.costChange->metricName});
+        content.fields.push_back(
+            {"cost_before", std::to_string(report.costChange->beforeValue)});
+        content.fields.push_back(
+            {"cost_after", std::to_string(report.costChange->afterValue)});
+    }
+
+    ListArtifactSection gateIds;
+    gateIds.title = "Changed gate IDs";
+    gateIds.generatedEntryCount = report.changedGateIds.size();
+    gateIds.generateEntry = [&report](size_t index) {
+        return std::to_string(report.changedGateIds[index]);
+    };
+    content.sections.push_back(std::move(gateIds));
+
+    ListArtifactSection netIds;
+    netIds.title = "Changed net IDs";
+    netIds.generatedEntryCount = report.changedNetIds.size();
+    netIds.generateEntry = [&report](size_t index) {
+        return std::to_string(report.changedNetIds[index]);
+    };
+    content.sections.push_back(std::move(netIds));
+
+    ListArtifactSection gateNames;
+    gateNames.title = "Changed gate names";
+    gateNames.entries = report.changedGateNames;
+    content.sections.push_back(std::move(gateNames));
+
+    ListArtifactSection netNames;
+    netNames.title = "Changed net names";
+    netNames.entries = report.changedNetNames;
+    content.sections.push_back(std::move(netNames));
+
+    if (report.functionalMerge) {
+        const auto& summary = *report.functionalMerge;
+        ListArtifactSection records;
+        records.title = "Functional merge records";
+        records.generatedEntryCount = summary.records.size();
+        records.generateEntry = [&summary](size_t index) {
+            const auto& record = summary.records[index];
+            std::ostringstream line;
+            line << "representative_gate=" << record.representativeGateName
+                 << " representative_gate_id=" << record.representativeGateId
+                 << " representative_net=" << record.representativeNetName
+                 << " representative_net_id=" << record.representativeNetId
+                 << " removed_gate=" << record.removedGateName
+                 << " removed_gate_id=" << record.removedGateId
+                 << " removed_net=" << record.removedNetName
+                 << " removed_net_id=" << record.removedNetId;
+            return line.str();
+        };
+        content.sections.push_back(std::move(records));
+
+        ListArtifactSection skipped;
+        skipped.title = "Functional merge skipped gate names";
+        skipped.entries = summary.skippedGateNames;
+        content.sections.push_back(std::move(skipped));
+    }
+    return content;
+}
+
+ListArtifactResult writeEditChangedListArtifactIfNeeded(
+    ToolSession& session,
+    const std::string& command,
+    const std::string& mode,
+    const Netlist::NetlistEditReport& report)
+{
+    return writeAutomaticListArtifact(
+        session,
+        command,
+        mode,
+        makeEditChangedListArtifactContent(report));
+}
+
+void printEditReport(const Netlist& netlist,
+                     const Netlist::NetlistEditReport& report,
+                     bool suppressChangedLists = false) {
     std::cout << "  report_success: " << (report.success ? "true" : "false") << "\n";
     std::cout << "  report_changed: " << (report.changed ? "true" : "false") << "\n";
     std::cout << "  rolled_back: " << (report.rolledBack ? "true" : "false") << "\n";
@@ -3109,6 +3817,8 @@ void printEditReport(const Netlist& netlist, const Netlist::NetlistEditReport& r
                   << (summary.searchComplete ? "true" : "false") << "\n";
         std::cout << "    search_timed_out: "
                   << (summary.searchTimedOut ? "true" : "false") << "\n";
+        std::cout << "    apply_timed_out: "
+                  << (summary.applyTimedOut ? "true" : "false") << "\n";
         std::cout << "    whole_design_equivalence_checked: "
                   << (summary.wholeDesignEquivalenceChecked ? "true" : "false")
                   << "\n";
@@ -3129,23 +3839,25 @@ void printEditReport(const Netlist& netlist, const Netlist::NetlistEditReport& r
         std::cout << "    total_elapsed_seconds: "
                   << summary.totalElapsedSeconds << "\n";
         std::cout << "    merge_record_count: " << summary.records.size() << "\n";
-        for (size_t index = 0; index < summary.records.size(); ++index) {
-            const auto& record = summary.records[index];
-            std::cout << "    merge_record " << (index + 1) << ":\n";
-            std::cout << "      representative_gate: "
-                      << record.representativeGateName << "\n";
-            std::cout << "      representative_gate_id: "
-                      << record.representativeGateId << "\n";
-            std::cout << "      representative_net: "
-                      << record.representativeNetName << "\n";
-            std::cout << "      representative_net_id: "
-                      << record.representativeNetId << "\n";
-            std::cout << "      removed_gate: " << record.removedGateName << "\n";
-            std::cout << "      removed_gate_id: " << record.removedGateId << "\n";
-            std::cout << "      removed_net: " << record.removedNetName << "\n";
-            std::cout << "      removed_net_id: " << record.removedNetId << "\n";
+        if (!suppressChangedLists) {
+            for (size_t index = 0; index < summary.records.size(); ++index) {
+                const auto& record = summary.records[index];
+                std::cout << "    merge_record " << (index + 1) << ":\n";
+                std::cout << "      representative_gate: "
+                          << record.representativeGateName << "\n";
+                std::cout << "      representative_gate_id: "
+                          << record.representativeGateId << "\n";
+                std::cout << "      representative_net: "
+                          << record.representativeNetName << "\n";
+                std::cout << "      representative_net_id: "
+                          << record.representativeNetId << "\n";
+                std::cout << "      removed_gate: " << record.removedGateName << "\n";
+                std::cout << "      removed_gate_id: " << record.removedGateId << "\n";
+                std::cout << "      removed_net: " << record.removedNetName << "\n";
+                std::cout << "      removed_net_id: " << record.removedNetId << "\n";
+            }
+            printStringList("    skipped_gate_names", summary.skippedGateNames);
         }
-        printStringList("    skipped_gate_names", summary.skippedGateNames);
     }
 
     if (report.optimization) {
@@ -3196,10 +3908,12 @@ void printEditReport(const Netlist& netlist, const Netlist::NetlistEditReport& r
         std::cout << "    elapsed_seconds: " << summary.elapsedSeconds << "\n";
     }
 
-    printIntList("  changed_gate_ids", report.changedGateIds);
-    printIntList("  changed_net_ids", report.changedNetIds);
-    printStringList("  changed_gate_names", report.changedGateNames);
-    printStringList("  changed_net_names", report.changedNetNames);
+    if (!suppressChangedLists) {
+        printIntList("  changed_gate_ids", report.changedGateIds);
+        printIntList("  changed_net_ids", report.changedNetIds);
+        printStringList("  changed_gate_names", report.changedGateNames);
+        printStringList("  changed_net_names", report.changedNetNames);
+    }
     printStringList("  warnings", report.warnings);
 }
 
@@ -4183,9 +4897,59 @@ bool buildDepthQuery(std::istringstream& iss,
         }
         query.threshold = static_cast<int>(threshold);
         query.includeCriticalPath = false;
+    } else if (m == "filter") {
+        query.type = Netlist::DepthQueryType::EndpointDepthFilter;
+        query.includeCriticalPath = false;
+
+        std::string scopeToken;
+        if (!requireValue("depth_query filter", scopeToken) ||
+            !parseDepthFilterScope(scopeToken, query.filterScope)) {
+            error = "depth_query filter scope must be one of: all, po, dff_d.";
+            return false;
+        }
+
+        std::string predicateToken;
+        if (!requireValue("depth_query filter", predicateToken) ||
+            !parseDepthPredicate(predicateToken, query.predicate)) {
+            error = "depth_query filter predicate must be one of: eq, ne, gt, ge, lt, le, between.";
+            return false;
+        }
+
+        auto parseDepthValue = [&](const std::string& value, int& parsed) {
+            size_t depth = 0;
+            if (!parseNonNegativeSize(value, depth) ||
+                depth > static_cast<size_t>(std::numeric_limits<int>::max())) {
+                return false;
+            }
+            parsed = static_cast<int>(depth);
+            return true;
+        };
+
+        std::string lowerValue;
+        if (!requireValue("depth_query filter", lowerValue) ||
+            !parseDepthValue(lowerValue, query.threshold)) {
+            error = "depth_query filter requires a non-negative integer depth.";
+            return false;
+        }
+
+        if (query.predicate == Netlist::DepthPredicate::BetweenInclusive) {
+            std::string upperValue;
+            if (!requireValue("depth_query filter between", upperValue) ||
+                !parseDepthValue(upperValue, query.upperThreshold)) {
+                error = "depth_query filter between requires two non-negative integer depths.";
+                return false;
+            }
+            if (query.threshold > query.upperThreshold) {
+                error = "depth_query filter between requires lower <= upper.";
+                return false;
+            }
+        }
     } else if (m == "gate_on_critical") {
         query.type = Netlist::DepthQueryType::GateOnCriticalPath;
         if (!requireValue("depth_query gate_on_critical", query.gateName)) return false;
+    } else if (m == "critical_gates") {
+        query.type = Netlist::DepthQueryType::CriticalGateBatch;
+        query.includeCriticalPath = false;
     } else if (m == "deepest_output") {
         query.type = Netlist::DepthQueryType::DeepestOutputCone;
     } else {
@@ -4326,7 +5090,14 @@ bool buildFunctionSearchQuery(const Netlist& netlist,
         loweredMode == "pattern" || loweredMode == "pattern_operands";
     const bool equivalentPairSearch =
         loweredMode == "equivalent_pairs" || loweredMode == "equivalent_gate_pairs";
-    if (!nandSearch && !patternSearch && !equivalentPairSearch) {
+    const bool constantSearch =
+        loweredMode == "constant_signals" ||
+        loweredMode == "functional_constant_signals";
+    const bool complementarySearch =
+        loweredMode == "complementary_pairs" ||
+        loweredMode == "complement_pairs";
+    if (!nandSearch && !patternSearch && !equivalentPairSearch &&
+        !constantSearch && !complementarySearch) {
         error = "Unknown func_search mode: " + mode;
         return false;
     }
@@ -4350,7 +5121,7 @@ bool buildFunctionSearchQuery(const Netlist& netlist,
             error = "pattern gate type must be BUF, NOT, AND, NAND, OR, NOR, XOR, or XNOR.";
             return false;
         }
-    } else {
+    } else if (equivalentPairSearch) {
         query.type = Netlist::FunctionSearchQueryType::EquivalentGatePairs;
         std::string scopeToken;
         if (!(iss >> scopeToken)) {
@@ -4377,18 +5148,104 @@ bool buildFunctionSearchQuery(const Netlist& netlist,
             error = "The selected equivalent_pairs scope requires a net or gate name.";
             return false;
         }
+    } else if (constantSearch) {
+        std::string filterToken;
+        if (!(iss >> filterToken)) {
+            error = "constant_signals requires zero, one, or either.";
+            return false;
+        }
+        const std::string loweredFilter = toLower(filterToken);
+        if (loweredFilter == "zero" || loweredFilter == "0") {
+            query.constantFilter = Netlist::FunctionSearchConstantFilter::Zero;
+        } else if (loweredFilter == "one" || loweredFilter == "1") {
+            query.constantFilter = Netlist::FunctionSearchConstantFilter::One;
+        } else if (loweredFilter == "either" || loweredFilter == "any") {
+            query.constantFilter = Netlist::FunctionSearchConstantFilter::Either;
+        } else {
+            error = "constant_signals filter must be zero, one, or either.";
+            return false;
+        }
+        query.type = Netlist::FunctionSearchQueryType::FunctionalConstantSignals;
+    } else {
+        std::string domainToken;
+        std::string scopeToken;
+        if (!(iss >> domainToken >> scopeToken)) {
+            error = "complementary_pairs requires signals|gates and a scope.";
+            return false;
+        }
+        const std::string loweredDomain = toLower(domainToken);
+        if (loweredDomain == "signals" || loweredDomain == "signal") {
+            query.candidateDomain =
+                Netlist::FunctionSearchCandidateDomain::Signals;
+        } else if (loweredDomain == "gates" || loweredDomain == "gate_outputs") {
+            query.candidateDomain =
+                Netlist::FunctionSearchCandidateDomain::CombinationalGateOutputs;
+        } else {
+            error = "complementary_pairs domain must be signals or gates.";
+            return false;
+        }
+        const std::string loweredScope = toLower(scopeToken);
+        if (loweredScope == "whole" || loweredScope == "whole_design") {
+            query.scope = Netlist::FunctionSearchScope::WholeDesign;
+        } else if (loweredScope == "net_fanin") {
+            query.scope = Netlist::FunctionSearchScope::NetFanin;
+        } else if (loweredScope == "net_fanout") {
+            query.scope = Netlist::FunctionSearchScope::NetFanout;
+        } else if (loweredScope == "gate_fanin") {
+            query.scope = Netlist::FunctionSearchScope::GateFanin;
+        } else if (loweredScope == "gate_fanout") {
+            query.scope = Netlist::FunctionSearchScope::GateFanout;
+        } else {
+            error = "Unknown complementary_pairs scope: " + scopeToken;
+            return false;
+        }
+        if (query.scope != Netlist::FunctionSearchScope::WholeDesign &&
+            !(iss >> query.scopeName)) {
+            error = "The selected complementary_pairs scope requires a net or gate name.";
+            return false;
+        }
+        query.type = Netlist::FunctionSearchQueryType::ComplementaryPairs;
     }
+
+    bool allSeen = false;
+    bool findAnySeen = false;
+    bool allowSameSeen = false;
+    bool includeBoundarySeen = false;
+    bool scopeSeen = false;
+    bool gateTypeSeen = false;
+    bool maxResultsSeen = false;
+    bool patternsSeen = false;
+    bool timeLimitSeen = false;
+    auto markOption = [&](bool& seen, const std::string& canonicalName) {
+        if (seen) {
+            error = "Duplicate func_search option: " + canonicalName;
+            return false;
+        }
+        seen = true;
+        return true;
+    };
 
     std::string option;
     while (iss >> option) {
         const std::string lowered = toLower(option);
         if (lowered == "--all" || lowered == "-all") {
+            if (!markOption(allSeen, "--all")) return false;
+            if (findAnySeen) {
+                error = "--all and --find-any are mutually exclusive.";
+                return false;
+            }
             query.mode = Netlist::FunctionSearchMode::FindAll;
         } else if (lowered == "--find-any" || lowered == "-find_any") {
+            if (!markOption(findAnySeen, "--find-any")) return false;
+            if (allSeen) {
+                error = "--all and --find-any are mutually exclusive.";
+                return false;
+            }
             query.mode = Netlist::FunctionSearchMode::FindAny;
         } else if (lowered == "--allow-same" || lowered == "-allow_same") {
-            if (equivalentPairSearch) {
-                error = "--allow-same is only valid for nand_pair.";
+            if (!markOption(allowSameSeen, "--allow-same")) return false;
+            if (equivalentPairSearch || constantSearch || complementarySearch) {
+                error = "--allow-same is only valid for nand_pair or binary pattern searches.";
                 return false;
             }
             if (patternSearch &&
@@ -4400,14 +5257,21 @@ bool buildFunctionSearchQuery(const Netlist& netlist,
             query.allowSameSignalPair = true;
         } else if (lowered == "--include-boundary-signals" ||
                    lowered == "-include_boundary_signals") {
-            if (equivalentPairSearch) {
-                error = "--include-boundary-signals is only valid for nand_pair.";
+            if (!markOption(includeBoundarySeen, "--include-boundary-signals")) {
+                return false;
+            }
+            if (equivalentPairSearch ||
+                (complementarySearch &&
+                 query.candidateDomain !=
+                     Netlist::FunctionSearchCandidateDomain::Signals)) {
+                error = "--include-boundary-signals is valid for signal-domain searches, not gate-output searches.";
                 return false;
             }
             query.internalSignalsOnly = false;
         } else if (lowered == "--scope" || lowered == "-scope") {
-            if (!nandSearch && !patternSearch) {
-                error = "--scope is only valid for operand-pattern search.";
+            if (!markOption(scopeSeen, "--scope")) return false;
+            if (!nandSearch && !patternSearch && !constantSearch) {
+                error = "--scope is only valid for operand-pattern or constant-signal search.";
                 return false;
             }
             std::string scopeToken;
@@ -4427,17 +5291,21 @@ bool buildFunctionSearchQuery(const Netlist& netlist,
             } else if (loweredScope == "gate_fanout") {
                 query.scope = Netlist::FunctionSearchScope::GateFanout;
             } else {
-                error = "Unknown operand-pattern scope: " + scopeToken;
+                error = "Unknown func_search scope: " + scopeToken;
                 return false;
             }
             if (query.scope != Netlist::FunctionSearchScope::WholeDesign &&
                 !(iss >> query.scopeName)) {
-                error = "The selected operand-pattern scope requires a net or gate name.";
+                error = "The selected func_search scope requires a net or gate name.";
                 return false;
             }
         } else if (lowered == "--gate-type" || lowered == "-gate_type") {
-            if (!equivalentPairSearch) {
-                error = "--gate-type is only valid for equivalent_pairs.";
+            if (!markOption(gateTypeSeen, "--gate-type")) return false;
+            if (!equivalentPairSearch &&
+                !(complementarySearch &&
+                  query.candidateDomain ==
+                      Netlist::FunctionSearchCandidateDomain::CombinationalGateOutputs)) {
+                error = "--gate-type is only valid for equivalent_pairs or complementary_pairs gates.";
                 return false;
             }
             std::string typeToken;
@@ -4452,6 +5320,7 @@ bool buildFunctionSearchQuery(const Netlist& netlist,
                 return false;
             }
         } else if (lowered == "--max-results" || lowered == "-max_results") {
+            if (!markOption(maxResultsSeen, "--max-results")) return false;
             std::string valueToken;
             int value = 0;
             if (!(iss >> valueToken) || !parseStrictInteger(valueToken, value) || value < 1) {
@@ -4460,6 +5329,7 @@ bool buildFunctionSearchQuery(const Netlist& netlist,
             }
             query.maxResults = static_cast<size_t>(value);
         } else if (lowered == "--patterns" || lowered == "-patterns") {
+            if (!markOption(patternsSeen, "--patterns")) return false;
             std::string valueToken;
             int value = 0;
             if (!(iss >> valueToken) || !parseStrictInteger(valueToken, value) ||
@@ -4469,6 +5339,7 @@ bool buildFunctionSearchQuery(const Netlist& netlist,
             }
             query.simulationPatternCount = static_cast<size_t>(value);
         } else if (lowered == "--time-limit" || lowered == "-time_limit") {
+            if (!markOption(timeLimitSeen, "--time-limit")) return false;
             std::string valueToken;
             double value = 0.0;
             if (!(iss >> valueToken) || !parseStrictDouble(valueToken, value) ||
@@ -4481,6 +5352,10 @@ bool buildFunctionSearchQuery(const Netlist& netlist,
             error = "Unknown func_search option: " + option;
             return false;
         }
+    }
+    if (maxResultsSeen && query.mode != Netlist::FunctionSearchMode::FindAll) {
+        error = "--max-results is only valid with --all.";
+        return false;
     }
     return true;
 }
@@ -5173,6 +6048,9 @@ bool parsePathMode(const std::string& mode, Netlist::PathQueryMode& outMode) {
         outMode = Netlist::PathQueryMode::FindAny;
     } else if (m == "enumerate") {
         outMode = Netlist::PathQueryMode::EnumerateAll;
+    } else if (m == "top_k_shortest" || m == "top_k_longest" ||
+               m == "nth_shortest" || m == "nth_longest") {
+        outMode = Netlist::PathQueryMode::RankedPaths;
     } else if (m == "min_depth") {
         outMode = Netlist::PathQueryMode::MinDepth;
     } else if (m == "max_depth") {
@@ -5251,10 +6129,15 @@ void printHelp() {
         << "\nPath query\n"
         << "  path_query <mode> <start_endpoint> <end_endpoint> [-req node...] [-avoid node...]\n"
         << "  path_query enumerate <start_endpoint> <end_endpoint> [-count_only]\n"
+        << "      [-depth_eq N | -depth_ge N | -depth_le N]\n"
+        << "  path_query top_k_shortest|top_k_longest <start_endpoint> <end_endpoint> <K>\n"
+        << "  path_query nth_shortest|nth_longest <start_endpoint> <end_endpoint> <N>\n"
+        << "      ranked modes also accept -req, -avoid, and depth predicates\n"
         << "  path_query direct_pi_po\n"
         << "  enumerate automatically writes the complete list to a unique file and returns a summary\n"
         << "  output files, display size, and execution budget are managed automatically\n"
-        << "  mode: exists | find_any | enumerate | min_depth | max_depth\n"
+        << "  mode: exists | find_any | enumerate | top_k_shortest | top_k_longest\n"
+        << "        nth_shortest | nth_longest | min_depth | max_depth\n"
         << "        every_through | every_avoids | mandatory_nodes | articulation_between\n"
         << "        is_separator | pi_po_cut <internal_net> | direct_pi_po\n"
         << "  endpoint: net:<n> | pi:<p> | po:<p> | all_pi | all_po | dff_q:<ff> | dff_d:<ff>\n"
@@ -5266,7 +6149,9 @@ void printHelp() {
         << "  depth_query <mode> [args]\n"
         << "  mode: net <net> | all_po | all_dff_d | global_critical | exceeding <depth>\n"
         << "        po_exceeding <depth>\n"
-        << "        gate_on_critical <gate> | deepest_output\n"
+        << "        filter <all|po|dff_d> <eq|ne|gt|ge|lt|le> <depth>\n"
+        << "        filter <all|po|dff_d> between <lower> <upper>\n"
+        << "        gate_on_critical <gate> | critical_gates | deepest_output\n"
         << "\nFunction query\n"
         << "  func_query <mode> [args]\n"
         << "  mode: equivalence <net_a> <net_b> | can_be_value <net> <0|1>\n"
@@ -5279,20 +6164,23 @@ void printHelp() {
         << "\nFunction search\n"
         << "  func_search pattern <BUF|NOT|AND|NAND|OR|NOR|XOR|XNOR> <target_net>\n"
         << "              [--all] [--scope <scope> [scope_name]]\n"
-        << "              [--max-results n] [--patterns 1..4096]\n"
-        << "              [--time-limit seconds] [--allow-same]\n"
+        << "              [--max-results n] [--allow-same]\n"
         << "              [--include-boundary-signals]\n"
         << "  func_search nand_pair <target_net> [--all] [--max-results n]\n"
-        << "              [--patterns 1..4096] [--time-limit seconds]\n"
         << "              [--allow-same] [--include-boundary-signals]\n"
         << "  func_search equivalent_pairs <scope> [scope_name] [--all]\n"
         << "              [--gate-type type] [--max-results n]\n"
-        << "              [--patterns 1..4096] [--time-limit seconds]\n"
+        << "  func_search constant_signals <zero|one|either> [--find-any|--all]\n"
+        << "              [--scope <scope> [scope_name]] [--include-boundary-signals]\n"
+        << "              [--max-results n]\n"
+        << "  func_search complementary_pairs <signals|gates> <scope> [scope_name]\n"
+        << "              [--find-any|--all] [--include-boundary-signals]\n"
+        << "              [--gate-type type] [--max-results n]\n"
         << "  scope: whole | net_fanin <net> | net_fanout <net>\n"
         << "         gate_fanin <gate> | gate_fanout <gate>\n"
         << "  --all performs a complete search, writes all matches to a unique file,\n"
         << "  and returns only a summary; use --max-results only when requested\n"
-        << "  default mode finds one SAT-proven pair; --all requests complete enumeration\n"
+        << "  default mode finds one SAT-proven result; --all requests complete enumeration\n"
         << "\nSequential pattern query\n"
         << "  sequential_query enable_hold <all|dff_name> [--summary-only]\n"
         << "                   [--confirmed-only] [--include-no-pattern]\n"
@@ -5322,7 +6210,7 @@ void printHelp() {
         << "            [--target-cost N] [--time-limit seconds]\n"
         << "            [--allow-no-improvement] [--verbose]\n"
         << "  critical_path_depth minimizes logic depth; gate_count_minimization\n"
-        << "  minimizes combinational gate count\n"
+        << "  minimizes gate count (global scope includes DFF; cone scope counts combinational gates)\n"
         << "  --scope/--cost-scope select where the cost is measured\n"
         << "  --target-cost is a depth for critical_path_depth and a gate count\n"
         << "  for gate_count_minimization\n"
@@ -5687,6 +6575,8 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         if (query.mode == Netlist::PathQueryMode::EnumerateAll) {
             // 完整列表由 backend 自動寫檔；terminal 預設只保留摘要。
             query.maxPrintedPaths = 0;
+        } else if (query.mode == Netlist::PathQueryMode::RankedPaths) {
+            query.maxPrintedPaths = std::numeric_limits<size_t>::max();
         } else if (query.mode == Netlist::PathQueryMode::DirectPiPoConnections) {
             // 此 mode 不自動寫檔，因此預設完整顯示所有 direct connections。
             query.maxPrintedPaths = std::numeric_limits<size_t>::max();
@@ -5715,6 +6605,31 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             }
         }
 
+        if (query.mode == Netlist::PathQueryMode::RankedPaths) {
+            std::string rankToken;
+            size_t rankOrCount = 0;
+            if (!(iss >> rankToken) ||
+                !parseNonNegativeSize(rankToken, rankOrCount) ||
+                rankOrCount == 0) {
+                emitToolError(session, command, modeText,
+                              "Ranked path mode requires a positive integer K or N.");
+                return true;
+            }
+            const bool longest = loweredMode == "top_k_longest" ||
+                                 loweredMode == "nth_longest";
+            query.rankingOrder = longest
+                ? Netlist::PathRankingOrder::LongestFirst
+                : Netlist::PathRankingOrder::ShortestFirst;
+            if (loweredMode == "nth_shortest" ||
+                loweredMode == "nth_longest") {
+                query.firstRank = rankOrCount;
+                query.resultCount = 1;
+            } else {
+                query.firstRank = 1;
+                query.resultCount = rankOrCount;
+            }
+        }
+
         int listMode = 0;
         bool listHasValue = false;
         const auto requireCompletedNodeList = [&]() -> bool {
@@ -5722,6 +6637,17 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
                 emitToolError(session, command, modeText,
                               listMode == 1 ? "-req requires at least one node."
                                             : "-avoid requires at least one node.");
+                return false;
+            }
+            return true;
+        };
+        const auto readDepthValue = [&](const std::string& option,
+                                        int& value) -> bool {
+            std::string valueToken;
+            if (!(iss >> valueToken) ||
+                !parseStrictInteger(valueToken, value) || value < 0) {
+                emitToolError(session, command, modeText,
+                              option + " requires a non-negative integer.");
                 return false;
             }
             return true;
@@ -5742,6 +6668,11 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             }
             if (token == "-out") {
                 if (!requireCompletedNodeList()) return true;
+                if (query.mode == Netlist::PathQueryMode::RankedPaths) {
+                    emitToolError(session, command, modeText,
+                                  "Ranked path output files are managed automatically.");
+                    return true;
+                }
                 std::string outputPath;
                 if (!(iss >> outputPath) || isOptionToken(outputPath)) {
                     emitToolError(session, command, modeText,
@@ -5755,6 +6686,11 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             }
             if (token == "-max_print") {
                 if (!requireCompletedNodeList()) return true;
+                if (query.mode == Netlist::PathQueryMode::RankedPaths) {
+                    emitToolError(session, command, modeText,
+                                  "Ranked path terminal output is managed automatically.");
+                    return true;
+                }
                 std::string valueToken;
                 size_t maxPrinted = 0;
                 if (!(iss >> valueToken) || !parseNonNegativeSize(valueToken, maxPrinted)) {
@@ -5767,6 +6703,11 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             }
             if (token == "-max_paths") {
                 if (!requireCompletedNodeList()) return true;
+                if (query.mode == Netlist::PathQueryMode::RankedPaths) {
+                    emitToolError(session, command, modeText,
+                                  "RankedPaths uses the prompt-provided K or N only.");
+                    return true;
+                }
                 std::string valueToken;
                 size_t maxPaths = 0;
                 if (!(iss >> valueToken) || !parseNonNegativeSize(valueToken, maxPaths)) {
@@ -5791,15 +6732,46 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             }
             if (token == "-count_only") {
                 if (!requireCompletedNodeList()) return true;
+                if (query.mode != Netlist::PathQueryMode::EnumerateAll) {
+                    emitToolError(session, command, modeText,
+                                  "-count_only is supported by enumerate only.");
+                    return true;
+                }
                 query.countOnly = true;
                 query.writePathsToFile = false;
+                listMode = 0;
+                continue;
+            }
+            if (token == "-depth_eq" || token == "-depth_ge" ||
+                token == "-depth_le") {
+                if (!requireCompletedNodeList()) return true;
+                if (query.mode != Netlist::PathQueryMode::EnumerateAll &&
+                    query.mode != Netlist::PathQueryMode::RankedPaths) {
+                    emitToolError(
+                        session, command, modeText,
+                        "Path depth predicates are supported by enumerate and ranked modes only.");
+                    return true;
+                }
+                int depth = -1;
+                if (!readDepthValue(token, depth)) return true;
+                if (token == "-depth_eq" || token == "-depth_ge") {
+                    query.minimumAcceptedDepth =
+                        std::max(query.minimumAcceptedDepth, depth);
+                }
+                if (token == "-depth_eq" || token == "-depth_le") {
+                    query.maximumAcceptedDepth =
+                        query.maximumAcceptedDepth < 0
+                            ? depth
+                            : std::min(query.maximumAcceptedDepth, depth);
+                }
                 listMode = 0;
                 continue;
             }
             if (isOptionToken(token)) {
                 emitToolError(session, command, modeText,
                               "Unknown path_query option: " + token +
-                              ". Supported public options: -req -avoid -count_only.");
+                              ". Supported public options: -req -avoid -count_only "
+                              "-depth_eq -depth_ge -depth_le.");
                 return true;
             }
             if (listMode == 1) {
@@ -5811,11 +6783,19 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             } else {
                 emitToolError(session, command, modeText,
                               "Unexpected token '" + token +
-                              "'. Supported public options: -req -avoid -count_only.");
+                              "'. Supported public options: -req -avoid -count_only "
+                              "-depth_eq -depth_ge -depth_le.");
                 return true;
             }
         }
         if (!requireCompletedNodeList()) return true;
+        if (query.minimumAcceptedDepth >= 0 &&
+            query.maximumAcceptedDepth >= 0 &&
+            query.minimumAcceptedDepth > query.maximumAcceptedDepth) {
+            emitToolError(session, command, modeText,
+                          "Path depth predicate has an empty range.");
+            return true;
+        }
 
         if (query.mode == Netlist::PathQueryMode::EnumerateAll &&
             !query.countOnly && query.outputFilePath.empty()) {
@@ -6007,11 +6987,13 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             : ListArtifactResult{};
         ToolResponse response;
         response.ok = report.ok;
-        response.status = report.ok ? ToolStatus::Ok : ToolStatus::Error;
+        response.status = !report.ok
+            ? ToolStatus::Error
+            : (report.complete ? ToolStatus::Ok : ToolStatus::Partial);
         response.command = command;
         response.mode = toLower(mode);
         response.message = report.message;
-        response.complete = report.ok;
+        response.complete = report.ok && report.complete;
         emitToolResponse(session, response, [&]() {
             printDepthReportSet(session.current, report, artifact.complete);
             printListArtifactMetadata(artifact);
@@ -6087,7 +7069,10 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
                 "",
                 "Usage: func_search pattern <gate_type> <target_net> [options] | "
                 "func_search nand_pair <target_net> [options] | "
-                "func_search equivalent_pairs <scope> [scope_name] [options]");
+                "func_search equivalent_pairs <scope> [scope_name] [options] | "
+                "func_search constant_signals <zero|one|either> [options] | "
+                "func_search complementary_pairs <signals|gates> <scope> "
+                "[scope_name] [options]");
             return true;
         }
 
@@ -6347,8 +7332,11 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         response.mode = toLower(mode);
         response.message = report.message;
         response.complete = report.success;
+        const ListArtifactResult artifact = writeEditChangedListArtifactIfNeeded(
+            session, command, response.mode, report);
         emitToolResponse(session, response, [&]() {
-            printEditReport(session.current, report);
+            printEditReport(session.current, report, artifact.complete);
+            printListArtifactMetadata(artifact);
         });
         return true;
     }
@@ -6478,8 +7466,12 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         response.mode = "last_edit";
         response.message = "Cached last edit report.";
         response.complete = true;
+        const ListArtifactResult artifact = writeEditChangedListArtifactIfNeeded(
+            session, command, response.mode, *session.lastEditReport);
         emitToolResponse(session, response, [&]() {
-            printEditReport(session.current, *session.lastEditReport);
+            printEditReport(
+                session.current, *session.lastEditReport, artifact.complete);
+            printListArtifactMetadata(artifact);
         });
         return true;
     }
@@ -6515,6 +7507,7 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
         const bool functionalMergeTimedOut =
             report.functionalMerge &&
             (report.functionalMerge->searchTimedOut ||
+             report.functionalMerge->applyTimedOut ||
              report.functionalMerge->wholeDesignTimedOut);
         const bool deadLogicTimedOut =
             report.deadLogic && report.deadLogic->timedOut;
@@ -6543,7 +7536,12 @@ bool dispatchCommand(ToolSession& session, const std::string& inputLine) {
             ? report.message
             : "Edit completed, but the requested equivalence certificate is unavailable. " + report.message;
         response.complete = report.success && equivalenceComplete && !anyTimedOut;
-        emitToolResponse(session, response, [&]() { printEditReport(session.current, report); });
+        const ListArtifactResult artifact = writeEditChangedListArtifactIfNeeded(
+            session, command, response.mode, report);
+        emitToolResponse(session, response, [&]() {
+            printEditReport(session.current, report, artifact.complete);
+            printListArtifactMetadata(artifact);
+        });
         return true;
     }
 

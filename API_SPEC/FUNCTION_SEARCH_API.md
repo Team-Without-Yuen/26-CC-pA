@@ -18,11 +18,17 @@ API_SPEC/FUNCTION_SEARCH_USAGE.md
 FunctionalPatternOperands
 NandEquivalentInputPairs (compatibility alias)
 EquivalentGatePairs
+FunctionalConstantSignals
+ComplementaryPairs
 ```
 
 `FunctionalPatternOperands` 搜尋使指定 BUF/NOT/AND/NAND/OR/NOR/XOR/XNOR
 function 等價於 target 的既有 signals；`NandEquivalentInputPairs` 保留原有 NAND 呼叫相容性。
 `EquivalentGatePairs` 搜尋 output function 完全相同的 active combinational gate pairs，並整理成等價類。
+`FunctionalConstantSignals` 在候選名稱未知時，批次搜尋 functionally constant 0/1 signals；
+literal constant net 不列入「derived functional constant」結果。
+`ComplementaryPairs` 搜尋 `f(a)=!f(b)` 的 named signals 或 active combinational gate outputs，
+不要求兩者具有固定 NOT/NAND/NOR 結構。
 
 本 API 是 read-only analysis，不會 merge gate、rewire 或修改 netlist。修改必須交給 `EditApply`，並依題意執行修改後等價驗證。
 
@@ -61,7 +67,20 @@ scope 的 gate 集合沿用 `ConeQuery` 語意；fanin 包含驅動 root net 的
 enum class FunctionSearchQueryType {
     NandEquivalentInputPairs,
     FunctionalPatternOperands,
-    EquivalentGatePairs
+    EquivalentGatePairs,
+    FunctionalConstantSignals,
+    ComplementaryPairs
+};
+
+enum class FunctionSearchConstantFilter {
+    Zero,
+    One,
+    Either
+};
+
+enum class FunctionSearchCandidateDomain {
+    Signals,
+    CombinationalGateOutputs
 };
 
 enum class FunctionSearchMode {
@@ -91,17 +110,29 @@ enum class FunctionSearchScope {
 | `writeMatchesToFile` | `false` | 是否以 streaming 將 pair records 寫到檔案 |
 | `outputFilePath` | 空字串 | 指定 artifact 路徑；公開 CLI 會自動提供不覆寫的檔名 |
 
+`FunctionalConstantSignals` 使用：
+
+| 欄位 | 語意 |
+|---|---|
+| `constantFilter` | `Zero`、`One` 或 `Either` |
+| `internalSignalsOnly` | true 時搜尋 active named driven non-port nets，包含 internal DFF.Q；false 時額外納入 PI/PO |
+| `scope`, `scopeName` | whole design 或指定 fanin/fanout cone |
+
+此 mode 排除 removed、unnamed、literal constant 與 floating/undriven nets。DFF.Q 是合法的
+current-state Boolean source；若同時是 PO，仍依 port policy 決定是否納入。
+
 `FunctionalPatternOperands` 與 `NandEquivalentInputPairs` 使用：
 
 | 欄位 | 語意 |
 |---|---|
 | `targetNetName` | existing scalar target |
 | `patternGateType` | 通用 mode 必填；支援 BUF/NOT/AND/NAND/OR/NOR/XOR/XNOR；legacy NAND mode 固定為 NAND |
-| `internalSignalsOnly` | true 時排除 PI、PO、constant、undriven 與 target；保留有有效 driver 的 internal nets，包含 DFF.Q |
+| `internalSignalsOnly` | true 時排除 PI、PO、constant、undriven 與 target；保留有有效 driver 的 internal nets，包含 internal DFF.Q。DFF.Q 若同時為 PO，依 PO policy 排除 |
 | `allowSameSignalPair` | 是否允許 `(a,a)` |
 | `scope`, `scopeName` | 可限制 operand 候選於 whole design 或指定 fanin/fanout cone |
 
-`internalSignalsOnly=false` 時會納入 PI，以及有有效 driver 的 PO/internal nets；constant、target
+`internalSignalsOnly=false` 時會納入 PI，以及有有效 driver 的 PO/internal nets；因此也會納入
+同時是 PO 的 DFF.Q。constant、target
 本身與非 PI undriven nets 仍排除。Pair 為 unordered，不會同時回 `(a,b)` 與 `(b,a)`；只有
 `allowSameSignalPair=true` 才加入 `(a,a)`。
 
@@ -115,6 +146,19 @@ XOR/XNOR 為二元搜尋，`operandArity=2`。MUX 不走本 mode，避免 O(n^3)
 | `scope` | 搜尋範圍 |
 | `scopeName` | 非 whole scope 的 net/gate 名稱 |
 | `gateTypeFilter` | `UNKNOWN` 代表全部 combinational types；也可限制單一 type |
+
+`ComplementaryPairs` 使用：
+
+| 欄位 | 語意 |
+|---|---|
+| `candidateDomain` | `Signals` 或 `CombinationalGateOutputs` |
+| `scope`, `scopeName` | whole design 或指定 fanin/fanout cone，只限制候選集合 |
+| `internalSignalsOnly` | signal domain 預設排除 PI/PO，保留 internal DFF.Q；false 時納入 PI/PO |
+| `gateTypeFilter` | 只適用 gate domain；`UNKNOWN` 代表全部 combinational types |
+
+兩個 domain 都排除 removed、unnamed、literal constant 與 floating/undriven candidates。gate domain
+不包含 DFF；signal domain 的 internal DFF.Q 是合法 current-state Boolean source。scope 不會縮小 proof
+所需的 PI/DFF.Q assignment 空間，因此 scoped 結果仍是完整 Boolean relation，而非局部假設。
 
 ---
 
@@ -143,6 +187,45 @@ XOR/XNOR 為二元搜尋，`operandArity=2`。MUX 不走本 mode，避免 O(n^3)
 | `outputFilePath` | 完整或受明確 `maxResults` 限制的 records 檔案路徑 |
 | `patternGateType`, `patternTypeName` | 實際要求的 Boolean pattern |
 | `operandArity` | 一元為 1，二元為 2；equivalent-gate mode 為 0 |
+| `constantFilter` | constant search 的 0/1/either filter；其他 mode 不適用 |
+| `constantSignals` | 記憶體中的 proven constant records；FindAll streaming 時可為空 |
+| `constantZeroCount`, `constantOneCount` | 已證明的 constant-0/1 結果數 |
+| `candidateSignalsRejectedBySimulation` | 已由 concrete simulation assignment 排除的候選數 |
+| `provenNonConstantSignalCount` | 已確實證明同時可為 0 與 1 的候選數；specific filter 的反方向 constant 不會誤算 |
+| `inconclusiveSignalCount` | unknown/unsupported、不能安全分類的候選數 |
+| `candidateDomain` | complementary search 的 signals/gates domain |
+| `complementaryClasses` | 正負 phase members；每個 positive member 與每個 negative member 互補 |
+| `complementaryClassCount` | 至少各有一個正/負 member 的 proven phase class 數 |
+| `complementaryPairCount` | 所有 class 的 `positive.size * negative.size` 總和 |
+| `inconclusiveCandidateCount` | complementary search 中未能完整分類的候選數 |
+
+### 4.1 Streaming Artifact Contract
+
+FindAll streaming 使用 `FUNCTION_SEARCH_ARTIFACT_V2`。檔案 header 必須讓 reader 不依賴
+terminal envelope 也能還原 query：`query_type`、`search_mode`、target/pattern、operand arity、
+scope/scope name、gate-type filter、candidate domain、boundary/same-signal policy，以及
+`result_policy`/`max_results`。不適用欄位固定寫 `not_applicable`，不可用空字串表示。
+Pattern/NAND artifact 另明確寫出 `include_pi_po_port_signals`、
+`internal_dff_q_signals_included` 與 `dff_q_output_port_requires_boundary_opt_in`，避免把
+timing boundary 與 port opt-in 混為同一概念。
+
+既有 `Match N`、`Equivalence class N` records 與 `Total matches`/`Complete`/`Status` footer
+保持相容。V2 另以 `records_begin`/`records_end` 劃分 records，footer 補上 candidate、SAT、
+unknown、class/pair 與完整性統計。artifact 是 query output，不是可重播的 mutation request，
+也不代表後續 command 會自動引用上一份結果。
+
+constant search 使用 `Constant signal N` records，包含 net ID/name、driver gate ID/name/type、
+`constant_value`、`proof_method` 與 `solver_status`。header 另含 `constant_filter`、
+`constant_signals_excluded:false` 與 `literal_constant_nets_excluded:true`；footer 含 0/1、
+non-constant 與 inconclusive counts。
+
+complementary search 使用 `Complementary class N` records。每筆 class 明確寫出
+`positive_members x negative_members` 的重建規則、兩側完整 net/gate identity、`pair_count` 與 proof
+method；因此大型結果不需要逐 pair 展開，也沒有隱藏數量截斷。footer 另含
+`complementary_class_count`、`complementary_pair_count` 與 `inconclusive_candidate_count`。
+若 caller 明確設定 `maxResults`，artifact 改寫前 N 筆 literal complementary pair records，header
+標記 `literal_pairs_explicit_limit`，且 report 保持 `truncated=true`；不會用完整 class 偷渡超出
+prompt 限制的 pairs。
 
 `EquivalentGatePairs` 主要統計：
 
@@ -197,6 +280,37 @@ FunctionSearchReport runFunctionSearchQuery(
 
 不同 simulation bucket 的 outputs 已有 concrete simulation assignment 證明不同，因此不需 SAT。相同 bucket 仍逐步做 SAT，避免把 simulation collision 當成 proof。
 
+`FunctionalConstantSignals` 執行流程：
+
+```text
+解析 scope 與 candidate policy
+  -> 對 current named netlist 做一次 deterministic bit-parallel simulation
+  -> 依 zero/one/either filter 保留全 0 或全 1 signature
+  -> 其他 signature 由 concrete assignment 證明不符合 filter
+  -> survivors 以共用 Primitives 做 literal equality 或 incremental SAT constant proof
+  -> 只有 Equal/UNSAT 結果可進 report/artifact
+```
+
+simulation 的全 0/全 1 signature 只代表候選，不能單獨列為 constant。SAT Unknown、unsupported
+或 deadline 到期會使 FindAll `complete=false`；不得降格成 NO_MATCH。
+
+`ComplementaryPairs` 執行流程：
+
+```text
+解析 candidate domain、scope 與 filter
+  -> 一次 deterministic bit-parallel simulation
+  -> 以 min(signature, complement(signature)) 建立 phase-aware buckets
+  -> 不同 bucket 由 concrete assignment 安全排除
+  -> 同 bucket 以 AIG literal phase 或 equiv_checked(candidate, !representative) 建立 proven classes
+  -> FindAny 回第一組 witness；FindAll 回完整正負 phase classes 與 exact Cartesian pair count
+```
+
+simulation 互補只用於分桶，不是 positive proof。演算法避免 whole-design naive O(N^2) SAT；正式
+proof 數量通常由 signature collision bucket 與 class representatives 決定。Unknown、unsupported 或
+deadline 會保留已證明 classes，但使 `complete=false`。
+若短 signature 產生超過 32 個 candidates 的 collision bucket，backend 會自動以 4096 patterns
+重做一次線性 simulation refinement，再進 proof；這不改變候選、答案或 proof 標準。
+
 Phase B 替換 `EquivalentGatePairs` 的 class proof backend，並用於 NAND pair
 `FindAny` 與通用 pattern surviving-candidate proof。NAND `FindAll` 仍使用 legacy cone-miter
 SAT，其他 pattern 使用共用 engine。scope、candidate 順序、
@@ -214,6 +328,9 @@ simulation、timeout 與 report assembly 均沿用原本流程；同一個 `Netl
 | 搜尋 `NAND(a,b)==target` 的未知 pair | `FunctionSearchQuery::NandEquivalentInputPairs` |
 | 搜尋 BUF/NOT/AND/NAND/OR/NOR/XOR/XNOR 的未知 operands | `FunctionSearchQuery::FunctionalPatternOperands` |
 | 搜尋任意 output function 相同的 gate pairs | `FunctionSearchQuery::EquivalentGatePairs` |
+| 已知 net，判斷它是否 constant 0/1 | `FunctionQuery::AlwaysZero/AlwaysOne/ConstantValue` |
+| 未知名稱，列出 functionally constant 0/1 signals | `FunctionSearchQuery::FunctionalConstantSignals` |
+| 搜尋未知名稱的互補 signal/gate-output pairs | `FunctionSearchQuery::ComplementaryPairs` |
 | 找結構完全相同的 duplicate gates | `EditApply::MergeStructurallyEquivalentGates` |
 | 實際合併、rewire、清理 gate | `EditApply` |
 | 修改前後 whole-design equivalence | `WholeDesignEquivalence` |
@@ -226,14 +343,19 @@ gate output 等價不等於該 gate 在 observability 上 redundant；本 API �
 
 - 目前 simulation/SAT 支援 AND、OR、NAND、NOR、NOT、BUF、XOR、XNOR combinational logic。
 - 官方 netlist 只使用題目規定的 gate types；prompt 中的 MUX 等語意由合法 gates 組成的 Boolean function 表示。Direct MUX/unknown primitive 不屬競賽輸入 contract，因此不納入本 API 的 unsupported coverage。
-- DFF 不作為候選 gate，但 DFF.Q 可作為 function boundary。
+- DFF 不作為候選 gate；internal DFF.Q 預設可作為 Boolean operand，且分析在 Q 停止、不跨 cycle。DFF.Q 若同時是 PO，依 port policy 由 `internalSignalsOnly=false` 納入。
 - gate type filter 不接受 DFF 或 UNKNOWN 字串；C++ 的 `UNKNOWN` 值代表不過濾。
 - `NO_MATCH` 只有在 `ok && complete && allCandidatesExamined` 時才是完整否定答案。
 - TIMEOUT、SOLVER_UNKNOWN、unsupported 或 result truncation 都不得解讀為「不存在」。
 - `FindAll` 預設不設數量上限；只有 caller 或 prompt 明確指定正值 `maxResults` 時才會回 `RESULT_LIMIT_REACHED`。
+- CLI parser 拒絕重複 option、`--all`/`--find-any` 衝突，以及 FindAny 搭配
+  `--max-results`；canonical option 與相容 alias 仍視為同一個 option。
 - 公開 CLI 的 FindAll 一律自動 streaming 至 `<design>_function_search_<sequence>.txt`，terminal envelope 只回 summary 與路徑。
 - 自動檔名會跳過既有檔案，不覆寫同目錄中的舊 artifact。
 - `FindAll` 的 worst case 仍可能需要大量 SAT checks；scope、gate filter 與題目允許的 time limit 是主要規模控制。
+- constant search 的 simulation 只做 sound rejection；只有 AIG literal equality 或 SAT proof 可產生 positive result。
+- complementary search 的 simulation phase 也只做 sound rejection；只有 AIG phase identity 或 incremental SAT proof 可產生 positive pair/class。
+- complementary signal/gate domain 的選擇屬 prompt 語意，不可由 backend 自動混用；`--gate-type` 只適用 gates，PI/PO opt-in 只適用 signals。
 - 搜尋結果只證明 output functions 相同，不會自動套用 merge。
 
 ---
@@ -247,11 +369,24 @@ gate output 等價不等於該 gate 在 observability 上 redundant；本 API �
 | simulation、SAT、分類 | `src/analysis/FunctionAnalysis.cpp` |
 | public CLI | `tools.cpp` |
 | 通用 pattern 與 legacy NAND API regression（26/26） | `mini test/test23` |
-| 通用 pattern 與 legacy NAND CLI regression（15/15） | `mini test/test24` |
+| 通用 pattern 與 legacy NAND CLI regression（18/18） | `mini test/test24` |
 | equivalent-gate API/CLI regression | `mini test/test26` |
 | reference/Phase B differential 與大型 random DAG | `mini test/test44` |
+| functional constant batch CLI regression（12/12） | `mini test/test63` |
+| complementary phase-class CLI regression（12/12） | `mini test/test64` |
 
-`test24` 覆蓋 NAND FindAny/FindAll、完整 artifact、明確 result limit、no-match、invalid input 與 timeout。`test26` 覆蓋跨 gate type 等價、多個 equivalence classes、FindAny/FindAll、完整 artifact、scope、gate filter、result limit、直接 timeout、functional merge 與 rollback。`test44` 以 reference/engine 雙路徑做官方、synthetic 與最大 2048-gate random DAG 比對；EquivalentGatePairs 的 reference 為獨立 legacy proof，NAND reference 為 production adapter。
+`test24` 覆蓋 NAND FindAny/FindAll、完整 artifact、明確 result limit、no-match、invalid input、timeout，以及衝突/重複 option 的 strict parser。`test26` 覆蓋跨 gate type 等價、多個 equivalence classes、FindAny/FindAll、完整 artifact、scope、gate filter、result limit、直接 timeout、functional merge 與 rollback。`test44` 以 reference/engine 雙路徑做官方、synthetic 與最大 2048-gate random DAG 比對；EquivalentGatePairs 的 reference 為獨立 legacy proof，NAND reference 為 production adapter。
+
+`test63` 覆蓋 constant 0/1/either、FindAny/FindAll、PI/PO opt-in、DFF.Q boundary、cone
+scope、完整 artifact、明確 result limit 與 strict parser。NewTestCase/test53 另以既有
+`always_zero n16` 對照 batch zero search，兩者一致判定 n16 非 constant-zero；batch 完整分類
+5,577 個 eligible signals，Unknown/timeout 均為 0。
+
+`test64` 覆蓋 direct NOT、AND/NAND、OR/NOR、XOR/XNOR、De Morgan、同 phase 多成員、
+signals/gates domain、NAND filter、whole/cone scope、internal DFF.Q、PI/PO opt-in、FindAny/FindAll、
+explicit result limit、strict parser 與 self-contained Cartesian-product artifact。
+NewTestCase/test53 的 complementary signal FindAll 在 refinement 前於 290 秒 timeout；refinement 後
+約 36.4 秒完成 5,252 candidates、474 classes、526 pairs，Unknown/unsupported/timeout 均為 0。
 
 NewTestCase production differential 實測（2026-08-20）：
 
@@ -267,4 +402,4 @@ test29/test30 的 artifact record 數與 `match_count` 完全一致；test70 是
 通用 FindAny 會先檢查 target 直接 driver 的 eligible inputs，再保留原始完整候選順序作 fallback。
 此排序不刪除候選、不影響 FindAll；test70 OR probe 的 simulation pair 數由 257,412,964 降為 1。
 
-`mini test/test45` 另重播 test29/test30 在 functional merge 前的官方順序：AND/NOT basis conversion、dead/dangling cleanup、double-inverter collapse，再建立只讀 oracle 並呼叫 `EditApply::MergeFunctionallyEquivalentGates`。此時分別完整合併 361/494 顆；oracle class size、merge records、`mergedGateCount` 與 active-gate delta 完全一致，mandatory CEC、獨立 CEC、write/readback CEC 皆通過。
+`mini test/test45` 另重播 test29/test30 在 functional merge 前的官方順序：AND/NOT basis conversion、dead/dangling cleanup、double-inverter collapse，再建立只讀 oracle 並呼叫 `EditApply::MergeFunctionallyEquivalentGates`。此時分別完整合併 361/494 顆；oracle class size、merge records、`mergedGateCount` 與 active-gate delta 完全一致。開發期獨立 CEC 與 write/readback CEC 皆通過；正式 edit flow 不執行 final whole-design SAT。

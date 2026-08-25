@@ -74,9 +74,9 @@ equivalent
 
 `answer` 是 mode-specific 主要布林答案；回答 equivalence 時優先讀 `equivalent`，dependence 讀 `depends on input`，symmetry 讀 `symmetric`，不要混用其他預設布林欄位。
 
-`boolean_expression` 不使用上述 yes/no 欄位。只有 envelope `complete:true` 且
-`expression artifact complete: yes` 時，`output_file` 才包含完整答案。artifact footer
-也必須是 `Complete: yes`；timeout 或 I/O failure 時不可把部分檔案說成完整。
+`boolean_expression` 不使用上述 yes/no 欄位。LLM 只有在 envelope `complete:true` 且
+`expression artifact complete: yes` 時，才可把 `output_file` 描述為完整答案；LLM 不開檔
+檢查 footer。Producer 仍必須寫入 `Complete: yes` footer，供 evaluator 與檔案完整性檢查使用。
 
 Boolean expression 的 leaf 必須依輸出分類判讀：
 
@@ -101,9 +101,9 @@ wrote list to file: yes
 output_file: <path>
 ```
 
-表示完整 support 或 counterexample records 位於該檔案；response 中的 count 與主要判定仍可
-直接使用。只有 artifact footer 為 `Complete: yes` 才能視為完整。小結果不觸發 artifact，仍
-直接完整列於 response。
+表示完整 support 或 counterexample records 交付於該檔案；response 中的 count 與主要判定仍可
+直接使用。LLM 依 envelope 的 `complete` 與 `list artifact complete` 判讀，不開檔檢查 footer。
+小結果不觸發 artifact，仍直接完整列於 response。
 
 ## 6. Prompt Examples
 

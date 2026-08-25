@@ -183,7 +183,7 @@ std::string describeCost(const CostTarget& cost) {
              + " of cone '" + cost.cone->sourceName + "'";
     }
     return depth ? "global maximum combinational depth"
-                 : "total combinational gate count";
+                 : "total gate count including DFFs";
 }
 
 std::string describeBasis(const BasisConstraint& basis) {

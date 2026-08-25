@@ -84,17 +84,17 @@ if ($responses.Count -ge 28) {
 
     Check-Result `
         ($help -match "opt_query critical_path_depth" -and
-         $help -match "opt_apply critical_path_depth" -and
-         $help -match "--target-depth N" -and
-         $help -match "equivalence validation" -and
-         $help -match "StructuralIdentity") `
+         $help -match "opt_apply <critical_path_depth" -and
+         $help -match "gate_count_minimization" -and
+         $help -match "--target-cost N" -and
+         $help -match "aliases kept for compatibility") `
         "help exposes the public depth optimization contract"
 
     Check-Result `
         ($query -match "status: ok" -and
          $query -match "pass_kind: critical_path_depth" -and
          $query -match "candidate_count: 1" -and
-         $query -match "requires_equivalence_check: true") `
+         $query -match "requires_equivalence_check: false") `
         "opt_query exposes the safe pass-level candidate"
 
     Check-Result `
@@ -104,17 +104,20 @@ if ($responses.Count -ge 28) {
     Check-Result `
         ($globalAccepted -match "status: ok" -and
          $globalAccepted -match "design_revision: 1" -and
-         $globalAccepted -match "before_depth: 7" -and
-         $globalAccepted -match "after_depth: 3" -and
+         $globalAccepted -match "before_value: 7" -and
+         $globalAccepted -match "after_value: 3" -and
          $globalAccepted -match "improved: true" -and
          $globalAccepted -match "candidate_accepted: true" -and
-         $globalAccepted -match "whole_design_equivalent: true") `
-        "whole-design optimization accepts an equivalent depth improvement"
+         $globalAccepted -match "whole_design_equivalence_checked: false" -and
+         $globalAccepted -match "equivalence_method: CertifiedRewrite" -and
+         $globalAccepted -match "changed_gate_ids \([1-9][0-9]*\):" -and
+         $globalAccepted -match "changed_net_ids \([1-9][0-9]*\):") `
+        "optimization accepts a certified depth improvement without whole-design SAT"
 
     Check-Result `
         ($cachedGlobal -match "operation_kind: DepthOptimization" -and
-         $cachedGlobal -match "before_depth: 7" -and
-         $cachedGlobal -match "after_depth: 3") `
+         $cachedGlobal -match "before_value: 7" -and
+         $cachedGlobal -match "after_value: 3") `
         "report_query caches the global optimization result"
 
     Check-Result `
@@ -136,13 +139,14 @@ if ($responses.Count -ge 28) {
         ($constrainedAccepted -match "status: ok" -and
          $constrainedAccepted -match "design_revision: 1" -and
          $constrainedAccepted -match "report_success: true" -and
-         $constrainedAccepted -match "before_depth: 7" -and
-         $constrainedAccepted -match "after_depth: 9" -and
+         $constrainedAccepted -match "before_value: 7" -and
+         $constrainedAccepted -match "after_value: 9" -and
          $constrainedAccepted -match "improved: false" -and
          $constrainedAccepted -match "baseline_constraints_satisfied: false" -and
          $constrainedAccepted -match "final_constraints_satisfied: true" -and
          $constrainedAccepted -match "candidate_accepted: true" -and
-         $constrainedAccepted -match "whole_design_equivalent: true" -and
+         $constrainedAccepted -match "whole_design_equivalence_checked: false" -and
+         $constrainedAccepted -match "equivalence_method: CertifiedRewrite" -and
          $constrainedAccepted -match "allowed_gate_types \(2\):(?s).*NOR(?s).*NOT" -and
          $constrainedAccepted -match "original design violated a hard gate constraint") `
         "DFF gate_fanin NOR/NOT flow reports the hard-constraint tradeoff without exposing legacy resolution detail"
@@ -150,7 +154,8 @@ if ($responses.Count -ge 28) {
     Check-Result `
         ($cachedConstrained -match "operation_kind: DepthOptimization" -and
          $cachedConstrained -match "candidate_accepted: true" -and
-         $cachedConstrained -match "whole_design_equivalence_checked: true") `
+         $cachedConstrained -match "whole_design_equivalence_checked: false" -and
+         $cachedConstrained -match "equivalence_method: CertifiedRewrite") `
         "report_query returns the cached optimization report"
 
     Check-Result `
@@ -174,7 +179,7 @@ if ($responses.Count -ge 28) {
          $rejected -match "design_revision: 0" -and
          $rejected -match "report_success: false" -and
          $rejected -match "rolled_back: true" -and
-         $rejected -match "target_depth: 0" -and
+         $rejected -match "target_value: 0" -and
          $rejected -match "meets_target: false" -and
          $rejected -match "candidate_accepted: false") `
         "unmet target depth rejects and rolls back the candidate"
@@ -186,12 +191,12 @@ if ($responses.Count -ge 28) {
     Check-Result `
         ($cachedRejected -match "report_success: false" -and
          $cachedRejected -match "rolled_back: true" -and
-         $cachedRejected -match "target_depth: 0") `
+         $cachedRejected -match "target_value: 0") `
         "failed optimization report is also cached for follow-up questions"
 
     Check-Result `
         ($invalidScope -match "status: error" -and
-         $invalidScope -match "Cone depth objective requires net_fanin or gate_fanin scope") `
+         $invalidScope -match "A cone-scoped cost function requires net_fanin or gate_fanin scope") `
         "parser rejects a cone objective with fanout scope"
 
     Check-Result `
@@ -229,8 +234,8 @@ if ($responses.Count -ge 28) {
     Check-Result `
         ($dffOptimal -match "status: no_change" -and
          $dffOptimal -match "report_success: true" -and
-         $dffOptimal -match "before_depth: 0" -and
-         $dffOptimal -match "after_depth: 0" -and
+         $dffOptimal -match "before_value: 0" -and
+         $dffOptimal -match "after_value: 0" -and
          $dffOptimal -match "core_status: NO_IMPROVEMENT" -and
          $dffOptimal -match "resolved optimization scope is empty" -and
          $dffOptimal -match "equivalence_method: StructuralIdentity" -and
@@ -244,8 +249,8 @@ if ($responses.Count -ge 28) {
     Check-Result `
         ($andOptimal -match "status: no_change" -and
          $andOptimal -match "report_success: true" -and
-         $andOptimal -match "before_depth: 2" -and
-         $andOptimal -match "after_depth: 2" -and
+         $andOptimal -match "before_value: 2" -and
+         $andOptimal -match "after_value: 2" -and
          $andOptimal -match "depth 2 is optimal" -and
          $andOptimal -match "final_constraints_satisfied: true" -and
          $andOptimal -match "equivalence_method: StructuralIdentity" -and

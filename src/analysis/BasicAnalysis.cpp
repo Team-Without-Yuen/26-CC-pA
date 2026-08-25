@@ -878,6 +878,8 @@ Netlist::BasicReport Netlist::runBasicQuery(const BasicQuery& query) const {
         report.message = "Port info";
         report.portWidth = static_cast<int>(port->netIds.size());
         report.isBus = port->isBus();
+        report.portLeftBound = port->msb;
+        report.portRightBound = port->lsb;
         report.typeName = report.isBus ? "BUS_PORT" : "SCALAR_PORT";
         PortSummary summary;
         summary.name = port->name;

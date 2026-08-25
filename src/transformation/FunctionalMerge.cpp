@@ -224,12 +224,12 @@ NetlistEditReport Netlist::mergeFunctionallyEquivalentGatesWithReport(
     }
 
     if (elapsedSeconds() >= timeLimitSeconds) {
-        summary.wholeDesignTimedOut = true;
+        summary.applyTimedOut = true;
         summary.totalElapsedSeconds = elapsedSeconds();
         return makeSearchFailureReport(
             *this,
             std::move(summary),
-            "Functional gate merge was not applied because no time remained for whole-design equivalence.");
+            "Functional gate merge was not applied because no time remained to apply the rewrite.");
     }
 
     const Netlist before = cloneForRollback();
@@ -253,6 +253,11 @@ NetlistEditReport Netlist::mergeFunctionallyEquivalentGatesWithReport(
         const std::string representativeNetName = getNet(representativeNetId).name;
 
         for (int removedGateId : equivalentClass.gateIds) {
+            if (elapsedSeconds() >= timeLimitSeconds) {
+                mergeFailed = true;
+                summary.applyTimedOut = true;
+                break;
+            }
             if (removedGateId == representativeGateId) {
                 continue;
             }
@@ -309,7 +314,9 @@ NetlistEditReport Netlist::mergeFunctionallyEquivalentGatesWithReport(
         restoreFrom(before);
         report.success = false;
         report.rolledBack = true;
-        report.message = mergeFailed
+        report.message = summary.applyTimedOut
+            ? "Functional gate merge exceeded its time limit while applying rewrites and was rolled back."
+            : mergeFailed
             ? "Functional gate merge could not safely merge every SAT equivalence class and was rolled back."
             : "Functional gate merge failed structural validation and was rolled back.";
         summary.totalElapsedSeconds = elapsedSeconds();
@@ -317,52 +324,14 @@ NetlistEditReport Netlist::mergeFunctionallyEquivalentGatesWithReport(
         return report;
     }
 
-    const double remainingTime = timeLimitSeconds - elapsedSeconds();
-    if (remainingTime <= 0.0) {
-        restoreFrom(before);
-        report.success = false;
-        report.rolledBack = true;
-        report.validation.equivalenceChecked = false;
-        report.validation.functionallyEquivalent = false;
-        report.validation.equivalenceMethod = EquivalenceCheckMethod::NotChecked;
-        report.validation.messages.push_back(
-            "No time remained for mandatory whole-design equivalence verification.");
-        report.message = "Functional gate merge exceeded its time limit and was rolled back.";
-        summary.wholeDesignTimedOut = true;
-        summary.totalElapsedSeconds = elapsedSeconds();
-        report.functionalMerge = std::move(summary);
-        return report;
-    }
-
-    const WholeDesignEquivalenceReport equivalence =
-        checkWholeDesignEquivalence(before, remainingTime);
-    summary.wholeDesignEquivalenceChecked = true;
-    summary.wholeDesignEquivalent = equivalence.ok && equivalence.equivalent;
-    summary.wholeDesignTimedOut = equivalence.timeBudgetExceeded;
-    report.validation.equivalenceChecked = true;
-    report.validation.functionallyEquivalent =
-        equivalence.ok && equivalence.equivalent;
-    report.validation.equivalenceMethod = EquivalenceCheckMethod::WholeDesignSat;
-    report.validation.messages.push_back(equivalence.message);
-    for (const std::string& warning : equivalence.warnings) {
-        report.addWarning(warning);
-    }
-    for (const std::string& reason : equivalence.unsupportedReasons) {
-        report.addWarning(reason);
-    }
-
-    if (!equivalence.ok || !equivalence.equivalent) {
-        restoreFrom(before);
-        report.success = false;
-        report.rolledBack = true;
-        report.message = equivalence.timeBudgetExceeded
-            ? "Whole-design equivalence timed out; functional gate merge was rolled back."
-            : "Whole-design equivalence failed; functional gate merge was rolled back.";
-    } else {
-        report.success = true;
-        report.changed = summary.mergedGateCount > 0;
-        report.message = "Functionally equivalent gates were merged and whole-design equivalence was proved.";
-    }
+    report.success = true;
+    report.changed = summary.mergedGateCount > 0;
+    certifyEquivalence(
+        report,
+        EquivalenceCheckMethod::CertifiedRewrite,
+        "Each removed gate output was SAT-proven equivalent to its cycle-safe representative; final whole-design SAT was not executed.");
+    report.message =
+        "Functionally equivalent gates were merged using SAT-proven classes and cycle-safe rewrites.";
 
     summary.totalElapsedSeconds = elapsedSeconds();
     report.functionalMerge = std::move(summary);

@@ -2162,7 +2162,7 @@ Official bounded smoke：
 8. FunctionSearchQuery（NAND pair 與 equivalent gate-pair modes 已完成）
    - existing pair search，例如 NAND(a,b) == target。
    - whole/cone scope 內的 SAT-proven functional-equivalent gate pairs 與 gate-type filter。
-   - 實際 functional merge 由 `EditApply::MergeFunctionallyEquivalentGates` 負責，已完成 cycle-safe apply、whole-design SAT 與 rollback。
+   - 實際 functional merge 由 `EditApply::MergeFunctionallyEquivalentGates` 負責，已完成 SAT-class proof、cycle-safe apply、結構驗證與 failure rollback；正式流程不執行 final whole-design SAT。
    - official test38 已確認為 structural duplicates，可由 `MergeStructurallyEquivalentGates` 完整移除 14 gates；general observability-only redundancy search/removal 仍屬 hidden-case hardening。
 
 9. SequentialPatternQuery

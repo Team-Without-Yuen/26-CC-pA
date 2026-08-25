@@ -30,6 +30,35 @@ function Assert-NotContains([string] $Text, [string] $Unexpected, [string] $Labe
 $read = "read $circuit"
 
 # ---------------------------------------------------------------------------
+# PortInfo declaration bounds：scalar metadata 必須保存原始 left/right order。
+# ---------------------------------------------------------------------------
+
+$rangeCircuit = Join-Path $PSScriptRoot 'port_ranges.v'
+$descendingPort = Invoke-Tools @(
+    "read $rangeCircuit",
+    'structure_query port_info descending'
+)
+Assert-Contains $descendingPort '  width: 4' 'descending bus reports width'
+Assert-Contains $descendingPort '  declaration_left_bound: 3' 'descending bus keeps left bound'
+Assert-Contains $descendingPort '  declaration_right_bound: 0' 'descending bus keeps right bound'
+
+$ascendingPort = Invoke-Tools @(
+    "read $rangeCircuit",
+    'structure_query port_info ascending'
+)
+Assert-Contains $ascendingPort '  width: 3' 'ascending bus reports width'
+Assert-Contains $ascendingPort '  declaration_left_bound: 0' 'ascending bus keeps left bound'
+Assert-Contains $ascendingPort '  declaration_right_bound: 2' 'ascending bus keeps right bound'
+
+$scalarPort = Invoke-Tools @(
+    "read $rangeCircuit",
+    'structure_query port_info scalar_out'
+)
+Assert-Contains $scalarPort '  is_bus: false' 'scalar port remains scalar'
+Assert-Contains $scalarPort '  declaration_left_bound: -1' 'scalar port has no left range'
+Assert-Contains $scalarPort '  declaration_right_bound: -1' 'scalar port has no right range'
+
+# ---------------------------------------------------------------------------
 # fixture 基準：AND=3 OR=1 NAND=3 NOR=2 NOT=2 BUF=1 XOR=2 XNOR=1 DFF=2，共 17 顆
 # 其中 g_dead 是不驅動任何輸出的 dangling XOR，供 tombstone 檢查使用
 # ---------------------------------------------------------------------------
@@ -341,9 +370,14 @@ Assert-NotContains $afterEditNetClasses '  n_dead' 'removed net name never surfa
 # ---------------------------------------------------------------------------
 
 $connectedIssues = Invoke-Tools @($read, 'structure_query structural_issues')
+Assert-Contains $connectedIssues '  undriven nets:' 'connected fixture reports the undriven category count'
+Assert-Contains $connectedIssues '  no-load nets:' 'connected fixture reports the no-load category count'
+Assert-Contains $connectedIssues '  floating nets:' 'connected fixture reports the floating category count'
 Assert-Contains $connectedIssues '  unconnected gates: 0' 'connected fixture reports a valid zero gate count'
 Assert-Contains $connectedIssues '  unconnected input pins: 0' 'connected fixture reports a valid zero input-pin count'
 Assert-Contains $connectedIssues '  unconnected output pins: 0' 'connected fixture reports a valid zero output-pin count'
+Assert-Contains $connectedIssues '  floating primary-input nets:' 'connected fixture reports the floating-PI category count'
+Assert-Contains $connectedIssues '  unconnected primary-output nets:' 'connected fixture reports the unconnected-PO category count'
 
 $pinCircuit = Join-Path $PSScriptRoot 'unconnected_pins.v'
 $pinIssues = Invoke-Tools @(
@@ -364,7 +398,9 @@ Assert-NotContains $pinIssues 'gate=g_ok type=BUF direction=' 'fully connected g
 # 大型 pin issue 必須依 4096-token policy 自動改寫完整 artifact。
 $largeCircuit = Join-Path $PSScriptRoot 'generated_unconnected_large.v'
 $largeLines = [System.Collections.Generic.List[string]]::new()
-$largeLines.Add('module generated_unconnected_large(input a, output y);')
+$largeLines.Add('module generated_unconnected_large(a, y);')
+$largeLines.Add('input a;')
+$largeLines.Add('output y;')
 for ($i = 0; $i -lt 150; ++$i) {
     $largeLines.Add("wire n$i;")
     $largeLines.Add("and g_hole_$i(n$i, a, );")
@@ -378,8 +414,14 @@ try {
         "read $largeCircuit",
         'structure_query structural_issues'
     )
+    Assert-Contains $largeIssues '  undriven nets: 0' 'large query preserves the exact undriven-net count'
+    Assert-Contains $largeIssues '  no-load nets: 150' 'large query preserves the exact no-load-net count'
+    Assert-Contains $largeIssues '  floating nets: 150' 'large query preserves the exact floating-net count'
     Assert-Contains $largeIssues '  unconnected gates: 150' 'large query preserves exact gate count'
     Assert-Contains $largeIssues '  unconnected input pins: 150' 'large query preserves exact pin count'
+    Assert-Contains $largeIssues '  unconnected output pins: 0' 'large query preserves the exact output-pin count'
+    Assert-Contains $largeIssues '  floating primary-input nets: 0' 'large query preserves the exact floating-PI count'
+    Assert-Contains $largeIssues '  unconnected primary-output nets: 0' 'large query preserves the exact unconnected-PO count'
     Assert-Contains $largeIssues 'list artifact complete: yes' 'large pin report uses a complete artifact'
     Assert-Contains $largeIssues 'response token limit: 4096' 'large pin report uses the official token limit'
     Assert-Contains $largeIssues 'artifact triggered by token estimate: yes' 'large pin report records the trigger'
@@ -394,6 +436,11 @@ try {
         throw "[large pin artifact file] File does not exist: $artifactPath"
     }
     $artifactText = Get-Content -LiteralPath $artifactPath -Raw
+    Assert-Contains $artifactText '  undriven net count: 0' 'artifact fields preserve the undriven-net count'
+    Assert-Contains $artifactText '  no-load net count: 150' 'artifact fields preserve the no-load-net count'
+    Assert-Contains $artifactText '  floating net count: 150' 'artifact fields preserve the floating-net count'
+    Assert-Contains $artifactText '  floating primary-input net count: 0' 'artifact fields preserve the floating-PI count'
+    Assert-Contains $artifactText '  unconnected primary-output net count: 0' 'artifact fields preserve the unconnected-PO count'
     Assert-Contains $artifactText 'Unconnected pin details (150):' 'artifact contains every pin record'
     Assert-Contains $artifactText 'gate=g_hole_0 type=AND direction=input pin=IN2' 'artifact contains the first pin record'
     Assert-Contains $artifactText 'gate=g_hole_149 type=AND direction=input pin=IN2' 'artifact contains the last pin record'

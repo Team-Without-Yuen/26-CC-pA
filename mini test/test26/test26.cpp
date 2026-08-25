@@ -164,8 +164,10 @@ int main() {
                    mergeReport.validation.equivalenceChecked &&
                    mergeReport.validation.functionallyEquivalent &&
                    mergeReport.validation.equivalenceMethod ==
-                       EquivalenceCheckMethod::WholeDesignSat,
-               "functional merge passes mandatory whole-design SAT");
+                       EquivalenceCheckMethod::CertifiedRewrite &&
+                   mergeReport.functionalMerge &&
+                   !mergeReport.functionalMerge->wholeDesignEquivalenceChecked,
+               "functional merge uses SAT-proven classes without final whole-design SAT");
     test.check(mergeReport.functionalMerge &&
                    mergeReport.functionalMerge->searchComplete &&
                    mergeReport.functionalMerge->equivalenceClassCount == 2 &&
@@ -232,29 +234,28 @@ int main() {
                    timeoutMergeReport.functionalMerge->searchTimedOut,
                "search timeout is reported before any mutation occurs");
 
-    Netlist rollbackMergeNetlist;
+    Netlist endpointFreeMergeNetlist;
     test.check(reader.read(
                    "mini test/test26/functional_merge_rollback_circuit.v",
-                   rollbackMergeNetlist),
-               "rollback functional merge loads a design without endpoints");
-    const size_t rollbackBefore =
-        rollbackMergeNetlist.collectNetlistStats().activeGateCount;
-    const auto rollbackMergeReport =
-        rollbackMergeNetlist.runEditApply(mergeRequest);
-    test.check(!rollbackMergeReport.success && rollbackMergeReport.changed &&
-                   rollbackMergeReport.rolledBack &&
-                   rollbackMergeReport.functionalMerge &&
-                   rollbackMergeReport.functionalMerge->mergedGateCount == 1 &&
-                   rollbackMergeReport.functionalMerge
+                   endpointFreeMergeNetlist),
+               "functional merge loads a design without endpoints");
+    const size_t endpointFreeBefore =
+        endpointFreeMergeNetlist.collectNetlistStats().activeGateCount;
+    const auto endpointFreeMergeReport =
+        endpointFreeMergeNetlist.runEditApply(mergeRequest);
+    test.check(endpointFreeMergeReport.success && endpointFreeMergeReport.changed &&
+                   !endpointFreeMergeReport.rolledBack &&
+                   endpointFreeMergeReport.functionalMerge &&
+                   endpointFreeMergeReport.functionalMerge->mergedGateCount == 1 &&
+                   !endpointFreeMergeReport.functionalMerge
                        ->wholeDesignEquivalenceChecked &&
-                   !rollbackMergeReport.functionalMerge->wholeDesignEquivalent,
-               "failed whole-design verification reports the attempted merge and rollback");
+                   endpointFreeMergeReport.validation.equivalenceMethod ==
+                       EquivalenceCheckMethod::CertifiedRewrite,
+               "endpoint-free functional merge uses its rewrite certificate");
     test.check(
-        rollbackMergeNetlist.collectNetlistStats().activeGateCount == rollbackBefore &&
-            rollbackMergeNetlist.getGateId("g_and2") >= 0 &&
-            rollbackMergeNetlist.getGate(
-                rollbackMergeNetlist.getGateId("g_and2")).type == GateType::AND,
-        "rollback restores every removed gate in the current design");
+        endpointFreeMergeNetlist.collectNetlistStats().activeGateCount ==
+            endpointFreeBefore - 1,
+        "endpoint-free functional merge commits the duplicate removal");
 
     std::cout << "Summary: " << test.passed << " passed, "
               << test.failed << " failed.\n";

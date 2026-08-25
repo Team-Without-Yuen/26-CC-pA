@@ -153,6 +153,9 @@ struct FunctionalMergeSummary {
     std::string searchStatus;
     bool searchComplete = false;
     bool searchTimedOut = false;
+    bool applyTimedOut = false;
+    // Legacy compatibility fields. Functional merge no longer runs a final
+    // whole-design SAT pass, so these remain false.
     bool wholeDesignEquivalenceChecked = false;
     bool wholeDesignEquivalent = false;
     bool wholeDesignTimedOut = false;

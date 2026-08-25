@@ -227,12 +227,35 @@ std::vector<ConnectivityPinRecord> loadPinRecordsForNetIds(
     return records;
 }
 
+// Keep scalar category metadata available when detailed lists are externalized.
+void finalizeFanoutLoadCounts(FanoutLoadReport& report) {
+    report.combinationalGateLoadCount = report.combinationalGateLoads.size();
+    report.dffDataLoadCount = report.dffDataLoads.size();
+    report.dffClockLoadCount = report.dffClockLoads.size();
+    report.dffResetSetLoadCount = report.dffResetSetLoads.size();
+    report.dffOtherLoadCount = report.dffOtherLoads.size();
+    report.distinctGateLoadIds.clear();
+    report.distinctGateLoadIds.reserve(report.allGateLoadIds.size());
+    std::unordered_set<int> seenGateIds;
+    for (int gateId : report.allGateLoadIds) {
+        if (seenGateIds.insert(gateId).second) {
+            report.distinctGateLoadIds.push_back(gateId);
+        }
+    }
+    report.distinctGateLoadCount = report.distinctGateLoadIds.size();
+    report.totalLoadCount = report.combinationalGateLoadCount +
+                            report.dffDataLoadCount +
+                            report.dffClockLoadCount +
+                            report.dffResetSetLoadCount +
+                            report.dffOtherLoadCount +
+                            report.primaryOutputLoadCount;
+}
+
 // 將 rhs 的 fanout load 分類合併到 lhs；bus aggregate 會使用這個 helper。
 void mergeFanoutLoadReport(FanoutLoadReport& lhs, const FanoutLoadReport& rhs) {
     lhs.ok = lhs.ok || rhs.ok;
     lhs.drivesPrimaryOutput = lhs.drivesPrimaryOutput || rhs.drivesPrimaryOutput;
     lhs.primaryOutputLoadCount += rhs.primaryOutputLoadCount;
-    lhs.totalLoadCount += rhs.totalLoadCount;
 
     lhs.combinationalGateLoads.insert(lhs.combinationalGateLoads.end(),
                                       rhs.combinationalGateLoads.begin(),
@@ -252,6 +275,7 @@ void mergeFanoutLoadReport(FanoutLoadReport& lhs, const FanoutLoadReport& rhs) {
     lhs.allGateLoadIds.insert(lhs.allGateLoadIds.end(),
                               rhs.allGateLoadIds.begin(),
                               rhs.allGateLoadIds.end());
+    finalizeFanoutLoadCounts(lhs);
 }
 
 bool isValidFanoutFilter(FanoutPredicate predicate,
@@ -466,7 +490,7 @@ FanoutLoadReport Netlist::getFanoutLoadReport(int netId) const {
         report.primaryOutputLoadCount = 1;
     }
 
-    report.totalLoadCount = report.allGateLoadIds.size() + report.primaryOutputLoadCount;
+    finalizeFanoutLoadCounts(report);
     return report;
 }
 
