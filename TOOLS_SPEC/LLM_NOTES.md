@@ -41,6 +41,27 @@ tools command 不知道原始 prompt，也不負責撰寫最終自然語言答�
 不要在 command grammar 後附加自然語言、註解或未定義 token。固定 arity mode 必須嚴格遵守
 其文件列出的參數數量。
 
+### 2.1 高容錯 command 選擇 invariant
+
+LLM 應選擇「最少額外推理即可直接回答原 prompt」的 public mode。以下規則適用所有 tools：
+
+1. 有 batch/ranking/filter mode 能直接回傳完整 winner、ties、threshold matches 或衍生集合時，
+   不使用只回一個 representative 的 legacy mode，也不逐物件 loop 後自行拼接。
+2. Prompt 使用單數 `which` 不代表答案一定唯一。Extrema query 必須保留所有同一 metric level 的
+   ties，最後答案可明確說明並列。
+3. 未指定方向的 `logic cone of output X` 預設為 feeding X 的 transitive fanin；
+   `affected/reachable/downstream from X` 才是 transitive fanout。`status:ok` 不能彌補方向錯誤。
+4. Prompt 明確指定 start 與 end scopes 時，extrema/depth 必須使用同一 endpoint-scoped path mode，
+   不可改用會納入其他 endpoints 的 global summary。
+5. 優先使用能在單一 report 同時提供 prompt 所需 scalar 與 identities 的 mode，例如
+   `fanout_load` 同時提供 QA pin-level fanout 與 `Direct load gates`。
+6. Edit/optimization 後詢問 `current/now/after` 的性質時，重新查 current design；只有詢問上一步
+   delta、changed names 或 operation status 時才讀 `report_query last_edit`。
+7. 每個 RUN 只能有一個 public command。禁止使用 `;`、`&&`、`||`、pipe 或換行串接命令；
+   複合題以多個 LLM turns 逐一呼叫，再組合 complete semantic fields。
+8. 不主動加入 prompt 未要求的 `--with-pins`、path detail、result limit、time limit 或相容 flag。
+   額外 payload 不能提高正確性，反而可能造成 parser、token 與 routing 風險。
+
 ## 3. Envelope 與完整性
 
 每次 command 都先讀 `status` 與 `complete`，再讀具語意名稱的 `data` 欄位：
