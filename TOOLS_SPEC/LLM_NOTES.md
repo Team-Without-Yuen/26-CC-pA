@@ -29,7 +29,7 @@ tools command 不知道原始 prompt，也不負責撰寫最終自然語言答�
 每個 prompt 依下列順序處理：
 
 ```text
-解析量詞、物件、scope、filter、constraint 與輸出要求
+解析 operation、object、scope、direction、metric、quantifier、state 與 output shape
 -> 選擇 authoritative public command
 -> 送出最少且語意完整的參數
 -> 核對 result 的 command/mode/source/target/scope/revision
@@ -61,6 +61,9 @@ LLM 應選擇「最少額外推理即可直接回答原 prompt」的 public mode
    複合題以多個 LLM turns 逐一呼叫，再組合 complete semantic fields。
 8. 不主動加入 prompt 未要求的 `--with-pins`、path detail、result limit、time limit 或相容 flag。
    額外 payload 不能提高正確性，反而可能造成 parser、token 與 routing 風險。
+9. 不以單一關鍵字決定 family/mode。`output` 不等於 fanout、`depth` 不一定是 DepthQuery、
+   `count` 不一定是 whole-design summary、`equivalent` 也不一定是 whole-design equivalence；
+   必須由完整 semantic tuple 決定 owner。
 
 ## 3. Envelope 與完整性
 

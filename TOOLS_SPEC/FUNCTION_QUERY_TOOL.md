@@ -17,9 +17,22 @@ generic list artifact，單次 response 只會有一個 `output_file`。
 
 ## 2. 選擇條件
 
-已知要分析的 net/bus 名稱，且 prompt 出現 `functionally equivalent`、`when condition`、`always 0/1`、`can be`、`depends on`、`symmetric`、`Boolean expression` 或 `support inputs` 時使用本 tool。
+當 prompt 已提供要判定的 target net/bus，以及 property 所需的其他 operand identities 時，使用
+本 tool 對這組已知 signals 做 Boolean analysis。mode 由 property 決定：同一 current design
+內的 equivalence、條件式 equivalence、可滿足值、constant/truth status、functional dependence、
+input symmetry、Boolean equation 或 support boundaries。
 
-候選名稱未知、要求從全設計找一組 signals 時使用 `func_search`。比較 current/original 兩份 design 使用 `equiv_query`。
+責任邊界：
+
+- operand identities 未知，答案必須掃描 candidate domain 找 witness/list/count 時，使用
+  `func_search`。
+- 比較的是兩個 named signals，而不是兩份 design，使用本工具的 `equivalence`。
+- 比較 current design 與 original/previous design 的 whole-design state，使用 `equiv_query`。
+- structural fanin leaves 或 cone size 不需要 Boolean proof，使用 Structure/Cone；exact functional
+  dependence 才使用本工具。
+
+不能只因 prompt 出現 `equivalent`、`constant` 或 `input` 就選本工具；必須先確認 proof object
+是已知 signal property，而非 candidate search、design baseline comparison 或結構屬性。
 
 ## 3. Command Grammar
 

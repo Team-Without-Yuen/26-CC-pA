@@ -18,9 +18,22 @@ error。這和「物件仍存在，但兩端沒有 path」的成功 `No`/零結�
 
 ## 2. 選擇條件
 
-prompt 出現 `path from A to B`、`through`、`avoid`、`every path`、`shortest`、`longest between endpoints`、`top-K`、`Nth path`、`register-to-register`、`mandatory`、`articulation points between A and B`、`separator` 或 `cut` 時使用本 tool。即使題目使用 `logic depth` 字樣，只要明確限定 start scope 與 end scope（例如 `from any primary input to any DFF D-pin`），仍使用本 tool 的 `max_depth`，不能改用包含其他 startpoints 的全域 depth query。
+當答案是「某個 start set 與 end set 之間的 directed combinational path relation」時使用本
+tool。先辨識 endpoints，再辨識要回答的 path population：
 
-只問某物件可到達的完整範圍使用 `cone_query`；全設計 maximum depth/critical endpoint 使用 `depth_query`。
+- existence/witness：是否存在、任一條、最短或最長的一條。
+- population：所有 paths、path count、depth-filtered paths、Top-K 或 Nth path。
+- universal constraint：每條 path 是否經過/避開指定 node、mandatory nodes。
+- separation：candidate 是否切斷指定 endpoints，或 PI-to-PO directed cut。
+
+即使題目使用 `logic depth`、`critical` 或 `register` 字樣，只要 start scope 與 end scope 被明確
+限制，depth 就是該 endpoint relation 上的 path metric，owner 仍是 `path_query`。反之，若題目
+要量測 current design 所有 timing endpoints 的 arrival-depth distribution 或 global maximum，
+使用 `depth_query`。
+
+只問某 root 的完整 ancestors/descendants 集合而沒有 end constraint 時使用 `cone_query`；只問
+一層 driver/load adjacency 時使用 `structure_query`。不能因 prompt 出現 `path` 字樣，就把
+critical endpoint summary 或 rooted cone 強制送到本工具。
 
 ## 3. Command Grammar
 
