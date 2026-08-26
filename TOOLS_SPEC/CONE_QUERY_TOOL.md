@@ -11,7 +11,7 @@ breakdown、artifact completeness 與 `output_file`。4096-token 保守估算門
 
 ## 2. 選擇條件
 
-prompt 出現 `transitive fanin`、`transitive fanout`、`cone`、`reachable`、`can affect`、`shared fanin`、`largest cone`、`smallest cone`、`second-largest cone`、`top/bottom cone`，或要求 outputs 的 cone size exact/comparison/range 時使用本 tool。
+prompt 出現 `transitive fanin`、`transitive fanout`、`cone`、`reachable`、`can affect`、`shared fanin`、`largest cone`、`smallest cone`、`second-largest cone`、`top/bottom cone`，或要求 outputs 的 cone size exact/comparison/range 時使用本 tool。`logic cone of output X`、`cone of X` 未明說方向時預設為 feeding X 的 `net_fanin X`；只有 `affected by X`、`reachable from X`、`downstream of X` 等語意使用 `net_fanout X`。
 
 只問一層 driver/load 使用 `structure_query`；指定 A 到 B 的 path/through/avoid 使用 `path_query`；depth/critical 使用 `depth_query`。
 
@@ -45,7 +45,7 @@ with_paths | --with-paths
 | `net_fanout` | `<net> [options]` | net 的 transitive fanout | 同上 |
 | `gate_fanin` | `<gate> [options]` | gate 的 transitive fanin | 同上 |
 | `gate_fanout` | `<gate> [options]` | gate 的 transitive fanout | 同上 |
-| `largest_output` | `[options]` | 比較所有 PO fanin cones | `source`、checked outputs、scope/filter counts |
+| `largest_output` | `[options]` | legacy 單一 representative；只供舊 command 相容 | `source`、checked outputs、scope/filter counts |
 | `output_rank` | `<metric> <mode> [k] [options]` | 依 cone metric 排名所有 PO bits，保留完整 ties | ranking counts、`Ranked output cones` |
 | `output_filter` | `<metric> <predicate> <value> [upper] [options]` | 依 cone metric threshold/range 篩選所有 PO bits | matched count、`Matched output cones` |
 | `shared_fanin` | `<net_a> <net_b> [options]` | 兩個 nets 的 shared fanin gates | sources、scope/filter counts、names/details |
@@ -83,8 +83,9 @@ PI/PO/constant 標記。只有 prompt 明確要求 connection、pin 或每顆 ga
 | cone 內各 gate type breakdown | 不傳 filter，讀 `Gate type counts` |
 | 列出符合 type 的 gates | 傳 filter，讀 `Cone gates` |
 | 列出 gate pin/net details | 加 `--with-pins`，讀 `Gate connection details` |
-| 哪個 output cone 最大 | `source` 與 `scope gates`；output 選擇不受 filter 影響 |
-| 所有最大/最小 ties | `output_rank ... highest/lowest`，讀 `Ranked output cones` |
+| 哪個/哪些 output cone 最大 | `output_rank gates highest`，讀全部 `Ranked output cones` ties |
+| 哪個/哪些 output cone 最小 | `output_rank gates lowest`，讀全部 `Ranked output cones` ties |
+| 指定 type 後的最大/最小 cone | `output_rank filtered_gates highest/lowest --gate-types ...` |
 | 第 N 大/小 cone | `output_rank ... nth_highest/nth_lowest N`，讀 `requested rank exists` 與 ranking list |
 | 前/後 K 個 cone-size levels | `output_rank ... top/bottom K`；完整保留每個 level 的 ties |
 | cone metric 等於/不等於/大於/小於門檻 | `output_filter <metric> <eq|ne|gt|ge|lt|le> <value>` |
@@ -122,9 +123,15 @@ Read: Cone gates
 ```
 
 ```text
-Prompt: Which outputs tie for the largest fanin cone?
+Prompt: Which primary output has the largest fanin logic cone?
 Command: cone_query output_rank gates highest
-Read: Ranked output cones；不要只讀 source
+Read: Ranked output cones；即使 prompt 使用單數，也要回答全部最大 ties，不要只讀 source
+```
+
+```text
+Prompt: Report the number of each gate type in the logic cone of output n6[0].
+Command: cone_query net_fanin n6[0]
+Read: Gate type counts；output logic cone 未指定方向時是 fanin，不能改成 net_fanout
 ```
 
 ```text
@@ -148,8 +155,9 @@ Read: matched output count；大型完整 records 交付於 output_file
 ## 7. 限制
 
 - `with_paths` 是 cone 內 local path 摘要，不等於列出所有 paths。
-- `largest_output` 是 legacy 單一 winner：gate count 同分時再比 net count，仍同分保留先遇到者。
-  題目要求 ties、第 N 或 top/bottom 時必須使用 `output_rank`，不可從 `largest_output` 猜測。
+- `largest_output` 是 legacy 單一 representative：gate count 同分時再比 net count，仍同分保留先遇到者。
+  它不能證明 winner 唯一，LLM 不得用它回答自然語言 extrema prompt。Largest/smallest、單數/複數、
+  ties、第 N 與 top/bottom 一律使用 `output_rank`。
 - `output_rank` 的 `source` 只代表 selected ranking entries 的第一筆及其 cone payload；完整排名
   必須讀 `Ranked output cones`。要求的 Nth level 不存在時是 `status:ok`、空 list、
   `requested rank exists:no`。

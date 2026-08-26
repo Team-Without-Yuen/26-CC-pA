@@ -52,6 +52,34 @@ TOOL_RESULT_END
     > whole-design generic query
 ```
 
+### 高容錯 mode 選擇
+
+多個 public mode 都能產生看似合理的結果時，優先選擇能直接、完整保留 prompt 語意的 mode，
+不要依賴 LLM 事後從代表值、sample、舊狀態或多份 records 補推答案：
+
+```text
+完整 batch/ranking/filter report
+    > 單一 representative 或 legacy compatibility mode
+同一 report 同時提供 prompt 所需 scalar + identities
+    > 分開查詢後由 LLM 猜測兩者關係
+明確 start/end scope 的 path query
+    > 可能包含其他 startpoint/endpoint 的 global query
+修改後對 current design 重新查詢
+    > 沿用修改前的自然語言答案或 summary
+```
+
+具體預設：
+
+- output cone 的 largest/smallest/highest/lowest，即使 prompt 使用單數 `which output`，也使用
+  `cone_query output_rank ... highest/lowest`，完整保留 ties；不使用 legacy `largest_output`。
+- `the logic cone of output X`、`the cone of X`、`logic feeding X` 未明說方向時一律是
+  `net_fanin X`；只有 `affected by X`、`reachable from X`、`downstream of X` 才是 `net_fanout X`。
+- register-to-register、PI-to-DFF.D 等已指定 start/end scope 的最長或最短 depth 使用
+  `path_query max_depth/min_depth`；不能用全域 `depth_query global_critical` 代替。
+- 同時問 official fanout count 與直接 load gates 時使用一次 `structure_query fanout_load`，
+  同時讀 pin-level count 與 `Direct load gates`；不以 `net_loads` 的去重 gate count 冒充 fanout。
+- 每次 RUN 只含一個 command；禁止使用 `;`、`&&`、`||` 或換行拼接多個 command。
+
 ### Scoped query 優先於 global query
 
 `in the cone of n8`、`between A and B`、`driven by n0` 等文字會限制答案範圍，
@@ -224,6 +252,7 @@ types 以空白或逗號分隔；不得把「NOR and NOT only」解讀為只允�
 | 名稱 | 完整保留 gate/net/port 名稱；bus bit `n4[0]` 不得改成 `n4` |
 | Scope | whole、fanin、fanout、指定 endpoints 與指定 candidate set 不得互換 |
 | 比較題 | `A or B which...` 分別查 A、B，核對 identity/complete 後比較相同 semantic metric；集合比較另依 `LLM_NOTES.md` 讀 records 或用專用 query |
+| Extrema / ranking | largest/smallest/highest/lowest 預設保留完整 ties；使用 batch ranking mode，不取 legacy representative |
 | 修改後追問 | edit/opt 後重新查 current design；詢問修改 delta 才使用 `report_query last_edit` |
 | Sequential boundary | DFF.Q fanin 是空 combinational cone；空結果不是 error，也不能回追同一顆 DFF.D |
 | 完整性 | 只有 `complete:true` 及對應 artifact complete 才能宣稱 `all` 已完整 |
@@ -365,7 +394,8 @@ pin-level load 數，`distinct direct-load gate count` 與 `Direct load gates` �
 - 統計 cone 內 gate 數量或各 gate type 數量。
 - 以一種或多種 gate type 篩選 cone，並取得 filter 後 gates 或完整 pin/net details。
 - 比較或尋找 shared fanin gates。
-- 查詢 largest output cone，以及保留 ties 的 highest/lowest/Nth/top/bottom output cone ranking。
+- 以 tie-preserving ranking 查詢 largest/smallest/highest/lowest/Nth/top/bottom output cone；
+  `largest_output` 只保留作 legacy compatibility。
 - 依 gate/net count 的 exact、comparison 或 inclusive range 篩選所有 output cones。
 
 典型 prompt：
@@ -388,8 +418,9 @@ breakdown、完整性與 `output_file`；小型 cone 維持直接列出全部名
 
 prompt 指定 gate type 時使用 `--gate-types <type...>`；支援 `AND OR NOT NAND NOR XOR
 XNOR BUF DFF`，多個 type 是聯集。prompt 要求 pin/net connection 時再加 `--with-pins`。
-單一 legacy 最大值使用 `largest_output`；若題目要求 ties、smallest、Nth 或 top/bottom，使用
-`output_rank`，並從完整 `Ranked output cones` 判讀，不可只取代表性的 `source`。
+所有自然語言的 largest/smallest/highest/lowest/Nth/top/bottom 題目都使用 `output_rank`，並從
+完整 `Ranked output cones` 判讀全部 ties，不可只取代表性的 `source`。`largest_output` 只供
+舊 command 相容，不是 LLM routing 選項。
 若題目要求 outputs 的 cone count threshold/range，使用 `output_filter`，讀
 `matched output count` 與完整 `Matched output cones`；大型結果由工具自動寫 artifact。
 
