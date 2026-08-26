@@ -10,11 +10,22 @@
 
 ## 2. 選擇條件
 
-prompt 出現 `logic depth`、`level`、`critical path`、`maximum depth`、`deepest output`、
-depth 的 exact/comparison/range、`gate on critical path`，或要求列出/計數所有 critical gates
-時使用本 tool。
+當答案來自 current design 的 timing endpoint arrival depth 時使用本 tool。它負責的 object/scope
+組合是：指定 net、所有 PO、所有 DFF.D、PO+DFF.D 的全域 endpoint 集合，以及全域
+maximum-depth paths 上的 gate 聯集。
 
-若動詞是 `reduce`、`minimize`、`optimize`、`best`，或題目提供 cost function，屬於 optimization，不是 `depth_query`。
+mode 由 quantifier 與 output shape 決定：
+
+- 單一 endpoint depth：`net`。
+- 完整 endpoint distribution：`all_po` / `all_dff_d`。
+- exact、threshold 或 inclusive range 的 endpoint subset：`filter`、`po_exceeding` 或 `exceeding`。
+- current global maximum 與一條 witness：`global_critical`；僅比較 PO 時是 `deepest_output`。
+- 某 gate 是否位於任一 global maximum path：`gate_on_critical`；完整 gate 聯集或分類計數：
+  `critical_gates`。
+
+若 start scope 與 end scope 都被明確限定，問題是在該 endpoints relation 上量測 path depth，
+應使用 `path_query`，即使句中也有 `logic depth` 或 `critical path`。若 operation 是降低、最小化、
+改善或達成 target cost，屬於 optimization；`depth_query` 只能量測，不修改設計。
 
 ## 3. Command Grammar
 

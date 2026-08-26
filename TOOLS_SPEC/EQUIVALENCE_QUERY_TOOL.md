@@ -9,9 +9,13 @@
 
 ## 2. 選擇條件
 
-prompt 明確比較 current design 與「original/last loaded design」時使用 `original`；比較
-「previous/last edit 之前」時使用 `previous_edit`。同一份 current design 內兩條已知 nets
-是否等價，使用 `func_query equivalence`，不是本 tool。
+當 proof object 是兩份 design states 在同名 PO 與 DFF.D boundaries 上的 whole-design
+equivalence 時使用本 tool。baseline identity 決定 mode：最近一次成功 `read` 的 snapshot 使用
+`original`；最近一次 edit/optimization transaction 之前的 snapshot 使用 `previous_edit`。
+
+同一份 current design 內兩條已知 nets 的 Boolean equivalence 使用 `func_query equivalence`；
+上一筆 operation 的 certificate/delta 使用 `report_query last_edit`。不能只因 prompt 出現
+`equivalent` 或 `previous` 就選本工具，必須確認比較單位是 design state，而不是 signals 或 report。
 
 `edit_apply`/`opt_apply` 自己的 validation report 用於判斷該 transaction 是否可 commit；
 只有 prompt 額外要求 whole-design baseline comparison 時才另呼叫 `equiv_query`。
@@ -29,7 +33,7 @@ equiv_query previous_edit [time_budget_seconds]
 | Mode | Baseline | 適用問題 |
 |---|---|---|
 | `original` | 最近一次成功 `read` 建立的 snapshot | 最終 current 是否仍等價於原始題目設計 |
-| `previous_edit` | 最近一次 `edit_apply` 前 snapshot | 上一步 edit 是否保持功能 |
+| `previous_edit` | 最近一次 `edit_apply` 或 `opt_apply` 前 snapshot | 上一步 edit/optimization 是否保持功能 |
 
 ## 4. 輸出判讀
 
@@ -69,7 +73,7 @@ Read: complete, equivalent
 
 ## 6. 限制
 
-- `original` 需要先成功 `read`；`previous_edit` 需要先執行 `edit_apply`。
+- `original` 需要先成功 `read`；`previous_edit` 需要先執行 `edit_apply` 或 `opt_apply`。
 - `previous_edit` 對應最近一次 edit/optimization 前的 snapshot；若最近一次操作失敗、rollback 或 timeout，應先讀該次 `report_query last_edit`，不可拿更早一次成功 edit 的 delta 或 equivalence 結論回答本題。
 - 目前比較 PO 與 DFF.D next-state combinational boundary，不包含 DFF initial state 或 multi-cycle sequential equivalence。
 - 同一 design 內兩條 internal nets 的 equivalence 使用 `func_query equivalence`。

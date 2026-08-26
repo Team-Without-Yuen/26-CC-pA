@@ -8,7 +8,16 @@
 
 ## 2. 選擇條件
 
-prompt 明確指定 rename、cleanup、constant propagation、buffer insertion、gate replacement、basis conversion，或要求找出並合併重複 gate 時使用本 tool。若要求 `minimize`、`best depth` 或自動搜尋最佳 transformation，改用 `opt_apply critical_path_depth`，不是 `edit_apply`。
+當使用者已指定要執行的 transformation identity 時使用本 tool，例如 rename、某一層級的
+cleanup、constant simplification、buffer insertion、duplicate merge、gate replacement 或 basis
+conversion。這些 command 的核心是「套用指定 rewrite」，即使結果會改變 gate count/depth，也
+不會把它變成 cost-driven optimization。
+
+若使用者只指定 objective、scope 與 constraints，要求工具自行搜尋較小 gate count 或較低
+maximum depth 的 implementation，使用 `opt_apply`。判斷核心是 operation 是否已被指定，不是
+句中是否出現 `reduce`、`better` 或 `equivalent`。同一 prompt 同時包含 optimization objective
+與固定 hard transformation 時，依 [`OPTIMIZATION_TOOL.md`](OPTIMIZATION_TOOL.md) 的組合流程
+分別執行，不能拿其中一個 command 冒充另一個。
 
 ### 縮減類 mode 的涵蓋層級
 
@@ -27,13 +36,16 @@ remove_redundant_logic          ⊃ safe_cleanup_fixpoint
 | `remove_dead_logic` | 只移除無法從 PO / DFF 反向到達的邏輯 | prompt 說 dangling、unused、not contributing to any output |
 | `local_simplification_fixpoint` | 加上 constant folding、same/complementary input、buffer/inverter 清理 | prompt 說 simplify the logic、apply local simplifications |
 | `safe_cleanup_fixpoint` | 再加上 structural duplicate merge | prompt 說 clean up the netlist、apply all safe cleanups |
-| `remove_redundant_logic` | 再加上 SAT-proven 常數傳播、SAT-proven functional merge、untestable stuck-at 移除 | prompt 說 redundant、reduce gate count as much as possible，或不確定該用哪一個時 |
+| `remove_redundant_logic` | 再加上 SAT-proven 常數傳播、SAT-proven functional merge、untestable stuck-at 移除 | 要求移除所有可證明的 redundant combinational logic，且未指定較窄 cleanup 類別時 |
 
-**`remove_redundant_logic` 是縮減類的預設選擇。** 遇到以下情況一律使用它：
+**`remove_redundant_logic` 是 broad redundancy-removal transformation 的預設選擇。** 遇到以下情況使用它：
 
-- prompt 出現 redundant、remove anything that can be removed without changing functionality、minimize the gate count、make the design as small as possible
-- prompt 的縮減要求不明確，無法對應到上表的特定一層
-- 已呼叫某個特定 mode 但回報 `status:no_change`，而 prompt 要求必須有所縮減
+- operation 是移除所有可證明 redundant logic，而不是搜尋 global minimum gate-count design。
+- 題目要求 broad safe/redundancy cleanup，且無法對應到上表較窄的指定類別。
+
+若特定 mode 回 `status:no_change`，表示該指定 transformation 沒有適用機會；不得為了產生改動
+擅自升級成 `remove_redundant_logic`。若 semantic objective 本來就是最小化 gate count，則一開始
+就應使用 `opt_apply gate_count_minimization`，而不是把 cleanup pipeline 當 optimizer。
 
 反過來，prompt 明確指定了單一種類的縮減時，**要用對應的專用 mode**，因為只有專用 mode 的 report 才有該種類的精確計數。例如問「移除了多少 dangling gates」必須用 `remove_dead_logic` 讀 `dead_logic.removed_gate_count`；用 `remove_redundant_logic` 得到的是所有階段的總縮減量，那不是題目要的數字。
 

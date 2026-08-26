@@ -11,7 +11,14 @@ breakdown、artifact completeness 與 `output_file`。4096-token 保守估算門
 
 ## 2. 選擇條件
 
-prompt 出現 `transitive fanin`、`transitive fanout`、`cone`、`reachable`、`can affect`、`shared fanin`、`largest cone`、`smallest cone`、`second-largest cone`、`top/bottom cone`，或要求 outputs 的 cone size exact/comparison/range 時使用本 tool。`logic cone of output X`、`cone of X` 未明說方向時預設為 feeding X 的 `net_fanin X`；只有 `affected by X`、`reachable from X`、`downstream of X` 等語意使用 `net_fanout X`。
+當答案是由一個或多個 roots 出發，遞迴取得 transitive ancestors/descendants，或比較這些
+rooted sets 的 size/filter/rank 時使用本 tool。先辨識 root object（net、gate 或所有 PO），再由
+資訊流決定 direction，最後決定 metric、quantifier 與 output shape。
+
+`logic cone of output X` 或未限定方向的 output implementation，語意是 feeding X 的
+`net_fanin X`；只有題目要 X 所影響、可到達或驅動的 downstream 集合時才是 fanout。若只需
+一層 driver/load adjacency，使用 `structure_query`；若同時指定 start 與 end 並問兩者之間的
+path relation，使用 `path_query`。
 
 只問一層 driver/load 使用 `structure_query`；指定 A 到 B 的 path/through/avoid 使用 `path_query`；depth/critical 使用 `depth_query`。
 
@@ -67,6 +74,16 @@ rank 採 distinct metric levels，所有 boundary ties 都保留；Top/Bottom K 
 或 `between`。`between` 必須提供 inclusive lower/upper；其餘 predicate 只提供一個非負整數。
 所有 matches 依 output name、net ID 穩定排序。這是 summary-only batch query，只允許
 `--gate-types`；`with_paths` 與 `--with-pins` 會明確拒絕。
+
+方向依 root 與資訊流判斷，不依英文中是否剛好出現 `input` 或 `output`：
+
+| Prompt 所問集合 | Direction | Mode |
+|---|---|---|
+| 哪些 logic feeds、implements、determines、can affect root | root 的 ancestors | `net_fanin` / `gate_fanin` |
+| root can affect、can reach、drives downstream 的哪些 logic | root 的 descendants | `net_fanout` / `gate_fanout` |
+| output 的 logic cone，未明說 downstream/reachable-from | output 的 implementation | `net_fanin` |
+| 多個 PO cone 的 extrema/rank/threshold | 每個 PO 的 fanin metric | `output_rank` / `output_filter` |
+| 兩個 roots 共同依賴哪些 upstream gates | fanin intersection | `shared_fanin` |
 
 `with_paths` 額外要求 local longest/shortest path 摘要，主要欄位為 `longest local path depth`、`shortest local path depth` 與 longest path nets。
 
@@ -126,12 +143,6 @@ Read: Cone gates
 Prompt: Which primary output has the largest fanin logic cone?
 Command: cone_query output_rank gates highest
 Read: Ranked output cones；即使 prompt 使用單數，也要回答全部最大 ties，不要只讀 source
-```
-
-```text
-Prompt: Report the number of each gate type in the logic cone of output n6[0].
-Command: cone_query net_fanin n6[0]
-Read: Gate type counts；output logic cone 未指定方向時是 fanin，不能改成 net_fanout
 ```
 
 ```text

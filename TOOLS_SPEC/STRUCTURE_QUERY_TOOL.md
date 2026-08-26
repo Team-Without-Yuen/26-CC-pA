@@ -11,14 +11,16 @@ terminal 只回 count、artifact completeness 與 `output_file`。這個門檻�
 
 ## 2. 選擇條件
 
-下列 prompt 優先使用本 tool：
+當題目所需資料可由 current named netlist 的物件屬性或一層 adjacency 直接決定時使用本 tool：
 
-- `how many`、`list`、`gate type`、`PI/PO/DFF count`，以及 internal/constant net 分類。
-- `floating`、`undriven`、`no load`、`unconnected`。
-- `driver`、`load`、`input pin`、`output net`、`direct fanin/fanout`。
-- `fanout load`、`fanout limit`、`DFFs driven by clock/reset net`。
+- design/object inventory：active gate/net、gate type、PI/PO/DFF、port width/range、net class。
+- structural state：是否 undriven、no-load、floating、unconnected，以及 exact unconnected pins。
+- direct adjacency：某 net 的 driver/load gates、某 gate 的 immediate input/output/fanin/fanout。
+- pin-level load metric：QA fanout、fanout extrema/rank/threshold，以及 clock/reset net 的 DFF pin loads。
 
-若出現 `transitive`、`cone`、`reachable`，改用 `cone_query`。若出現 `path from A to B`，改用 `path_query`。若問 signal 是否永遠為 0/1，改用 `func_query`。
+判斷 owner 的核心不是 `count` 或 `list` 字樣，而是答案集合是否能由單一物件或一層 edge 得到。
+需要遞迴走訪 ancestors/descendants 時使用 `cone_query`；需要兩個 endpoints 間的 path relation 時使用
+`path_query`；需要 Boolean function proof 時使用 `func_query`。
 
 ## 3. Command Grammar
 
@@ -267,7 +269,7 @@ Read: count, pin connection count；小型 records inline，大型 records 以 o
 ```text
 Prompt: How many OR gates have a constant-1 input?
 Command: structure_query const_input_gates OR 1
-Read: Gate names 的列表長度
+Read: gates / filtered gates；不要以 inline Gate names 長度計數，因大型名單可能位於 artifact
 ```
 
 ```text

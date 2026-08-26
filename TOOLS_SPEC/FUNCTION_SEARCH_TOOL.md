@@ -16,25 +16,27 @@
 
 ## 2. 選擇條件
 
-Prompt 出現下列語意時使用本工具：
+當 Boolean property 的一個或多個 operand identities 未知，答案必須在 current design 的
+candidate domain 中搜尋 witness、完整集合或數量時使用本工具。選 mode 前依序確定：
 
-```text
-find any pair / does there exist a pair
-find existing signals whose specified Boolean operation equals a target
-list all functionally equivalent gate pairs or groups
-find gates implementing the same function in a cone
-find/list/count signals that are always 0 or always 1
-find/list/count signals or gate outputs that compute complementary/opposite functions
-```
+1. target relation：指定 gate function 組合後等價於 target、candidate outputs 彼此等價、
+   derived constant，或兩 candidates 功能互補。
+2. candidate domain：named signals，或 active combinational gate outputs。
+3. structural scope：whole design 或指定 fanin/fanout cone。
+4. quantifier：存在任一 witness 使用 FindAny；完整 identities/count 使用 `--all`。
+5. filters：gate type、boundary inclusion、same-operand policy，只在 prompt 語意明確要求時加入。
 
-指定一般 BUF/NOT/AND/NAND/OR/NOR/XOR/XNOR operands 時選 `pattern`；既有 NAND 問題仍可選
-`nand_pair`；要求任意 gate outputs 功能相同時選 `equivalent_pairs`。Prompt 只問是否存在時維持預設 FindAny；出現 `all`、`every`、`list`
-等完整列舉語意時加入 `--all`。
+指定 BUF/NOT/AND/NAND/OR/NOR/XOR/XNOR function 與已知 target 時選 `pattern`；`nand_pair`
+只是 NAND pattern 的相容入口，不代表 NAND 題型有不同責任。未知 gate outputs 功能相同時選
+`equivalent_pairs`；未知 derived constant signals 使用 `constant_signals`；未知互補 candidates
+使用 `complementary_pairs`，並由題目要求的 object 決定 `signals` 或 `gates` domain。
 
-題目已指定 net 名稱並只問它是否 constant 時，使用 `func_query always_zero/always_one`；題目
-沒有提供候選名稱、要求搜尋或列出 constant signals 時，才使用 `constant_signals`。
-Prompt 問兩個未知 candidates 是否為 Boolean complements/opposites/inverses 時使用
-`complementary_pairs`。明確說 signals/nets 選 `signals`；明確說 gates/gate outputs 選 `gates`。
+若所有 operand identities 都已指定，且 `func_query` 已公開對應 property mode，使用
+`func_query`。例如已知 net 是否 constant 屬 `func_query`，而「全設計有哪些 constant nets」
+才屬搜尋。已知 pair 的 complement 判定或已知 operands 的任意 gate-relation proof 目前沒有
+通用 public checker；不能假造 `func_query` mode，也不能用 unknown-candidate search 冒充精確
+pair checker。不能只靠 `find`、`all`、`pair` 等表面字詞判斷 owner；關鍵是 candidate identity、
+property 與 public mode 是否一致。
 
 ## 3. Command Grammar
 

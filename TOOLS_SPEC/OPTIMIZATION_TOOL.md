@@ -2,7 +2,10 @@
 
 ## 1. 責任
 
-`opt_query` 與 `opt_apply` 負責 cost-driven 的最佳化。它們與 `depth_query` / `structure_query` 的差異是會搜尋並嘗試提交重構後的 design；與 `edit_apply` 的差異是使用者指定的是**目標與限制**，而不是固定 transformation。
+`opt_query` 與 `opt_apply` 負責 cost-driven 的最佳化。`opt_query` 只查詢候選資訊；
+`opt_apply` 搜尋並嘗試提交重構後的 design。它們與 `depth_query` / `structure_query` 的差異是
+operation 要改變 design cost；與 `edit_apply` 的差異是使用者指定的是**目標與限制**，而不是
+固定 transformation identity。
 
 本 tool 公開兩個 pass，兩者用法完全相同，只有「成本量什麼」不同：
 
@@ -17,7 +20,23 @@
 
 ---
 
-## 2. Prompt → Command
+## 2. 語意拆解與 Command
+
+當 operation 是在 hard constraints 下最小化某個 measurable cost 時使用本工具。先建立互相
+獨立的三組語意：
+
+1. objective metric：maximum logic depth 或 gate count，決定 pass。
+2. cost scope：評分全設計或指定 fanin cone，決定 `--scope` / `--cost-scope`。
+3. basis constraints：允許/禁止 gate types 套用在哪個區域，決定 `--basis-scope` 與
+   inside/outside gate-type options。
+
+固定 rewrite 名稱不等於 objective；只要求 conversion、replacement、cleanup 或 buffering 而
+沒有較佳 cost 的搜尋語意時，owner 是 `edit_apply`。只量測 current cost 時則使用
+`depth_query` / `structure_query`。
+
+實際要求改善並輸出修改後設計時直接使用 `opt_apply`。`opt_query` 只在 prompt 明確要求
+inspect/preview optimization candidates 而不修改 current design 時使用；不能先查候選後讓 LLM
+自行挑選或逐筆 rewiring 來取代 transactional `opt_apply`。
 
 判讀只需要回答兩個問題，分別對應兩組互相獨立的參數：
 

@@ -9,9 +9,13 @@
 
 ## 2. 選擇條件
 
-每個 testcase 的 load prompt 先使用 `read`，最後的 output prompt 使用 `write`。所有其他
-public query/edit 都要求同一 session 已有成功載入的 current design。不要因 prompt 同時要求
-「load and report」就只執行 `read`；load 後仍需呼叫負責 report 的 query。
+`read` 與 `write` 只負責 session design state 的輸入與輸出。需要將某個 Verilog 設為 current
+design 時使用 `read`；需要把 current design materialize 成輸出 Verilog 時使用 `write`。所有
+analysis/edit command 都依賴同一 session 中最近一次成功載入的 current design。
+
+I/O operation 不隱含 analysis、transformation 或 equivalence。若同一 request 同時要求 load 與
+report，先 `read`，再呼叫負責該 semantic metric 的 query；若同時要求修改與輸出，先完成並
+驗證修改，再 `write`。`read` 回傳的基本 size 只是載入 metadata，不應取代正式 query report。
 
 `help` 只用於確認 public grammar，不回答 circuit prompt。`quit`/`exit` 只在該 testcase
 全部 prompt 與 final write 完成後使用。
@@ -83,7 +87,10 @@ Command:
 
 ## 8. 限制
 
-`write` 不會自動執行 equivalence。題目要求功能不變時，先使用 `equiv_query` 確認，再輸出設計。
+`write` 不會自動執行 equivalence。一般 transformation/optimization 的功能保持要求，先讀該
+operation report 的 structural/local/certified rewrite certificate；只有 prompt 明確要求獨立
+whole-design SAT/CEC proof 或 baseline comparison 時，才在輸出前使用 `equiv_query`。不可把
+一般的 `preserve functionality` 常態措辭自動擴張成額外 whole-design SAT。
 
 跨 prompt 的 hard constraint 由 LLM 從對話上下文維護，不會由 session 自動推論或保存。
 若後續 prompt 說 `preserve previous constraints` 或 `maintain existing constraint`，應先查看

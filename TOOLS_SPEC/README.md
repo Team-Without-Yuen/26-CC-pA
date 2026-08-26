@@ -76,9 +76,25 @@ TOOL_RESULT_END
   `net_fanin X`；只有 `affected by X`、`reachable from X`、`downstream of X` 才是 `net_fanout X`。
 - register-to-register、PI-to-DFF.D 等已指定 start/end scope 的最長或最短 depth 使用
   `path_query max_depth/min_depth`；不能用全域 `depth_query global_critical` 代替。
-- 同時問 official fanout count 與直接 load gates 時使用一次 `structure_query fanout_load`，
+- 同時問 pin-level fanout count 與直接 load gates 時使用一次 `structure_query fanout_load`，
   同時讀 pin-level count 與 `Direct load gates`；不以 `net_loads` 的去重 gate count 冒充 fanout。
 - 每次 RUN 只含一個 command；禁止使用 `;`、`&&`、`||` 或換行拼接多個 command。
+
+這些規則不是關鍵字對照表。選擇 command 前先建立下列 semantic tuple：
+
+```text
+operation     要 count、list、compare、prove、search、edit 或 optimize
+object        gate、net、port、pin、path、DFF 或整個 design
+scope         whole、rooted cone、direct adjacency、explicit endpoints 或 saved baseline
+direction     feeding/ancestor (fanin)、affected/descendant (fanout) 或無方向
+metric        gate count、pin load、depth、Boolean function、cost 等
+quantifier    any、all、exactly、threshold、rank、top-K、ties
+state         current、original、previous edit 或 operation delta
+output shape  scalar、decision、完整 identities、records 或 artifact
+```
+
+Tool family 與 mode 必須共同保留這八個維度。表面詞彙可以改寫，但 semantic tuple 相同時，
+command 應保持相同；若 tuple 中任一維度改變，就必須重新判斷，不能只沿用上一個相似 prompt。
 
 ### Scoped query 優先於 global query
 
@@ -114,10 +130,10 @@ Simplify OR gates with any constant input.
 
 ```text
 Cost is the maximum logic depth of the final design.
--> --objective global
+-> --cost-scope whole
 
 Cost is the depth of the cone of n8.
--> --objective cone
+-> --scope net_fanin n8 --cost-scope cone
 ```
 
 例如：
@@ -125,8 +141,8 @@ Cost is the depth of the cone of n8.
 ```text
 Optimize the design while the cone of n11 uses NAND/NOT only;
 cost is the maximum depth of the final design.
--> opt_apply critical_path_depth --scope net_fanin n11
-   --objective global --allowed NAND NOT
+-> opt_apply critical_path_depth --basis-scope net_fanin n11
+   --allowed NAND NOT
 ```
 
 ### Endpoint 與英文語意詞
@@ -247,7 +263,7 @@ types 以空白或逗號分隔；不得把「NOR and NOT only」解讀為只允�
 
 | 必查項目 | Routing 規則 |
 |---|---|
-| 量詞 | `any`、`exists`、`find one` 使用 find-any；只有 `all`、`every`、`list each` 才完整列舉或加 `--all` |
+| 量詞 | existence/one witness 使用 find-any；完整 identities、總數、ranking population、`all/every/list each` 都需要完整搜尋或 batch mode。不能因 count 題沒寫 `all` 就只找一筆 |
 | 路徑限制 | `avoid`、`without passing`、`does not traverse` 必須保留為 `-avoid`；`through`、`must pass` 不得降成普通 existence query |
 | 名稱 | 完整保留 gate/net/port 名稱；bus bit `n4[0]` 不得改成 `n4` |
 | Scope | whole、fanin、fanout、指定 endpoints 與指定 candidate set 不得互換 |
@@ -602,14 +618,15 @@ Identify DFFs implemented with a feedback MUX pattern.
 
 ---
 
-## 9. Depth Optimization
+## 9. Optimization (Depth / Gate Count)
 
 公開 tools：`opt_query`、`opt_apply`
 
-負責 objective/cost-driven 的 critical-path depth 最佳化：
+負責 objective/cost-driven 的 critical-path depth 或 gate-count 最佳化：
 
 - 全設計 maximum logic depth 最佳化。
 - 指定 fanin cone depth 最佳化。
+- 全設計或指定 fanin cone 的 gate-count 最佳化。
 - whole design 或 local scope 的 allowed/banned gate-type constraints。
 - target depth、time budget、no-improvement policy。
 - candidate constraint validation、qualified rewrite certificate 與 transactional commit/rollback。
@@ -653,7 +670,7 @@ Reduce maximum depth to at most 5 without changing functionality.
 ```text
 Remove dangling logic from the design.
 Collapse all back-to-back inverters.
-Remove redundant gates from test38 without changing functionality.
+Remove all structurally duplicate gates without changing functionality.
 Convert the cone of n10 to NOR and NOT gates.
 Find and merge all functionally equivalent gate pairs.
 How many gates were removed in the previous step?
@@ -662,7 +679,9 @@ What changed after the last transformation?
 
 責任邊界：`EditApply` 執行指定操作，不負責搜尋最佳 cost/depth。public edit 依 structural/local/certified rewrite 契約提交，不在 transaction 內執行 final whole-design SAT；`merge_functionally_equivalent_gates` 保留候選 gate 間的 SAT 等價搜尋，但不再執行修改後的 whole-design CEC。只有 prompt 明確要求獨立 baseline comparison 時才使用 `equiv_query`。
 
-test38 的 redundant-gate step 已確認 routing 到 `merge_structurally_equivalent_gates`，不是 general observability search。未知 hidden prompt 若明確需要 observability-only redundancy，仍不可由 structural merge 的結果外推。
+`structurally duplicate` 與 general observability/functional redundancy 是不同 proof object；只有前者
+可直接 routing 到 `merge_structurally_equivalent_gates`。不能由 structural merge 的結果外推
+其他 redundancy 類型，也不能用 broad `redundant` 字樣省略所需 proof semantics。
 
 詳細用法：[`EDIT_APPLY_TOOL.md`](EDIT_APPLY_TOOL.md)、[`REPORT_QUERY_TOOL.md`](REPORT_QUERY_TOOL.md)
 
