@@ -133,8 +133,9 @@ size_t endpointCount = report.count;
 
 公開 CLI 的大型 `reports` 或 `worst.criticalPath` 不會全部塞進 terminal。當 endpoint、net 與
 gate records 的總量超過內部門檻時，`tools.cpp` 自動輸出 `QUERY_LIST_ARTIFACT_V1`，並在
-response 提供 `list artifact complete`、`list entry count` 與 `output_file`。這個門檻只決定
-呈現方式，不限制 `DepthReportSet` 的完整計算；LLM 不控制檔名或 sample 數。
+response 提供 `list artifact complete`、`list entry count` 與 `output_file`。目前在估算達到
+3072 response tokens，或 list records 達到 256 筆時提前輸出；4096 tokens 仍是正式上限。
+門檻只決定呈現方式，不限制 `DepthReportSet` 的完整計算；LLM 不控制檔名或 sample 數。
 
 ---
 

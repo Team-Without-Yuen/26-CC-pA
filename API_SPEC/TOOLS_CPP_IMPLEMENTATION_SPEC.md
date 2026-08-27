@@ -486,7 +486,7 @@ Direct Connectivity CLI parser 規格：
 7. fanout_filter 的 predicate 只能是 eq/ne/gt/ge/lt/le/between；between 必須有 inclusive upper，且 lower <= upper。
 8. fanout_filter value 使用 size_t strict decimal parser，不套 INT_MAX 上限；非法值與 trailing token fail closed。
 9. predicate filter 不改既有 checked count、maximum 或 violations；獨立輸出 matched net count/list。
-10. 依 4096-token estimate 判定大型 matched list，完整資料寫 self-contained artifact，terminal 只保留 count/path。
+10. 4096 tokens 是正式 response 上限；matched list 估算達到 3072 tokens，或 records 達到 256 筆時提前寫 self-contained artifact，terminal 只保留 count/path。
 11. fanout_rank scope 僅接受 all/pi/po/internal/gate_output/comb_output/dff_output。
 12. highest/lowest 不接受 K；nth_highest/nth_lowest/top/bottom 必須有 size_t positive K。
 13. ranking 以 distinct fanout values 編 rank，完整保留 boundary ties；同 rank 依 name/ID 穩定排序。
@@ -557,10 +557,11 @@ gate_details_included / gate_connections（有要求時）
 CLI 保留 `gates` 作為 filter 後相容欄位，另明確輸出 `scope gates` 與 `filtered gates`。
 大型 names/details 使用 `QUERY_LIST_ARTIFACT_V1`；artifact 必須包含 filter metadata、
 完整 gate details 與 `Complete: yes` footer。
-通用 writer 以單一 response 的 4096-token 上限與保守 estimate 決定是否寫檔，
-並在 response/header 記錄 estimate、limit 與 trigger。門檻只屬於 printer policy，不得截斷 API report。
+通用 writer 保留單一 response 的 4096-token 正式上限，並以 3072-token estimate 或 256-entry
+count 作為提前寫檔條件；response/header 會分別記錄 estimate、正式 limit、兩個 trigger
+threshold 與觸發原因。門檻只屬於 printer policy，不得截斷 API report。
 估算由 256-token envelope reserve、`ceil(serializedCharacters / 3)`，以及每筆 list entry
-額外 2 tokens 組成；所有加法採 saturating arithmetic，估算達到或超過 4096 時寫入 artifact。
+額外 2 tokens 組成；所有加法採 saturating arithmetic。任一提前門檻達成即寫入 artifact。
 
 ### 10.2 Batch 5 已補 ConeReport 並 expose
 
@@ -853,7 +854,8 @@ support_primary_inputs
 
 ### 14.5 FunctionReport 大型輸出
 
-`support_pi` 與 `symmetry` 使用通用 4096-token estimate `QUERY_LIST_ARTIFACT_V1`。artifact 內容必須包含
+`support_pi` 與 `symmetry` 使用通用 `QUERY_LIST_ARTIFACT_V1`；估算達到 3072 tokens，或 records
+達到 256 筆時提前寫檔，4096 tokens 仍是正式 response 上限。artifact 內容必須包含
 support union/三分類、mismatched target bits、counterexample assignments、swap 前後 target
 values，以及足以獨立判讀的 target/status/count fields。成功寫檔後 terminal 抑制上述大型
 lists，但保留 proof fields、主要 bool、counts、artifact completeness 與 `output_file`。

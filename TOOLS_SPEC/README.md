@@ -370,8 +370,9 @@ Which primary input has the highest direct fanout?
 
 大型 object/load/issue 名單會自動完整寫入 list artifact；LLM 只從 envelope 讀取 count、
 `list artifact complete` 與 `output_file`，不開啟 artifact，也不需或不能指定輸出門檻或檔名。
-自動切換以單一 prompt 的 4096-token 上限為基準，使用保守 token estimate 並保留 envelope
-空間；估算達到或超過上限即寫 artifact。門檻只決定呈現位置，不改變查詢結果數量。
+4096 tokens 是單一 prompt 的正式 response 上限；工具為保留生成時間與格式空間，會在估算
+達到 3072 tokens，或完整 list records 達到 256 筆時提前寫 artifact。兩個門檻都只決定呈現
+位置，不改變查詢結果數量。
 
 一或多種 gate type 的 names-only list 使用 `gates_by_type --gate-types <type...>`；排除型別使用
 `--exclude-gate-types <type...>`。未指定 include 代表全部，include 後再套 exclude，且 exclude

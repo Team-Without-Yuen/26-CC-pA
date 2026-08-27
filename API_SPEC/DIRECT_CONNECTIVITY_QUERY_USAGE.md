@@ -307,8 +307,9 @@ pin-level loads；這和 NetLoadGates 的 gate-level 去重不同。
 `FanoutLoadReport`：前者讀 `totalLoadCount`，後者讀 `distinctGateLoadCount` 與
 `distinctGateLoadIds`。不需要再組合第二個 `NetLoadGates` query。
 
-五個 category count 永遠保留在 public report。即使完整名稱清單因 4096-token policy 寫入
-artifact，呼叫端仍可直接回答各類 load 數量，不需要讀取 artifact 重新計數。
+五個 category count 永遠保留在 public report。即使完整名稱清單因共用的 3072-token 或
+256-record 提前門檻寫入 artifact，呼叫端仍可直接回答各類 load 數量，不需要讀取 artifact
+重新計數。4096 tokens 仍是正式 response 上限。
 
 ---
 

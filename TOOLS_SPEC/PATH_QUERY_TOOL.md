@@ -142,11 +142,13 @@ Path 0: a -> g0(BUF) -> n0 -> g2(AND) -> n2 -> g7(BUF) -> y
 
 只有 header count、`Written paths`、`Complete: yes` 與 envelope 完整性一致時，才能宣稱已列出全部 paths。
 
-`direct_pi_po` 的小型結果直接完整顯示；保守估算超過 4096 response tokens 時由工具自動寫入 self-contained artifact，
-response 回傳總數、完整性、格式與 `output_file`，不需要先取得總數後重跑。
+`direct_pi_po` 的小型結果直接完整顯示；估算達到 3072 response tokens，或 list records 達到
+256 筆時由工具提前寫入 self-contained artifact。4096 tokens 仍是正式 response 上限；response
+回傳總數、完整性、格式與 `output_file`，不需要先取得總數後重跑。
 
-ranked modes 不會完整 enumerate 後交給 LLM 排序。小結果直接列出；超過 4096-token 估算時
-完整 `rank/depth/literal path` 會自動寫入 artifact。只有 `Ranking complete: yes` 時排名可用；
+ranked modes 不會完整 enumerate 後交給 LLM 排序。小結果直接列出；達到共用的 3072-token
+或 256-record 提前門檻時，完整 `rank/depth/literal path` 會自動寫入 artifact。只有
+`Ranking complete: yes` 時排名可用；
 `Requested rank exists: no` 也必須在 complete 時才能回答不存在。
 
 同 depth 的連續 ranks 會精確壓縮，例如 `ranks 1-200: depth=16`。literal paths 外移時，只要

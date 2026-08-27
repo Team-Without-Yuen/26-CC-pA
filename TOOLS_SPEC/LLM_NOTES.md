@@ -107,7 +107,8 @@ status: partial/timeout/unsupported/error or complete: false
 3. Prompt 要求完整 records 且產生 artifact 時，正式答案直接給 scalar/關鍵結論、是否完整與
    `output_file`。不要把檔案全文貼回 response。
 4. 沒有 artifact metadata 時，代表完整小型 records 位於 `data`；prompt 要求列出全部時不得
-   擅自省略。
+   擅自省略。只回答 count、examples、representative record 或使用省略號，都不符合完整
+   collection 的交付要求，即使該 count 本身正確。
 5. 任何需要檢查 membership、逐筆屬性或兩份 records 才能得到的結論，都不能假設 LLM 能從
    artifact 推導。必須使用現有專用 query，或登記為工具功能缺口。
 6. 不可依賴「這次結果應該很小、會 inline」來設計功能。Hidden case 可能觸發 artifact，因此
@@ -207,8 +208,8 @@ Which gates are present in A's fanin cone but not B's?
 
 ## 7. Large Output 與時間
 
-- 單一 prompt 的自然語言輸出預算以 4096 tokens 為基準。工具可自動將大型 payload 改寫為
-  artifact，但不可移走 LLM 作答需要的 metadata。
+- 單一 prompt 的自然語言輸出正式上限為 4096 tokens。共用 list writer 會在估算達到 3072
+  tokens，或完整 records 達到 256 筆時提前寫 artifact，但不可移走 LLM 作答需要的 metadata。
 - 除 prompt 明確要求前 N 筆、最多 N 筆或一個 witness，不得自行設定結果數量上限。
 - LLM 不主動設定 `max_print`、`limit`、`max_paths`、`--max-results`、輸出檔名或 time limit。
 - `max_print`、`limit` 等 display/page 參數不得改變 `all` 的語意；若有 pagination，必須取完。
