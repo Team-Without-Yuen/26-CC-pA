@@ -218,8 +218,9 @@ artifact 以 streaming 逐條輸出完整具名路徑：
 每一筆 record 對應一條可直接閱讀的 start-to-end path。只有
 `Written paths == Expected paths` 且 `Complete: yes` 才能將 artifact 視為完整。
 
-RankedPaths 的小型結果直接回傳；保守估算超過 4096 response tokens 時，CLI 使用
-`QUERY_LIST_ARTIFACT_V1`，每筆包含原始 rank、depth 與完整 literal path。artifact 同時記錄
+RankedPaths 的小型結果直接回傳；保守估算達到 3072 response tokens，或 list records 達到
+256 筆時，CLI 提前使用 `QUERY_LIST_ARTIFACT_V1`。每筆包含原始 rank、depth 與完整 literal
+path；artifact 同時記錄
 ranking order、requested window、completion、population exhaustion 與完整 rank-depth ranges。
 terminal envelope 固定保留 first/last returned depth、range count；Nth 查詢另保留
 `requested_rank_depth`。壓縮 ranges 在 token-safe 時即使 literal paths 已外移仍會留在 envelope。

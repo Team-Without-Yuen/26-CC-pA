@@ -59,6 +59,8 @@ struct ToolResponse {
 };
 
 constexpr size_t kMaximumResponseTokenCount = 4096;
+constexpr size_t kAutomaticArtifactTokenTrigger = 3072;
+constexpr size_t kAutomaticArtifactEntryTrigger = 256;
 constexpr size_t kResponseEnvelopeTokenReserve = 256;
 constexpr size_t kConservativeCharactersPerToken = 3;
 constexpr size_t kConservativeListEntryTokenOverhead = 2;
@@ -128,7 +130,10 @@ struct ListArtifactResult {
     size_t estimatedCharacterCount = 0;
     size_t estimatedTokenCount = 0;
     size_t responseTokenLimit = kMaximumResponseTokenCount;
+    size_t artifactTokenTrigger = kAutomaticArtifactTokenTrigger;
+    size_t artifactEntryTrigger = kAutomaticArtifactEntryTrigger;
     bool triggeredByTokenEstimate = false;
+    bool triggeredByEntryCount = false;
     std::string format = "QUERY_LIST_ARTIFACT_V1";
     std::string outputFilePath;
     std::string message;
@@ -1641,8 +1646,10 @@ ListArtifactResult writeAutomaticListArtifact(
         kResponseEnvelopeTokenReserve,
         saturatingAdd(serializedTokenEstimate, entryTokenOverhead));
     result.triggeredByTokenEstimate =
-        result.estimatedTokenCount >= kMaximumResponseTokenCount;
-    if (!result.triggeredByTokenEstimate) {
+        result.estimatedTokenCount >= kAutomaticArtifactTokenTrigger;
+    result.triggeredByEntryCount =
+        result.entryCount >= kAutomaticArtifactEntryTrigger;
+    if (!result.triggeredByTokenEstimate && !result.triggeredByEntryCount) {
         return result;
     }
 
@@ -1668,8 +1675,14 @@ ListArtifactResult writeAutomaticListArtifact(
            << "  estimated response tokens: "
            << result.estimatedTokenCount << "\n"
            << "  response token limit: " << result.responseTokenLimit << "\n"
+           << "  artifact token trigger: "
+           << result.artifactTokenTrigger << "\n"
+           << "  artifact entry trigger: "
+           << result.artifactEntryTrigger << "\n"
            << "  triggered by token estimate: "
-           << (result.triggeredByTokenEstimate ? "yes" : "no") << "\n\n"
+           << (result.triggeredByTokenEstimate ? "yes" : "no") << "\n"
+           << "  triggered by entry count: "
+           << (result.triggeredByEntryCount ? "yes" : "no") << "\n\n"
            << "Fields:\n";
     for (const auto& field : content.fields) {
         output << "  " << field.first << ": " << field.second << "\n";
@@ -1728,8 +1741,14 @@ void printListArtifactMetadata(const ListArtifactResult& artifact) {
               << artifact.estimatedTokenCount << "\n";
     std::cout << "  response token limit: "
               << artifact.responseTokenLimit << "\n";
+    std::cout << "  artifact token trigger: "
+              << artifact.artifactTokenTrigger << "\n";
+    std::cout << "  artifact entry trigger: "
+              << artifact.artifactEntryTrigger << "\n";
     std::cout << "  artifact triggered by token estimate: "
               << (artifact.triggeredByTokenEstimate ? "yes" : "no") << "\n";
+    std::cout << "  artifact triggered by entry count: "
+              << (artifact.triggeredByEntryCount ? "yes" : "no") << "\n";
     std::cout << "  wrote list to file: "
               << (artifact.wroteFile ? "yes" : "no") << "\n";
     if (artifact.wroteFile) {

@@ -6,8 +6,10 @@
 
 完整性規則：要求 cone list 時取得全部 gates/nets，不自行限制筆數；只問數量或 type breakdown
 時只回摘要。大型 cone list 由 CLI 自動完整寫入唯一 artifact，terminal 保留 gates/nets、type
-breakdown、artifact completeness 與 `output_file`。4096-token 保守估算門檻只決定輸出位置，不限制 cone
-大小，也不由 LLM 設定。時間限制依題目指定。詳見 [`LLM_NOTES.md`](LLM_NOTES.md)。
+breakdown、artifact completeness 與 `output_file`。4096 tokens 仍是正式 response 上限；完整
+輸出估算達到 3072 tokens，或 list records 達到 256 筆時會提前寫 artifact。門檻只決定輸出
+位置，不限制 cone 大小，也不由 LLM 設定。時間限制依題目指定。詳見
+[`LLM_NOTES.md`](LLM_NOTES.md)。
 
 ## 2. 選擇條件
 
@@ -108,6 +110,10 @@ PI/PO/constant 標記。只有 prompt 明確要求 connection、pin 或每顆 ga
 | cone metric 等於/不等於/大於/小於門檻 | `output_filter <metric> <eq|ne|gt|ge|lt|le> <value>` |
 | cone metric 位於 inclusive range | `output_filter <metric> between <lower> <upper>` |
 | 兩 cone 共用哪些 gates | `Cone gates` 或 filter 後 details |
+
+`gates`、`scope gates` 與 `filtered gates` 都是 scalar count metadata，不能代替 `Cone gates`
+中的 gate identities。Prompt 要求「所有/哪些 gates」時，若沒有 `output_file`，正式答案必須
+交付完整 `Cone gates`；若有 `output_file`，則回答 semantic count/complete 並提供該路徑。
 
 大型 cone 由 envelope 讀 `list artifact complete`、semantic counts 與 `output_file`；只有
 envelope `complete:true` 且 artifact complete 為 `yes` 時，才可把該路徑描述為完整名單。

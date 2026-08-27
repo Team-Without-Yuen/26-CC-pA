@@ -10,7 +10,8 @@ gate、depth 或輸出字元上限；只受 request deadline 與 I/O 錯誤限�
 output path，也不得省略 artifact 內的中間 equations。
 
 `support_pi` 的 support lists，以及 `symmetry` 的 support/counterexample/detail lists，若保守
-估算超過單一 response 的 4096-token 上限，會自動寫入完整 `QUERY_LIST_ARTIFACT_V1`。
+估算達到 3072 tokens，或 list records 達到 256 筆，會在正式 4096-token response 上限前自動
+寫入完整 `QUERY_LIST_ARTIFACT_V1`。
 response 保留 target、proof status、主要 bool 與各類 count，再提供 `output_file`；門檻只改變
 呈現位置，不會限制分析筆數。`boolean_expression` 已有專用 equation artifact，因此明確跳過
 generic list artifact，單次 response 只會有一個 `output_file`。

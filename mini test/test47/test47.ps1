@@ -239,6 +239,39 @@ try {
                   $portArtifact.Contains("Complete: yes")) `
         "large port artifact is complete and self-contained"
 
+    $mediumConeOutput = Invoke-ToolBatch @(
+        "read NewTestCase/test53/test53.v",
+        "cone_query net_fanout n2",
+        "exit"
+    )
+    $mediumConePath = Get-OutputFile $mediumConeOutput
+    if ($mediumConePath) { $createdArtifacts += $mediumConePath }
+    $mediumConeArtifact = if ($mediumConePath -and
+        (Test-Path -LiteralPath $mediumConePath)) {
+        Get-Content -LiteralPath $mediumConePath -Raw
+    } else { "" }
+    $mediumGateSection = Get-ArtifactSectionCount `
+        $mediumConeArtifact "Cone gates"
+    $mediumNetSection = Get-ArtifactSectionCount `
+        $mediumConeArtifact "Cone nets"
+
+    Check-Result ($mediumConeOutput.Contains("list artifact complete: yes") -and
+                  $mediumConeOutput.Contains("artifact entry trigger: 256") -and
+                  $mediumConeOutput.Contains("artifact triggered by entry count: yes")) `
+        "medium cone uses the early record-count artifact trigger"
+    Check-Result (-not $mediumConeOutput.Contains("Cone gates (343):") -and
+                  -not $mediumConeOutput.Contains("Cone nets (344):")) `
+        "medium cone lists are omitted from the terminal"
+    Check-Result ($null -ne $mediumGateSection -and
+                  $mediumGateSection.Declared -eq 343 -and
+                  $mediumGateSection.Actual -eq 343 -and
+                  $null -ne $mediumNetSection -and
+                  $mediumNetSection.Declared -eq 344 -and
+                  $mediumNetSection.Actual -eq 344 -and
+                  $mediumConeArtifact.Contains("artifact entry trigger: 256") -and
+                  $mediumConeArtifact.Contains("Complete: yes")) `
+        "medium cone artifact is complete and records its trigger contract"
+
     $smallOutput = Invoke-ToolBatch @(
         "read NewTestCase/test58/test58.v",
         "structure_query list_dffs",

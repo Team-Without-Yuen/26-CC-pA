@@ -5,9 +5,10 @@
 `structure_query` 負責 current active netlist 的基本數量、物件列表、物件資訊、structural issue 與一層直接 connectivity。它不處理 transitive cone、endpoint path、logic depth 或 Boolean property。
 
 完整性規則：list mode 預設取得全部 active objects，不自行限制筆數；只問 count 時只回摘要。
-CLI 以單一 prompt 的 4096-token 上限為基準，保守估算完整 response；估算超過門檻時會自動將完整資料寫入唯一 artifact，
-terminal 只回 count、artifact completeness 與 `output_file`。這個門檻只決定輸出位置，不會
-截斷結果，也不由 LLM 設定。時間限制依題目指定。詳見 [`LLM_NOTES.md`](LLM_NOTES.md)。
+CLI 保留單一 prompt 的 4096-token 正式上限，並在完整 response 估算達到 3072 tokens，或
+list records 達到 256 筆時，提前將完整資料寫入唯一 artifact。terminal 只回 count、artifact
+completeness 與 `output_file`。門檻只決定輸出位置，不會截斷結果，也不由 LLM 設定。時間限制
+依題目指定。詳見 [`LLM_NOTES.md`](LLM_NOTES.md)。
 
 ## 2. 選擇條件
 
@@ -147,7 +148,7 @@ count query 或 list/filter query 即使沒有 matching object，也會明確輸
 同樣地，`net_classes` 的 `constant nets` 只代表 parser/named-netlist 明確標記的 constants；
 若題目問任意 signal 是否在所有輸入下恆為 0/1，必須使用 `func_query constant/truth_status`。
 
-預估超過 4096 tokens 的大型 list query 另讀：
+達到 3072-token 或 256-record 提前門檻的 list query 另讀：
 
 ```text
 list artifact format: QUERY_LIST_ARTIFACT_V1
