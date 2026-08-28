@@ -73,7 +73,7 @@ prompt 指名單一 gate 且要求改寫**它本身**（而非它的 cone）時�
 
 prompt 指名具體 net（例如 "insert buffers on the reset signal n1"）時使用 `insert_buffers_for_net <net> <max_fanout>`，即使該 net 的角色是 clock 或 reset。`insert_buffers_for_dff_control` 只用於 prompt 要求處理**所有** clock 或 reset 網路而未指名特定 net 的情況。
 
-`insert_buffers_for_fanout` 使用 cascaded buffer 結構，在滿足 fanout 限制的前提下 BUF 數量已是最小值。prompt 若同時要求 fanout 限制與「the cost function is the total gate count; smaller is better」，直接使用本 command 即可，不需要改用 `opt_apply`，也不需要額外的最佳化步驟；回答時可說明 cascaded 插入已使 BUF 數最小化。
+`insert_buffers_for_fanout` 使用 cascaded buffer 結構，在目前輸入設計上以精簡的 buffer tree 滿足 fanout 限制；但這不代表輸入設計本身的總 gate count 已最佳化。prompt 若同時要求 fanout hard constraint 與「the cost function is the total gate count; smaller is better」，必須先執行 `opt_apply gate_count_minimization` 降低基礎 gate count，再以本 command 作為最後一步施加 fanout constraint。不能在插入 buffer 後再次最佳化，否則可能移除 buffer 或重新造成 fanout violation。
 
 此 mode 的 constraint universe 是 active non-constant nets，包含 PI、gate output 與 DFF.Q。`1'b0` / `1'b1` 是 literal source，不是 gate-driven signal，不會為它建立 buffer tree，也不會使 `fanout_change.meets_constraint` 變成 false。若 prompt 單純詢問 constant literal 的 load 數，仍使用 connectivity query。
 
@@ -504,9 +504,12 @@ Note: 全設計的 fanout 限制。
 ```text
 Prompt: Insert buffers so that no signal drives more than 16 loads.
         The cost function is the total gate count of the final design; smaller is better.
-Command: edit_apply insert_buffers_for_fanout 16
+Commands:
+  1. opt_apply gate_count_minimization
+  2. edit_apply insert_buffers_for_fanout 16
 Read: fanout_change.after_max_fanout, meets_constraint, diff.gate_type_count_delta[BUF]
-Note: cascaded 插入的 BUF 數已是最小，不需要再呼叫 opt_apply。
+Note: 第一個 command 降低 cost，第二個 command 最後施加 hard constraint。
+      `16` 是 fanout limit，不是 optimization target；BUF 也不是 final allowed basis。
 ```
 
 ```text

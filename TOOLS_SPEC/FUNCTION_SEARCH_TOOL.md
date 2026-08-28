@@ -38,6 +38,10 @@ candidate domain 中搜尋 witness、完整集合或數量時使用本工具。�
 pair checker。不能只靠 `find`、`all`、`pair` 等表面字詞判斷 owner；關鍵是 candidate identity、
 property 與 public mode 是否一致。
 
+存在性或搜尋 prompt 中的符號 operands（例如 `a`、`b`）是 unknown candidate roles，不是 netlist
+中必須存在的同名 signals。已知 target、未知 operands 的 pattern 應將 target 傳給 `pattern` 或
+`nand_pair`；不得把 `NAND(a,b)` 等 expression 當成 `func_query equivalence` 的 net argument。
+
 ## 3. Command Grammar
 
 ```text

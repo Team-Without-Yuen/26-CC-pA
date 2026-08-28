@@ -47,7 +47,7 @@ depth_query <mode> [args]
 | `filter` | `<all\|po\|dff_d> between <lower> <upper>` | inclusive depth range | checked/matched/unavailable counts，typed endpoint list |
 | `gate_on_critical` | `<gate>` | gate 是否位於任一條 global maximum-depth path | `Gate on critical path`；顯示的 worst path 仍只是一條代表路徑 |
 | `critical_gates` | 無 | 所有位於任一 global maximum-depth path 的 combinational gates | gate summary counts、完整 critical gate records、`Worst endpoint` |
-| `deepest_output` | 無 | fanin depth 最大的 primary output | `Worst endpoint`, depth, path |
+| `deepest_output` | 無 | 完整 PO-bit population 中 arrival logic depth 最大的 primary output；量測 logic levels，不是 cone gate/net 數 | `Worst endpoint`, depth, path |
 
 ## 5. 輸出判讀
 
@@ -155,4 +155,6 @@ path_query max_depth all_pi all_dff_d
   需要特定 start/end path enumeration 時仍使用 Path Query。
 - depth traversal 以 combinational boundary 處理 DFF，DFF.Q 為 start boundary，DFF.D 為 endpoint boundary。
 - `deepest_output` 只比較 PO；全域最差 endpoint 使用 `global_critical`。
+- deepest、logic depth、path depth、logic levels 都是 depth metric；即使 prompt 以 output 的 fanin logic
+  描述 target，也不能改用計算 cone gate/net 數量的 `cone_query largest_output`。
 - `filter` 是 summary-only，不回傳每個 match 的 critical path；如需指定 endpoint path，再使用 `net` 或 Path Query。

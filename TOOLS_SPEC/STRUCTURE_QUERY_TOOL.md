@@ -45,7 +45,7 @@ structure_query <mode> [args]
 | `net_info` | `<net>` | net 類型、ID 與基本資訊 | `object`, `id`, `type` |
 | `port_info` | `<port>` | port direction、width、declaration bounds 與 ordered bit nets | object fields、固定 scalar `declaration_left_bound/right_bound`、`Net names`、唯一一筆 `Port summaries`；不輸出無意義的負 ID |
 | `count_by_type` | `[type] [--gate-types <type...>] [--exclude-gate-types <type...>]` | 統計 include-minus-exclude type；省略 filters 時列全部 | `gates`, `Gate type counts`, filter metadata |
-| `gates_by_type` | `[type] [--gate-types <type...>] [--exclude-gate-types <type...>] [--with-pins]` | 列 include-minus-exclude gates；旗標要求 pin/net 明細 | names-only：`Gate names`；detail：`Gate connection details` artifact |
+| `gates_by_type` | `[type] [--gate-types <type...>] [--exclude-gate-types <type...>] [--with-pins]` | 只依 gate type 列 include-minus-exclude gates；旗標要求 pin/net 明細，不依 clock/reset/data pin relation 篩選 | names-only：`Gate names`；detail：`Gate connection details` artifact |
 | `const_input_gates` | `[type\|all] [0\|1\|any] [--gate-types <type...>] [--exclude-gate-types <type...>] [--const <0\|1\|any>] [--with-pins]` | 先找直接接 constant 的 gates，再套 type filters | names-only：`Gate names`；detail：`Gate connection details` artifact |
 | `structural_issues` | 無 | 結構問題摘要與 exact unconnected pins | 六類 semantic object counts、input/output pin counts、完整 issue lists / artifact 與 pin details |
 
@@ -100,6 +100,10 @@ inclusive range；其他 predicate 不可多給 upper。值採非負十進位整
 同時固定輸出 `distinct direct-load gate count`，並以 `Direct load gates` 回傳去重後的 gate
 instance names。即使完整名稱清單寫入 artifact，所有數量仍直接留在 envelope；只有列舉名稱時
 才提供 `output_file`。
+
+若 prompt 指定一條 net 與 DFF pin role（例如 clocked/reset/driven-at-D），使用 `fanout_load <net>`
+並讀對應 role count/list。`gates_by_type DFF --with-pins` 只是全體 DFF inventory，即使 artifact
+含 pin details，也不能在 envelope 中證明或篩選指定 pin-role predicate。
 
 prompt 同時問 `fanout` 與 `every gate driven directly` 時，只呼叫一次 `fanout_load`：fanout
 讀 QA pin-level count，gate 名單讀 `Direct load gates`。不得以 distinct gate count 代替

@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+
+SCRIPT_DIR=$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)
+BACKEND="$SCRIPT_DIR/EDATools"
+
+if [ ! -x "$BACKEND" ]; then
+    echo "Missing executable backend: $BACKEND" >&2
+    exit 127
+fi
+
+export EDA_TOOLS_EXE="$BACKEND"
+exec python3 "$SCRIPT_DIR/agent_final.py" "$@"

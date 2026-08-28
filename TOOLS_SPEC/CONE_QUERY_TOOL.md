@@ -55,7 +55,7 @@ with_paths | --with-paths
 | `gate_fanin` | `<gate> [options]` | gate 的 transitive fanin | 同上 |
 | `gate_fanout` | `<gate> [options]` | gate 的 transitive fanout | 同上 |
 | `largest_output` | `[options]` | legacy 單一 representative；只供舊 command 相容 | `source`、checked outputs、scope/filter counts |
-| `output_rank` | `<metric> <mode> [k] [options]` | 依 cone metric 排名所有 PO bits，保留完整 ties | ranking counts、`Ranked output cones` |
+| `output_rank` | `<metric> <highest\|lowest> [options]` 或 `<metric> <nth_highest\|nth_lowest\|top\|bottom> <k> [options]` | 依 cone metric 排名完整 PO-bit population，保留完整 ties；不接受 named candidate subset | ranking counts、`Ranked output cones` |
 | `output_filter` | `<metric> <predicate> <value> [upper] [options]` | 依 cone metric threshold/range 篩選所有 PO bits | matched count、`Matched output cones` |
 | `shared_fanin` | `<net_a> <net_b> [options]` | 兩個 nets 的 shared fanin gates | sources、scope/filter counts、names/details |
 
@@ -86,6 +86,11 @@ rank 採 distinct metric levels，所有 boundary ties 都保留；Top/Bottom K 
 | output 的 logic cone，未明說 downstream/reachable-from | output 的 implementation | `net_fanin` |
 | 多個 PO cone 的 extrema/rank/threshold | 每個 PO 的 fanin metric | `output_rank` / `output_filter` |
 | 兩個 roots 共同依賴哪些 upstream gates | fanin intersection | `shared_fanin` |
+
+`largest_output`、`output_rank` 與 `output_filter` 的 population 固定是目前設計的全部 PO bits。
+若 prompt 明確限定一組具名 candidates，不能把問題擴張成全體 PO ranking；應對每個具名 root
+使用相同 single-root cone mode，並比較相同的 envelope scalar。Cone size 是 gate/filtered-gate/net
+數量，不是 logic depth；deepest、logic level、arrival depth 使用 `depth_query`。
 
 `with_paths` 額外要求 local longest/shortest path 摘要，主要欄位為 `longest local path depth`、`shortest local path depth` 與 longest path nets。
 
@@ -178,6 +183,7 @@ Read: matched output count；大型完整 records 交付於 output_file
 - `output_rank` 的 `source` 只代表 selected ranking entries 的第一筆及其 cone payload；完整排名
   必須讀 `Ranked output cones`。要求的 Nth level 不存在時是 `status:ok`、空 list、
   `requested rank exists:no`。
+- `highest` / `lowest` 不接受 `k`；只有 `nth_highest`、`nth_lowest`、`top`、`bottom` 需要正整數 `k`。
 - `output_filter` 不填代表性 source/cone；完整答案只能讀 `matched output count` 與
   `Matched output cones`。沒有 active PO 或沒有 match 都是 `status:ok` 的完整零結果。
 - DFF.Q 是 combinational sequential boundary；`cone_query net_fanin <dff_q_net>` 不會回傳任何 combinational gate（`gates: 0`），也不會穿透到同一顆 DFF 的 D input。report 仍可能保留 query root 本身，因此 `nets` 可為 1。

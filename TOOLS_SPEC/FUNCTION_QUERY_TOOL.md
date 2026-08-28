@@ -94,13 +94,17 @@ equivalent
 
 Boolean expression 的 leaf 必須依輸出分類判讀：
 
-- `real primary input count`：真正 top-level PI。
+- `real primary input count`：此 target function support 中出現的真正 top-level PI 數量，不是整個
+  design 的 PI inventory；此值為 0 不代表 design 沒有 primary inputs。
 - `DFF.Q boundary count`：目前 state 的 sequential boundary，不是真正 PI。
 - `DFF.Q current-state variable mappings`：`state_qN = <DFF>.Q (net <net>)`，用來把
   artifact 方程式中的狀態變數映射回 named netlist；`state_qN` 只代表當前週期狀態。
 - `undriven boundary count`：floating/undriven leaf，也不是真正 PI。
 - `primary-input-only combinational expression available: no`：不能在不跨 DFF cycle、也不
   假設 floating value 的前提下，寫成只含 top-level PI 的組合式。
+
+`a`、`b` 等若在 prompt 中是 existential/unknown operands，代表要從現有 signals 中搜尋的角色，
+不是可以直接傳給 `func_query equivalence` 的 literal net names；這類問題屬 `func_search`。
 
 若 prompt 要求 `using only primary input names`，但此欄位為 `no`，LLM 必須說明完整的
 current-cycle combinational expression 以 DFF.Q 或 undriven signal 為 boundary；不得把
