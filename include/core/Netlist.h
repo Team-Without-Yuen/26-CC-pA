@@ -471,7 +471,8 @@ public:
     // 計算 ConeResult 內 net 數量。
     size_t getConeNetCount(const ConeResult& cone) const;
 
-    // 從 ConeResult 內的 net-to-net 邊推回實際參與 cone 的 gate IDs；DFF 邊界不會被算入。
+    // 從 ConeResult 內的 net-to-net 邊推回 combinational gate IDs；不包含 DFF boundary。
+    // Optimization/edit/function backend 使用此 helper，維持純組合邏輯 scope。
     std::vector<int> getConeGateIds(const ConeResult& cone) const;
 
     // 將 ConeResult 內參與 cone 的 gate IDs 轉成 gate names；順序與 getConeGateIds() 一致。
@@ -479,6 +480,12 @@ public:
 
     // 計算 ConeResult 內參與 cone 的 gate 數量。
     size_t getConeGateCount(const ConeResult& cone) const;
+
+    // Cone Query 官方 report gate view：combination gates 加上 fanin traversal 遇到的
+    // bounding DFF。DFF 只計數/列出，不會成為 traversal edge 或增加 path depth。
+    std::vector<int> getConeGateIdsIncludingBoundaries(const ConeResult& cone) const;
+    std::vector<std::string> getConeGateNamesIncludingBoundaries(const ConeResult& cone) const;
+    size_t getConeGateCountIncludingBoundaries(const ConeResult& cone) const;
 
     // 邏輯錐高階查詢 API (Logic Cone Analysis Wrappers)  
     std::vector<std::string> getTransitiveFaninConeGateNames(const std::string& netName) const;

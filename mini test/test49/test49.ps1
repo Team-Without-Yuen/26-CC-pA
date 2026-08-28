@@ -46,11 +46,14 @@ Assert-Contains $all 'gate type filters: AND, OR, NAND, NOR, NOT, BUF, XOR, XNOR
 
 $dff = Invoke-Tools @(
     $read,
-    'cone_query net_fanin y --gate-types DFF'
+    'cone_query net_fanin q --gate-types DFF --with-pins'
 )
 Assert-Contains $dff 'status: ok' 'DFF filter is valid input'
-Assert-Contains $dff 'filtered gates: 0' 'DFF excluded at sequential cone boundary'
-Assert-Contains $dff 'complete: true' 'valid zero result is complete'
+Assert-Contains $dff 'scope gates: 1' 'DFF.Q root includes its bounding DFF'
+Assert-Contains $dff 'filtered gates: 1' 'DFF filter returns the bounding DFF'
+Assert-Contains $dff 'DFF : 1' 'DFF gate-type count is explicit'
+Assert-Contains $dff 'gate=g_dff type=DFF' 'bounding DFF has structured gate detail'
+Assert-Contains $dff 'complete: true' 'bounding DFF result is complete'
 
 $invalid = Invoke-Tools @(
     $read,
@@ -118,7 +121,7 @@ $top = Invoke-Tools @(
 )
 Assert-Contains $top 'selected cone metric levels: 2' 'top K counts distinct levels'
 Assert-Contains $top 'result output count: 2' 'top two levels retain both outputs'
-Assert-Contains $top 'rank=2 output=q metric=0' 'DFF Q cone remains a zero-gate boundary'
+Assert-Contains $top 'rank=2 output=q metric=1' 'DFF Q cone counts its bounding DFF'
 
 $filteredRank = Invoke-Tools @(
     $read,
@@ -149,8 +152,9 @@ Assert-Contains $greaterFilter 'status: ok' 'output filter greater-than succeeds
 Assert-Contains $greaterFilter 'output cone filter metric: scope_gates' 'output filter metric reported'
 Assert-Contains $greaterFilter 'output cone filter predicate: greater_than' 'output filter predicate reported'
 Assert-Contains $greaterFilter 'checked primary outputs: 2' 'output filter checks every active output'
-Assert-Contains $greaterFilter 'matched output count: 1' 'output filter matched count reported'
+Assert-Contains $greaterFilter 'matched output count: 2' 'output filter matched count includes DFF.Q output'
 Assert-Contains $greaterFilter 'output=y metric=8 scope_gates=8 filtered_gates=8 nets=11' 'output filter summary is self-contained'
+Assert-Contains $greaterFilter 'output=q metric=1 scope_gates=1 filtered_gates=1 nets=1' 'output filter reports the bounding DFF count'
 
 $predicateMatrix = Invoke-Tools @(
     $read,
@@ -183,7 +187,7 @@ $netOutputFilter = Invoke-Tools @(
     'cone_query output_filter nets between 1 1'
 )
 Assert-Contains $netOutputFilter 'output cone filter metric: nets' 'output filter net metric reported'
-Assert-Contains $netOutputFilter 'output=q metric=1 scope_gates=0 filtered_gates=0 nets=1' 'output filter net match preserves DFF boundary'
+Assert-Contains $netOutputFilter 'output=q metric=1 scope_gates=1 filtered_gates=1 nets=1' 'output filter net match includes DFF boundary gate'
 
 $invalidOutputFilters = Invoke-Tools @(
     $read,
@@ -266,12 +270,12 @@ $officialTie = Invoke-Tools @(
 Assert-Contains $officialTie 'message: Largest primary output fanin cone' 'official legacy largest-output query succeeds'
 Assert-Contains $officialTie '  source: n4[0]' 'legacy largest-output tie rule remains unchanged'
 Assert-Contains $officialTie 'result output count: 3' 'official ranking preserves all highest ties'
-Assert-Contains $officialTie 'rank=1 output=n4[0] metric=4 scope_gates=4 filtered_gates=4 nets=7' 'official ranking contains n4[0]'
-Assert-Contains $officialTie 'rank=1 output=n5[0] metric=4 scope_gates=4 filtered_gates=4 nets=7' 'official ranking contains n5[0]'
-Assert-Contains $officialTie 'rank=1 output=n5[1] metric=4 scope_gates=4 filtered_gates=4 nets=7' 'official ranking contains n5[1]'
-Assert-Contains $officialTie 'matched output count: 3' 'official output filter preserves all threshold matches'
-Assert-Contains $officialTie 'output=n4[0] metric=4 scope_gates=4 filtered_gates=4 nets=7' 'official output filter contains n4[0]'
-Assert-Contains $officialTie 'output=n5[0] metric=4 scope_gates=4 filtered_gates=4 nets=7' 'official output filter contains n5[0]'
-Assert-Contains $officialTie 'output=n5[1] metric=4 scope_gates=4 filtered_gates=4 nets=7' 'official output filter contains n5[1]'
+Assert-Contains $officialTie 'rank=1 output=n4[0] metric=7 scope_gates=7 filtered_gates=7 nets=7' 'official ranking contains n4[0] and its bounding DFFs'
+Assert-Contains $officialTie 'rank=1 output=n5[0] metric=7 scope_gates=7 filtered_gates=7 nets=7' 'official ranking contains n5[0] and its bounding DFFs'
+Assert-Contains $officialTie 'rank=1 output=n5[1] metric=7 scope_gates=7 filtered_gates=7 nets=7' 'official ranking contains n5[1] and its bounding DFFs'
+Assert-Contains $officialTie 'matched output count: 6' 'official output filter includes cones enlarged by bounding DFFs'
+Assert-Contains $officialTie 'output=n4[0] metric=7 scope_gates=7 filtered_gates=7 nets=7' 'official output filter contains n4[0]'
+Assert-Contains $officialTie 'output=n5[0] metric=7 scope_gates=7 filtered_gates=7 nets=7' 'official output filter contains n5[0]'
+Assert-Contains $officialTie 'output=n5[1] metric=7 scope_gates=7 filtered_gates=7 nets=7' 'official output filter contains n5[1]'
 
 Write-Host '[PASS] test49 cone CLI filter/detail regression complete'
