@@ -161,12 +161,17 @@ read design.v
 structure_query count_by_type            # 原始閘數 baseline
 opt_apply gate_count_minimization        # 步驟 1
 edit_apply insert_buffers_for_fanout 16  # 步驟 2
-structure_query global_fanout 16         # 驗證 constraint
+report_query last_edit                   # 讀 fanout_change.meets_constraint
 structure_query count_by_type            # 最終閘數，用於回報
 write out.v
 ```
 
 深度版本把步驟 1 換成 `opt_apply critical_path_depth`，最後改用 `depth_query global_critical` 量測。
+
+fanout hard constraint 的權威結果是第二步 Edit report 的
+`fanout_change.meets_constraint`。通用 `structure_query global_fanout` 的分析 universe 會包含
+constant literal loads，而 buffer mutation 不會對 `1'b0` / `1'b1` 建立 buffer tree，因此不可用
+該 query 取代 Edit report 判定這個 mutation constraint 是否成功。
 
 ### 什麼時候不需要最佳化
 

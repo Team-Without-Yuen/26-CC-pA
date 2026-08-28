@@ -1,0 +1,7 @@
+This is the beginning of a new testcase. The case name is test102.
+Please load the design from the file test102.v located in the directory testcase/test102/.
+How many gates are in the fanin cone of primary output n29[0]?
+What is the fanout of primary input n8[0]? List all gates that n8[0] drives directly.
+Determine whether a combinational path from n8[0] to n29[0] exists that does not traverse node n3725.
+Verify whether a path connecting input n9[0] to output n30[0] exists while avoiding n3726.
+Please write the current design to the output file test102_out.v.

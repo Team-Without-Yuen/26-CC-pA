@@ -1,0 +1,8 @@
+This is the beginning of a new testcase. The case name is test104.
+Please load the design from the file test104.v located in the directory testcase/test104/.
+Please count all the gates in this design and report the total count broken down by gate type (AND, OR, NOT, NAND, NOR, XOR, XNOR, BUF, DFF).
+Remove all dangling gates that do not contribute to any primary output. Ensure functional equivalence is preserved.
+Rename gate g0 to renamed_gate. Ensure functional equivalence is preserved.
+Convert the logic cone of n18413 to use only NOR and NOT gates while preserving functional equivalence.
+Perform depth optimization on the combinational logic while ensuring the cone of n18413 continues to use only NOR and NOT gates. Ensure functional equivalence is preserved. The cost function is the maximum logic depth of the final design; smaller is better.
+Please write the current design to the output file test104_out.v.
