@@ -1,0 +1,14 @@
+provider: openai
+
+openai:
+  api_key: <OPENAI_API_KEY>
+  model: gpt-4o-mini
+  base_url: https://api.openai.com/v1
+
+anthropic:
+  api_key: <ANTHROPIC_API_KEY>
+  model: claude-haiku-4-5
+
+generation:
+  temperature: 0.2
+  max_output_tokens: 4096

@@ -503,3 +503,26 @@ Q68: transformation credit 只驗證 generated Verilog；自然語言 response �
 ```
 
 注意：本節只記錄官方語意與預定修改；加入本節時，DFF.Q rewrite scope 與 persistent constraints 尚未修改。
+
+## 18. 2026-08-27 QA 補充（Q94）
+
+來源：`A_QA_20260827 (2).pdf` 的 Q94。
+
+官方確認的 fanin cone gate-membership 語意：
+
+```text
+1. 當 combinational signal 的 fanin cone 終止於一或多個 DFF.Q 時，bounding DFF 必須計入 cone gate count。
+2. 例如 X = AND(q0, q1)，q0/q1 分別由兩顆 DFF 驅動，X 的 fanin cone 是 AND:1、DFF:2，共 3 gates。
+3. 當查詢 root 本身就是 DFF.Q 時，plain fanin-cone gate count 是 1（該 DFF），不是 0。
+4. DFF 仍是 traversal boundary；不得回追 D、clock、reset，也不增加 combinational depth。
+```
+
+目前實作採用兩種明確分離的 gate view：
+
+```text
+- Cone Query report/ranking/filter/shared-fanin：combinational gates + bounding DFF，符合 Q94。
+- optimization/edit/technology-mapping/function backend scope：保留純 combinational gates，不把 DFF 納入 rewrite scope。
+```
+
+因此 public command、query 參數與 report 欄位不變；只有 fanin cone 的 gate count、gate list、
+gate-type breakdown，以及由這些 gate membership 衍生的 ranking/filter 結果會依 Q94 更新。

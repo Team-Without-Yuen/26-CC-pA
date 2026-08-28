@@ -154,6 +154,104 @@ void testGateTypeFiltersAndDetails(TestReport& report, const Netlist& netlist) {
                  "cone_query empty gate-type filter preserves full scope");
 }
 
+void testBoundingDffFaninMembership(TestReport& report) {
+    Netlist netlist;
+    netlist.addPrimaryInput("d0");
+    netlist.addPrimaryInput("d1");
+    netlist.addPrimaryInput("clk");
+    netlist.addNet("q0");
+    netlist.addNet("q1");
+    netlist.addPrimaryOutput("x");
+    netlist.addPrimaryOutput("z");
+
+    const int ff0 = netlist.addGate("ff0", GateType::DFF);
+    netlist.connectGateInput(ff0, netlist.getNetId("d0"), "D");
+    netlist.connectGateInput(ff0, netlist.getNetId("clk"), "CK");
+    netlist.connectGateOutput(ff0, netlist.getNetId("q0"));
+
+    const int ff1 = netlist.addGate("ff1", GateType::DFF);
+    netlist.connectGateInput(ff1, netlist.getNetId("d1"), "D");
+    netlist.connectGateInput(ff1, netlist.getNetId("clk"), "CK");
+    netlist.connectGateOutput(ff1, netlist.getNetId("q1"));
+
+    const int join = netlist.addGate("g_join", GateType::AND);
+    netlist.connectGateInput(join, netlist.getNetId("q0"));
+    netlist.connectGateInput(join, netlist.getNetId("q1"));
+    netlist.connectGateOutput(join, netlist.getNetId("x"));
+
+    const int side = netlist.addGate("g_side", GateType::OR);
+    netlist.connectGateInput(side, netlist.getNetId("q0"));
+    netlist.connectGateInput(side, netlist.getNetId("d0"));
+    netlist.connectGateOutput(side, netlist.getNetId("z"));
+
+    const ConeResult xCone = netlist.getTransitiveFaninCone("x");
+    const std::vector<int> structuralGateIds = netlist.getConeGateIds(xCone);
+    const std::vector<int> reportedGateIds =
+        netlist.getConeGateIdsIncludingBoundaries(xCone);
+    report.check(structuralGateIds == std::vector<int>({join}) &&
+                     reportedGateIds.size() == 3 &&
+                     std::find(reportedGateIds.begin(), reportedGateIds.end(), ff0) !=
+                         reportedGateIds.end() &&
+                     std::find(reportedGateIds.begin(), reportedGateIds.end(), ff1) !=
+                         reportedGateIds.end(),
+                 "cone boundary view does not change combinational rewrite scope");
+
+    Netlist::ConeQuery query;
+    query.type = Netlist::ConeQueryType::NetTransitiveFanin;
+    query.netName = "x";
+    query.includeGateDetails = true;
+    query.includeLocalPaths = true;
+    const Netlist::ConeReport xReport = netlist.runConeQuery(query);
+    report.check(xReport.ok && xReport.exists &&
+                     xReport.scopeGateCount == 3 && xReport.gateCount == 3 &&
+                     xReport.gateTypeCounts.at(GateType::AND) == 1 &&
+                     xReport.gateTypeCounts.at(GateType::DFF) == 2 &&
+                     containsString(xReport.gateNames, "g_join") &&
+                     containsString(xReport.gateNames, "ff0") &&
+                     containsString(xReport.gateNames, "ff1") &&
+                     xReport.longestDepth == 1 &&
+                     !containsString(xReport.netNames, "d0") &&
+                     !containsString(xReport.netNames, "d1"),
+                 "cone_query counts bounding DFFs without crossing their inputs");
+
+    query.netName = "q0";
+    query.includeGateDetails = false;
+    query.includeLocalPaths = false;
+    const Netlist::ConeReport qReport = netlist.runConeQuery(query);
+    report.check(qReport.ok && qReport.scopeGateCount == 1 &&
+                     qReport.gateCount == 1 &&
+                     qReport.gateTypeCounts.at(GateType::DFF) == 1 &&
+                     qReport.gateNames == std::vector<std::string>({"ff0"}) &&
+                     qReport.netNames == std::vector<std::string>({"q0"}),
+                 "cone_query reports a DFF.Q root as one DFF gate");
+
+    query.gateTypeFilters = {GateType::DFF};
+    const Netlist::ConeReport filtered = netlist.runConeQuery(query);
+    report.check(filtered.ok && filtered.scopeGateCount == 1 &&
+                     filtered.gateCount == 1 &&
+                     filtered.gateNames == std::vector<std::string>({"ff0"}),
+                 "cone_query DFF filter selects bounding DFFs");
+
+    query = Netlist::ConeQuery();
+    query.type = Netlist::ConeQueryType::SharedFaninGates;
+    query.netName = "x";
+    query.secondNetName = "z";
+    const Netlist::ConeReport shared = netlist.runConeQuery(query);
+    report.check(shared.ok && shared.gateCount == 1 &&
+                     shared.gateNames == std::vector<std::string>({"ff0"}),
+                 "cone_query shared fanin includes a shared bounding DFF");
+
+    query = Netlist::ConeQuery();
+    query.type = Netlist::ConeQueryType::NetTransitiveFanout;
+    query.netName = "q0";
+    const Netlist::ConeReport fanout = netlist.runConeQuery(query);
+    report.check(fanout.ok && fanout.gateCount == 2 &&
+                     containsString(fanout.gateNames, "g_join") &&
+                     containsString(fanout.gateNames, "g_side") &&
+                     !containsString(fanout.gateNames, "ff0"),
+                 "cone_query fanout semantics remain unchanged");
+}
+
 void testNoPrimaryOutputs(TestReport& report) {
     Netlist netlist;
     netlist.addPrimaryInput("a");
@@ -709,6 +807,7 @@ int main() {
         testLargestOutputConeWithoutNames(report, netlist);
         testGateTransitiveFanout(report, netlist);
         testGateTypeFiltersAndDetails(report, netlist);
+        testBoundingDffFaninMembership(report);
         testNoPrimaryOutputs(report);
         testOutputConeRanking(report);
         testRemovedObjectsAndBusRoots(report);

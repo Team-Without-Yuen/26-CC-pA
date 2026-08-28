@@ -76,6 +76,8 @@ DFF 是 sequential boundary。
 Cone traversal 不穿越 DFF。
 fanout cone 遇到 DFF input 時不會走到 DFF Q。
 fanin cone 遇到 DFF Q 時不會走回 DFF D/CK/RN/SN。
+fanin cone 的官方 gate membership 會包含遇到的 bounding DFF；DFF 只列出與計數，
+不建立 D-to-Q traversal edge，也不增加 combinational path depth。
 ```
 
 ---
@@ -89,6 +91,7 @@ struct ConeResult {
     std::unordered_set<int> netIds;
     std::unordered_map<int, std::vector<int>> children;
     std::vector<int> rootNetIds;
+    std::unordered_set<int> boundaryGateIds;
 };
 ```
 
@@ -99,6 +102,7 @@ struct ConeResult {
 | `netIds` | cone 內所有 net IDs |
 | `children` | net-to-net traversal edge；`children[a] = {b, c}` 表示 cone traversal 從 `a` 走到 `b/c` |
 | `rootNetIds` | cone 起點 net IDs；bus 可能有多個 roots |
+| `boundaryGateIds` | fanin traversal 遇到的 bounding DFF IDs；只供正式 cone report 計數/列出，不穿越 DFF input side |
 
 注意：
 
@@ -141,13 +145,21 @@ size_t getConeNetCount(const ConeResult& cone) const;
 std::vector<int> getConeGateIds(const ConeResult& cone) const;
 std::vector<std::string> getConeGateNames(const ConeResult& cone) const;
 size_t getConeGateCount(const ConeResult& cone) const;
+
+std::vector<int> getConeGateIdsIncludingBoundaries(const ConeResult& cone) const;
+std::vector<std::string> getConeGateNamesIncludingBoundaries(const ConeResult& cone) const;
+size_t getConeGateCountIncludingBoundaries(const ConeResult& cone) const;
 ```
 
 重要語意：
 
 ```text
-getConeGateIds() 會從 ConeResult 的 net-to-net edge 反推真正參與 cone 的 combinational gates。
-它不會把 DFF boundary 誤算進 gate set。
+getConeGateIds()/getConeGateCount() 保留純 combinational structural scope，供 optimization、
+edit、technology mapping 與 functional backend 使用，不包含 bounding DFF。
+
+runConeQuery() 與 fanin gate-name/count wrappers 使用 IncludingBoundaries helpers，將
+combinational gates 和 boundaryGateIds 合併、去重並依 gate ID 排序。這是官方 cone
+gate count/list 語意；DFF 不會因此進入 rewrite scope 或增加 depth。
 ```
 
 ---
@@ -290,7 +302,8 @@ Gate-type filter 契約：
 1. gateTypeFilters 空集合表示不篩選；一個或多個 type 採 OR semantics。
 2. 重複 type 會去重；GateType::UNKNOWN 是 invalid argument，query 回 ok=false。
 3. cone/net payload 與 ConeResult 永遠保存完整 scope。
-4. scopeGateCount 是篩選前 gate 數；gateCount、gateIds、gateNames、
+4. scopeGateCount 是篩選前正式 cone gate 數；fanin query 包含 bounding DFF。
+   gateCount、gateIds、gateNames、
    gateTypeCounts、gateConnections 都是篩選後結果。
 5. includeGateDetails=true 時，gateConnections 重用 BasicQuery 的
    GateConnectionSummary，pin order、constant、PI/PO 與 bus-bit 語意一致。
@@ -302,7 +315,7 @@ Gate-type filter 契約：
 ```text
 1. sourceName/sourceId 是最大 fanin cone 的 primary output net。
 2. cone/rootNetIds/netNames/gateNames 等欄位對應該 output 的 fanin cone。
-3. output 選擇使用完整 cone 的 gate count，不受 gateTypeFilters 影響；回傳後才套 filter。
+3. output 選擇使用完整 cone 的 gate count（包含 bounding DFF），不受 gateTypeFilters 影響；回傳後才套 filter。
 4. scopeGateCount 是選中 output 的完整 cone gate 數，gateCount 是 filter 後數量。
 5. checkedOutputCount 表示實際掃描了多少個 active primary output bit。
 6. 若多個 output 完整 cone gate count 相同，會以 netCount 較大者優先；仍相同時保留先遇到的 output。
@@ -341,7 +354,7 @@ Gate-type filter 契約：
 9. OutputConeFilter 不是單一 rewrite scope，不得直接交給 edit/optimization engine。
 ```
 
-`SharedFaninGates` 會分別建立兩個 transitive fanin cones，對排序後的 gate IDs 做 intersection，並回傳 shared `gateIds/gateNames/gateTypeCounts`。兩個名稱都合法但沒有交集時回 `ok=true`、`exists=true`、`gateCount=0`，不是來源不存在。`includeIds/includeNames` 只控制對應 payload，不影響成功狀態與 count。
+`SharedFaninGates` 會分別建立兩個 transitive fanin cones，對排序後的正式 report gate IDs 做 intersection，並回傳 shared `gateIds/gateNames/gateTypeCounts`；若兩個 cones 都終止於同一顆 DFF.Q，該 bounding DFF 也是 shared gate。兩個名稱都合法但沒有交集時回 `ok=true`、`exists=true`、`gateCount=0`，不是來源不存在。`includeIds/includeNames` 只控制對應 payload，不影響成功狀態與 count。
 
 ---
 

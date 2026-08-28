@@ -993,7 +993,7 @@ struct ConeReport {
     ConeResult cone;                       // 原始 cone 結果，供底層演算法繼續使用
 
     size_t netCount = 0;                   // 完整 cone 內有效 net 數量
-    size_t scopeGateCount = 0;             // gate-type filter 前的有效 combinational gate 數量
+    size_t scopeGateCount = 0;             // filter 前的 cone gates；fanin 包含 bounding DFF
     size_t gateCount = 0;                  // filter 後 gate 數量；未篩選時等於 scopeGateCount
     size_t checkedOutputCount = 0;         // LargestOutputCone 掃描的 PO bit 數量
     bool gateTypeFilterApplied = false;    // gateTypeFilters 是否非空

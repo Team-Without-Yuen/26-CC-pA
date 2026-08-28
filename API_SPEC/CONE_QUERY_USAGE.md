@@ -37,6 +37,8 @@ ConeQuery 是 transitive traversal。
 DirectConnectivityQuery 只查直接相連。
 PathQuery 查指定 startpoint 到 endpoint 的路徑。
 DFF 是 sequential boundary，ConeQuery 不穿越 DFF。
+Fanin cone 仍會把在 DFF.Q 停下時遇到的 DFF 本身列入 gate count/type breakdown；
+不會回追該 DFF 的 D、clock、reset，也不會把 DFF 算成 combinational depth。
 ```
 
 ---
@@ -91,7 +93,7 @@ DFF 是 sequential boundary，ConeQuery 不穿越 DFF。
 | `secondSourceName` / `secondSourceId` | shared fanin query 的第二個來源 |
 | `cone` | 原始 `ConeResult` |
 | `netCount` | cone 內有效 net 數量 |
-| `scopeGateCount` | gate-type filter 前的有效 combinational gate 數量 |
+| `scopeGateCount` | gate-type filter 前的正式 cone gate 數量；fanin 包含 bounding DFF |
 | `gateCount` | filter 後 gate 數量；未篩選時等於 `scopeGateCount` |
 | `gateTypeFilterApplied` | 是否真的套用 gate-type filter |
 | `appliedGateTypeFilters` | 去重後的 filters |
@@ -311,7 +313,7 @@ Netlist::ConeReport report = netlist.runConeQuery(query);
 注意：
 
 ```text
-LargestOutputCone 是用 fanin cone 的 combinational gateCount 判斷大小。
+LargestOutputCone 是用 fanin cone 的正式 gateCount（combinational gates 加 bounding DFF）判斷大小。
 如果題目問 deepest fanin logic cone，應使用 DepthQuery::DeepestOutputCone。
 ```
 

@@ -270,7 +270,7 @@ types 以空白或逗號分隔；不得把「NOR and NOT only」解讀為只允�
 | 比較題 | `A or B which...` 分別查 A、B，核對 identity/complete 後比較相同 semantic metric；集合比較另依 `LLM_NOTES.md` 讀 records 或用專用 query |
 | Extrema / ranking | largest/smallest/highest/lowest 預設保留完整 ties；使用 batch ranking mode，不取 legacy representative |
 | 修改後追問 | edit/opt 後重新查 current design；詢問修改 delta 才使用 `report_query last_edit` |
-| Sequential boundary | DFF.Q fanin 是空 combinational cone；空結果不是 error，也不能回追同一顆 DFF.D |
+| Sequential boundary | DFF.Q fanin 不穿越到 DFF input side，但 cone gate count/list 包含該 bounding DFF；DFF.Q root 因此是 1 顆 DFF，不是 0 gates |
 | 完整性 | 只有 `complete:true` 及對應 artifact complete 才能宣稱 `all` 已完整 |
 | 最終答案 | 依 prompt 直接回答數值、名稱、yes/no 或比較結果；不要只貼多份 tool reports 讓評分器自行推導 |
 

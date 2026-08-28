@@ -62,7 +62,7 @@ with_paths | --with-paths
 `output_rank` 的 metric：
 
 ```text
-gates            完整 combinational gate count（同 scope_gates）
+gates            完整 cone gate count（同 scope_gates；fanin 包含 bounding DFF）
 filtered_gates   --gate-types 套用後的 gate count
 nets             完整 cone net count
 ```
@@ -186,10 +186,14 @@ Read: matched output count；大型完整 records 交付於 output_file
 - `highest` / `lowest` 不接受 `k`；只有 `nth_highest`、`nth_lowest`、`top`、`bottom` 需要正整數 `k`。
 - `output_filter` 不填代表性 source/cone；完整答案只能讀 `matched output count` 與
   `Matched output cones`。沒有 active PO 或沒有 match 都是 `status:ok` 的完整零結果。
-- DFF.Q 是 combinational sequential boundary；`cone_query net_fanin <dff_q_net>` 不會回傳任何 combinational gate（`gates: 0`），也不會穿透到同一顆 DFF 的 D input。report 仍可能保留 query root 本身，因此 `nets` 可為 1。
-- `DFF` 是合法 filter，但 cone traversal 不包含 sequential gate；因此只篩 DFF 時通常是
-  `status:ok`、`filtered gates: 0`，不能把 valid zero 誤判為工具失敗。
+- DFF.Q 是 sequential traversal boundary。`cone_query net_fanin <dff_q_net>` 會把驅動該 Q 的 DFF
+  列為 bounding gate，因此通常是 `scope gates: 1`、`DFF : 1`、`nets: 1`；但不會穿透到
+  同一顆 DFF 的 D、clock 或 reset input。
+- `DFF` 是合法 filter。Fanin cone 的 `--gate-types DFF` 會列出所有去重後的 bounding DFF；
+  fanout traversal 不新增此類 boundary membership。
 - cone traversal 不會跨越 sequential state；DFF 的 D/clock/reset 等 pin 不可由 Q 的 fanin query 反推。
+- bounding DFF 只影響 cone gate membership、gate-type breakdown、ranking/filter 與 shared-fanin；
+  不增加 local path depth，也不會被納入 optimization/edit/technology-mapping rewrite scope。
 - 若題目只問數量或 gate-type breakdown，只讀 `gates`、`nets` 或 `Gate type counts`；不要把
   完整 `Cone gates` / `Cone nets` 複製進答案。題目明確要求列出物件時，必須輸出全部
   confirmed entries；大型結果使用工具自動產生的 artifact，不得用固定筆數、省略號或摘要

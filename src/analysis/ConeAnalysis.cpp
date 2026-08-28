@@ -179,7 +179,10 @@ ConeResult Netlist::getTransitiveFaninCone(const std::string& netName) const {
         if (hasConsistentConeDriver(*this, currNetId, net.driverGateId)) {
             const Gate& driver = gates[net.driverGateId];
 
-            if (driver.type == GateType::DFF) continue;
+            if (driver.type == GateType::DFF) {
+                result.boundaryGateIds.insert(driver.id);
+                continue;
+            }
 
             for (int i = 0; i < (int)driver.inputNetIds.size(); i++) {
                 int inNetId = driver.inputNetIds[i];
@@ -353,13 +356,48 @@ size_t Netlist::getConeGateCount(const ConeResult& cone) const {
     return getConeGateIds(cone).size();
 }
 
+// Cone report gate membership includes sequential gates reached at a fanin
+// boundary. The structural helper above intentionally remains combinational so
+// rewrite, mapping, optimization, and functional-analysis scopes do not change.
+std::vector<int> Netlist::getConeGateIdsIncludingBoundaries(
+    const ConeResult& cone) const {
+    std::vector<int> gateIds = getConeGateIds(cone);
+    gateIds.reserve(gateIds.size() + cone.boundaryGateIds.size());
+    for (int gateId : cone.boundaryGateIds) {
+        if (!isActiveConeGate(*this, gateId) ||
+            gates[gateId].type != GateType::DFF) {
+            continue;
+        }
+        gateIds.push_back(gateId);
+    }
+    std::sort(gateIds.begin(), gateIds.end());
+    gateIds.erase(std::unique(gateIds.begin(), gateIds.end()), gateIds.end());
+    return gateIds;
+}
+
+std::vector<std::string> Netlist::getConeGateNamesIncludingBoundaries(
+    const ConeResult& cone) const {
+    std::vector<std::string> gateNames;
+    const std::vector<int> gateIds = getConeGateIdsIncludingBoundaries(cone);
+    gateNames.reserve(gateIds.size());
+    for (int gateId : gateIds) {
+        gateNames.push_back(gates[gateId].instName);
+    }
+    return gateNames;
+}
+
+size_t Netlist::getConeGateCountIncludingBoundaries(
+    const ConeResult& cone) const {
+    return getConeGateIdsIncludingBoundaries(cone).size();
+}
+
 // --- 針對 Net 的 Fanin ---
 std::vector<std::string> Netlist::getTransitiveFaninConeGateNames(const std::string& netName) const {
-    return getConeGateNames(getTransitiveFaninCone(netName));
+    return getConeGateNamesIncludingBoundaries(getTransitiveFaninCone(netName));
 }
 
 size_t Netlist::getTransitiveFaninConeGateCount(const std::string& netName) const {
-    return getConeGateCount(getTransitiveFaninCone(netName));
+    return getConeGateCountIncludingBoundaries(getTransitiveFaninCone(netName));
 }
 
 // --- 針對 Net 的 Fanout ---
@@ -373,11 +411,11 @@ size_t Netlist::getTransitiveFanoutConeGateCount(const std::string& netName) con
 
 // --- 針對 Gate 的 Fanin ---
 std::vector<std::string> Netlist::getGateTransitiveFaninConeGateNames(const std::string& gateName) const {
-    return getConeGateNames(getGateTransitiveFaninCone(gateName));
+    return getConeGateNamesIncludingBoundaries(getGateTransitiveFaninCone(gateName));
 }
 
 size_t Netlist::getGateTransitiveFaninConeGateCount(const std::string& gateName) const {
-    return getConeGateCount(getGateTransitiveFaninCone(gateName));
+    return getConeGateCountIncludingBoundaries(getGateTransitiveFaninCone(gateName));
 }
 
 // --- 針對 Gate 的 Fanout ---
@@ -455,7 +493,8 @@ Netlist::ConeReport Netlist::runConeQuery(const ConeQuery& query) const {
 
             const ConeResult cone =
                 getTransitiveFaninCone(nets[outputNetId].name);
-            const std::vector<int> scopeGateIds = getConeGateIds(cone);
+            const std::vector<int> scopeGateIds =
+                getConeGateIdsIncludingBoundaries(cone);
 
             ConeFilterEntry entry;
             entry.outputNetId = outputNetId;
@@ -573,7 +612,7 @@ Netlist::ConeReport Netlist::runConeQuery(const ConeQuery& query) const {
 
         for (int netId : activeOutputNetIds) {
             ConeResult cone = getTransitiveFaninCone(nets[netId].name);
-            const size_t gateCount = getConeGateCount(cone);
+            const size_t gateCount = getConeGateCountIncludingBoundaries(cone);
             const size_t netCount = getConeNetCount(cone);
             if (!found ||
                 gateCount > bestGateCount ||
@@ -795,9 +834,11 @@ Netlist::ConeReport Netlist::runConeQuery(const ConeQuery& query) const {
         }
 
         const std::vector<int> firstGateIds =
-            getConeGateIds(getTransitiveFaninCone(query.netName));
+            getConeGateIdsIncludingBoundaries(
+                getTransitiveFaninCone(query.netName));
         const std::vector<int> secondGateIds =
-            getConeGateIds(getTransitiveFaninCone(query.secondNetName));
+            getConeGateIdsIncludingBoundaries(
+                getTransitiveFaninCone(query.secondNetName));
         std::vector<int> sharedGateIds;
         std::set_intersection(
             firstGateIds.begin(), firstGateIds.end(),
@@ -830,7 +871,8 @@ Netlist::ConeReport Netlist::runConeQuery(const ConeQuery& query) const {
     report.ok = true;
     report.exists = true;
     report.netCount = getConeNetCount(report.cone);
-    const std::vector<int> coneGateIds = getConeGateIds(report.cone);
+    const std::vector<int> coneGateIds =
+        getConeGateIdsIncludingBoundaries(report.cone);
     populateGateResults(coneGateIds);
 
     if (query.includeIds) {

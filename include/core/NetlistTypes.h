@@ -75,8 +75,12 @@ struct Gate {
 //   Net-to-net traversal edges. children[A] = {B, C} means B/C are next-level nets.
 // rootNetIds:
 //   One or more root net IDs; bus queries may have multiple roots.
+// boundaryGateIds:
+//   Sequential boundary gates reached by fanin traversal. They are reported as
+//   cone members, but no traversal edge crosses from DFF.Q to DFF inputs.
 struct ConeResult {
     std::unordered_set<int> netIds;
     std::unordered_map<int, std::vector<int>> children;
     std::vector<int> rootNetIds;
+    std::unordered_set<int> boundaryGateIds;
 };
