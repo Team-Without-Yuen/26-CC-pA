@@ -26,22 +26,7 @@ NewTestCase/testNN/
 | `include/`, `src/` | Netlist、分析、transformation、SAT/AIG 與 optimizer 實作 |
 | `API_SPEC/` | C++ 高階 API contract、usage 與 backend policy |
 | `TOOLS_SPEC/` | `tools.cpp/tools.exe` 的 LLM-facing command contract |
-| `PROJECT_SPEC/` | 跨模組架構、ownership 與官方 Q&A 設計影響 |
 | `mini test/`, `Testing/` | focused regression 與執行證據 |
-
-## Build Tools
-
-在已安裝專案依賴的 MSYS2 UCRT64/MINGW64 環境中執行：
-
-```bash
-make -f TOOLS_SPEC/Makefile
-```
-
-產物為 repository root 的 `tools.exe`。command routing、參數與輸出契約以
-[`TOOLS_SPEC/README.md`](TOOLS_SPEC/README.md) 為入口；C++ API 使用方式則從
-[`API_SPEC/ANALYSIS_API_INVENTORY.md`](API_SPEC/ANALYSIS_API_INVENTORY.md) 開始。
-編譯耗時、第三方 warning、shell quoting 與 tester API 漂移的判讀方式見
-[`PROJECT_SPEC/BUILD_TROUBLESHOOTING.md`](PROJECT_SPEC/BUILD_TROUBLESHOOTING.md)。
 
 ## Evaluation Interface
 
