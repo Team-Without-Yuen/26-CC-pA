@@ -1,0 +1,7 @@
+This is the beginning of a new testcase. The case name is test030.
+Please load the design from the file test030.v located in the directory testcase/test030/.
+Count all the gates in this design and break the total down by gate type (AND, OR, NOT, NAND, NOR, XOR, XNOR, BUF, DFF).
+Trim out any unused wires and gates. Make sure nothing changes functionally.
+How many dangling gates were removed?
+Determine whether the current netlist is equivalent to the netlist as last loaded from disk.
+Please write the current design to the output file test030_out.v.

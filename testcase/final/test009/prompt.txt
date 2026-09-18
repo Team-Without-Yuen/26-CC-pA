@@ -1,0 +1,10 @@
+This is the beginning of a new testcase. The case name is test009.
+Please load the design from the file test009.v located in the directory testcase/test009/.
+Please count all the gates in this design and report the total count broken down by gate type (AND, OR, NOT, NAND, NOR, XOR, XNOR, BUF, DFF).
+Does output n54[0] depend on input n42[1]? Report yes or no.
+Compute the maximum logic depth from input n27[6] to output n57[0].
+Compute the transitive fanin cone of output n59[0].
+How many gates are in the fanin cone of primary output n55[0]?
+Determine whether wire n26[8] is a cut between any primary input and any primary output. Report yes or no.
+Does a combinational path exist from primary input n32[11] to primary output n55[0]? Report yes or no.
+Please write the current design to the output file test009_out.v.

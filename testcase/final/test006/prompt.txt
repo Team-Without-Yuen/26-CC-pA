@@ -1,0 +1,10 @@
+This is the beginning of a new testcase. The case name is test006.
+Please load the design from the file test006.v located in the directory testcase/test006/.
+Please count all the gates in this design and report the total count broken down by gate type (AND, OR, NOT, NAND, NOR, XOR, XNOR, BUF, DFF).
+List all XNOR gates in this design.
+Compute the transitive fanin cone of output n6[2].
+What is the maximum combinational logic depth on any register-to-register path in this design?
+Find all paths of length 0 (direct wire connections from PI to PO).
+Find all articulation points in the combinational graph between n13595 and n3363.
+How many flip-flops were found to have enable or hold structures in their D input logic?
+Please write the current design to the output file test006_out.v.

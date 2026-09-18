@@ -1,0 +1,4 @@
+This is the beginning of a new testcase. The case name is test093.
+Please load the design from the file test093.v located in the directory testcase/test093/.
+Compute the maximum logic depth of the fanin cone of output n3.
+Please write the current design to the output file test093_out.v.

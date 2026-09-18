@@ -1,0 +1,6 @@
+This is the beginning of a new testcase. The case name is test064.
+Please load the design from the file test064.v located in the directory testcase/test064/.
+Count all the gates in this design and break the total down by gate type (AND, OR, NOT, NAND, NOR, XOR, XNOR, BUF, DFF).
+Restructure the logic to shrink the critical path depth. Make sure nothing changes functionally. The cost function is the maximum logic depth of the final design; smaller is better.
+What is the maximum combinational logic depth in the design now?
+Please write the current design to the output file test064_out.v.
