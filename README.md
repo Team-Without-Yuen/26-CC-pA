@@ -10,13 +10,6 @@ testcase/testNN/
   testNN.v
   prompt.txt
 
-NewTestCase/testNN/
-  testNN.v
-  prompt.txt
-```
-
-- `testcase/test01` 到 `test40`：早期公開測資快照。
-- `NewTestCase/test01` 到 `test91`：目前 repository 內的擴充測資集合。
 - `prompt.txt` 每一行是一個獨立的自然語言 request。
 
 ## Repository Layout
