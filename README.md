@@ -9,6 +9,7 @@
 testcase/testNN/
   testNN.v
   prompt.txt
+```
 
 - `prompt.txt` 每一行是一個獨立的自然語言 request。
 
