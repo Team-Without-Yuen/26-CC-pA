@@ -1,0 +1,10 @@
+This is the beginning of a new testcase. The case name is test007.
+Please load the design from the file test007.v located in the directory testcase/test007/.
+Please count all the gates in this design and report the total count broken down by gate type (AND, OR, NOT, NAND, NOR, XOR, XNOR, BUF, DFF).
+Compute the maximum logic depth from input n10[16] to output n21[12].
+List all XOR gates in this design.
+Check whether internal signals n31457 and n49102 are functionally equivalent for all input combinations. Report yes or no.
+Determine whether a combinational path from n55019 to n49457 exists that does not traverse node n35195.
+List at most 5 flip-flops driven by clock n0.
+What is the maximum combinational logic depth on any register-to-register path in this design?
+Please write the current design to the output file test007_out.v.

@@ -1,0 +1,5 @@
+This is the beginning of a new testcase. The case name is test088.
+Please load the design from the file test088.v located in the directory testcase/test088/.
+This design implements p = a * b + c; q = a * b - d; y = ({64{sel}} & p) | ({64{~sel}} & q), which currently recomputes the following shared value rather than sharing it: a * b (feeds both mux branches p and q). Select logic uses AND/OR/NOT instead of ?: so it maps to plain gates instead of a mux macro cell. Restructure the netlist so each shared computation is computed once and reused by every consumer instead of being duplicated. Ensure the design functionality does not change. The cost function is the total gate count of the final design; smaller is better.
+What is the total gate count of the design now?
+Please write the current design to the output file test088_out.v.

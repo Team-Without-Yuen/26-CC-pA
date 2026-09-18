@@ -1,0 +1,5 @@
+This is the beginning of a new testcase. The case name is test085.
+Please load the design from the file test085.v located in the directory testcase/test085/.
+This design implements p = a * b; q = a * b * c, which currently recomputes the following shared value rather than sharing it: a * b (feeds p directly, and feeds the first stage of q's chained multiply). Restructure the netlist so each shared computation is computed once and reused by every consumer instead of being duplicated. Ensure the design functionality does not change. The cost function is the total gate count of the final design; smaller is better.
+What is the total gate count of the design now?
+Please write the current design to the output file test085_out.v.

@@ -1,0 +1,10 @@
+This is the beginning of a new testcase. The case name is test004.
+Please load the design from the file test004.v located in the directory testcase/test004/.
+Please count all the gates in this design and report the total count broken down by gate type (AND, OR, NOT, NAND, NOR, XOR, XNOR, BUF, DFF).
+What type of gate is g3055? Report its gate type and pin connections.
+Compute the maximum logic depth of the fanin cone of output n8[18].
+Verify whether a path connecting input n5[110] to output n8[21] exists while avoiding n5206.
+What is the maximum combinational logic depth on any register-to-register path in this design?
+Compute the transitive fanout cone of input n6[114].
+List all XNOR gates in this design.
+Please write the current design to the output file test004_out.v.

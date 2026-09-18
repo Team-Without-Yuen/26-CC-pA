@@ -1,0 +1,4 @@
+This is the beginning of a new testcase. The case name is test092.
+Please load the design from the file test092.v located in the directory testcase/test092/.
+How many gates are in the fanin cone of primary output n15?
+Please write the current design to the output file test092_out.v.

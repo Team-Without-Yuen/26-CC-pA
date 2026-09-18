@@ -1,0 +1,10 @@
+This is the beginning of a new testcase. The case name is test005.
+Please load the design from the file test005.v located in the directory testcase/test005/.
+Please count all the gates in this design and report the total count broken down by gate type (AND, OR, NOT, NAND, NOR, XOR, XNOR, BUF, DFF).
+Check whether internal signals n43531 and n5515 are functionally equivalent for all input combinations. Report yes or no.
+Which output (n10[4] or n7) has the largest fanin logic cone?
+Report at most 5 gates connected to the output of g27319.
+Report the number of each gate type in the cone of n61283.
+Does a combinational path exist from primary input n4[3] to primary output n5[0]? Report yes or no.
+Calculate the critical path depth between n97927 and n78357.
+Please write the current design to the output file test005_out.v.

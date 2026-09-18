@@ -1,0 +1,7 @@
+This is the beginning of a new testcase. The case name is test018.
+Please load the design from the file test018.v located in the directory testcase/test018/.
+Count all the gates in this design and break the total down by gate type (AND, OR, NOT, NAND, NOR, XOR, XNOR, BUF, DFF).
+Attempt to replace every 2-input NAND gate with a constant-1 input by an inverter. Ensure the design functionality does not change.
+How many NOT gates are currently in the design?
+Check that the current design and the originally loaded netlist are functionally equivalent.
+Please write the current design to the output file test018_out.v.
